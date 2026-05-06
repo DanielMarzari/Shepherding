@@ -1,3 +1,8 @@
+-- Disable FK enforcement for the duration of this migration. The legacy
+-- shepherdly tables reference each other and we don't care about FK order
+-- when blowing them away. Re-enabled at the bottom.
+PRAGMA foreign_keys = OFF;
+
 -- 1) Drop the entire legacy schema left over from the previous Shepherdly
 --    deploy. None of these tables are referenced by the current app.
 DROP TABLE IF EXISTS app_settings;
@@ -122,3 +127,5 @@ CREATE TABLE pco_forms (
 --    (default 3 months). Both live in pco_sync_settings.
 ALTER TABLE pco_sync_settings ADD COLUMN activity_months INTEGER NOT NULL DEFAULT 18;
 ALTER TABLE pco_sync_settings ADD COLUMN sync_threshold_months INTEGER NOT NULL DEFAULT 3;
+
+PRAGMA foreign_keys = ON;
