@@ -1,3 +1,10 @@
+-- The previous Shepherdly deploy left a `pco_form_submissions` table on the
+-- live DB with a different schema (no org_id, no form_id columns). Our
+-- CREATE TABLE IF NOT EXISTS below would silently skip it and the new
+-- index would fail with "no such column: org_id". Drop the legacy one
+-- first; it carries no data we need.
+DROP TABLE IF EXISTS pco_form_submissions;
+
 -- Tables that hold the data we pull from PCO.
 -- Keyed by (org_id, pco_id) so we can support multiple orgs per server.
 -- raw_json holds the full PCO record so future sync iterations can extract
