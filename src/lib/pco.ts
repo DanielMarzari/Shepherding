@@ -277,6 +277,59 @@ export function saveMetricsSettings(
   });
 }
 
+// ─── Filters ──────────────────────────────────────────────────────────────
+
+/** Membership types currently excluded from /people, /metrics counts, etc. */
+export function getExcludedMembershipTypes(orgId: number): string[] {
+  const row = getDb()
+    .prepare(
+      "SELECT excluded_membership_types FROM pco_sync_settings WHERE org_id = ?",
+    )
+    .get(orgId) as { excluded_membership_types: string | null } | undefined;
+  if (!row?.excluded_membership_types) return [];
+  try {
+    const parsed = JSON.parse(row.excluded_membership_types);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveExcludedMembershipTypes(orgId: number, types: string[]) {
+  const cleaned = Array.from(new Set(types.filter(Boolean)));
+  const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
+  // Ensure a row exists for this org first.
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) {
+    // Create a default row, then set the column.
+    saveSyncSettings(orgId, getSyncSettings(orgId));
+  }
+  getDb()
+    .prepare(
+      "UPDATE pco_sync_settings SET excluded_membership_types = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
+    )
+    .run(json, orgId);
+}
+
+/** Distinct membership types in the synced people, with counts. Used by
+ *  the Filters page to let admins toggle exclusions. */
+export function getMembershipTypeStats(
+  orgId: number,
+): { membershipType: string | null; count: number }[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT membership_type AS membershipType, COUNT(*) AS count
+         FROM pco_people
+         WHERE org_id = ?
+         GROUP BY membership_type
+         ORDER BY COUNT(*) DESC, membership_type ASC`,
+    )
+    .all(orgId) as { membershipType: string | null; count: number }[];
+  return rows;
+}
+
 // ─── What to sync (per-entity toggles) ────────────────────────────────────
 
 export interface SyncEntity {

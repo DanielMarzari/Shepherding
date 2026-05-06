@@ -1,15 +1,12 @@
 import "server-only";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
+import { getExcludedMembershipTypes } from "./pco";
 
-// Active and Shepherded are reserved for later when richer signals
-// (form submissions, group/team membership, attendance) are wired up.
-// For the rough-draft today, classification is purely from pco_updated_at:
-//   recent (within threshold)  → present
-//   stale  (older than threshold OR null) → inactive
-// PCO's `status` column is intentionally ignored — it isn't maintained
-// reliably enough to trust.
 export type ActivityClassification = "active" | "present" | "inactive";
+
+export type SortColumn = "updated" | "created" | "membership" | "status";
+export type SortDir = "asc" | "desc";
 
 export interface SyncedPersonRow {
   pcoId: string;
@@ -91,6 +88,8 @@ export interface ListPeopleOptions {
   tab: "all" | ActivityClassification;
   limit: number;
   offset: number;
+  sort: SortColumn;
+  dir: SortDir;
 }
 
 export interface ListPeopleResult {
@@ -100,18 +99,20 @@ export interface ListPeopleResult {
   page: number;
 }
 
-/** Paginated, classification-filtered list of synced people. */
 export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
   const db = getDb();
   const cutoff = cutoffIso(opts.activityMonths);
-  const { whereSql, whereArgs } = buildWhere(opts.orgId, opts.tab, cutoff);
+  const excluded = getExcludedMembershipTypes(opts.orgId);
+  const { whereSql, whereArgs } = buildWhere(opts.orgId, opts.tab, cutoff, excluded);
+  const orderSql = buildOrderBy(opts.sort, opts.dir, cutoff);
+
   const rows = db
     .prepare(
       `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at
          FROM pco_people
          ${whereSql}
-         ORDER BY pco_updated_at DESC
+         ${orderSql}
          LIMIT ? OFFSET ?`,
     )
     .all(...whereArgs, opts.limit, opts.offset) as RawRow[];
@@ -130,30 +131,53 @@ function buildWhere(
   orgId: number,
   tab: "all" | ActivityClassification,
   cutoff: string,
+  excludedTypes: string[],
 ): { whereSql: string; whereArgs: (string | number)[] } {
+  const parts: string[] = ["org_id = ?"];
+  const args: (string | number)[] = [orgId];
+
   if (tab === "active") {
-    // No active candidates yet — richer signals come later.
-    return {
-      whereSql: "WHERE org_id = ? AND 1 = 0",
-      whereArgs: [orgId],
-    };
+    parts.push("1 = 0"); // reserved — none qualify yet
+  } else if (tab === "present") {
+    parts.push("pco_updated_at IS NOT NULL AND pco_updated_at >= ?");
+    args.push(cutoff);
+  } else if (tab === "inactive") {
+    parts.push("(pco_updated_at IS NULL OR pco_updated_at < ?)");
+    args.push(cutoff);
   }
-  if (tab === "present") {
-    return {
-      whereSql: "WHERE org_id = ? AND pco_updated_at IS NOT NULL AND pco_updated_at >= ?",
-      whereArgs: [orgId, cutoff],
-    };
+
+  if (excludedTypes.length > 0) {
+    const placeholders = excludedTypes.map(() => "?").join(",");
+    // membership_type can be NULL, which we treat as "no type" and never exclude.
+    parts.push(`(membership_type IS NULL OR membership_type NOT IN (${placeholders}))`);
+    args.push(...excludedTypes);
   }
-  if (tab === "inactive") {
-    return {
-      whereSql: "WHERE org_id = ? AND (pco_updated_at IS NULL OR pco_updated_at < ?)",
-      whereArgs: [orgId, cutoff],
-    };
+
+  return { whereSql: `WHERE ${parts.join(" AND ")}`, whereArgs: args };
+}
+
+function buildOrderBy(sort: SortColumn, dir: SortDir, cutoff: string): string {
+  const direction = dir === "asc" ? "ASC" : "DESC";
+  // SQLite uses NULLS LAST when sorting DESC by default for column with
+  // null values? Actually no — explicit NULLS LAST keeps null rows at
+  // the bottom regardless of direction.
+  const nulls = "NULLS LAST";
+  switch (sort) {
+    case "updated":
+      return `ORDER BY pco_updated_at ${direction} ${nulls}`;
+    case "created":
+      return `ORDER BY pco_created_at ${direction} ${nulls}`;
+    case "membership":
+      return `ORDER BY membership_type ${direction} ${nulls}, pco_updated_at DESC`;
+    case "status": {
+      // Present (updated within threshold) vs Inactive — sort by the boolean.
+      const presentExpr = `(pco_updated_at IS NOT NULL AND pco_updated_at >= '${cutoff}')`;
+      // direction asc = inactive first, desc = present first
+      return `ORDER BY ${presentExpr} ${direction}, pco_updated_at DESC`;
+    }
+    default:
+      return `ORDER BY pco_updated_at DESC ${nulls}`;
   }
-  return {
-    whereSql: "WHERE org_id = ?",
-    whereArgs: [orgId],
-  };
 }
 
 export interface ClassificationCounts {
@@ -164,13 +188,18 @@ export interface ClassificationCounts {
   shepherded: number;
 }
 
-/** Cheap aggregate counts for the metric cards. Single round-trip. */
 export function getClassificationCounts(
   orgId: number,
   activityMonths: number,
 ): ClassificationCounts {
   const db = getDb();
   const cutoff = cutoffIso(activityMonths);
+  const excluded = getExcludedMembershipTypes(orgId);
+  const exclSql =
+    excluded.length === 0
+      ? ""
+      : ` AND (membership_type IS NULL OR membership_type NOT IN (${excluded.map(() => "?").join(",")}))`;
+  const args = [cutoff, cutoff, orgId, ...excluded];
   const row = db
     .prepare(
       `SELECT
@@ -178,18 +207,18 @@ export function getClassificationCounts(
          SUM(CASE WHEN pco_updated_at IS NOT NULL AND pco_updated_at >= ? THEN 1 ELSE 0 END) AS present,
          SUM(CASE WHEN pco_updated_at IS NULL OR pco_updated_at < ? THEN 1 ELSE 0 END) AS inactive
        FROM pco_people
-       WHERE org_id = ?`,
+       WHERE org_id = ?${exclSql}`,
     )
-    .get(cutoff, cutoff, orgId) as {
+    .get(...args) as {
     total: number;
     present: number | null;
     inactive: number | null;
   };
   return {
     total: row.total,
-    active: 0, // Reserved — needs richer signals.
+    active: 0,
     present: row.present ?? 0,
     inactive: row.inactive ?? 0,
-    shepherded: 0, // Reserved — needs group/team membership.
+    shepherded: 0,
   };
 }

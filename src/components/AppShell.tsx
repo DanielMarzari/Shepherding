@@ -17,6 +17,7 @@ const NAV_ITEMS = [
 
 const PCO_NAV_ITEMS = [
   { href: "/pco", label: "Sync settings" },
+  { href: "/pco/filters", label: "Filters" },
   { href: "/metrics", label: "Metrics" },
 ];
 

@@ -7,6 +7,8 @@ import {
   type ActivityClassification,
   getClassificationCounts,
   listPeople,
+  type SortColumn,
+  type SortDir,
   type SyncedPersonRow,
 } from "@/lib/people-read";
 
@@ -19,9 +21,13 @@ const TABS: { key: "all" | ActivityClassification; label: string }[] = [
   { key: "inactive", label: "Inactive" },
 ];
 
+const VALID_SORTS: SortColumn[] = ["updated", "created", "membership", "status"];
+
 interface SearchParams {
   tab?: string;
   page?: string;
+  sort?: string;
+  dir?: string;
 }
 
 export default async function PeoplePage({
@@ -37,6 +43,10 @@ export default async function PeoplePage({
     | ActivityClassification;
   const page = Math.max(1, Number(params.page ?? 1) || 1);
   const offset = (page - 1) * PAGE_SIZE;
+  const sort: SortColumn = VALID_SORTS.includes(params.sort as SortColumn)
+    ? (params.sort as SortColumn)
+    : "updated";
+  const dir: SortDir = params.dir === "asc" ? "asc" : "desc";
 
   const counts = getClassificationCounts(session.orgId, settings.activityMonths);
   const result = listPeople({
@@ -45,8 +55,27 @@ export default async function PeoplePage({
     tab,
     limit: PAGE_SIZE,
     offset,
+    sort,
+    dir,
   });
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+
+  function buildLink(overrides: Partial<SearchParams>): string {
+    const merged: SearchParams = { tab, page: String(page), sort, dir, ...overrides };
+    const search = new URLSearchParams();
+    if (merged.tab && merged.tab !== "all") search.set("tab", merged.tab);
+    if (merged.page && merged.page !== "1") search.set("page", merged.page);
+    if (merged.sort && merged.sort !== "updated") search.set("sort", merged.sort);
+    if (merged.dir && merged.dir !== "desc") search.set("dir", merged.dir);
+    const qs = search.toString();
+    return qs ? `/people?${qs}` : "/people";
+  }
+
+  function sortLink(column: SortColumn): string {
+    const newDir: SortDir =
+      sort === column ? (dir === "desc" ? "asc" : "desc") : "desc";
+    return buildLink({ sort: column, dir: newDir, page: "1" });
+  }
 
   return (
     <AppShell active="People" breadcrumb={`People · ${TABS.find((t) => t.key === tab)!.label}`}>
@@ -88,35 +117,41 @@ export default async function PeoplePage({
           </Card>
         </div>
 
-        {/* Tabs */}
-        <div className="flex items-center gap-1 border-b border-border-soft -mb-3 overflow-x-auto">
-          {TABS.map((t) => {
-            const isActive = t.key === tab;
-            const count =
-              t.key === "all"
-                ? counts.total
-                : t.key === "active"
-                  ? counts.active
-                  : t.key === "present"
-                    ? counts.present
-                    : counts.inactive;
-            return (
-              <Link
-                key={t.key}
-                href={t.key === "all" ? "/people" : `/people?tab=${t.key}`}
-                className={`px-3 py-2 text-sm border-b-2 -mb-px transition-colors whitespace-nowrap ${
-                  isActive
-                    ? "border-accent text-fg font-medium"
-                    : "border-transparent text-muted hover:text-fg"
-                }`}
-              >
-                {t.label}{" "}
-                <span className={`tnum text-xs ${isActive ? "text-accent" : "text-subtle"}`}>
-                  {count.toLocaleString()}
-                </span>
-              </Link>
-            );
-          })}
+        {/* Tabs — proper aligned underline pattern */}
+        <div className="border-b border-border-soft">
+          <nav className="flex gap-1 -mb-px overflow-x-auto">
+            {TABS.map((t) => {
+              const isActive = t.key === tab;
+              const count =
+                t.key === "all"
+                  ? counts.total
+                  : t.key === "active"
+                    ? counts.active
+                    : t.key === "present"
+                      ? counts.present
+                      : counts.inactive;
+              return (
+                <Link
+                  key={t.key}
+                  href={buildLink({ tab: t.key, page: "1" })}
+                  className={`px-3 py-2.5 text-sm border-b-2 transition-colors whitespace-nowrap inline-flex items-baseline gap-1.5 ${
+                    isActive
+                      ? "border-accent text-fg font-medium"
+                      : "border-transparent text-muted hover:text-fg hover:border-border-soft"
+                  }`}
+                >
+                  <span>{t.label}</span>
+                  <span
+                    className={`tnum text-xs ${
+                      isActive ? "text-accent" : "text-subtle"
+                    }`}
+                  >
+                    {count.toLocaleString()}
+                  </span>
+                </Link>
+              );
+            })}
+          </nav>
         </div>
 
         {/* Table */}
@@ -140,33 +175,90 @@ export default async function PeoplePage({
               populate.
             </p>
           </Card>
-        ) : tab === "inactive" ? (
-          <InactiveTable people={result.rows} thresholdMonths={settings.activityMonths} />
         ) : (
-          <PeopleTable people={result.rows} total={result.total} />
+          <PeopleTable
+            people={result.rows}
+            total={result.total}
+            sort={sort}
+            dir={dir}
+            sortLink={sortLink}
+          />
         )}
 
-        {/* Pagination — hide for tabs that don't paginate */}
+        {/* Pagination */}
         {(tab === "all" || tab === "present" || tab === "inactive") && counts.total > 0 && (
-          <Pagination tab={tab} page={page} totalPages={totalPages} total={result.total} />
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={result.total}
+            buildLink={buildLink}
+          />
         )}
       </div>
     </AppShell>
   );
 }
 
-function PeopleTable({ people, total }: { people: SyncedPersonRow[]; total: number }) {
+function PeopleTable({
+  people,
+  total,
+  sort,
+  dir,
+  sortLink,
+}: {
+  people: SyncedPersonRow[];
+  total: number;
+  sort: SortColumn;
+  dir: SortDir;
+  sortLink: (c: SortColumn) => string;
+}) {
   return (
     <Card>
-      <CardHeader title="People" right={<span className="text-xs text-muted">{people.length} of {total.toLocaleString()}</span>} />
+      <CardHeader
+        title="People"
+        right={
+          <span className="text-xs text-muted">
+            {people.length} of {total.toLocaleString()}
+          </span>
+        }
+      />
       <table className="w-full text-sm">
         <thead className="text-xs text-muted">
           <tr className="border-b border-border-soft">
             <th className="text-left font-medium px-5 py-2">Name</th>
-            <th className="text-left font-medium px-5 py-2 hidden md:table-cell">Status</th>
-            <th className="text-left font-medium px-5 py-2 hidden lg:table-cell">Membership</th>
-            <th className="text-left font-medium px-5 py-2 hidden lg:table-cell">PCO updated</th>
-            <th className="text-right font-medium px-5 py-2 hidden xl:table-cell">PCO created</th>
+            <SortableTh
+              label="Status"
+              column="status"
+              currentSort={sort}
+              currentDir={dir}
+              link={sortLink("status")}
+              className="hidden md:table-cell"
+            />
+            <SortableTh
+              label="Membership"
+              column="membership"
+              currentSort={sort}
+              currentDir={dir}
+              link={sortLink("membership")}
+              className="hidden lg:table-cell"
+            />
+            <SortableTh
+              label="PCO updated"
+              column="updated"
+              currentSort={sort}
+              currentDir={dir}
+              link={sortLink("updated")}
+              className="hidden lg:table-cell"
+            />
+            <SortableTh
+              label="PCO created"
+              column="created"
+              currentSort={sort}
+              currentDir={dir}
+              link={sortLink("created")}
+              className="hidden xl:table-cell"
+              align="right"
+            />
           </tr>
         </thead>
         <tbody>
@@ -203,91 +295,53 @@ function PeopleTable({ people, total }: { people: SyncedPersonRow[]; total: numb
   );
 }
 
-function InactiveTable({
-  people,
-  thresholdMonths,
+function SortableTh({
+  label,
+  column,
+  currentSort,
+  currentDir,
+  link,
+  className = "",
+  align = "left",
 }: {
-  people: SyncedPersonRow[];
-  thresholdMonths: number;
+  label: string;
+  column: SortColumn;
+  currentSort: SortColumn;
+  currentDir: SortDir;
+  link: string;
+  className?: string;
+  align?: "left" | "right";
 }) {
+  const isActive = currentSort === column;
+  const arrow = isActive ? (currentDir === "asc" ? "▲" : "▼") : "";
   return (
-    <Card>
-      <CardHeader
-        title="Inactive — slipped away"
-        right={
-          <span className="text-xs text-muted">
-            no PCO updates in {thresholdMonths}mo+
-          </span>
-        }
-      />
-      {people.length === 0 ? (
-        <div className="px-5 py-10 text-center text-sm text-muted">
-          No one is currently inactive on this page.
-        </div>
-      ) : (
-        <table className="w-full text-sm">
-          <thead className="text-xs text-muted">
-            <tr className="border-b border-border-soft">
-              <th className="text-left font-medium px-5 py-2">Name</th>
-              <th className="text-left font-medium px-5 py-2">Last update</th>
-              <th className="text-left font-medium px-5 py-2 hidden md:table-cell">Membership</th>
-              <th className="text-right font-medium px-5 py-2 hidden xl:table-cell">First created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {people.map((p) => (
-              <tr key={p.pcoId} className="border-b border-border-softer hover:bg-bg-elev-2/60">
-                <td className="px-5 py-3">
-                  <div className="flex items-center gap-3">
-                    <Avatar initials={p.initials} size="sm" />
-                    <div>
-                      <div className="font-medium">{p.fullName}</div>
-                      <div className="text-xs text-muted">PCO #{p.pcoId}</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-5 py-3 text-muted">
-                  {p.pcoUpdatedAt ? (
-                    <>
-                      <div className="text-fg">{relativeTime(p.pcoUpdatedAt)}</div>
-                      <div className="text-xs">
-                        {new Date(p.pcoUpdatedAt).toLocaleDateString()}
-                      </div>
-                    </>
-                  ) : (
-                    "never"
-                  )}
-                </td>
-                <td className="px-5 py-3 hidden md:table-cell text-muted">
-                  {p.membershipType ?? <span className="text-subtle">—</span>}
-                </td>
-                <td className="px-5 py-3 text-right hidden xl:table-cell tnum text-muted">
-                  {p.pcoCreatedAt ? new Date(p.pcoCreatedAt).toLocaleDateString() : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Card>
+    <th className={`font-medium px-5 py-2 ${className}`} style={{ textAlign: align }}>
+      <Link
+        href={link}
+        className={`inline-flex items-center gap-1 hover:text-fg ${
+          isActive ? "text-fg" : ""
+        }`}
+      >
+        {label}
+        <span className="text-[10px] tnum">{arrow || "↕"}</span>
+      </Link>
+    </th>
   );
 }
 
 function Pagination({
-  tab,
   page,
   totalPages,
   total,
+  buildLink,
 }: {
-  tab: string;
   page: number;
   totalPages: number;
   total: number;
+  buildLink: (o: Partial<SearchParams>) => string;
 }) {
-  const base = tab === "all" ? "/people" : `/people?tab=${tab}`;
-  const sep = tab === "all" ? "?" : "&";
-  const prevHref = page <= 1 ? null : `${base}${sep}page=${page - 1}`;
-  const nextHref = page >= totalPages ? null : `${base}${sep}page=${page + 1}`;
+  const prevHref = page <= 1 ? null : buildLink({ page: String(page - 1) });
+  const nextHref = page >= totalPages ? null : buildLink({ page: String(page + 1) });
   const showFrom = (page - 1) * PAGE_SIZE + 1;
   const showTo = Math.min(page * PAGE_SIZE, total);
   return (
@@ -328,13 +382,4 @@ function Pagination({
       </div>
     </div>
   );
-}
-
-function relativeTime(iso: string): string {
-  const d = new Date(iso);
-  const months = (Date.now() - d.valueOf()) / (1000 * 60 * 60 * 24 * 30);
-  if (months < 1) return "less than a month ago";
-  if (months < 12) return `${Math.floor(months)} months ago`;
-  const years = Math.floor(months / 12);
-  return years === 1 ? "1 year ago" : `${years} years ago`;
 }
