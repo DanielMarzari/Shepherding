@@ -48,5 +48,39 @@ jobs:
               ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/apps/shepherdly/public/
           fi
 
+          # Schema files. The standalone build's file tracer doesn't follow
+          # .sql, so ship migrations separately — the app reads from
+          # <cwd>/db/migrations/ at boot.
+          rsync -avz --mkpath \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            db/migrations/ \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/apps/shepherdly/db/migrations/
+
+          # Write env file the standalone server reads at startup. ENCRYPTION_KEY
+          # must persist across deploys so encrypted PCO creds remain decryptable.
+          # GH Actions masks the secret in logs.
+          printf 'ENCRYPTION_KEY=%s\n' '${{ secrets.ENCRYPTION_KEY }}' \
+            | ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+              "umask 077 && cat > /var/www/apps/shepherdly/.env.production"
+
+          # Apply migrations + restart PM2.
           ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            'export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && cd /var/www/apps && (pm2 restart ecosystem.config.js --only shepherdly --update-env || pm2 start ecosystem.config.js --only shepherdly) && pm2 save'
+            'export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && cd /var/www/apps/shepherdly && DATABASE_PATH=/var/www/apps/shepherdly/shepherdly.db node -e "
+              const Database = require(\"better-sqlite3\");
+              const fs = require(\"fs\");
+              const path = require(\"path\");
+              const db = new Database(process.env.DATABASE_PATH);
+              db.pragma(\"journal_mode = WAL\");
+              db.pragma(\"foreign_keys = ON\");
+              db.exec(\"CREATE TABLE IF NOT EXISTS _migrations (filename TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (strftime('\''%Y-%m-%dT%H:%M:%fZ'\'', '\''now'\'')))\");
+              const applied = new Set(db.prepare(\"SELECT filename FROM _migrations\").all().map(r => r.filename));
+              const dir = path.join(process.cwd(), \"db\", \"migrations\");
+              const files = fs.readdirSync(dir).filter(f => f.endsWith(\".sql\")).sort();
+              for (const f of files) {
+                if (applied.has(f)) continue;
+                console.log(\"Applying \" + f);
+                db.exec(fs.readFileSync(path.join(dir, f), \"utf8\"));
+                db.prepare(\"INSERT INTO _migrations (filename) VALUES (?)\").run(f);
+              }
+              console.log(\"Migrations complete\");
+            " && cd /var/www/apps && (pm2 restart ecosystem.config.js --only shepherdly --update-env || pm2 start ecosystem.config.js --only shepherdly) && pm2 save'
