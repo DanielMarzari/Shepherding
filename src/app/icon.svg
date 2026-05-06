@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="wool" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#f5f5f5"/>
+      <stop offset="1" stop-color="#d8d8d8"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#fbc890"/>
+      <stop offset="1" stop-color="#f6a25b"/>
+    </linearGradient>
+    <linearGradient id="shade" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#000" stop-opacity="0"/>
+      <stop offset=".5" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".10"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Ears -->
+  <path d="M52 152 q-8 32 28 56 l60 -28 z" fill="#f7d6a8"/>
+  <path d="M460 152 q8 32 -28 56 l-60 -28 z" fill="#f7d6a8"/>
+
+  <!-- Face (trapezoid, peach) -->
+  <path d="M148 168 L364 168 Q380 168 376 188 L320 412 Q316 430 296 430 L216 430 Q196 430 192 412 L136 188 Q132 168 148 168 Z" fill="url(#face)"/>
+
+  <!-- Y / fork mark on chest -->
+  <path d="M256 326 L256 380 M256 326 L232 296 M256 326 L280 296"
+        stroke="#c97f3a" stroke-width="18" stroke-linecap="round" fill="none"/>
+
+  <!-- Wool top: cloud of bumps -->
+  <g fill="url(#wool)">
+    <circle cx="148" cy="170" r="62"/>
+    <circle cx="206" cy="118" r="78"/>
+    <circle cx="306" cy="118" r="78"/>
+    <circle cx="364" cy="170" r="62"/>
+    <ellipse cx="256" cy="170" rx="120" ry="60"/>
+  </g>
+
+  <!-- Right-side shading overlay for the gentle 3D effect -->
+  <path d="M256 168 L364 168 Q380 168 376 188 L320 412 Q316 430 296 430 L256 430 Z"
+        fill="url(#shade)"/>
+  <path d="M256 100 Q310 60 360 100 Q400 130 396 178 L256 178 Z"
+        fill="#000" fill-opacity=".06"/>
+</svg>

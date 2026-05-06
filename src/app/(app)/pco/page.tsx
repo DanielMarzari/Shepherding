@@ -9,8 +9,9 @@ import {
   SYNC_ENTITIES,
 } from "@/lib/pco";
 import { CredentialsCard } from "./credentials-card";
-import { ScheduleAndEntitiesCard } from "./schedule-card";
+import { ScheduleCard } from "./schedule-card";
 import { SyncNowButton } from "./sync-now-button";
+import { WhatToSyncCard } from "./what-to-sync-card";
 
 const FREQ_LABEL: Record<string, string> = {
   daily: "daily",
@@ -31,12 +32,15 @@ export default async function PCOSettingsPage() {
     ? new Date(recentSyncs[0].startedAt).toLocaleString()
     : "—";
 
-  const enabledCount = SYNC_ENTITIES.filter((e) => entityToggles[e.key]).length;
+  const enabledCount = SYNC_ENTITIES.filter((e) =>
+    e.required ? true : entityToggles[e.key],
+  ).length;
 
   return (
     <AppShell active="PCO" breadcrumb="PCO › Sync settings">
-      <div className="px-5 md:px-7 py-7">
-        <div className="mb-7 flex items-start justify-between gap-4 flex-wrap">
+      <div className="px-5 md:px-7 py-7 space-y-6">
+        {/* Heading + Sync now */}
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <div className="text-muted text-xs mb-1">PCO · Planning Center Online</div>
             <h1 className="text-2xl font-semibold tracking-tight">Sync settings</h1>
@@ -50,7 +54,7 @@ export default async function PCOSettingsPage() {
         </div>
 
         {/* Status strip */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Connection</div>
             <div className="flex items-center gap-2">
@@ -81,7 +85,12 @@ export default async function PCOSettingsPage() {
             </div>
             <div className="text-xs text-muted mt-1">
               {settings.enabled
-                ? scheduleSummary(settings.frequency, settings.runAtHour, settings.runAtDow, settings.runAtDom)
+                ? scheduleSummary(
+                    settings.frequency,
+                    settings.runAtHour,
+                    settings.runAtDow,
+                    settings.runAtDom,
+                  )
                 : "enable below"}
             </div>
           </Card>
@@ -89,14 +98,18 @@ export default async function PCOSettingsPage() {
             <div className="text-xs text-muted mb-1.5">Sync entities · enabled</div>
             <div className="tnum text-2xl font-semibold">
               {enabledCount}
-              <span className="text-muted text-sm font-normal"> / {SYNC_ENTITIES.length}</span>
+              <span className="text-muted text-sm font-normal">
+                {" "}
+                / {SYNC_ENTITIES.length}
+              </span>
             </div>
             <div className="text-xs text-muted mt-1">configure below</div>
           </Card>
         </div>
 
-        {/* Credentials + instructions */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 mb-5">
+        {/* Credentials + Instructions — heights tend to match, so OK side-by-side.
+            Each subsequent section is full width to avoid empty grid cells. */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
           <div className="xl:col-span-2">
             <CredentialsCard
               initial={{
@@ -110,68 +123,69 @@ export default async function PCOSettingsPage() {
               isAdmin={session.role === "admin"}
             />
           </div>
-          <div>
-            <PCOInstructionsPanel />
-          </div>
+          <PCOInstructionsPanel />
         </div>
 
-        {/* Schedule + What to sync (left)  +  Recent syncs (right) */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-          <div className="xl:col-span-2">
-            <ScheduleAndEntitiesCard
-              initial={settings}
-              initialEntities={entityToggles}
-              entities={SYNC_ENTITIES}
-              isAdmin={session.role === "admin"}
-            />
-          </div>
-          <Card>
-            <CardHeader
-              title="Recent syncs"
-              right={
-                recentSyncs.length > 0 ? (
-                  <button className="text-xs text-accent hover:underline">View all →</button>
-                ) : null
-              }
-            />
-            {recentSyncs.length === 0 ? (
-              <div className="px-5 py-12 text-center text-sm text-muted">
-                No syncs yet. Save credentials and enable auto-sync — or click{" "}
-                <span className="text-fg font-medium">Sync now</span> at the top.
-              </div>
-            ) : (
-              <ul className="divide-y divide-border-softer">
+        {/* What to sync — full width, separate section */}
+        <WhatToSyncCard
+          initial={entityToggles}
+          entities={SYNC_ENTITIES}
+          isAdmin={session.role === "admin"}
+        />
+
+        {/* Auto-sync schedule — full width, separate section, below What to sync */}
+        <ScheduleCard initial={settings} isAdmin={session.role === "admin"} />
+
+        {/* Recent syncs — full width at the bottom */}
+        <Card>
+          <CardHeader
+            title="Recent syncs"
+            right={
+              recentSyncs.length > 0 ? (
+                <button className="text-xs text-accent hover:underline">View all →</button>
+              ) : null
+            }
+          />
+          {recentSyncs.length === 0 ? (
+            <div className="px-5 py-10 text-center text-sm text-muted">
+              No syncs yet. Save credentials and enable auto-sync — or click{" "}
+              <span className="text-fg font-medium">Sync now</span> at the top.
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="text-xs text-muted">
+                <tr className="border-b border-border-soft">
+                  <th className="text-left font-medium px-5 py-2">When</th>
+                  <th className="text-left font-medium px-5 py-2">Trigger</th>
+                  <th className="text-left font-medium px-5 py-2">Status</th>
+                  <th className="text-right font-medium px-5 py-2 tnum">Changes</th>
+                </tr>
+              </thead>
+              <tbody>
                 {recentSyncs.map((r) => (
-                  <li key={r.id} className="px-5 py-3 text-sm">
-                    <div className="flex items-baseline justify-between mb-0.5">
-                      <span className="tnum text-xs text-muted">
-                        {new Date(r.startedAt).toLocaleString()}
-                      </span>
-                      <span
-                        className={
-                          r.status === "ok"
-                            ? "text-good-soft-fg text-xs font-medium"
-                            : "text-warn-soft-fg text-xs font-medium"
-                        }
-                      >
-                        {r.status === "ok" ? "OK" : "Partial"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-muted text-xs">{r.trigger}</span>
-                      <span className="tnum text-xs">{r.changes} changes</span>
-                    </div>
-                    {r.warning && (
-                      <div className="text-xs text-warn-soft-fg mt-0.5">{r.warning}</div>
-                    )}
-                  </li>
+                  <tr key={r.id} className="border-b border-border-softer hover:bg-bg-elev-2/60">
+                    <td className="px-5 py-2.5 tnum text-muted">
+                      {new Date(r.startedAt).toLocaleString()}
+                    </td>
+                    <td className="px-5 py-2.5 text-muted">{r.trigger}</td>
+                    <td className="px-5 py-2.5">
+                      {r.status === "ok" ? (
+                        <span className="text-good-soft-fg font-medium">OK</span>
+                      ) : (
+                        <span className="text-warn-soft-fg font-medium">
+                          Partial · {r.warning ?? ""}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-2.5 text-right tnum">{r.changes}</td>
+                  </tr>
                 ))}
-              </ul>
-            )}
-          </Card>
-        </div>
+              </tbody>
+            </table>
+          )}
+        </Card>
 
-        <p className="mt-6 text-xs text-muted">
+        <p className="text-xs text-muted">
           <span className="text-fg">Privacy:</span> credentials are AES-256-GCM encrypted at
           rest. Shepherding only reads the entities you enable. We never write back to PCO,
           never store giving amounts, and never share data outside your church.
@@ -190,10 +204,7 @@ function scheduleSummary(
   const t = `${String(hour).padStart(2, "0")}:00`;
   if (freq === "daily") return `every day at ${t}`;
   if (freq === "weekly") return `every ${DOW_LABEL[dow]} at ${t}`;
-  if (freq === "monthly") {
-    const ord = ordinal(dom);
-    return `${ord} of each month at ${t}`;
-  }
+  if (freq === "monthly") return `${ordinal(dom)} of each month at ${t}`;
   return "—";
 }
 
@@ -205,7 +216,7 @@ function ordinal(n: number) {
 
 function PCOInstructionsPanel() {
   return (
-    <Card className="p-5 xl:sticky xl:top-4">
+    <Card className="p-5">
       <h2 className="text-sm font-semibold mb-3">How to get a PCO token</h2>
       <ol className="space-y-3 text-sm text-fg list-decimal list-inside">
         <li>
@@ -259,8 +270,7 @@ function PCOInstructionsPanel() {
         </li>
         <li>
           Copy the <span className="font-medium">Authenticity Secret</span> PCO generates
-          and paste it into the optional field on the left. Used to verify the webhook
-          signature on every push.
+          and paste it into the optional field on the left.
         </li>
       </ol>
 

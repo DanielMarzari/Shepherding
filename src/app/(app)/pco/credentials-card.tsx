@@ -25,9 +25,25 @@ export function CredentialsCard({
   initial: InitialCreds;
   isAdmin: boolean;
 }) {
+  // When creds are saved, fields render locked with masked dots until the user
+  // clicks "Change credentials". Editing mode clears the values for new entry.
+  const [editing, setEditing] = useState(!initial.hasCreds);
   const [appId, setAppId] = useState("");
   const [secret, setSecret] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
+
+  function startEditing() {
+    setEditing(true);
+    setAppId("");
+    setSecret("");
+    setWebhookSecret("");
+  }
+
+  // When locked, show 16 dots with the saved last4 visible at the end.
+  function maskedDisplay(last4: string | null): string {
+    if (!last4) return "";
+    return "••••••••••••" + last4;
+  }
   const [testState, testAction, testing] = useActionState<TestState | null, FormData>(
     testConnectionAction,
     null,
@@ -82,41 +98,50 @@ export function CredentialsCard({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Field
             label="Application ID"
-            hint="From PCO · Account › Personal Access Tokens"
-            id="appId"
-            value={appId}
-            onChange={setAppId}
-            placeholder={
-              initial.appIdLast4 ? `••••${initial.appIdLast4}` : "paste from PCO"
+            hint={
+              editing
+                ? "From PCO · Account › Personal Access Tokens"
+                : "Saved · click Change credentials to replace"
             }
-            type="text"
-            disabled={!isAdmin}
+            id="appId"
+            value={editing ? appId : maskedDisplay(initial.appIdLast4)}
+            onChange={setAppId}
+            placeholder="paste from PCO"
+            type="password"
+            disabled={!isAdmin || !editing}
+            locked={!editing}
           />
           <Field
             label="Secret"
-            hint="Stored encrypted. Only the last 4 chars are shown after save."
-            id="secret"
-            value={secret}
-            onChange={setSecret}
-            placeholder={
-              initial.secretLast4 ? `••••${initial.secretLast4}` : "shown once in PCO"
+            hint={
+              editing
+                ? "Stored encrypted. Only the last 4 chars are shown after save."
+                : "Saved · encrypted at rest"
             }
+            id="secret"
+            value={editing ? secret : maskedDisplay(initial.secretLast4)}
+            onChange={setSecret}
+            placeholder="shown once in PCO"
             type="password"
-            disabled={!isAdmin}
+            disabled={!isAdmin || !editing}
+            locked={!editing}
           />
           <Field
             label="Webhook secret"
-            hint="Optional · used to verify real-time webhook pushes."
-            id="webhookSecret"
-            value={webhookSecret}
-            onChange={setWebhookSecret}
-            placeholder={
-              initial.webhookSecretLast4
-                ? `••••${initial.webhookSecretLast4}`
-                : "leave blank if not using webhooks"
+            hint={
+              editing
+                ? "Optional · used to verify real-time webhook pushes."
+                : initial.webhookSecretLast4
+                  ? "Saved · encrypted at rest"
+                  : "Not set"
             }
-            type="text"
-            disabled={!isAdmin}
+            id="webhookSecret"
+            value={editing ? webhookSecret : maskedDisplay(initial.webhookSecretLast4)}
+            onChange={setWebhookSecret}
+            placeholder="leave blank if not using webhooks"
+            type="password"
+            disabled={!isAdmin || !editing}
+            locked={!editing}
             optional
           />
           <div>
@@ -187,37 +212,60 @@ export function CredentialsCard({
               : "Never tested"}
           </div>
           <div className="flex gap-2">
-            <form action={testAction}>
-              <input type="hidden" name="appId" value={appId} />
-              <input type="hidden" name="secret" value={secret} />
-              <input type="hidden" name="webhookSecret" value={webhookSecret} />
+            {!editing && initial.hasCreds && (
               <button
-                type="submit"
-                disabled={testing || !appId || !secret || !isAdmin}
-                className="px-3 py-1.5 rounded border border-border-soft text-xs text-fg hover:bg-bg-elev-2/60 disabled:opacity-50 disabled:cursor-not-allowed"
+                type="button"
+                onClick={startEditing}
+                disabled={!isAdmin}
+                className="px-3 py-1.5 rounded border border-border-soft text-xs text-fg hover:bg-bg-elev-2/60 disabled:opacity-50"
               >
-                {testing ? "Testing…" : "Test connection"}
+                Change credentials
               </button>
-            </form>
-            <form action={saveAction}>
-              <input type="hidden" name="appId" value={appId} />
-              <input type="hidden" name="secret" value={secret} />
-              <input type="hidden" name="webhookSecret" value={webhookSecret} />
-              <button
-                type="submit"
-                disabled={!canSave}
-                title={
-                  !isAdmin
-                    ? "Admin only"
-                    : !testIsValid
-                      ? "Test connection first"
-                      : ""
-                }
-                className="px-3 py-1.5 rounded bg-accent text-[var(--accent-fg)] text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {saving ? "Saving…" : "Save credentials"}
-              </button>
-            </form>
+            )}
+            {editing && (
+              <>
+                {initial.hasCreds && (
+                  <button
+                    type="button"
+                    onClick={() => setEditing(false)}
+                    className="px-3 py-1.5 rounded border border-border-soft text-xs text-muted hover:text-fg"
+                  >
+                    Cancel
+                  </button>
+                )}
+                <form action={testAction}>
+                  <input type="hidden" name="appId" value={appId} />
+                  <input type="hidden" name="secret" value={secret} />
+                  <input type="hidden" name="webhookSecret" value={webhookSecret} />
+                  <button
+                    type="submit"
+                    disabled={testing || !appId || !secret || !isAdmin}
+                    className="px-3 py-1.5 rounded border border-border-soft text-xs text-fg hover:bg-bg-elev-2/60 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {testing ? "Testing…" : "Test connection"}
+                  </button>
+                </form>
+                <form action={saveAction}>
+                  <input type="hidden" name="appId" value={appId} />
+                  <input type="hidden" name="secret" value={secret} />
+                  <input type="hidden" name="webhookSecret" value={webhookSecret} />
+                  <button
+                    type="submit"
+                    disabled={!canSave}
+                    title={
+                      !isAdmin
+                        ? "Admin only"
+                        : !testIsValid
+                          ? "Test connection first"
+                          : ""
+                    }
+                    className="px-3 py-1.5 rounded bg-accent text-[var(--accent-fg)] text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {saving ? "Saving…" : "Save credentials"}
+                  </button>
+                </form>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -235,6 +283,7 @@ function Field({
   type,
   disabled,
   optional,
+  locked,
 }: {
   label: string;
   hint: string;
@@ -245,6 +294,7 @@ function Field({
   type: "text" | "password";
   disabled?: boolean;
   optional?: boolean;
+  locked?: boolean;
 }) {
   return (
     <div>
@@ -268,7 +318,9 @@ function Field({
         data-lpignore="true"
         data-form-type="other"
         style={
-          type === "password"
+          // Visually mask secret/saved values without using type=password
+          // (which triggers browser/manager autofill).
+          type === "password" && !locked
             ? ({ WebkitTextSecurity: "disc" } as React.CSSProperties)
             : undefined
         }

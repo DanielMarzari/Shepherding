@@ -6,7 +6,7 @@ import {
   type SyncSaveState,
   saveSyncSettingsAction,
 } from "./actions";
-import type { SyncEntity, SyncFrequency, SyncSettings } from "@/lib/pco";
+import type { SyncFrequency, SyncSettings } from "@/lib/pco";
 
 const FREQUENCIES: { value: SyncFrequency; label: string }[] = [
   { value: "daily", label: "Daily" },
@@ -24,15 +24,11 @@ const DOW_OPTIONS = [
   "Saturday",
 ];
 
-export function ScheduleAndEntitiesCard({
+export function ScheduleCard({
   initial,
-  initialEntities,
-  entities,
   isAdmin,
 }: {
   initial: SyncSettings;
-  initialEntities: Record<string, boolean>;
-  entities: SyncEntity[];
   isAdmin: boolean;
 }) {
   const [enabled, setEnabled] = useState(initial.enabled);
@@ -42,16 +38,11 @@ export function ScheduleAndEntitiesCard({
   const [runAtDom, setRunAtDom] = useState(initial.runAtDom);
   const [emailOnFailure, setEmailOnFailure] = useState(initial.emailOnFailure);
   const [autoResolve, setAutoResolve] = useState(initial.autoResolveConflicts);
-  const [entityState, setEntityState] = useState<Record<string, boolean>>(initialEntities);
 
   const [state, action, pending] = useActionState<SyncSaveState | null, FormData>(
     saveSyncSettingsAction,
     null,
   );
-
-  function setEntity(key: string, val: boolean) {
-    setEntityState((prev) => ({ ...prev, [key]: val }));
-  }
 
   return (
     <Card>
@@ -108,7 +99,6 @@ export function ScheduleAndEntitiesCard({
 
           {/* When to run */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
-            {/* Time of day always shown */}
             <div>
               <label className="text-xs text-muted block mb-2">Time of day</label>
               <select
@@ -146,7 +136,7 @@ export function ScheduleAndEntitiesCard({
                 <p className="text-xs text-subtle mt-1.5">Runs once a week.</p>
               </div>
             )}
-            {frequency === "weekly" || (
+            {frequency !== "weekly" && (
               <input type="hidden" name="runAtDow" value={runAtDow} />
             )}
 
@@ -172,7 +162,7 @@ export function ScheduleAndEntitiesCard({
                 <p className="text-xs text-subtle mt-1.5">Capped at 28 to fit every month.</p>
               </div>
             )}
-            {frequency === "monthly" || (
+            {frequency !== "monthly" && (
               <input type="hidden" name="runAtDom" value={runAtDom} />
             )}
           </div>
@@ -212,43 +202,6 @@ export function ScheduleAndEntitiesCard({
             </div>
           </div>
 
-          {/* What to sync */}
-          <div className="pt-3 border-t border-border-soft">
-            <div className="flex items-baseline justify-between mb-1">
-              <h3 className="text-sm font-semibold">What to sync</h3>
-              <span className="text-xs text-muted">
-                {entities.filter((e) => entityState[e.key]).length} of {entities.length} enabled
-              </span>
-            </div>
-            <p className="text-xs text-muted mb-3">
-              Per-entity toggles. Disable anything you don&apos;t want pulled — it shrinks
-              the sync window and reduces PCO API calls.
-            </p>
-            <ul className="divide-y divide-border-softer border border-border-soft rounded">
-              {entities.map((e) => {
-                const checked = e.required ? true : entityState[e.key] ?? false;
-                return (
-                  <li key={e.key} className="px-4 py-3 flex items-start gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-sm">{e.label}</span>
-                        {e.required ? <Pill tone="muted">required</Pill> : null}
-                      </div>
-                      <p className="text-xs text-muted mt-0.5">{e.description}</p>
-                    </div>
-                    <Toggle
-                      name={`entity_${e.key}`}
-                      checked={checked}
-                      onChange={(v) => setEntity(e.key, v)}
-                      disabled={!isAdmin || e.required}
-                    />
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-
-          {/* Save */}
           {state?.status === "saved" && (
             <div className="rounded border border-good-soft-bg bg-good-soft-bg/40 px-3 py-2 text-sm text-good-soft-fg">
               {state.message}
@@ -266,7 +219,7 @@ export function ScheduleAndEntitiesCard({
               disabled={!isAdmin || pending}
               className="px-3 py-1.5 rounded bg-accent text-[var(--accent-fg)] text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {pending ? "Saving…" : "Save schedule & entities"}
+              {pending ? "Saving…" : "Save schedule"}
             </button>
           </div>
         </div>

@@ -114,20 +114,32 @@ export async function saveSyncSettingsAction(
     autoResolveConflicts,
   };
   saveSyncSettings(s.orgId, settings);
+  revalidatePath("/pco");
+  return { status: "saved", message: "Sync settings saved." };
+}
 
-  // Persist what-to-sync toggles in the same form submit.
+export interface SyncEntitiesSaveState {
+  status: "idle" | "saved" | "error";
+  message?: string;
+}
+
+export async function saveSyncEntitiesAction(
+  _prev: SyncEntitiesSaveState | null,
+  formData: FormData,
+): Promise<SyncEntitiesSaveState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") {
+    return { status: "error", message: "Only admins can change sync entities." };
+  }
   const toggles: Record<string, boolean> = {};
   for (const [key, value] of formData.entries()) {
     if (key.startsWith("entity_")) {
       toggles[key.slice(7)] = value === "on";
     }
   }
-  if (Object.keys(toggles).length > 0) {
-    saveSyncEntities(s.orgId, toggles);
-  }
-
+  saveSyncEntities(s.orgId, toggles);
   revalidatePath("/pco");
-  return { status: "saved", message: "Sync settings saved." };
+  return { status: "saved", message: "Entity selection saved." };
 }
 
 export interface SyncNowState {
