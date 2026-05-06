@@ -15,6 +15,15 @@ export const STATS = {
 
 export const LANE_STATS = [
   {
+    key: "none",
+    label: "No activity",
+    count: 67,
+    pct: "11%",
+    avgTenure: "—",
+    monthDelta: "27 new · 40 fading",
+    note: "newcomers · or fell off all lanes",
+  },
+  {
     key: "give",
     label: "Giving",
     count: 312,
@@ -463,50 +472,232 @@ export const RECENT_LANE_TRANSITIONS = [
   },
 ];
 
-export const SAMPLE_JOURNEYS = [
-  {
+// ─── Person profiles (slug-keyed) ─────────────────────────────────────────
+
+export interface PersonProfile {
+  slug: string;
+  name: string;
+  initials: string;
+  age: number;
+  joinedDate: string; // "March 2023"
+  status: "active" | "fading" | "newcomer";
+  household: string;
+  zip: string;
+  summary: string;
+  note: string;
+  noteTone: "good" | "warn" | "muted";
+  tenureYears: number;
+  lastSunday: string;
+  lastTouch: string;
+  shepherds: { name: string; role: string; since: string }[];
+  shepherdsOf: { name: string; tag?: string }[];
+  groups: { name: string; role: string; since: string }[];
+  teams: { name: string; role: string; since: string }[];
+  journey: { lane: LaneKey | null; label: string; date: string; at: number }[];
+  laneTenure: { lane: LaneKey; entered: string; months: number; intensity: string }[];
+  activity: { when: string; type: string; text: string }[];
+  notes: { when: string; author: string; text: string }[];
+}
+
+export const PEOPLE_PROFILES: Record<string, PersonProfile> = {
+  "priya-patel": {
+    slug: "priya-patel",
     name: "Priya Patel",
-    summary: "3.1 yr at church",
+    initials: "PP",
+    age: 34,
+    joinedDate: "May 2023",
+    status: "active",
+    household: "Patel · 2 adults",
+    zip: "92806",
+    summary: "3.1 yr at church · 4 of 5 lanes · ready to co-lead",
     note: "Now ready to co-lead a group",
-    points: [
-      { lane: "wors" as LaneKey, label: "Worship", at: 0 },
-      { lane: "comm" as LaneKey, label: "+ Comm", at: 18 },
-      { lane: "serv" as LaneKey, label: "+ Serve", at: 42 },
-      { lane: "give" as LaneKey, label: "+ Giving", at: 78 },
+    noteTone: "good",
+    tenureYears: 3.1,
+    lastSunday: "Aug 17 · this week",
+    lastTouch: "Aug 12 · Rachel Thompson",
+    shepherds: [{ name: "Rachel Thompson", role: "primary · Women's care", since: "May 2023" }],
+    shepherdsOf: [],
+    groups: [
+      { name: "Tuesday Women's Group", role: "member", since: "Jan 2024" },
+      { name: "Marriage Mentoring", role: "member", since: "Mar 2025" },
+    ],
+    teams: [{ name: "Hospitality Team", role: "member", since: "Aug 2024" }],
+    journey: [
+      { lane: "none", label: "First visit", date: "May 2023", at: 0 },
+      { lane: "wors", label: "+ Worship", date: "Jun 2023", at: 4 },
+      { lane: "comm", label: "+ Community", date: "Jan 2024", at: 22 },
+      { lane: "serv", label: "+ Serve", date: "Aug 2024", at: 45 },
+      { lane: "give", label: "+ Giving", date: "Apr 2026", at: 92 },
+    ],
+    laneTenure: [
+      { lane: "wors", entered: "Jun 2023", months: 38, intensity: "weekly · 3.6 of 4 Sundays" },
+      { lane: "comm", entered: "Jan 2024", months: 31, intensity: "Tuesdays · ~96% attendance" },
+      { lane: "serv", entered: "Aug 2024", months: 24, intensity: "monthly · Hospitality" },
+      { lane: "give", entered: "Apr 2026", months: 4, intensity: "monthly · recurring since launch" },
+    ],
+    activity: [
+      { when: "Aug 17", type: "worship", text: "Sunday service · 9am" },
+      { when: "Aug 13", type: "community", text: "Tuesday Women's Group · attended" },
+      { when: "Aug 12", type: "touchpoint", text: "Lunch with Rachel Thompson · noted as &quot;leadership ready&quot;" },
+      { when: "Aug 10", type: "worship", text: "Sunday service · 11am" },
+      { when: "Aug 06", type: "community", text: "Tuesday Women's Group · attended" },
+      { when: "Aug 03", type: "worship", text: "Sunday service · 9am" },
+    ],
+    notes: [
+      {
+        when: "Aug 12",
+        author: "Rachel Thompson",
+        text: "Coffee at Pieology. Asked about leadership opportunities — feels ready to mentor newer women. Suggested co-leading a fall group.",
+      },
+      {
+        when: "Jul 04",
+        author: "Rachel Thompson",
+        text: "Spring retreat takeaway: she stepped in to lead a small group discussion when Karen got sick. Naturals.",
+      },
     ],
   },
-  {
+  "tyler-rodriguez": {
+    slug: "tyler-rodriguez",
     name: "Tyler Rodriguez",
-    summary: "2.4 yr · serve-first",
+    initials: "TR",
+    age: 27,
+    joinedDate: "April 2024",
+    status: "active",
+    household: "Rodriguez · 1 adult",
+    zip: "92804",
+    summary: "2.4 yr · serve-first · ready for team lead",
     note: "Found community through Worship Team",
-    points: [
-      { lane: "wors" as LaneKey, label: "Worship", at: 0 },
-      { lane: "serv" as LaneKey, label: "+ Serve", at: 8 },
-      { lane: "comm" as LaneKey, label: "+ Comm", at: 55 },
+    noteTone: "good",
+    tenureYears: 2.4,
+    lastSunday: "Aug 17 · this week",
+    lastTouch: "Aug 11 · Brian Choi",
+    shepherds: [{ name: "Brian Choi", role: "primary · Worship lead", since: "Aug 2024" }],
+    shepherdsOf: [],
+    groups: [{ name: "Young Married Connect", role: "member", since: "May 2025" }],
+    teams: [{ name: "Worship Team · vocals", role: "weekly", since: "Aug 2024" }],
+    journey: [
+      { lane: "none", label: "First visit", date: "Apr 2024", at: 0 },
+      { lane: "wors", label: "+ Worship", date: "May 2024", at: 4 },
+      { lane: "serv", label: "+ Serve", date: "Aug 2024", at: 14 },
+      { lane: "comm", label: "+ Community", date: "May 2025", at: 50 },
+    ],
+    laneTenure: [
+      { lane: "wors", entered: "May 2024", months: 27, intensity: "weekly · leads vocals" },
+      { lane: "serv", entered: "Aug 2024", months: 24, intensity: "weekly · Worship Team" },
+      { lane: "comm", entered: "May 2025", months: 15, intensity: "biweekly · Young Married" },
+    ],
+    activity: [
+      { when: "Aug 17", type: "worship", text: "Sunday service · led vocals 9am+11am" },
+      { when: "Aug 14", type: "community", text: "Young Married Connect · attended" },
+      { when: "Aug 11", type: "touchpoint", text: "Brian Choi · ran rehearsal feedback" },
+      { when: "Aug 10", type: "worship", text: "Sunday service · led vocals 9am+11am" },
+    ],
+    notes: [
+      {
+        when: "Aug 11",
+        author: "Brian Choi",
+        text: "Tyler trained Megan and Hannah this month. Naturally takes responsibility for new vocalists. Time to talk about a formal team-lead role.",
+      },
     ],
   },
-  {
+  "marcus-johnson": {
+    slug: "marcus-johnson",
     name: "Marcus Johnson",
-    summary: "1.4 yr · stuck",
-    note: "14mo Worship-only · candidate for group invite",
-    points: [
-      { lane: "wors" as LaneKey, label: "Worship", at: 0 },
-      { lane: null, label: "no next", at: 88 },
+    initials: "MJ",
+    age: 44,
+    joinedDate: "August 2024",
+    status: "fading",
+    household: "Johnson · 1 adult",
+    zip: "92805",
+    summary: "1.4 yr · Worship-only → no activity 6 weeks",
+    note: "Highest care risk · no shepherd · system flagged",
+    noteTone: "warn",
+    tenureYears: 1.4,
+    lastSunday: "Jul 06 · 6 weeks ago",
+    lastTouch: "—",
+    shepherds: [],
+    shepherdsOf: [],
+    groups: [],
+    teams: [],
+    journey: [
+      { lane: "none", label: "First visit", date: "Aug 2024", at: 0 },
+      { lane: "wors", label: "+ Worship", date: "Aug 2024", at: 2 },
+      { lane: "none", label: "→ no activity", date: "Jul 2026", at: 90 },
+    ],
+    laneTenure: [
+      { lane: "wors", entered: "Aug 2024", months: 11, intensity: "weekly until July · 0 since" },
+    ],
+    activity: [
+      { when: "Jul 06", type: "worship", text: "Sunday service · last attended" },
+      { when: "Jun 29", type: "worship", text: "Sunday service · 9am" },
+      { when: "Jun 22", type: "worship", text: "Sunday service · 9am" },
+      { when: "Aug 18", type: "system", text: "Risk score raised to 91 (high) · 6 weeks no Sunday" },
+    ],
+    notes: [
+      {
+        when: "Aug 18",
+        author: "System",
+        text: "Flagged in Care Queue: no primary shepherd, no group, no team, attendance gap exceeds inactivity threshold by 2 weeks.",
+      },
     ],
   },
-  {
+  "christopher-walsh": {
+    slug: "christopher-walsh",
     name: "Christopher Walsh",
-    summary: "4.0 yr · all five",
-    note: "Mentoring 2 in Recovery · ready to shepherd",
-    points: [
-      { lane: "wors" as LaneKey, label: "W", at: 0 },
-      { lane: "comm" as LaneKey, label: "+C", at: 14 },
-      { lane: "serv" as LaneKey, label: "+S", at: 38 },
-      { lane: "give" as LaneKey, label: "+G", at: 60 },
-      { lane: "outr" as LaneKey, label: "+O", at: 84 },
+    initials: "CW",
+    age: 41,
+    joinedDate: "September 2022",
+    status: "active",
+    household: "Walsh · 4 adults · 2 kids",
+    zip: "92806",
+    summary: "4.0 yr · all five lanes · mentoring 2 informally",
+    note: "Ready to be a shepherd · confidence 94",
+    noteTone: "good",
+    tenureYears: 4.0,
+    lastSunday: "Aug 17 · this week",
+    lastTouch: "Aug 09 · Pastor Mark",
+    shepherds: [{ name: "Mark Davies", role: "primary · Lead Pastor", since: "Sep 2022" }],
+    shepherdsOf: [
+      { name: "Roberto Sanchez", tag: "Recovery · 14mo · informal" },
+      { name: "Jeremy Vale", tag: "Recovery · 8mo · informal" },
+    ],
+    groups: [{ name: "Recovery Group", role: "co-lead", since: "Apr 2024" }],
+    teams: [
+      { name: "Greeters", role: "monthly", since: "Mar 2023" },
+      { name: "Outreach · Soup Kitchen", role: "quarterly", since: "Aug 2025" },
+    ],
+    journey: [
+      { lane: "none", label: "First visit", date: "Sep 2022", at: 0 },
+      { lane: "wors", label: "+ Worship", date: "Sep 2022", at: 1 },
+      { lane: "comm", label: "+ Community", date: "Jan 2023", at: 14 },
+      { lane: "serv", label: "+ Serve", date: "Mar 2023", at: 18 },
+      { lane: "give", label: "+ Giving", date: "Jun 2024", at: 60 },
+      { lane: "outr", label: "+ Outreach", date: "Aug 2025", at: 84 },
+    ],
+    laneTenure: [
+      { lane: "wors", entered: "Sep 2022", months: 47, intensity: "weekly" },
+      { lane: "comm", entered: "Jan 2023", months: 43, intensity: "Recovery · co-lead since 2024" },
+      { lane: "serv", entered: "Mar 2023", months: 41, intensity: "Greeters monthly" },
+      { lane: "give", entered: "Jun 2024", months: 26, intensity: "monthly · faithful" },
+      { lane: "outr", entered: "Aug 2025", months: 12, intensity: "Soup Kitchen · quarterly" },
+    ],
+    activity: [
+      { when: "Aug 17", type: "worship", text: "Sunday service · 9am" },
+      { when: "Aug 14", type: "community", text: "Recovery Group · co-led" },
+      { when: "Aug 09", type: "touchpoint", text: "1:1 with Pastor Mark · talked about Roberto" },
+      { when: "Aug 03", type: "worship", text: "Sunday service · 9am" },
+    ],
+    notes: [
+      {
+        when: "Aug 09",
+        author: "Mark Davies",
+        text: "Chris has been mentoring Roberto and Jeremy on his own initiative. Brought up bringing them into Recovery's leadership rotation. Time to make this official with a shepherd role.",
+      },
     ],
   },
-];
+};
+
+export const PEOPLE_PROFILE_SLUGS = Object.keys(PEOPLE_PROFILES);
 
 // ─── Shepherding Hierarchy (Rachel Thompson) ─────────────────────────────
 

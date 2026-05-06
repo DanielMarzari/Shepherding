@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { LANE_STATS } from "@/lib/mock";
 
 const NAV_ITEMS = [
   { href: "/", label: "Home" },
@@ -73,15 +74,46 @@ export function AppShell({
           })}
         </ul>
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">
+          Lanes
+        </div>
+        <ul className="space-y-0.5 text-sm">
+          {LANE_STATS.map((lane) => (
+            <li
+              key={lane.key}
+              className="px-2 py-1.5 rounded flex justify-between items-center text-fg hover:bg-bg-elev-2 cursor-default"
+            >
+              <span className="flex items-center gap-2">
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: `var(--lane-${lane.key})` }}
+                />
+                <span>{lane.label}</span>
+              </span>
+              <span className="text-muted tnum text-xs">{lane.count}</span>
+            </li>
+          ))}
+        </ul>
+
+        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">
           PCO
         </div>
-        <div className="px-2 text-xs text-muted">
-          <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-good" />
-            <span>Synced 6m ago</span>
-          </div>
-          <div className="mt-1 text-subtle">Mock data · rough draft</div>
-        </div>
+        <ul className="space-y-0.5">
+          <li>
+            <Link
+              href="/pco"
+              className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
+                active === "PCO" ? "bg-bg-elev-2 text-fg font-medium" : "text-fg hover:bg-bg-elev-2"
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-good" />
+                <span>Sync settings</span>
+              </span>
+              <span className="text-muted tnum text-xs">6m</span>
+            </Link>
+          </li>
+        </ul>
+        <div className="px-2 mt-2 text-xs text-subtle">Mock data · rough draft</div>
       </aside>
 
       <div className="flex-1 min-w-0">

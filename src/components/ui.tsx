@@ -108,7 +108,7 @@ export function LaneTag({
   laneKey,
   short = false,
 }: {
-  laneKey: "give" | "wors" | "outr" | "comm" | "serv";
+  laneKey: "give" | "wors" | "outr" | "comm" | "serv" | "none";
   short?: boolean;
 }) {
   const labels = {
@@ -117,6 +117,7 @@ export function LaneTag({
     outr: short ? "O" : "Outreach",
     comm: short ? "C" : "Community",
     serv: short ? "S" : "Serve",
+    none: short ? "—" : "No activity",
   };
   const bgVar = `var(--lane-${laneKey}-bg)`;
   const fgVar = `var(--lane-${laneKey})`;

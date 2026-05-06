@@ -3,10 +3,10 @@ import { Card, CardHeader, LaneTag } from "@/components/ui";
 import {
   LANE_SEQUENCES,
   LANE_STATS,
+  PEOPLE_PROFILES,
   RECENT_LANE_TRANSITIONS,
-  SAMPLE_JOURNEYS,
-  type LaneKey,
 } from "@/lib/mock";
+import Link from "next/link";
 
 export default function LanesPage() {
   return (
@@ -27,17 +27,20 @@ export default function LanesPage() {
           </div>
         </div>
 
-        {/* 5 lane stat cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+        {/* 6 lane stat cards (incl. No activity) */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
           {LANE_STATS.map((lane) => (
-            <Card key={lane.key} className="p-4">
+            <Card
+              key={lane.key}
+              className={`p-4 ${lane.key === "none" ? "border-dashed" : ""}`}
+            >
               <div className="flex items-center justify-between mb-1">
                 <LaneTag laneKey={lane.key} />
-                <span className="text-xs text-muted">{lane.pct} of active</span>
+                <span className="text-xs text-muted">{lane.pct}</span>
               </div>
               <div className="tnum text-2xl font-semibold mt-2">{lane.count}</div>
               <div className="text-xs text-muted mt-0.5">
-                avg tenure {lane.avgTenure} · {lane.monthDelta}
+                {lane.key === "none" ? lane.monthDelta : `avg ${lane.avgTenure} · ${lane.monthDelta}`}
               </div>
             </Card>
           ))}
@@ -178,30 +181,49 @@ export default function LanesPage() {
           </Card>
 
           <Card className="xl:col-span-5 p-5">
-            <h2 className="text-sm font-semibold mb-1">Sample journeys</h2>
+            <h2 className="text-sm font-semibold mb-1">Notable individual journeys</h2>
             <p className="text-xs text-muted mb-4">
-              A handful of individual paths — see Person profile for full timeline.
+              Open a person to see their full lane timeline, lane tenure, and pastoral notes.
             </p>
-            <div className="space-y-5">
-              {SAMPLE_JOURNEYS.map((j) => (
-                <div key={j.name}>
-                  <div className="flex items-baseline justify-between mb-2">
-                    <span className="font-medium text-sm">{j.name}</span>
-                    <span className="text-xs text-muted tnum">{j.summary}</span>
-                  </div>
-                  <Journey points={j.points} />
-                  <div
-                    className={`text-xs mt-4 ${
-                      j.note.includes("stuck") || j.note.includes("Worship-only")
-                        ? "text-warn-soft-fg"
-                        : "text-accent"
-                    }`}
+            <ul className="space-y-2">
+              {Object.values(PEOPLE_PROFILES).map((p) => (
+                <li key={p.slug}>
+                  <Link
+                    href={`/people/${p.slug}`}
+                    className="block rounded border border-border-soft p-3 hover:bg-bg-elev-2/60 transition-colors"
                   >
-                    {j.note}
-                  </div>
-                </div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-medium text-sm">{p.name}</span>
+                      <span className="text-xs text-muted tnum">{p.tenureYears} yr</span>
+                    </div>
+                    <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+                      {p.journey.map((pt, i) => (
+                        <span key={i} className="flex items-center gap-1">
+                          <LaneTag laneKey={pt.lane ?? "none"} short />
+                          {i < p.journey.length - 1 ? (
+                            <span className="text-muted text-[10px]">→</span>
+                          ) : null}
+                        </span>
+                      ))}
+                    </div>
+                    <div
+                      className={`text-xs ${
+                        p.noteTone === "warn"
+                          ? "text-warn-soft-fg"
+                          : p.noteTone === "good"
+                            ? "text-accent"
+                            : "text-muted"
+                      }`}
+                    >
+                      {p.note}
+                    </div>
+                  </Link>
+                </li>
               ))}
-            </div>
+            </ul>
+            <p className="text-xs text-muted mt-4">
+              Full activity timelines live on each person&apos;s profile.
+            </p>
           </Card>
         </div>
       </div>
@@ -209,111 +231,97 @@ export default function LanesPage() {
   );
 }
 
-function Journey({
-  points,
-}: {
-  points: { lane: LaneKey | null; label: string; at: number }[];
-}) {
-  return (
-    <div className="relative h-7">
-      <div className="absolute inset-0 flex items-center">
-        <div className="h-px bg-border-soft w-full" />
-      </div>
-      {points.map((p, i) => (
-        <div key={i} className="absolute" style={{ left: `${p.at}%` }}>
-          <div className="-translate-x-1/2">
-            <div
-              className="w-3 h-3 rounded-full mt-2.5"
-              style={{
-                background: p.lane ? `var(--lane-${p.lane})` : "transparent",
-                border: p.lane ? "none" : "1px solid var(--fg-subtle)",
-              }}
-            />
-            <div className="text-[10px] text-muted mt-1 whitespace-nowrap">{p.label}</div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function SankeyFlow() {
-  // Static sankey — same as v2 mockup. Real version computes from data.
   return (
-    <svg viewBox="0 0 700 360" className="w-full h-[380px]">
+    <svg viewBox="0 0 700 380" className="w-full h-[400px]">
       <g fontFamily="Inter" fontSize="11" fill="var(--fg)">
-        {/* Source */}
-        <rect x="40" y="40" width="14" height="40" fill="var(--lane-wors)" rx="2" />
-        <text x="60" y="55">Worship</text>
-        <text x="60" y="69" fill="var(--fg-muted)" fontSize="10">487 people · entry</text>
+        {/* SOURCE column */}
+        <rect x="40" y="14" width="14" height="20" fill="var(--lane-none)" rx="2" />
+        <text x="60" y="24">No activity</text>
+        <text x="60" y="38" fill="var(--fg-muted)" fontSize="10">27 newcomers entering</text>
 
-        <rect x="40" y="110" width="14" height="32" fill="var(--lane-comm)" rx="2" />
-        <text x="60" y="124">Community</text>
-        <text x="60" y="138" fill="var(--fg-muted)" fontSize="10">298 people</text>
+        <rect x="40" y="56" width="14" height="40" fill="var(--lane-wors)" rx="2" />
+        <text x="60" y="71">Worship</text>
+        <text x="60" y="85" fill="var(--fg-muted)" fontSize="10">487 people · entry</text>
 
-        <rect x="40" y="172" width="14" height="22" fill="var(--lane-serv)" rx="2" />
-        <text x="60" y="186">Serve</text>
-        <text x="60" y="200" fill="var(--fg-muted)" fontSize="10">221 people</text>
+        <rect x="40" y="120" width="14" height="32" fill="var(--lane-comm)" rx="2" />
+        <text x="60" y="134">Community</text>
+        <text x="60" y="148" fill="var(--fg-muted)" fontSize="10">298 people</text>
 
-        <rect x="40" y="222" width="14" height="14" fill="var(--lane-give)" rx="2" />
-        <text x="60" y="232">Giving</text>
-        <text x="60" y="246" fill="var(--fg-muted)" fontSize="10">312 people</text>
+        <rect x="40" y="174" width="14" height="22" fill="var(--lane-serv)" rx="2" />
+        <text x="60" y="188">Serve</text>
+        <text x="60" y="202" fill="var(--fg-muted)" fontSize="10">221 people</text>
 
-        <rect x="40" y="262" width="14" height="10" fill="var(--lane-outr)" rx="2" />
-        <text x="60" y="270">Outreach</text>
-        <text x="60" y="284" fill="var(--fg-muted)" fontSize="10">134 people</text>
+        <rect x="40" y="218" width="14" height="14" fill="var(--lane-give)" rx="2" />
+        <text x="60" y="228">Giving</text>
+        <text x="60" y="242" fill="var(--fg-muted)" fontSize="10">312 people</text>
 
-        {/* Right column */}
-        <rect x="640" y="40" width="14" height="34" fill="var(--lane-comm)" rx="2" />
-        <text x="630" y="55" textAnchor="end">Community</text>
-        <text x="630" y="69" textAnchor="end" fill="var(--fg-muted)" fontSize="10">186 next-step</text>
+        <rect x="40" y="254" width="14" height="10" fill="var(--lane-outr)" rx="2" />
+        <text x="60" y="262">Outreach</text>
+        <text x="60" y="276" fill="var(--fg-muted)" fontSize="10">134 people</text>
 
-        <rect x="640" y="100" width="14" height="28" fill="var(--lane-serv)" rx="2" />
-        <text x="630" y="113" textAnchor="end">Serve</text>
-        <text x="630" y="127" textAnchor="end" fill="var(--fg-muted)" fontSize="10">142 next-step</text>
+        {/* DESTINATION column */}
+        <rect x="640" y="14" width="14" height="34" fill="var(--lane-comm)" rx="2" />
+        <text x="630" y="29" textAnchor="end">Community</text>
+        <text x="630" y="43" textAnchor="end" fill="var(--fg-muted)" fontSize="10">186 next-step</text>
 
-        <rect x="640" y="156" width="14" height="20" fill="var(--lane-give)" rx="2" />
-        <text x="630" y="167" textAnchor="end">Giving</text>
-        <text x="630" y="181" textAnchor="end" fill="var(--fg-muted)" fontSize="10">98 next-step</text>
+        <rect x="640" y="68" width="14" height="28" fill="var(--lane-serv)" rx="2" />
+        <text x="630" y="81" textAnchor="end">Serve</text>
+        <text x="630" y="95" textAnchor="end" fill="var(--fg-muted)" fontSize="10">142 next-step</text>
+
+        <rect x="640" y="116" width="14" height="22" fill="var(--lane-wors)" rx="2" />
+        <text x="630" y="127" textAnchor="end">Worship</text>
+        <text x="630" y="141" textAnchor="end" fill="var(--fg-muted)" fontSize="10">19 returns</text>
+
+        <rect x="640" y="158" width="14" height="20" fill="var(--lane-give)" rx="2" />
+        <text x="630" y="169" textAnchor="end">Giving</text>
+        <text x="630" y="183" textAnchor="end" fill="var(--fg-muted)" fontSize="10">98 next-step</text>
 
         <rect x="640" y="200" width="14" height="14" fill="var(--lane-outr)" rx="2" />
         <text x="630" y="211" textAnchor="end">Outreach</text>
         <text x="630" y="225" textAnchor="end" fill="var(--fg-muted)" fontSize="10">61 next-step</text>
 
-        <rect x="640" y="240" width="14" height="22" fill="var(--fg-subtle)" rx="2" />
-        <text x="630" y="252" textAnchor="end">No next lane</text>
-        <text x="630" y="266" textAnchor="end" fill="var(--fg-muted)" fontSize="10">112 stopped</text>
+        <rect x="640" y="232" width="14" height="40" fill="var(--lane-none)" rx="2" />
+        <text x="630" y="247" textAnchor="end">No activity</text>
+        <text x="630" y="261" textAnchor="end" fill="var(--fg-muted)" fontSize="10">40 fading off all lanes</text>
       </g>
 
-      {/* Worship → */}
-      <path d="M54 60 C 250 60, 450 57, 640 57" fill="none" stroke="var(--lane-wors)" strokeOpacity="0.35" strokeWidth="22" />
-      <path d="M54 65 C 250 95, 450 110, 640 114" fill="none" stroke="var(--lane-wors)" strokeOpacity="0.35" strokeWidth="18" />
-      <path d="M54 70 C 250 140, 450 160, 640 166" fill="none" stroke="var(--lane-wors)" strokeOpacity="0.35" strokeWidth="14" />
-      <path d="M54 76 C 250 200, 450 205, 640 207" fill="none" stroke="var(--lane-wors)" strokeOpacity="0.35" strokeWidth="9" />
-      <path d="M54 78 C 250 250, 450 250, 640 251" fill="none" stroke="var(--lane-wors)" strokeOpacity="0.35" strokeWidth="14" />
+      {/* No activity → first lane (newcomer entry) */}
+      <path d="M54 24 C 250 30, 450 50, 640 56" fill="none" stroke="var(--lane-none)" strokeOpacity="0.45" strokeWidth="14" />
+      <path d="M54 28 C 250 35, 450 80, 640 124" fill="none" stroke="var(--lane-none)" strokeOpacity="0.45" strokeWidth="6" />
+      <path d="M54 32 C 250 60, 450 100, 640 169" fill="none" stroke="var(--lane-none)" strokeOpacity="0.45" strokeWidth="4" />
+
+      {/* Worship → various */}
+      <path d="M54 76 C 250 50, 450 30, 640 25" fill="none" stroke="var(--lane-wors)" strokeOpacity="0.35" strokeWidth="22" />
+      <path d="M54 80 C 250 80, 450 80, 640 80" fill="none" stroke="var(--lane-wors)" strokeOpacity="0.35" strokeWidth="14" />
+      <path d="M54 84 C 250 110, 450 130, 640 168" fill="none" stroke="var(--lane-wors)" strokeOpacity="0.35" strokeWidth="9" />
+      <path d="M54 88 C 250 160, 450 200, 640 207" fill="none" stroke="var(--lane-wors)" strokeOpacity="0.35" strokeWidth="6" />
+      <path d="M54 92 C 250 240, 450 250, 640 252" fill="none" stroke="var(--lane-none)" strokeOpacity="0.35" strokeWidth="14" />
 
       {/* Community → */}
-      <path d="M54 120 C 250 80, 450 78, 640 70" fill="none" stroke="var(--lane-comm)" strokeOpacity="0.35" strokeWidth="9" />
-      <path d="M54 124 C 250 115, 450 113, 640 110" fill="none" stroke="var(--lane-comm)" strokeOpacity="0.35" strokeWidth="13" />
-      <path d="M54 128 C 250 145, 450 160, 640 164" fill="none" stroke="var(--lane-comm)" strokeOpacity="0.35" strokeWidth="11" />
-      <path d="M54 134 C 250 195, 450 207, 640 209" fill="none" stroke="var(--lane-comm)" strokeOpacity="0.35" strokeWidth="6" />
+      <path d="M54 130 C 250 50, 450 35, 640 27" fill="none" stroke="var(--lane-comm)" strokeOpacity="0.35" strokeWidth="9" />
+      <path d="M54 134 C 250 90, 450 85, 640 82" fill="none" stroke="var(--lane-comm)" strokeOpacity="0.35" strokeWidth="13" />
+      <path d="M54 138 C 250 140, 450 130, 640 124" fill="none" stroke="var(--lane-comm)" strokeOpacity="0.35" strokeWidth="6" />
+      <path d="M54 142 C 250 180, 450 190, 640 168" fill="none" stroke="var(--lane-comm)" strokeOpacity="0.35" strokeWidth="6" />
+      <path d="M54 146 C 250 240, 450 250, 640 256" fill="none" stroke="var(--lane-none)" strokeOpacity="0.35" strokeWidth="6" />
 
       {/* Serve → */}
-      <path d="M54 178 C 250 105, 450 109, 640 113" fill="none" stroke="var(--lane-serv)" strokeOpacity="0.35" strokeWidth="6" />
-      <path d="M54 184 C 250 170, 450 165, 640 167" fill="none" stroke="var(--lane-serv)" strokeOpacity="0.35" strokeWidth="9" />
-      <path d="M54 188 C 250 210, 450 211, 640 211" fill="none" stroke="var(--lane-serv)" strokeOpacity="0.35" strokeWidth="6" />
-      <path d="M54 191 C 250 250, 450 252, 640 252" fill="none" stroke="var(--lane-serv)" strokeOpacity="0.35" strokeWidth="5" />
+      <path d="M54 180 C 250 60, 450 70, 640 80" fill="none" stroke="var(--lane-serv)" strokeOpacity="0.35" strokeWidth="9" />
+      <path d="M54 184 C 250 110, 450 110, 640 122" fill="none" stroke="var(--lane-serv)" strokeOpacity="0.35" strokeWidth="6" />
+      <path d="M54 188 C 250 170, 450 165, 640 167" fill="none" stroke="var(--lane-serv)" strokeOpacity="0.35" strokeWidth="9" />
+      <path d="M54 192 C 250 220, 450 220, 640 211" fill="none" stroke="var(--lane-serv)" strokeOpacity="0.35" strokeWidth="5" />
+      <path d="M54 196 C 250 250, 450 255, 640 260" fill="none" stroke="var(--lane-none)" strokeOpacity="0.35" strokeWidth="4" />
 
-      {/* Giving → */}
-      <path d="M54 228 C 250 215, 450 213, 640 213" fill="none" stroke="var(--lane-give)" strokeOpacity="0.35" strokeWidth="4" />
-      <path d="M54 233 C 250 252, 450 254, 640 254" fill="none" stroke="var(--lane-give)" strokeOpacity="0.35" strokeWidth="6" />
+      {/* Giving → mostly stays + a bit fades */}
+      <path d="M54 222 C 250 215, 450 213, 640 213" fill="none" stroke="var(--lane-give)" strokeOpacity="0.35" strokeWidth="4" />
+      <path d="M54 226 C 250 240, 450 250, 640 263" fill="none" stroke="var(--lane-none)" strokeOpacity="0.35" strokeWidth="3" />
 
-      {/* Outreach */}
-      <path d="M54 267 C 250 215, 450 214, 640 214" fill="none" stroke="var(--lane-outr)" strokeOpacity="0.35" strokeWidth="3" />
-      <path d="M54 271 C 250 255, 450 256, 640 257" fill="none" stroke="var(--lane-outr)" strokeOpacity="0.35" strokeWidth="4" />
+      {/* Outreach → mostly stays */}
+      <path d="M54 258 C 250 230, 450 218, 640 214" fill="none" stroke="var(--lane-outr)" strokeOpacity="0.35" strokeWidth="3" />
+      <path d="M54 262 C 250 255, 450 260, 640 268" fill="none" stroke="var(--lane-none)" strokeOpacity="0.35" strokeWidth="3" />
 
-      <text x="350" y="335" textAnchor="middle" fill="var(--fg-muted)" fontSize="11">
-        Most common entry: Worship → Community → Serve · 142 people
+      <text x="350" y="355" textAnchor="middle" fill="var(--fg-muted)" fontSize="11">
+        Newcomers enter from &quot;No activity&quot; · drift back to &quot;No activity&quot; when all lanes fall away.
       </text>
     </svg>
   );

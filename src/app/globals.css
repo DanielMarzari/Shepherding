@@ -34,6 +34,8 @@
   --lane-comm-bg: rgba(5, 150, 105, 0.10);
   --lane-serv: #7c3aed;
   --lane-serv-bg: rgba(124, 58, 237, 0.10);
+  --lane-none: #71717a;
+  --lane-none-bg: rgba(113, 113, 122, 0.10);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -69,6 +71,8 @@
     --lane-comm-bg: rgba(52, 211, 153, 0.14);
     --lane-serv: #a78bfa;
     --lane-serv-bg: rgba(167, 139, 250, 0.14);
+    --lane-none: #52525b;
+    --lane-none-bg: rgba(82, 82, 91, 0.20);
   }
 }
 
@@ -103,6 +107,8 @@
   --color-lane-comm-bg: var(--lane-comm-bg);
   --color-lane-serv: var(--lane-serv);
   --color-lane-serv-bg: var(--lane-serv-bg);
+  --color-lane-none: var(--lane-none);
+  --color-lane-none-bg: var(--lane-none-bg);
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
