@@ -13,6 +13,10 @@ const NAV_ITEMS = [
   { href: "/people", label: "People" },
   { href: "/groups", label: "Groups" },
   { href: "/movement", label: "Movement" },
+];
+
+const PCO_NAV_ITEMS = [
+  { href: "/pco", label: "Sync settings" },
   { href: "/metrics", label: "Metrics" },
 ];
 
@@ -110,18 +114,25 @@ export async function AppShell({
 
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">PCO</div>
         <ul className="space-y-0.5">
-          <li>
-            <Link
-              href="/pco"
-              className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
-                active === "PCO"
-                  ? "bg-bg-elev-2 text-fg font-medium"
-                  : "text-fg hover:bg-bg-elev-2"
-              }`}
-            >
-              <span>Sync settings</span>
-            </Link>
-          </li>
+          {PCO_NAV_ITEMS.map((item) => {
+            const isActive =
+              (item.label === "Sync settings" && active === "PCO") ||
+              item.label === active;
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
+                    isActive
+                      ? "bg-bg-elev-2 text-fg font-medium"
+                      : "text-fg hover:bg-bg-elev-2"
+                  }`}
+                >
+                  <span>{item.label}</span>
+                </Link>
+              </li>
+            );
+          })}
         </ul>
 
         <div className="mt-auto pt-4">

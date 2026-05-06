@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
+import { getDb } from "@/lib/db";
 import {
   type SyncFrequency,
   type SyncSettings,
@@ -11,7 +12,7 @@ import {
   saveSyncSettings,
   testPcoConnection,
 } from "@/lib/pco";
-import { runSync } from "@/lib/pco-sync";
+import { runSync, type SyncDetails } from "@/lib/pco-sync";
 
 const VALID_FREQ: SyncFrequency[] = ["daily", "weekly", "monthly"];
 
@@ -148,9 +149,14 @@ export async function saveSyncEntitiesAction(
 }
 
 export interface SyncNowState {
-  status: "idle" | "ok" | "error";
+  status: "idle" | "started" | "already-running" | "error";
   message?: string;
 }
+
+// Module-level Set holds promises in-flight so V8 doesn't GC them while
+// the user is on another page. We're on a persistent PM2-managed Node
+// process, so fire-and-forget is safe — no serverless cold-stop.
+const inFlight = new Set<Promise<unknown>>();
 
 export async function syncNowAction(
   _prev: SyncNowState | null,
@@ -160,17 +166,103 @@ export async function syncNowAction(
   if (s.role !== "admin") {
     return { status: "error", message: "Only admins can trigger a sync." };
   }
-  const result = await runSync(s.orgId, "manual");
-  revalidatePath("/pco");
-  if (!result.ok) {
-    return { status: "error", message: result.error ?? "Sync failed." };
+  if (isSyncRunningInDb(s.orgId)) {
+    return {
+      status: "already-running",
+      message: "A sync is already in progress for this org.",
+    };
   }
-  const d = result.details;
-  const summary =
-    `Synced ${d.people.upserted} people, ${d.forms.upserted} forms, ` +
-    `${d.formSubmissions.upserted} submissions in ${(d.durationMs / 1000).toFixed(1)}s.` +
-    (result.warning ? ` ⚠ ${result.warning}` : "");
-  return { status: "ok", message: summary };
+  const promise = runSync(s.orgId, "manual").catch(() => {
+    // runSync records errors in the DB itself via finishSyncRun; we just
+    // swallow here so the unhandled-rejection handler doesn't fire.
+  });
+  inFlight.add(promise);
+  promise.finally(() => inFlight.delete(promise));
+  return {
+    status: "started",
+    message: "Sync started in the background. Safe to navigate away.",
+  };
+}
+
+export interface SyncStatusState {
+  running: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  status: "running" | "ok" | "error" | null;
+  changes: number;
+  warning: string | null;
+  details: SyncDetails | null;
+}
+
+/** Polled by the Sync now button while a background sync is in flight. */
+export async function getSyncStatusAction(): Promise<SyncStatusState> {
+  const s = await requireOrg();
+  return readLatestStatus(s.orgId);
+}
+
+function isSyncRunningInDb(orgId: number): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT started_at FROM pco_sync_runs
+        WHERE org_id = ? AND status = 'running'
+        ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(orgId) as { started_at: string } | undefined;
+  if (!row) return false;
+  // Anything older than 10 minutes we assume crashed/abandoned.
+  const ageMs = Date.now() - new Date(row.started_at).valueOf();
+  return ageMs < 10 * 60 * 1000;
+}
+
+function readLatestStatus(orgId: number): SyncStatusState {
+  const row = getDb()
+    .prepare(
+      `SELECT started_at, finished_at, status, changes, warning, details
+         FROM pco_sync_runs
+         WHERE org_id = ?
+         ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(orgId) as
+    | {
+        started_at: string;
+        finished_at: string | null;
+        status: string;
+        changes: number;
+        warning: string | null;
+        details: string | null;
+      }
+    | undefined;
+  if (!row) {
+    return {
+      running: false,
+      startedAt: null,
+      finishedAt: null,
+      status: null,
+      changes: 0,
+      warning: null,
+      details: null,
+    };
+  }
+  let parsedDetails: SyncDetails | null = null;
+  if (row.details) {
+    try {
+      parsedDetails = JSON.parse(row.details);
+    } catch {
+      parsedDetails = null;
+    }
+  }
+  const running =
+    row.status === "running" &&
+    Date.now() - new Date(row.started_at).valueOf() < 10 * 60 * 1000;
+  return {
+    running,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    status: row.status as "running" | "ok" | "error",
+    changes: row.changes,
+    warning: row.warning,
+    details: parsedDetails,
+  };
 }
 
 function clamp(n: number, lo: number, hi: number) {

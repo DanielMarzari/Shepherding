@@ -47,11 +47,8 @@ export function ThresholdForm({
           className="w-full accent-[var(--accent)] disabled:opacity-50"
         />
         <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
-          <span>1 mo</span>
-          <span>12 mo</span>
-          <span>18 mo</span>
-          <span>24 mo</span>
-          <span>36 mo</span>
+          <span>1 month</span>
+          <span>36 months</span>
         </div>
       </div>
 
@@ -80,11 +77,8 @@ export function ThresholdForm({
           className="w-full accent-[var(--accent)] disabled:opacity-50"
         />
         <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
-          <span>1 mo</span>
-          <span>3 mo</span>
-          <span>6 mo</span>
-          <span>12 mo</span>
-          <span>24 mo</span>
+          <span>1 month</span>
+          <span>24 months</span>
         </div>
       </div>
 
