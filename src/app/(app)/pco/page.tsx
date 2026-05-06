@@ -1,39 +1,52 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { getStoredCreds, getSyncSettings, listRecentSyncs } from "@/lib/pco";
+import {
+  getStoredCreds,
+  getSyncEntities,
+  getSyncSettings,
+  listRecentSyncs,
+  SYNC_ENTITIES,
+} from "@/lib/pco";
 import { CredentialsCard } from "./credentials-card";
-import { SyncScheduleCard } from "./sync-schedule-card";
+import { ScheduleAndEntitiesCard } from "./schedule-card";
+import { SyncNowButton } from "./sync-now-button";
 
 const FREQ_LABEL: Record<string, string> = {
-  "15m": "every 15 min",
-  "30m": "every 30 min",
-  hourly: "hourly",
   daily: "daily",
-  weekly: "weekly (Sundays)",
-  monthly: "monthly (1st of month)",
+  weekly: "weekly",
+  monthly: "monthly",
 };
+
+const DOW_LABEL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 export default async function PCOSettingsPage() {
   const session = await requireOrg();
   const creds = getStoredCreds(session.orgId);
   const settings = getSyncSettings(session.orgId);
+  const entityToggles = getSyncEntities(session.orgId);
   const recentSyncs = listRecentSyncs(session.orgId);
 
   const lastSyncLabel = recentSyncs[0]?.startedAt
     ? new Date(recentSyncs[0].startedAt).toLocaleString()
     : "—";
 
+  const enabledCount = SYNC_ENTITIES.filter((e) => entityToggles[e.key]).length;
+
   return (
     <AppShell active="PCO" breadcrumb="PCO › Sync settings">
-      <div className="px-5 md:px-7 py-7 max-w-6xl">
-        <div className="mb-7">
-          <div className="text-muted text-xs mb-1">PCO · Planning Center Online</div>
-          <h1 className="text-2xl font-semibold tracking-tight">Sync settings</h1>
-          <p className="text-muted text-sm mt-1 max-w-2xl">
-            Connect your Planning Center account, choose what to pull, and set the schedule.
-            Shepherding never writes back to PCO — your source of truth stays untouched.
-          </p>
+      <div className="px-5 md:px-7 py-7">
+        <div className="mb-7 flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <div className="text-muted text-xs mb-1">PCO · Planning Center Online</div>
+            <h1 className="text-2xl font-semibold tracking-tight">Sync settings</h1>
+            <p className="text-muted text-sm mt-1 max-w-2xl">
+              Connect your Planning Center account, choose what to pull, and set the
+              schedule. Shepherding never writes back to PCO — your source of truth stays
+              untouched.
+            </p>
+          </div>
+          {creds.hasCreds && session.role === "admin" && <SyncNowButton />}
         </div>
 
         {/* Status strip */}
@@ -56,7 +69,9 @@ export default async function PCOSettingsPage() {
             <div className="text-xs text-muted mb-1.5">Last sync</div>
             <div className="font-medium">{lastSyncLabel}</div>
             <div className="text-xs text-muted mt-1">
-              {recentSyncs[0]?.changes ? `${recentSyncs[0].changes} changes` : "—"}
+              {recentSyncs[0]?.changes != null
+                ? `${recentSyncs[0].changes} changes`
+                : "—"}
             </div>
           </Card>
           <Card className="p-4">
@@ -66,16 +81,17 @@ export default async function PCOSettingsPage() {
             </div>
             <div className="text-xs text-muted mt-1">
               {settings.enabled
-                ? `runs at ${String(settings.runAtHour).padStart(2, "0")}:00 local`
+                ? scheduleSummary(settings.frequency, settings.runAtHour, settings.runAtDow, settings.runAtDom)
                 : "enable below"}
             </div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Sync runs · last 30d</div>
-            <div className="tnum text-2xl font-semibold">{recentSyncs.length}</div>
-            <div className="text-xs text-muted mt-1">
-              {recentSyncs.filter((r) => r.status !== "ok").length} with warnings
+            <div className="text-xs text-muted mb-1.5">Sync entities · enabled</div>
+            <div className="tnum text-2xl font-semibold">
+              {enabledCount}
+              <span className="text-muted text-sm font-normal"> / {SYNC_ENTITIES.length}</span>
             </div>
+            <div className="text-xs text-muted mt-1">configure below</div>
           </Card>
         </div>
 
@@ -99,10 +115,15 @@ export default async function PCOSettingsPage() {
           </div>
         </div>
 
-        {/* Schedule + recent syncs */}
+        {/* Schedule + What to sync (left)  +  Recent syncs (right) */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
           <div className="xl:col-span-2">
-            <SyncScheduleCard initial={settings} isAdmin={session.role === "admin"} />
+            <ScheduleAndEntitiesCard
+              initial={settings}
+              initialEntities={entityToggles}
+              entities={SYNC_ENTITIES}
+              isAdmin={session.role === "admin"}
+            />
           </div>
           <Card>
             <CardHeader
@@ -115,7 +136,8 @@ export default async function PCOSettingsPage() {
             />
             {recentSyncs.length === 0 ? (
               <div className="px-5 py-12 text-center text-sm text-muted">
-                No syncs yet. Save credentials and enable auto-sync to start.
+                No syncs yet. Save credentials and enable auto-sync — or click{" "}
+                <span className="text-fg font-medium">Sync now</span> at the top.
               </div>
             ) : (
               <ul className="divide-y divide-border-softer">
@@ -159,6 +181,28 @@ export default async function PCOSettingsPage() {
   );
 }
 
+function scheduleSummary(
+  freq: string,
+  hour: number,
+  dow: number,
+  dom: number,
+): string {
+  const t = `${String(hour).padStart(2, "0")}:00`;
+  if (freq === "daily") return `every day at ${t}`;
+  if (freq === "weekly") return `every ${DOW_LABEL[dow]} at ${t}`;
+  if (freq === "monthly") {
+    const ord = ordinal(dom);
+    return `${ord} of each month at ${t}`;
+  }
+  return "—";
+}
+
+function ordinal(n: number) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
 function PCOInstructionsPanel() {
   return (
     <Card className="p-5 xl:sticky xl:top-4">
@@ -186,12 +230,12 @@ function PCOInstructionsPanel() {
         <li>
           Copy the <span className="font-medium">Application ID</span> and{" "}
           <span className="font-medium">Secret</span>. The Secret is shown <em>once</em> —
-          paste it here before leaving the page.
+          copy it now before leaving the page.
         </li>
         <li>
           Paste both into the form on the left, click{" "}
           <span className="font-medium">Test connection</span>, then{" "}
-          <span className="font-medium">Save</span>.
+          <span className="font-medium">Save credentials</span>.
         </li>
       </ol>
 
@@ -208,7 +252,10 @@ function PCOInstructionsPanel() {
         </li>
         <li>
           Set the URL to{" "}
-          <span className="font-mono text-xs">https://shepherdly.danmarzari.com/api/webhooks/pco</span>.
+          <span className="font-mono text-xs">
+            https://shepherdly.danmarzari.com/api/webhooks/pco
+          </span>
+          .
         </li>
         <li>
           Copy the <span className="font-medium">Authenticity Secret</span> PCO generates

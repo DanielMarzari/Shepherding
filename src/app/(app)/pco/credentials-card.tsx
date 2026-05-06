@@ -50,6 +50,13 @@ export function CredentialsCard({
   const testIsValid = testState?.status === "ok" && testValidFor === currentKey;
   const canSave = isAdmin && testIsValid && !saving;
 
+  // Show org name freshly detected on a successful test (still valid for current input),
+  // otherwise fall back to whatever was saved.
+  const detectedOrgName =
+    testState?.status === "ok" && testValidFor === currentKey
+      ? (testState.organizationName ?? null)
+      : initial.organizationName;
+
   return (
     <Card>
       <CardHeader
@@ -114,8 +121,12 @@ export function CredentialsCard({
           />
           <div>
             <label className="text-xs text-muted block mb-1.5">Organization name</label>
-            <div className="px-3 py-2 text-sm text-muted bg-bg-elev-2/40 rounded border border-border-soft">
-              {initial.organizationName ?? "Will be detected on Test connection"}
+            <div
+              className={`px-3 py-2 text-sm rounded border border-border-soft ${
+                detectedOrgName ? "text-fg bg-bg-elev-2/30" : "text-muted bg-bg-elev-2/40"
+              }`}
+            >
+              {detectedOrgName ?? "Will be detected on Test connection"}
             </div>
             <p className="text-xs text-subtle mt-1.5">
               Auto-detected from PCO when you test the connection.
@@ -244,13 +255,23 @@ function Field({
       <input
         id={id}
         name={id}
-        type={type}
+        type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
         autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
         spellCheck={false}
+        data-1p-ignore="true"
+        data-lpignore="true"
+        data-form-type="other"
+        style={
+          type === "password"
+            ? ({ WebkitTextSecurity: "disc" } as React.CSSProperties)
+            : undefined
+        }
         className="w-full bg-transparent border border-border-soft rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent disabled:opacity-60"
       />
       <p className="text-xs text-subtle mt-1.5">{hint}</p>

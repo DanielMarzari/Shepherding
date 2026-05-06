@@ -163,12 +163,14 @@ export function deleteCreds(orgId: number) {
 
 // ─── Sync settings ─────────────────────────────────────────────────────────
 
-export type SyncFrequency = "15m" | "30m" | "hourly" | "daily" | "weekly" | "monthly";
+export type SyncFrequency = "daily" | "weekly" | "monthly";
 
 export interface SyncSettings {
   enabled: boolean;
   frequency: SyncFrequency;
   runAtHour: number;
+  runAtDow: number;
+  runAtDom: number;
   emailOnFailure: boolean;
   autoResolveConflicts: boolean;
 }
@@ -176,14 +178,17 @@ export interface SyncSettings {
 export function getSyncSettings(orgId: number): SyncSettings {
   const row = getDb()
     .prepare(
-      `SELECT enabled, frequency, run_at_hour, email_on_failure, auto_resolve_conflicts
+      `SELECT enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
+              email_on_failure, auto_resolve_conflicts
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
     | {
         enabled: number;
-        frequency: SyncFrequency;
+        frequency: string;
         run_at_hour: number;
+        run_at_dow: number;
+        run_at_dom: number;
         email_on_failure: number;
         auto_resolve_conflicts: number;
       }
@@ -193,14 +198,21 @@ export function getSyncSettings(orgId: number): SyncSettings {
       enabled: false,
       frequency: "daily",
       runAtHour: 0,
+      runAtDow: 0,
+      runAtDom: 1,
       emailOnFailure: true,
       autoResolveConflicts: false,
     };
   }
+  // Coerce any stale sub-daily frequencies (from before this UI restriction) to "daily".
+  const freq: SyncFrequency =
+    row.frequency === "weekly" || row.frequency === "monthly" ? row.frequency : "daily";
   return {
     enabled: !!row.enabled,
-    frequency: row.frequency,
+    frequency: freq,
     runAtHour: row.run_at_hour,
+    runAtDow: row.run_at_dow,
+    runAtDom: row.run_at_dom,
     emailOnFailure: !!row.email_on_failure,
     autoResolveConflicts: !!row.auto_resolve_conflicts,
   };
@@ -210,12 +222,15 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
   getDb()
     .prepare(
       `INSERT INTO pco_sync_settings
-         (org_id, enabled, frequency, run_at_hour, email_on_failure, auto_resolve_conflicts, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+         (org_id, enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
+          email_on_failure, auto_resolve_conflicts, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id) DO UPDATE SET
          enabled = excluded.enabled,
          frequency = excluded.frequency,
          run_at_hour = excluded.run_at_hour,
+         run_at_dow = excluded.run_at_dow,
+         run_at_dom = excluded.run_at_dom,
          email_on_failure = excluded.email_on_failure,
          auto_resolve_conflicts = excluded.auto_resolve_conflicts,
          updated_at = excluded.updated_at`,
@@ -225,9 +240,118 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
       s.enabled ? 1 : 0,
       s.frequency,
       s.runAtHour,
+      s.runAtDow,
+      s.runAtDom,
       s.emailOnFailure ? 1 : 0,
       s.autoResolveConflicts ? 1 : 0,
     );
+}
+
+// ─── What to sync (per-entity toggles) ────────────────────────────────────
+
+export interface SyncEntity {
+  key: string;
+  label: string;
+  description: string;
+  required?: boolean;
+  defaultEnabled?: boolean;
+}
+
+export const SYNC_ENTITIES: SyncEntity[] = [
+  {
+    key: "people",
+    label: "People",
+    description: "Names, contact info, demographics, household, status",
+    required: true,
+    defaultEnabled: true,
+  },
+  {
+    key: "group_memberships",
+    label: "Group memberships",
+    description: "Who is in which group, since when, role",
+    defaultEnabled: true,
+  },
+  {
+    key: "group_attendance",
+    label: "Group attendance",
+    description: "Per-meeting attendance · used for activity tracking",
+    defaultEnabled: true,
+  },
+  {
+    key: "service_teams",
+    label: "Service teams",
+    description: "Worship, Hospitality, Greeters, Kids · membership + scheduling",
+    defaultEnabled: true,
+  },
+  {
+    key: "sunday_attendance",
+    label: "Sunday attendance (Check-Ins)",
+    description: "Required for Worship lane and falling-through-cracks rules",
+    defaultEnabled: true,
+  },
+  {
+    key: "giving",
+    label: "Giving",
+    description:
+      "Donor records · drives the Giving lane. We never see amounts, only frequency.",
+    defaultEnabled: false,
+  },
+  {
+    key: "forms",
+    label: "Forms (newcomer track)",
+    description:
+      "Form submissions to flag newcomers and track milestone completion",
+    defaultEnabled: false,
+  },
+];
+
+export function getSyncEntities(orgId: number): Record<string, boolean> {
+  const rows = getDb()
+    .prepare("SELECT entity, enabled FROM pco_sync_entities WHERE org_id = ?")
+    .all(orgId) as { entity: string; enabled: number }[];
+  const stored = new Map(rows.map((r) => [r.entity, !!r.enabled]));
+  const out: Record<string, boolean> = {};
+  for (const e of SYNC_ENTITIES) {
+    out[e.key] = stored.has(e.key) ? stored.get(e.key)! : !!e.defaultEnabled;
+  }
+  return out;
+}
+
+export function saveSyncEntities(orgId: number, toggles: Record<string, boolean>) {
+  const db = getDb();
+  const stmt = db.prepare(
+    `INSERT INTO pco_sync_entities (org_id, entity, enabled) VALUES (?, ?, ?)
+     ON CONFLICT(org_id, entity) DO UPDATE SET enabled = excluded.enabled`,
+  );
+  const tx = db.transaction((entries: [string, boolean][]) => {
+    for (const [key, val] of entries) stmt.run(orgId, key, val ? 1 : 0);
+  });
+  // Always force required entities on
+  const entries = SYNC_ENTITIES.map(
+    (e) => [e.key, e.required ? true : !!toggles[e.key]] as [string, boolean],
+  );
+  tx(entries);
+}
+
+// ─── Manual sync trigger (stub) ───────────────────────────────────────────
+
+export function recordManualSync(orgId: number): SyncRun {
+  const now = new Date().toISOString();
+  const result = getDb()
+    .prepare(
+      `INSERT INTO pco_sync_runs (org_id, started_at, finished_at, trigger, status, changes)
+       VALUES (?, ?, ?, 'manual', 'ok', 0)`,
+    )
+    .run(orgId, now, now);
+  return {
+    id: Number(result.lastInsertRowid),
+    startedAt: now,
+    finishedAt: now,
+    trigger: "manual",
+    status: "ok",
+    changes: 0,
+    warning: null,
+  };
 }
 
 export interface SyncRun {
