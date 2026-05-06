@@ -332,26 +332,7 @@ export function saveSyncEntities(orgId: number, toggles: Record<string, boolean>
   tx(entries);
 }
 
-// ─── Manual sync trigger (stub) ───────────────────────────────────────────
-
-export function recordManualSync(orgId: number): SyncRun {
-  const now = new Date().toISOString();
-  const result = getDb()
-    .prepare(
-      `INSERT INTO pco_sync_runs (org_id, started_at, finished_at, trigger, status, changes)
-       VALUES (?, ?, ?, 'manual', 'ok', 0)`,
-    )
-    .run(orgId, now, now);
-  return {
-    id: Number(result.lastInsertRowid),
-    startedAt: now,
-    finishedAt: now,
-    trigger: "manual",
-    status: "ok",
-    changes: 0,
-    warning: null,
-  };
-}
+// Manual sync now runs the real PCO pull — see lib/pco-sync.ts.
 
 export interface SyncRun {
   id: number;

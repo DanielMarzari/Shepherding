@@ -5,12 +5,12 @@ import { requireOrg } from "@/lib/auth";
 import {
   type SyncFrequency,
   type SyncSettings,
-  recordManualSync,
   saveCreds,
   saveSyncEntities,
   saveSyncSettings,
   testPcoConnection,
 } from "@/lib/pco";
+import { runSync } from "@/lib/pco-sync";
 
 const VALID_FREQ: SyncFrequency[] = ["daily", "weekly", "monthly"];
 
@@ -155,10 +155,17 @@ export async function syncNowAction(
   if (s.role !== "admin") {
     return { status: "error", message: "Only admins can trigger a sync." };
   }
-  // Stub for now — real PCO pull lands in a follow-up. Records the run.
-  recordManualSync(s.orgId);
+  const result = await runSync(s.orgId, "manual");
   revalidatePath("/pco");
-  return { status: "ok", message: "Manual sync recorded. (Pull job stubbed for now.)" };
+  if (!result.ok) {
+    return { status: "error", message: result.error ?? "Sync failed." };
+  }
+  const d = result.details;
+  const summary =
+    `Synced ${d.people.upserted} people, ${d.forms.upserted} forms, ` +
+    `${d.formSubmissions.upserted} submissions in ${(d.durationMs / 1000).toFixed(1)}s.` +
+    (result.warning ? ` ⚠ ${result.warning}` : "");
+  return { status: "ok", message: summary };
 }
 
 function clamp(n: number, lo: number, hi: number) {

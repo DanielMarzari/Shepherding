@@ -8,6 +8,7 @@ import {
   listRecentSyncs,
   SYNC_ENTITIES,
 } from "@/lib/pco";
+import { getSyncedCounts } from "@/lib/pco-sync";
 import { CredentialsCard } from "./credentials-card";
 import { ScheduleCard } from "./schedule-card";
 import { SchedulePreview } from "./schedule-preview";
@@ -28,14 +29,11 @@ export default async function PCOSettingsPage() {
   const settings = getSyncSettings(session.orgId);
   const entityToggles = getSyncEntities(session.orgId);
   const recentSyncs = listRecentSyncs(session.orgId);
+  const counts = getSyncedCounts(session.orgId);
 
   const lastSyncLabel = recentSyncs[0]?.startedAt
     ? new Date(recentSyncs[0].startedAt).toLocaleString()
     : "—";
-
-  const enabledCount = SYNC_ENTITIES.filter((e) =>
-    e.required ? true : entityToggles[e.key],
-  ).length;
 
   return (
     <AppShell active="PCO" breadcrumb="PCO › Sync settings">
@@ -96,17 +94,24 @@ export default async function PCOSettingsPage() {
             </div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Sync entities · enabled</div>
-            <div className="tnum text-2xl font-semibold">
-              {enabledCount}
-              <span className="text-muted text-sm font-normal">
-                {" "}
-                / {SYNC_ENTITIES.length}
-              </span>
+            <div className="text-xs text-muted mb-1.5">In Shepherding</div>
+            <div className="tnum text-2xl font-semibold">{counts.people}</div>
+            <div className="text-xs text-muted mt-1">
+              people · {counts.forms} forms · {counts.formSubmissions} submissions
             </div>
-            <div className="text-xs text-muted mt-1">configure below</div>
           </Card>
         </div>
+
+        {/* Synced-data quick stats — only meaningful after first sync */}
+        {creds.hasCreds && counts.people > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <MiniStat label="People synced" value={counts.people} />
+            <MiniStat label="Forms tracked" value={counts.forms} />
+            <MiniStat label="Form fields" value={counts.formFields} />
+            <MiniStat label="Submissions" value={counts.formSubmissions} />
+          </div>
+        )}
+
 
         {/* 2D paired layout — each row's left/right columns are picked to match
             heights, so there's no whitespace gap. */}
@@ -216,6 +221,15 @@ function ordinal(n: number) {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function MiniStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-[10px] bg-bg-elev border border-border-soft p-4">
+      <div className="text-xs text-muted mb-1.5">{label}</div>
+      <div className="tnum text-2xl font-semibold">{value}</div>
+    </div>
+  );
 }
 
 function PCOInstructionsPanel() {
