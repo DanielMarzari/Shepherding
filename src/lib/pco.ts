@@ -298,9 +298,8 @@ export const SYNC_ENTITIES: SyncEntity[] = [
   },
   {
     key: "forms",
-    label: "Forms (newcomer track)",
-    description:
-      "Form submissions to flag newcomers and track milestone completion",
+    label: "Forms",
+    description: "Form submissions feed into activity tracking.",
     defaultEnabled: false,
   },
 ];

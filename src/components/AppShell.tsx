@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { LANE_STATS } from "@/lib/mock";
@@ -9,9 +10,9 @@ const NAV_ITEMS = [
   { href: "/care-queue", label: "Care queue", badge: 17 },
   { href: "/lanes", label: "Activity / Lanes" },
   { href: "/shepherds", label: "Shepherds" },
-  { href: "/people", label: "People", disabled: true },
-  { href: "/groups", label: "Groups", disabled: true },
-  { href: "/movement", label: "Movement", disabled: true },
+  { href: "/people", label: "People" },
+  { href: "/groups", label: "Groups" },
+  { href: "/movement", label: "Movement" },
 ];
 
 export async function AppShell({
@@ -29,13 +30,16 @@ export async function AppShell({
 
   return (
     <div className="flex min-h-screen bg-bg text-fg">
-      <aside className="w-56 shrink-0 border-r border-border-soft px-4 py-5 text-sm hidden md:block">
+      <aside className="w-56 shrink-0 border-r border-border-soft px-4 py-5 text-sm hidden md:flex md:flex-col">
         <Link href="/" className="flex items-center gap-2 mb-3 group">
-          <span className="w-6 h-6 rounded grid place-items-center bg-accent text-[var(--accent-fg)]">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M3 12c0-3 3-6 9-6s9 3 9 6-3 6-9 6-9-3-9-6Z" />
-            </svg>
-          </span>
+          <Image
+            src="/icon.svg"
+            alt="Shepherding"
+            width={28}
+            height={28}
+            unoptimized
+            className="shrink-0"
+          />
           <span className="font-semibold tracking-tight">Shepherding</span>
         </Link>
         {session?.orgName && (
@@ -55,28 +59,21 @@ export async function AppShell({
         <ul className="space-y-0.5">
           {NAV_ITEMS.map((item) => {
             const isActive = item.label === active;
-            const baseClass =
-              "px-2 py-1.5 rounded flex items-center justify-between transition-colors";
-            const stateClass = isActive
-              ? "bg-bg-elev-2 text-fg font-medium"
-              : item.disabled
-                ? "text-subtle cursor-default"
-                : "text-fg hover:bg-bg-elev-2";
             return (
               <li key={item.href}>
-                {item.disabled ? (
-                  <span className={`${baseClass} ${stateClass}`}>
-                    <span>{item.label}</span>
-                    <span className="text-[10px] text-subtle">soon</span>
-                  </span>
-                ) : (
-                  <Link href={item.href} className={`${baseClass} ${stateClass}`}>
-                    <span>{item.label}</span>
-                    {item.badge ? (
-                      <span className="text-xs text-accent tnum">{item.badge}</span>
-                    ) : null}
-                  </Link>
-                )}
+                <Link
+                  href={item.href}
+                  className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
+                    isActive
+                      ? "bg-bg-elev-2 text-fg font-medium"
+                      : "text-fg hover:bg-bg-elev-2"
+                  }`}
+                >
+                  <span>{item.label}</span>
+                  {item.badge ? (
+                    <span className="text-xs text-accent tnum">{item.badge}</span>
+                  ) : null}
+                </Link>
               </li>
             );
           })}
@@ -84,21 +81,30 @@ export async function AppShell({
 
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Lanes</div>
         <ul className="space-y-0.5 text-sm">
-          {LANE_STATS.map((lane) => (
-            <li
-              key={lane.key}
-              className="px-2 py-1.5 rounded flex justify-between items-center text-fg hover:bg-bg-elev-2 cursor-default"
-            >
-              <span className="flex items-center gap-2">
-                <span
-                  className="w-1.5 h-1.5 rounded-full"
-                  style={{ background: `var(--lane-${lane.key})` }}
-                />
-                <span>{lane.label}</span>
-              </span>
-              <span className="text-muted tnum text-xs">{lane.count}</span>
-            </li>
-          ))}
+          {LANE_STATS.map((lane) => {
+            const isActive = active === `lane:${lane.key}`;
+            return (
+              <li key={lane.key}>
+                <Link
+                  href={`/lanes/${lane.key}`}
+                  className={`px-2 py-1.5 rounded flex justify-between items-center transition-colors ${
+                    isActive
+                      ? "bg-bg-elev-2 text-fg font-medium"
+                      : "text-fg hover:bg-bg-elev-2"
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span
+                      className="w-1.5 h-1.5 rounded-full"
+                      style={{ background: `var(--lane-${lane.key})` }}
+                    />
+                    <span>{lane.label}</span>
+                  </span>
+                  <span className="text-muted tnum text-xs">{lane.count}</span>
+                </Link>
+              </li>
+            );
+          })}
         </ul>
 
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">PCO</div>
@@ -117,20 +123,31 @@ export async function AppShell({
           </li>
         </ul>
 
-        {session && (
-          <div className="mt-8 pt-4 border-t border-border-soft px-2">
-            <div className="text-xs text-fg font-medium">{session.user.name}</div>
-            <div className="text-xs text-muted truncate">{session.user.email}</div>
-            <form action={logoutAction} className="mt-2">
-              <button
-                type="submit"
-                className="text-xs text-muted hover:text-fg"
-              >
-                Sign out
-              </button>
-            </form>
-          </div>
-        )}
+        <div className="mt-auto pt-4">
+          {session && (
+            <div className="border-t border-border-soft pt-4 px-2 mb-3">
+              <div className="text-xs text-fg font-medium">{session.user.name}</div>
+              <div className="text-xs text-muted truncate">{session.user.email}</div>
+              <form action={logoutAction} className="mt-2">
+                <button type="submit" className="text-xs text-muted hover:text-fg">
+                  Sign out
+                </button>
+              </form>
+            </div>
+          )}
+          <p className="px-2 text-[10px] text-subtle leading-relaxed">
+            Sheep icon by{" "}
+            <a
+              href="https://www.flaticon.com/free-icons/sheep"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-muted hover:text-fg underline"
+              title="sheep icons"
+            >
+              Freepik · Flaticon
+            </a>
+          </p>
+        </div>
       </aside>
 
       <div className="flex-1 min-w-0">

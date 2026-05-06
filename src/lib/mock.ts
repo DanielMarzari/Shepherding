@@ -699,6 +699,282 @@ export const PEOPLE_PROFILES: Record<string, PersonProfile> = {
 
 export const PEOPLE_PROFILE_SLUGS = Object.keys(PEOPLE_PROFILES);
 
+// ─── All people (table view) ──────────────────────────────────────────────
+
+export interface PersonRow {
+  slug: string | null;
+  name: string;
+  initials: string;
+  lanes: LaneKey[];
+  shepherd: string | null;
+  lastSeen: string;
+  status: "active" | "fading" | "newcomer" | "inactive";
+  risk: number | null;
+  tenure: string;
+}
+
+export const ALL_PEOPLE: PersonRow[] = [
+  // The 4 with full profiles
+  {
+    slug: "priya-patel",
+    name: "Priya Patel",
+    initials: "PP",
+    lanes: ["wors", "comm", "serv", "give"],
+    shepherd: "Rachel Thompson",
+    lastSeen: "Aug 17 · this week",
+    status: "active",
+    risk: null,
+    tenure: "3.1y",
+  },
+  {
+    slug: "tyler-rodriguez",
+    name: "Tyler Rodriguez",
+    initials: "TR",
+    lanes: ["wors", "comm", "serv"],
+    shepherd: "Brian Choi",
+    lastSeen: "Aug 17 · this week",
+    status: "active",
+    risk: null,
+    tenure: "2.4y",
+  },
+  {
+    slug: "marcus-johnson",
+    name: "Marcus Johnson",
+    initials: "MJ",
+    lanes: [],
+    shepherd: null,
+    lastSeen: "Jul 06 · 6 weeks ago",
+    status: "fading",
+    risk: 91,
+    tenure: "1.4y",
+  },
+  {
+    slug: "christopher-walsh",
+    name: "Christopher Walsh",
+    initials: "CW",
+    lanes: ["wors", "comm", "serv", "give", "outr"],
+    shepherd: "Mark Davies",
+    lastSeen: "Aug 17 · this week",
+    status: "active",
+    risk: null,
+    tenure: "4.0y",
+  },
+  // At-risk roster
+  { slug: null, name: "Sarah Chen", initials: "SC", lanes: ["wors", "comm"], shepherd: "Rachel Thompson", lastSeen: "Jul 27 · 3w ago", status: "fading", risk: 82, tenure: "3.8y" },
+  { slug: null, name: "Daniel Park", initials: "DP", lanes: ["wors", "serv"], shepherd: "Jamal Williams", lastSeen: "Jul 13 · 5w ago", status: "fading", risk: 86, tenure: "2.1y" },
+  { slug: null, name: "Elena Vasquez", initials: "EV", lanes: ["wors"], shepherd: "David Kim", lastSeen: "Jul 20 · 4w ago", status: "fading", risk: 68, tenure: "6.2y" },
+  { slug: null, name: "Megan O'Brien", initials: "MO", lanes: ["wors"], shepherd: null, lastSeen: "Jul 27 · 3w ago", status: "newcomer", risk: 71, tenure: "0.4y" },
+  { slug: null, name: "Jenny Liu", initials: "JL", lanes: ["wors", "comm"], shepherd: "Sarah Chen", lastSeen: "Aug 03 · 2w ago", status: "active", risk: 41, tenure: "1.2y" },
+  // Returners + recent
+  { slug: null, name: "Hannah Voss", initials: "HV", lanes: ["wors"], shepherd: "Karen Voss", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "4.5y" },
+  { slug: null, name: "Carlos Mendoza", initials: "CM", lanes: ["wors", "comm"], shepherd: null, lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "0.7y" },
+  { slug: null, name: "Amara Okafor", initials: "AO", lanes: ["wors"], shepherd: null, lastSeen: "Aug 17 · this week", status: "newcomer", risk: null, tenure: "0.4y" },
+  { slug: null, name: "Jordan Walker", initials: "JW", lanes: ["wors", "serv"], shepherd: "Brian Choi", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "1.0y" },
+  // Rachel's flock extras
+  { slug: null, name: "Maria Velez", initials: "MV", lanes: ["wors", "comm", "outr"], shepherd: "Rachel Thompson", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "1.6y" },
+  { slug: null, name: "Lauren Bell", initials: "LB", lanes: ["wors", "comm"], shepherd: "Rachel Thompson", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "2.2y" },
+  { slug: null, name: "Nina Rao", initials: "NR", lanes: ["wors", "comm", "serv"], shepherd: "Rachel Thompson", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "3.3y" },
+  { slug: null, name: "Sabrina Hill", initials: "SH", lanes: ["wors", "comm"], shepherd: "Rachel Thompson", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "0.8y" },
+  { slug: null, name: "Carla Brooks", initials: "CB", lanes: ["wors", "comm"], shepherd: "Rachel Thompson", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "2.4y" },
+  { slug: null, name: "Emily Watson", initials: "EW", lanes: ["wors", "comm"], shepherd: "Rachel Thompson", lastSeen: "Aug 10 · last wk", status: "active", risk: null, tenure: "1.2y" },
+  { slug: null, name: "Aisha Khan", initials: "AK", lanes: ["wors", "comm", "serv", "give"], shepherd: "Rachel Thompson", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "1.6y" },
+  // Other named people
+  { slug: null, name: "Ethan Park", initials: "EP", lanes: ["wors", "comm", "serv"], shepherd: "Brian Choi", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "0.9y" },
+  { slug: null, name: "Olivia Martin", initials: "OM", lanes: ["wors", "comm", "outr"], shepherd: "Karen Voss", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "2.4y" },
+  { slug: null, name: "Roberto Sanchez", initials: "RS", lanes: ["wors", "comm"], shepherd: "Christopher Walsh", lastSeen: "Aug 17 · this week", status: "active", risk: null, tenure: "1.2y" },
+  { slug: null, name: "Jeremy Vale", initials: "JV", lanes: ["wors", "comm"], shepherd: "Christopher Walsh", lastSeen: "Aug 10 · last wk", status: "active", risk: null, tenure: "0.7y" },
+  { slug: null, name: "Hassan Ali", initials: "HA", lanes: ["wors"], shepherd: null, lastSeen: "Aug 10 · last wk", status: "newcomer", risk: 35, tenure: "0.2y" },
+  { slug: null, name: "Andre Garcia", initials: "AG", lanes: ["wors", "comm"], shepherd: "Karen Voss", lastSeen: "Aug 03 · 2w ago", status: "fading", risk: 64, tenure: "2.0y" },
+  { slug: null, name: "Janelle Carter", initials: "JC", lanes: ["wors", "comm"], shepherd: "Jamal Williams", lastSeen: "Aug 03 · 2w ago", status: "active", risk: 32, tenure: "3.1y" },
+  { slug: null, name: "Brad Rivera", initials: "BR", lanes: [], shepherd: "David Kim", lastSeen: "Jun 22 · 8w ago", status: "inactive", risk: 38, tenure: "5.2y" },
+  // No-activity newcomers
+  { slug: null, name: "Tori Bennett", initials: "TB", lanes: [], shepherd: null, lastSeen: "first visit Aug 10", status: "newcomer", risk: null, tenure: "0.0y" },
+  { slug: null, name: "Sam Whitfield", initials: "SW", lanes: [], shepherd: null, lastSeen: "first visit Aug 17", status: "newcomer", risk: null, tenure: "0.0y" },
+  { slug: null, name: "Linnea Holst", initials: "LH", lanes: [], shepherd: null, lastSeen: "first visit Aug 03", status: "newcomer", risk: null, tenure: "0.0y" },
+];
+
+export function peopleInLane(laneKey: LaneKey): PersonRow[] {
+  if (laneKey === "none") {
+    return ALL_PEOPLE.filter((p) => p.lanes.length === 0);
+  }
+  return ALL_PEOPLE.filter((p) => p.lanes.includes(laneKey));
+}
+
+// ─── Groups (full list) ────────────────────────────────────────────────────
+
+export interface GroupRow {
+  slug: string;
+  name: string;
+  type: string;
+  members: number;
+  delta12w: number;
+  state: "growing" | "steady" | "shrinking" | "paused";
+  lead: string;
+  meeting: string;
+  spark: string;
+}
+
+export const ALL_GROUPS: GroupRow[] = [
+  {
+    slug: "young-married-connect",
+    name: "Young Married Connect",
+    type: "Community",
+    members: 22,
+    delta12w: 8,
+    state: "growing",
+    lead: "Tyler Rodriguez · co-lead Aliza Levy",
+    meeting: "Thu 7pm · Anaheim Hills",
+    spark: "M2 16 L12 14 L22 12 L32 9 L42 7 L52 5 L58 4",
+  },
+  {
+    slug: "tuesday-mens-bible-study",
+    name: "Tuesday Men's Bible Study",
+    type: "Community",
+    members: 11,
+    delta12w: 0,
+    state: "steady",
+    lead: "Mark Davies",
+    meeting: "Tue 6:30am · church basement",
+    spark: "M2 11 L12 12 L22 10 L32 11 L42 10 L52 11 L58 11",
+  },
+  {
+    slug: "wednesday-womens-group",
+    name: "Wednesday Women's Group",
+    type: "Community",
+    members: 9,
+    delta12w: -9,
+    state: "paused",
+    lead: "Rachel Thompson",
+    meeting: "paused · resumes Sept 4",
+    spark: "M2 5 L12 7 L22 9 L32 11 L42 13 L52 15 L58 17",
+  },
+  {
+    slug: "recovery-group",
+    name: "Recovery Group",
+    type: "Community",
+    members: 14,
+    delta12w: 6,
+    state: "growing",
+    lead: "Christopher Walsh · co-lead Carla Brooks",
+    meeting: "Mon 7pm · room 12",
+    spark: "M2 14 L12 13 L22 11 L32 9 L42 8 L52 7 L58 6",
+  },
+  {
+    slug: "marriage-mentoring",
+    name: "Marriage Mentoring",
+    type: "Community",
+    members: 8,
+    delta12w: 1,
+    state: "steady",
+    lead: "Mark + Lori Davies",
+    meeting: "1st & 3rd Sun · home",
+    spark: "M2 8 L12 8 L22 8 L32 7 L42 7 L52 7 L58 7",
+  },
+  {
+    slug: "college-ministry",
+    name: "College Ministry",
+    type: "Community",
+    members: 27,
+    delta12w: 3,
+    state: "growing",
+    lead: "Jamal Williams",
+    meeting: "Wed 8pm · Anaheim",
+    spark: "M2 12 L12 12 L22 11 L32 10 L42 9 L52 9 L58 8",
+  },
+  {
+    slug: "worship-team",
+    name: "Worship Team",
+    type: "Serve",
+    members: 12,
+    delta12w: -1,
+    state: "steady",
+    lead: "Brian Choi",
+    meeting: "Sat 4pm rehearsal · Sun 8/10:30am services",
+    spark: "M2 9 L12 10 L22 11 L32 11 L42 10 L52 11 L58 12",
+  },
+  {
+    slug: "hospitality-team",
+    name: "Hospitality Team",
+    type: "Serve",
+    members: 17,
+    delta12w: 1,
+    state: "steady",
+    lead: "Karen Voss",
+    meeting: "Sun 8/10:30am",
+    spark: "M2 10 L12 9 L22 10 L32 9 L42 9 L52 10 L58 9",
+  },
+  {
+    slug: "greeters",
+    name: "Greeters",
+    type: "Serve",
+    members: 14,
+    delta12w: 2,
+    state: "growing",
+    lead: "David Kim",
+    meeting: "Sun 8/10:30am",
+    spark: "M2 12 L12 12 L22 11 L32 10 L42 10 L52 9 L58 8",
+  },
+  {
+    slug: "kids-team",
+    name: "Kids Team",
+    type: "Serve",
+    members: 19,
+    delta12w: 0,
+    state: "steady",
+    lead: "Megan Sutter",
+    meeting: "Sun 8/10:30am",
+    spark: "M2 11 L12 11 L22 11 L32 10 L42 11 L52 11 L58 10",
+  },
+  {
+    slug: "soup-kitchen",
+    name: "Soup Kitchen",
+    type: "Outreach",
+    members: 23,
+    delta12w: 5,
+    state: "growing",
+    lead: "Karen Voss",
+    meeting: "1st Sat · downtown",
+    spark: "M2 14 L12 13 L22 12 L32 10 L42 9 L52 8 L58 7",
+  },
+  {
+    slug: "prayer-team",
+    name: "Prayer Team",
+    type: "Outreach",
+    members: 16,
+    delta12w: 2,
+    state: "steady",
+    lead: "Lori Davies",
+    meeting: "Sun 7:30am",
+    spark: "M2 10 L12 11 L22 10 L32 10 L42 9 L52 10 L58 9",
+  },
+];
+
+// ─── Movement feed (longer) ────────────────────────────────────────────────
+
+export interface MovementEvent {
+  date: string;
+  day: string;
+  type: "join" | "exit" | "handoff" | "return" | "milestone" | "promote";
+  text: string;
+}
+
+export const MOVEMENT_FEED: MovementEvent[] = [
+  { date: "Aug 18", day: "Mon", type: "milestone", text: "Aisha Khan made her first recurring gift — Giving lane added" },
+  { date: "Aug 17", day: "Sun", type: "return", text: "Hannah Voss returned after 4 months — first Sunday since April" },
+  { date: "Aug 17", day: "Sun", type: "milestone", text: "Newcomer's Lunch · 7 first-timers · 5 follow-ups booked" },
+  { date: "Aug 17", day: "Sun", type: "join", text: "Ethan Park joined the Greeters team — Serve lane added" },
+  { date: "Aug 14", day: "Thu", type: "exit", text: "Two Greene left the church — moved to Austin" },
+  { date: "Aug 13", day: "Tue", type: "handoff", text: "Rachel Thompson handed off Jenny Liu's care to Sarah Chen" },
+  { date: "Aug 13", day: "Tue", type: "join", text: "Olivia Martin signed up for Aug Soup Kitchen — Outreach lane added" },
+  { date: "Aug 12", day: "Wed", type: "join", text: "Carlos Mendoza joined Tuesday Men's Bible Study — Community lane added" },
+  { date: "Aug 12", day: "Wed", type: "promote", text: "Priya Patel flagged ready to co-lead a group" },
+  { date: "Aug 10", day: "Sun", type: "join", text: "Sam Whitfield · first visit · welcomed by greeters" },
+  { date: "Aug 10", day: "Sun", type: "milestone", text: "Tori Bennett completed newcomer track — eligible for group invite" },
+  { date: "Aug 09", day: "Sat", type: "milestone", text: "Christopher Walsh logged 24th month in Recovery Group — promote-to-shepherd flag raised" },
+  { date: "Aug 03", day: "Sun", type: "join", text: "Linnea Holst · first visit · brought by Priya Patel" },
+  { date: "Jul 31", day: "Wed", type: "exit", text: "Wednesday Women's Group ended its semester — 9 members on hold" },
+];
+
 // ─── Shepherding Hierarchy (Rachel Thompson) ─────────────────────────────
 
 export const FOCUS_SHEPHERD = {

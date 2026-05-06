@@ -10,6 +10,7 @@ import {
 } from "@/lib/pco";
 import { CredentialsCard } from "./credentials-card";
 import { ScheduleCard } from "./schedule-card";
+import { SchedulePreview } from "./schedule-preview";
 import { SyncNowButton } from "./sync-now-button";
 import { WhatToSyncCard } from "./what-to-sync-card";
 
@@ -107,9 +108,11 @@ export default async function PCOSettingsPage() {
           </Card>
         </div>
 
-        {/* Credentials + Instructions — heights tend to match, so OK side-by-side.
-            Each subsequent section is full width to avoid empty grid cells. */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+        {/* 2D paired layout — each row's left/right columns are picked to match
+            heights, so there's no whitespace gap. */}
+
+        {/* Row 1: Credentials | Instructions */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
           <div className="xl:col-span-2">
             <CredentialsCard
               initial={{
@@ -126,18 +129,16 @@ export default async function PCOSettingsPage() {
           <PCOInstructionsPanel />
         </div>
 
-        {/* What to sync — full width, separate section */}
-        <WhatToSyncCard
-          initial={entityToggles}
-          entities={SYNC_ENTITIES}
-          isAdmin={session.role === "admin"}
-        />
-
-        {/* Auto-sync schedule — full width, separate section, below What to sync */}
-        <ScheduleCard initial={settings} isAdmin={session.role === "admin"} />
-
-        {/* Recent syncs — full width at the bottom */}
-        <Card>
+        {/* Row 2: What to sync | Recent syncs */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
+          <div className="xl:col-span-2">
+            <WhatToSyncCard
+              initial={entityToggles}
+              entities={SYNC_ENTITIES}
+              isAdmin={session.role === "admin"}
+            />
+          </div>
+          <Card className="h-full">
           <CardHeader
             title="Recent syncs"
             right={
@@ -152,38 +153,41 @@ export default async function PCOSettingsPage() {
               <span className="text-fg font-medium">Sync now</span> at the top.
             </div>
           ) : (
-            <table className="w-full text-sm">
-              <thead className="text-xs text-muted">
-                <tr className="border-b border-border-soft">
-                  <th className="text-left font-medium px-5 py-2">When</th>
-                  <th className="text-left font-medium px-5 py-2">Trigger</th>
-                  <th className="text-left font-medium px-5 py-2">Status</th>
-                  <th className="text-right font-medium px-5 py-2 tnum">Changes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentSyncs.map((r) => (
-                  <tr key={r.id} className="border-b border-border-softer hover:bg-bg-elev-2/60">
-                    <td className="px-5 py-2.5 tnum text-muted">
+            <ul className="divide-y divide-border-softer">
+              {recentSyncs.map((r) => (
+                <li key={r.id} className="px-5 py-3 text-sm">
+                  <div className="flex items-baseline justify-between mb-0.5">
+                    <span className="tnum text-xs text-muted">
                       {new Date(r.startedAt).toLocaleString()}
-                    </td>
-                    <td className="px-5 py-2.5 text-muted">{r.trigger}</td>
-                    <td className="px-5 py-2.5">
-                      {r.status === "ok" ? (
-                        <span className="text-good-soft-fg font-medium">OK</span>
-                      ) : (
-                        <span className="text-warn-soft-fg font-medium">
-                          Partial · {r.warning ?? ""}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-5 py-2.5 text-right tnum">{r.changes}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </span>
+                    <span
+                      className={
+                        r.status === "ok"
+                          ? "text-good-soft-fg text-xs font-medium"
+                          : "text-warn-soft-fg text-xs font-medium"
+                      }
+                    >
+                      {r.status === "ok" ? "OK" : "Partial"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted text-xs">{r.trigger}</span>
+                    <span className="tnum text-xs">{r.changes} changes</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </Card>
+        </div>
+
+        {/* Row 3: Auto-sync schedule | Schedule preview */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
+          <div className="xl:col-span-2">
+            <ScheduleCard initial={settings} isAdmin={session.role === "admin"} />
+          </div>
+          <SchedulePreview settings={settings} />
+        </div>
 
         <p className="text-xs text-muted">
           <span className="text-fg">Privacy:</span> credentials are AES-256-GCM encrypted at

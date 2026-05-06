@@ -309,7 +309,11 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        disabled={disabled}
+        // Locked saved-state uses readOnly so the value stays at full
+        // foreground color (not the disabled grey). Editing-but-disabled
+        // still uses disabled (admin-only viewers see greyed inputs).
+        disabled={disabled && !locked}
+        readOnly={locked}
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="off"
@@ -318,13 +322,14 @@ function Field({
         data-lpignore="true"
         data-form-type="other"
         style={
-          // Visually mask secret/saved values without using type=password
-          // (which triggers browser/manager autofill).
+          // Visually mask the secret only while editing it (so the user
+          // can't accidentally screen-share it). When locked, the value
+          // is already pre-masked with bullet glyphs server-side.
           type === "password" && !locked
             ? ({ WebkitTextSecurity: "disc" } as React.CSSProperties)
             : undefined
         }
-        className="w-full bg-transparent border border-border-soft rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent disabled:opacity-60"
+        className="w-full bg-transparent border border-border-soft rounded px-3 py-2 text-sm font-mono text-fg placeholder:text-subtle focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent disabled:opacity-60 read-only:cursor-default read-only:text-fg"
       />
       <p className="text-xs text-subtle mt-1.5">{hint}</p>
     </div>
