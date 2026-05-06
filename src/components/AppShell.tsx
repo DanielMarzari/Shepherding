@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { href: "/people", label: "People" },
   { href: "/groups", label: "Groups" },
   { href: "/movement", label: "Movement" },
+  { href: "/metrics", label: "Metrics" },
 ];
 
 export async function AppShell({

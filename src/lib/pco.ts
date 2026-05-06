@@ -173,13 +173,19 @@ export interface SyncSettings {
   runAtDom: number;
   emailOnFailure: boolean;
   autoResolveConflicts: boolean;
+  /** Months window for "active" classification (default 18). */
+  activityMonths: number;
+  /** Always look back this many months on each sync, even with a newer
+   *  cursor — catches retroactive PCO edits (default 3). */
+  syncThresholdMonths: number;
 }
 
 export function getSyncSettings(orgId: number): SyncSettings {
   const row = getDb()
     .prepare(
       `SELECT enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
-              email_on_failure, auto_resolve_conflicts
+              email_on_failure, auto_resolve_conflicts,
+              activity_months, sync_threshold_months
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -191,6 +197,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
         run_at_dom: number;
         email_on_failure: number;
         auto_resolve_conflicts: number;
+        activity_months: number;
+        sync_threshold_months: number;
       }
     | undefined;
   if (!row) {
@@ -202,9 +210,10 @@ export function getSyncSettings(orgId: number): SyncSettings {
       runAtDom: 1,
       emailOnFailure: true,
       autoResolveConflicts: false,
+      activityMonths: 18,
+      syncThresholdMonths: 3,
     };
   }
-  // Coerce any stale sub-daily frequencies (from before this UI restriction) to "daily".
   const freq: SyncFrequency =
     row.frequency === "weekly" || row.frequency === "monthly" ? row.frequency : "daily";
   return {
@@ -215,6 +224,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
     runAtDom: row.run_at_dom,
     emailOnFailure: !!row.email_on_failure,
     autoResolveConflicts: !!row.auto_resolve_conflicts,
+    activityMonths: row.activity_months ?? 18,
+    syncThresholdMonths: row.sync_threshold_months ?? 3,
   };
 }
 
@@ -223,8 +234,9 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
     .prepare(
       `INSERT INTO pco_sync_settings
          (org_id, enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
-          email_on_failure, auto_resolve_conflicts, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          email_on_failure, auto_resolve_conflicts, activity_months,
+          sync_threshold_months, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id) DO UPDATE SET
          enabled = excluded.enabled,
          frequency = excluded.frequency,
@@ -233,6 +245,8 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          run_at_dom = excluded.run_at_dom,
          email_on_failure = excluded.email_on_failure,
          auto_resolve_conflicts = excluded.auto_resolve_conflicts,
+         activity_months = excluded.activity_months,
+         sync_threshold_months = excluded.sync_threshold_months,
          updated_at = excluded.updated_at`,
     )
     .run(
@@ -244,7 +258,23 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
       s.runAtDom,
       s.emailOnFailure ? 1 : 0,
       s.autoResolveConflicts ? 1 : 0,
+      Math.max(1, Math.min(60, Math.floor(s.activityMonths))),
+      Math.max(1, Math.min(60, Math.floor(s.syncThresholdMonths))),
     );
+}
+
+/** Update only the metric-related thresholds (keeps the rest untouched). */
+export function saveMetricsSettings(
+  orgId: number,
+  activityMonths: number,
+  syncThresholdMonths: number,
+) {
+  const current = getSyncSettings(orgId);
+  saveSyncSettings(orgId, {
+    ...current,
+    activityMonths: Math.max(1, Math.min(60, Math.floor(activityMonths))),
+    syncThresholdMonths: Math.max(1, Math.min(60, Math.floor(syncThresholdMonths))),
+  });
 }
 
 // ─── What to sync (per-entity toggles) ────────────────────────────────────

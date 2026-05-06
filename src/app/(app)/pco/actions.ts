@@ -5,6 +5,7 @@ import { requireOrg } from "@/lib/auth";
 import {
   type SyncFrequency,
   type SyncSettings,
+  getSyncSettings,
   saveCreds,
   saveSyncEntities,
   saveSyncSettings,
@@ -104,6 +105,8 @@ export async function saveSyncSettingsAction(
   const runAtDom = clamp(runAtDomRaw, 1, 28);
   const emailOnFailure = formData.get("emailOnFailure") === "on";
   const autoResolveConflicts = formData.get("autoResolveConflicts") === "on";
+  // Preserve threshold values managed on the Metrics page.
+  const current = getSyncSettings(s.orgId);
   const settings: SyncSettings = {
     enabled,
     frequency,
@@ -112,6 +115,8 @@ export async function saveSyncSettingsAction(
     runAtDom,
     emailOnFailure,
     autoResolveConflicts,
+    activityMonths: current.activityMonths,
+    syncThresholdMonths: current.syncThresholdMonths,
   };
   saveSyncSettings(s.orgId, settings);
   revalidatePath("/pco");

@@ -42,3 +42,19 @@ export function last4(value: string): string {
   if (value.length <= 4) return value;
   return value.slice(-4);
 }
+
+/** Encrypt a JSON-serializable value. */
+export function encryptJson(value: unknown): string {
+  return encrypt(JSON.stringify(value));
+}
+
+/** Decrypt a JSON value previously stored with encryptJson. Returns null on
+ *  missing input or any decryption error. */
+export function decryptJson<T>(payload: string | null | undefined): T | null {
+  if (!payload) return null;
+  try {
+    return JSON.parse(decrypt(payload)) as T;
+  } catch {
+    return null;
+  }
+}

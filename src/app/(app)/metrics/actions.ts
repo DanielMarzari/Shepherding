@@ -1,0 +1,26 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { requireOrg } from "@/lib/auth";
+import { saveMetricsSettings } from "@/lib/pco";
+
+export interface MetricsSaveState {
+  status: "idle" | "saved" | "error";
+  message?: string;
+}
+
+export async function saveThresholdsAction(
+  _prev: MetricsSaveState | null,
+  formData: FormData,
+): Promise<MetricsSaveState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") {
+    return { status: "error", message: "Only admins can change thresholds." };
+  }
+  const activity = Number(formData.get("activityMonths") ?? 18);
+  const sync = Number(formData.get("syncThresholdMonths") ?? 3);
+  saveMetricsSettings(s.orgId, activity, sync);
+  revalidatePath("/metrics");
+  revalidatePath("/people");
+  return { status: "saved", message: "Thresholds saved." };
+}
