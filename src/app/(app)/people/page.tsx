@@ -14,8 +14,11 @@ import {
 
 const PAGE_SIZE = 100;
 
-const TABS: { key: "all" | ActivityClassification; label: string }[] = [
+type TabKey = "all" | "shepherded" | "active" | "present" | "inactive";
+
+const TABS: { key: TabKey; label: string }[] = [
   { key: "all", label: "All" },
+  { key: "shepherded", label: "Shepherded" },
   { key: "active", label: "Active" },
   { key: "present", label: "Present" },
   { key: "inactive", label: "Inactive" },
@@ -38,9 +41,7 @@ export default async function PeoplePage({
   const session = await requireOrg();
   const settings = getSyncSettings(session.orgId);
   const params = await searchParams;
-  const tab = (TABS.find((t) => t.key === params.tab)?.key ?? "all") as
-    | "all"
-    | ActivityClassification;
+  const tab = (TABS.find((t) => t.key === params.tab)?.key ?? "all") as TabKey;
   const page = Math.max(1, Number(params.page ?? 1) || 1);
   const offset = (page - 1) * PAGE_SIZE;
   const sort: SortColumn = VALID_SORTS.includes(params.sort as SortColumn)
@@ -52,7 +53,7 @@ export default async function PeoplePage({
   const result = listPeople({
     orgId: session.orgId,
     activityMonths: settings.activityMonths,
-    tab,
+    tab: tab as Parameters<typeof listPeople>[0]["tab"],
     limit: PAGE_SIZE,
     offset,
     sort,
@@ -86,50 +87,58 @@ export default async function PeoplePage({
             <p className="text-muted text-sm mt-1">
               {counts.total === 0
                 ? "No synced people yet — connect PCO and run a sync."
-                : `${counts.total.toLocaleString()} people synced from PCO. Activity threshold: ${settings.activityMonths} months (set in Metrics).`}
+                : `${counts.visibleByDefault.toLocaleString()} visible · ${counts.inactive.toLocaleString()} inactive (hidden) · activity threshold ${settings.activityMonths}mo (set in Metrics)`}
             </p>
           </div>
         </div>
 
-        {/* Stat strip */}
+        {/* Stat strip: Shepherded · Active · Present · Inactive */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Total in system</div>
-            <div className="tnum text-2xl font-semibold">{counts.total.toLocaleString()}</div>
-            <div className="text-xs text-muted mt-1">all people synced</div>
+            <div className="text-xs text-muted mb-1.5">Shepherded</div>
+            <div className="tnum text-2xl font-semibold">{counts.shepherded}</div>
+            <div className="text-xs text-muted mt-1">in a group or team</div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Active</div>
-            <div className="tnum text-2xl font-semibold text-good-soft-fg">{counts.active}</div>
-            <div className="text-xs text-muted mt-1">forms / groups / teams (later)</div>
+            <div className="tnum text-2xl font-semibold text-good-soft-fg">
+              {counts.active.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">forms · registrations · etc.</div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Present</div>
-            <div className="tnum text-2xl font-semibold text-accent">{counts.present.toLocaleString()}</div>
+            <div className="tnum text-2xl font-semibold text-accent">
+              {counts.present.toLocaleString()}
+            </div>
             <div className="text-xs text-muted mt-1">
               touched in last {settings.activityMonths}mo
             </div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Inactive</div>
-            <div className="tnum text-2xl font-semibold text-warn-soft-fg">{counts.inactive.toLocaleString()}</div>
-            <div className="text-xs text-muted mt-1">no updates {settings.activityMonths}mo+</div>
+            <div className="tnum text-2xl font-semibold text-warn-soft-fg">
+              {counts.inactive.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">hidden from All — historical</div>
           </Card>
         </div>
 
-        {/* Tabs — proper aligned underline pattern */}
+        {/* Tabs */}
         <div className="border-b border-border-soft">
           <nav className="flex gap-1 -mb-px overflow-x-auto">
             {TABS.map((t) => {
               const isActive = t.key === tab;
               const count =
                 t.key === "all"
-                  ? counts.total
-                  : t.key === "active"
-                    ? counts.active
-                    : t.key === "present"
-                      ? counts.present
-                      : counts.inactive;
+                  ? counts.visibleByDefault
+                  : t.key === "shepherded"
+                    ? counts.shepherded
+                    : t.key === "active"
+                      ? counts.active
+                      : t.key === "present"
+                        ? counts.present
+                        : counts.inactive;
               return (
                 <Link
                   key={t.key}
@@ -142,9 +151,7 @@ export default async function PeoplePage({
                 >
                   <span>{t.label}</span>
                   <span
-                    className={`tnum text-xs ${
-                      isActive ? "text-accent" : "text-subtle"
-                    }`}
+                    className={`tnum text-xs ${isActive ? "text-accent" : "text-subtle"}`}
                   >
                     {count.toLocaleString()}
                   </span>
@@ -166,13 +173,12 @@ export default async function PeoplePage({
               , every person from your PCO database will appear here — encrypted at rest.
             </p>
           </Card>
-        ) : tab === "active" ? (
+        ) : tab === "shepherded" ? (
           <Card className="p-10 text-center">
-            <h3 className="font-semibold mb-2">Coming with richer signals</h3>
+            <h3 className="font-semibold mb-2">Coming with group/team sync</h3>
             <p className="text-sm text-muted max-w-md mx-auto">
-              The Active classification depends on form submissions, group memberships, team
-              participation, and check-in attendance. Once those are synced, this tab will
-              populate.
+              Shepherded counts everyone in a group or team. Once group + team membership is
+              synced from PCO, this tab populates.
             </p>
           </Card>
         ) : (
@@ -185,8 +191,7 @@ export default async function PeoplePage({
           />
         )}
 
-        {/* Pagination */}
-        {(tab === "all" || tab === "present" || tab === "inactive") && counts.total > 0 && (
+        {tab !== "shepherded" && counts.total > 0 && (
           <Pagination
             page={page}
             totalPages={totalPages}
@@ -222,77 +227,98 @@ function PeopleTable({
           </span>
         }
       />
-      <table className="w-full text-sm">
-        <thead className="text-xs text-muted">
-          <tr className="border-b border-border-soft">
-            <th className="text-left font-medium px-5 py-2">Name</th>
-            <SortableTh
-              label="Status"
-              column="status"
-              currentSort={sort}
-              currentDir={dir}
-              link={sortLink("status")}
-              className="hidden md:table-cell"
-            />
-            <SortableTh
-              label="Membership"
-              column="membership"
-              currentSort={sort}
-              currentDir={dir}
-              link={sortLink("membership")}
-              className="hidden lg:table-cell"
-            />
-            <SortableTh
-              label="PCO updated"
-              column="updated"
-              currentSort={sort}
-              currentDir={dir}
-              link={sortLink("updated")}
-              className="hidden lg:table-cell"
-            />
-            <SortableTh
-              label="PCO created"
-              column="created"
-              currentSort={sort}
-              currentDir={dir}
-              link={sortLink("created")}
-              className="hidden xl:table-cell"
-              align="right"
-            />
-          </tr>
-        </thead>
-        <tbody>
-          {people.map((p) => (
-            <tr key={p.pcoId} className="border-b border-border-softer hover:bg-bg-elev-2/60">
-              <td className="px-5 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Avatar initials={p.initials} size="sm" />
-                  <div>
-                    <div className="font-medium">{p.fullName}</div>
-                    <div className="text-xs text-muted">PCO #{p.pcoId}</div>
-                  </div>
-                </div>
-              </td>
-              <td className="px-5 py-2.5 hidden md:table-cell">
-                <Pill tone={p.classification === "present" ? "accent" : "warn"}>
-                  {p.classification}
-                </Pill>
-              </td>
-              <td className="px-5 py-2.5 hidden lg:table-cell text-muted">
-                {p.membershipType ?? <span className="text-subtle">—</span>}
-              </td>
-              <td className="px-5 py-2.5 hidden lg:table-cell text-muted">
-                {p.pcoUpdatedAt ? new Date(p.pcoUpdatedAt).toLocaleDateString() : "—"}
-              </td>
-              <td className="px-5 py-2.5 text-right hidden xl:table-cell tnum text-muted">
-                {p.pcoCreatedAt ? new Date(p.pcoCreatedAt).toLocaleDateString() : "—"}
-              </td>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm table-fixed min-w-[760px]">
+          <colgroup>
+            <col className="w-[40%]" />
+            <col className="w-[14%]" />
+            <col className="w-[18%]" />
+            <col className="w-[14%]" />
+            <col className="w-[14%]" />
+          </colgroup>
+          <thead className="text-xs text-muted">
+            <tr className="border-b border-border-soft">
+              <th className="text-left font-medium px-5 py-2">Name</th>
+              <SortableTh
+                label="Status"
+                column="status"
+                currentSort={sort}
+                currentDir={dir}
+                link={sortLink("status")}
+              />
+              <SortableTh
+                label="Membership"
+                column="membership"
+                currentSort={sort}
+                currentDir={dir}
+                link={sortLink("membership")}
+              />
+              <SortableTh
+                label="Updated"
+                column="updated"
+                currentSort={sort}
+                currentDir={dir}
+                link={sortLink("updated")}
+              />
+              <SortableTh
+                label="Created"
+                column="created"
+                currentSort={sort}
+                currentDir={dir}
+                link={sortLink("created")}
+                align="right"
+              />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {people.map((p) => (
+              <PersonRow key={p.pcoId} p={p} />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
+}
+
+function PersonRow({ p }: { p: SyncedPersonRow }) {
+  return (
+    <tr className="border-b border-border-softer hover:bg-bg-elev-2/60">
+      <td className="px-5 py-2.5">
+        <Link
+          href={`/people/${p.pcoId}`}
+          className="flex items-center gap-3 group"
+        >
+          <Avatar initials={p.initials} size="sm" />
+          <div className="min-w-0">
+            <div className="font-medium truncate group-hover:text-accent">
+              {p.fullName}
+            </div>
+            <div className="text-xs text-muted">PCO #{p.pcoId}</div>
+          </div>
+        </Link>
+      </td>
+      <td className="px-5 py-2.5">
+        <Pill tone={pillTone(p.classification)}>{p.classification}</Pill>
+      </td>
+      <td className="px-5 py-2.5 text-muted truncate">
+        {p.membershipType ?? <span className="text-subtle">—</span>}
+      </td>
+      <td className="px-5 py-2.5 text-muted">
+        {p.pcoUpdatedAt ? new Date(p.pcoUpdatedAt).toLocaleDateString() : "—"}
+      </td>
+      <td className="px-5 py-2.5 text-right tnum text-muted">
+        {p.pcoCreatedAt ? new Date(p.pcoCreatedAt).toLocaleDateString() : "—"}
+      </td>
+    </tr>
+  );
+}
+
+function pillTone(c: ActivityClassification): "good" | "accent" | "warn" | "muted" {
+  if (c === "active") return "good";
+  if (c === "shepherded") return "accent";
+  if (c === "present") return "accent";
+  return "warn";
 }
 
 function SortableTh({
@@ -301,7 +327,6 @@ function SortableTh({
   currentSort,
   currentDir,
   link,
-  className = "",
   align = "left",
 }: {
   label: string;
@@ -309,21 +334,18 @@ function SortableTh({
   currentSort: SortColumn;
   currentDir: SortDir;
   link: string;
-  className?: string;
   align?: "left" | "right";
 }) {
   const isActive = currentSort === column;
-  const arrow = isActive ? (currentDir === "asc" ? "▲" : "▼") : "";
+  const arrow = isActive ? (currentDir === "asc" ? "▲" : "▼") : "↕";
   return (
-    <th className={`font-medium px-5 py-2 ${className}`} style={{ textAlign: align }}>
+    <th className="font-medium px-5 py-2" style={{ textAlign: align }}>
       <Link
         href={link}
-        className={`inline-flex items-center gap-1 hover:text-fg ${
-          isActive ? "text-fg" : ""
-        }`}
+        className={`inline-flex items-center gap-1 hover:text-fg ${isActive ? "text-fg" : ""}`}
       >
         {label}
-        <span className="text-[10px] tnum">{arrow || "↕"}</span>
+        <span className="text-[10px] tnum">{arrow}</span>
       </Link>
     </th>
   );

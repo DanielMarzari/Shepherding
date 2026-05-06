@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { LANE_STATS } from "@/lib/mock";
 import { getSession, listOrgs } from "@/lib/auth";
 import { logoutAction } from "@/app/orgs/actions";
+import { SearchBar } from "./SearchBar";
 
 const NAV_ITEMS = [
   { href: "/", label: "Home" },
@@ -171,10 +172,7 @@ export async function AppShell({
             <span className="text-fg truncate">{breadcrumb}</span>
           </div>
           <div className="flex items-center gap-3">
-            <input
-              className="hidden lg:block bg-transparent border border-border-soft rounded px-3 py-1.5 text-sm w-72 placeholder:text-subtle"
-              placeholder="Jump to person, group…  ⌘K"
-            />
+            <SearchBar />
             <div
               className="w-7 h-7 rounded-full bg-bg-elev-2 grid place-items-center text-xs font-medium"
               title={session?.user.name}

@@ -3,7 +3,13 @@ import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 import { getExcludedMembershipTypes } from "./pco";
 
-export type ActivityClassification = "active" | "present" | "inactive";
+// Classification (priority: shepherded > active > present > inactive):
+//   shepherded = in a group OR a team  (no group/team data synced yet — 0)
+//   active     = NOT shepherded, has form submission / event registration
+//                / similar within threshold
+//   present    = NOT shepherded/active, has pco_updated_at within threshold
+//   inactive   = no measurable activity within threshold
+export type ActivityClassification = "shepherded" | "active" | "present" | "inactive";
 
 export type SortColumn = "updated" | "created" | "membership" | "status";
 export type SortDir = "asc" | "desc";
@@ -21,6 +27,7 @@ export interface SyncedPersonRow {
   maritalStatus: string | null;
   pcoCreatedAt: string | null;
   pcoUpdatedAt: string | null;
+  lastFormSubmissionAt: string | null;
   classification: ActivityClassification;
 }
 
@@ -39,6 +46,7 @@ interface RawRow {
   marital_status: string | null;
   pco_created_at: string | null;
   pco_updated_at: string | null;
+  last_form_submission_at: string | null;
 }
 
 function cutoffIso(activityMonths: number): string {
@@ -49,11 +57,13 @@ function cutoffIso(activityMonths: number): string {
 
 function classify(
   pcoUpdatedAt: string | null,
+  lastFormSubmissionAt: string | null,
   activityMonths: number,
 ): ActivityClassification {
-  if (pcoUpdatedAt && pcoUpdatedAt >= cutoffIso(activityMonths)) {
-    return "present";
-  }
+  // Shepherded would be checked here once group/team membership lands.
+  const cutoff = cutoffIso(activityMonths);
+  if (lastFormSubmissionAt && lastFormSubmissionAt >= cutoff) return "active";
+  if (pcoUpdatedAt && pcoUpdatedAt >= cutoff) return "present";
   return "inactive";
 }
 
@@ -78,14 +88,16 @@ function toRow(r: RawRow, activityMonths: number): SyncedPersonRow {
     maritalStatus: r.marital_status,
     pcoCreatedAt: r.pco_created_at,
     pcoUpdatedAt: r.pco_updated_at,
-    classification: classify(r.pco_updated_at, activityMonths),
+    lastFormSubmissionAt: r.last_form_submission_at,
+    classification: classify(r.pco_updated_at, r.last_form_submission_at, activityMonths),
   };
 }
 
 export interface ListPeopleOptions {
   orgId: number;
   activityMonths: number;
-  tab: "all" | ActivityClassification;
+  /** "all" hides inactive by default; pass "all-incl-inactive" to override. */
+  tab: "all" | ActivityClassification | "all-incl-inactive";
   limit: number;
   offset: number;
   sort: SortColumn;
@@ -109,7 +121,7 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
   const rows = db
     .prepare(
       `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
-              pco_created_at, pco_updated_at
+              pco_created_at, pco_updated_at, last_form_submission_at
          FROM pco_people
          ${whereSql}
          ${orderSql}
@@ -129,26 +141,46 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
 
 function buildWhere(
   orgId: number,
-  tab: "all" | ActivityClassification,
+  tab: ListPeopleOptions["tab"],
   cutoff: string,
   excludedTypes: string[],
 ): { whereSql: string; whereArgs: (string | number)[] } {
   const parts: string[] = ["org_id = ?"];
   const args: (string | number)[] = [orgId];
 
-  if (tab === "active") {
-    parts.push("1 = 0"); // reserved — none qualify yet
+  // Classification filters. Priority order matters: shepherded > active >
+  // present > inactive. Each tab applies the matching condition AND
+  // negates the higher-priority ones (so a person never appears in both
+  // active and present, etc.).
+  if (tab === "shepherded") {
+    parts.push("1 = 0"); // no group/team data yet
+  } else if (tab === "active") {
+    parts.push("last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?");
+    args.push(cutoff);
   } else if (tab === "present") {
-    parts.push("pco_updated_at IS NOT NULL AND pco_updated_at >= ?");
-    args.push(cutoff);
+    parts.push(
+      "(last_form_submission_at IS NULL OR last_form_submission_at < ?)",
+      "pco_updated_at IS NOT NULL AND pco_updated_at >= ?",
+    );
+    args.push(cutoff, cutoff);
   } else if (tab === "inactive") {
-    parts.push("(pco_updated_at IS NULL OR pco_updated_at < ?)");
-    args.push(cutoff);
+    parts.push(
+      "(last_form_submission_at IS NULL OR last_form_submission_at < ?)",
+      "(pco_updated_at IS NULL OR pco_updated_at < ?)",
+    );
+    args.push(cutoff, cutoff);
+  } else if (tab === "all") {
+    // "All" hides inactive by default — surface them only via the Inactive tab.
+    // Anyone with EITHER form-activity or recent updated_at is visible.
+    parts.push(
+      "((last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?) OR (pco_updated_at IS NOT NULL AND pco_updated_at >= ?))",
+    );
+    args.push(cutoff, cutoff);
   }
+  // "all-incl-inactive" applies no classification filter.
 
   if (excludedTypes.length > 0) {
     const placeholders = excludedTypes.map(() => "?").join(",");
-    // membership_type can be NULL, which we treat as "no type" and never exclude.
     parts.push(`(membership_type IS NULL OR membership_type NOT IN (${placeholders}))`);
     args.push(...excludedTypes);
   }
@@ -158,9 +190,6 @@ function buildWhere(
 
 function buildOrderBy(sort: SortColumn, dir: SortDir, cutoff: string): string {
   const direction = dir === "asc" ? "ASC" : "DESC";
-  // SQLite uses NULLS LAST when sorting DESC by default for column with
-  // null values? Actually no — explicit NULLS LAST keeps null rows at
-  // the bottom regardless of direction.
   const nulls = "NULLS LAST";
   switch (sort) {
     case "updated":
@@ -170,10 +199,15 @@ function buildOrderBy(sort: SortColumn, dir: SortDir, cutoff: string): string {
     case "membership":
       return `ORDER BY membership_type ${direction} ${nulls}, pco_updated_at DESC`;
     case "status": {
-      // Present (updated within threshold) vs Inactive — sort by the boolean.
-      const presentExpr = `(pco_updated_at IS NOT NULL AND pco_updated_at >= '${cutoff}')`;
-      // direction asc = inactive first, desc = present first
-      return `ORDER BY ${presentExpr} ${direction}, pco_updated_at DESC`;
+      // Active=2, Present=1, Inactive=0 (so DESC = active first, ASC = inactive first)
+      const expr = `(
+        CASE
+          WHEN last_form_submission_at IS NOT NULL AND last_form_submission_at >= '${cutoff}' THEN 2
+          WHEN pco_updated_at IS NOT NULL AND pco_updated_at >= '${cutoff}' THEN 1
+          ELSE 0
+        END
+      )`;
+      return `ORDER BY ${expr} ${direction}, pco_updated_at DESC`;
     }
     default:
       return `ORDER BY pco_updated_at DESC ${nulls}`;
@@ -182,10 +216,12 @@ function buildOrderBy(sort: SortColumn, dir: SortDir, cutoff: string): string {
 
 export interface ClassificationCounts {
   total: number;
+  shepherded: number;
   active: number;
   present: number;
   inactive: number;
-  shepherded: number;
+  /** Total minus inactive — what "All" shows by default. */
+  visibleByDefault: number;
 }
 
 export function getClassificationCounts(
@@ -199,26 +235,141 @@ export function getClassificationCounts(
     excluded.length === 0
       ? ""
       : ` AND (membership_type IS NULL OR membership_type NOT IN (${excluded.map(() => "?").join(",")}))`;
-  const args = [cutoff, cutoff, orgId, ...excluded];
+  const args = [cutoff, cutoff, cutoff, cutoff, orgId, ...excluded];
   const row = db
     .prepare(
       `SELECT
          COUNT(*) AS total,
-         SUM(CASE WHEN pco_updated_at IS NOT NULL AND pco_updated_at >= ? THEN 1 ELSE 0 END) AS present,
-         SUM(CASE WHEN pco_updated_at IS NULL OR pco_updated_at < ? THEN 1 ELSE 0 END) AS inactive
+         SUM(CASE WHEN last_form_submission_at IS NOT NULL AND last_form_submission_at >= ? THEN 1 ELSE 0 END) AS active,
+         SUM(CASE
+               WHEN (last_form_submission_at IS NULL OR last_form_submission_at < ?)
+                AND (pco_updated_at IS NOT NULL AND pco_updated_at >= ?)
+               THEN 1 ELSE 0 END) AS present,
+         SUM(CASE
+               WHEN (last_form_submission_at IS NULL OR last_form_submission_at < ?)
+                AND (pco_updated_at IS NULL OR pco_updated_at < ?)
+               THEN 1 ELSE 0 END) AS inactive
        FROM pco_people
        WHERE org_id = ?${exclSql}`,
     )
-    .get(...args) as {
+    .get(...[cutoff, cutoff, cutoff, cutoff, cutoff, orgId, ...excluded]) as {
     total: number;
+    active: number | null;
     present: number | null;
     inactive: number | null;
   };
+  void args; // (kept for potential future debug)
+  const active = row.active ?? 0;
+  const present = row.present ?? 0;
+  const inactive = row.inactive ?? 0;
   return {
     total: row.total,
-    active: 0,
-    present: row.present ?? 0,
-    inactive: row.inactive ?? 0,
-    shepherded: 0,
+    shepherded: 0, // reserved — needs group/team data
+    active,
+    present,
+    inactive,
+    visibleByDefault: row.total - inactive,
   };
+}
+
+// ─── Single-person fetch (for the profile page) ────────────────────────
+
+export function getPersonByPcoId(
+  orgId: number,
+  pcoId: string,
+  activityMonths: number,
+): SyncedPersonRow | null {
+  const row = getDb()
+    .prepare(
+      `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
+              pco_created_at, pco_updated_at, last_form_submission_at
+         FROM pco_people
+         WHERE org_id = ? AND pco_id = ?`,
+    )
+    .get(orgId, pcoId) as RawRow | undefined;
+  if (!row) return null;
+  return toRow(row, activityMonths);
+}
+
+export interface PersonFormSubmission {
+  formId: string;
+  formName: string | null;
+  pcoId: string;
+  createdAt: string | null;
+  verified: boolean;
+}
+
+export function listPersonFormSubmissions(
+  orgId: number,
+  pcoId: string,
+): PersonFormSubmission[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT s.form_id, s.pco_id, s.pco_created_at, s.verified, f.name AS form_name
+         FROM pco_form_submissions s
+         LEFT JOIN pco_forms f ON f.org_id = s.org_id AND f.pco_id = s.form_id
+         WHERE s.org_id = ? AND s.person_id = ?
+         ORDER BY s.pco_created_at DESC`,
+    )
+    .all(orgId, pcoId) as {
+    form_id: string;
+    pco_id: string;
+    pco_created_at: string | null;
+    verified: number;
+    form_name: string | null;
+  }[];
+  return rows.map((r) => ({
+    formId: r.form_id,
+    formName: r.form_name,
+    pcoId: r.pco_id,
+    createdAt: r.pco_created_at,
+    verified: !!r.verified,
+  }));
+}
+
+// ─── Search ────────────────────────────────────────────────────────────
+
+export interface SearchHit {
+  pcoId: string;
+  fullName: string;
+  initials: string;
+  classification: ActivityClassification;
+  membershipType: string | null;
+}
+
+/** Decrypt-and-match across all synced people for the org. With ~33k
+ *  rows this takes ~50-150ms server-side; called from a server action
+ *  on each keystroke (the client debounces). */
+export function searchPeople(
+  orgId: number,
+  query: string,
+  activityMonths: number,
+  limit = 8,
+): SearchHit[] {
+  const q = query.trim().toLowerCase();
+  if (q.length < 2) return [];
+  const rows = getDb()
+    .prepare(
+      `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
+              pco_created_at, pco_updated_at, last_form_submission_at
+         FROM pco_people
+         WHERE org_id = ?`,
+    )
+    .all(orgId) as RawRow[];
+  const hits: SearchHit[] = [];
+  for (const r of rows) {
+    const person = toRow(r, activityMonths);
+    const haystack = `${person.firstName ?? ""} ${person.lastName ?? ""}`.toLowerCase();
+    if (haystack.includes(q)) {
+      hits.push({
+        pcoId: person.pcoId,
+        fullName: person.fullName,
+        initials: person.initials,
+        classification: person.classification,
+        membershipType: person.membershipType,
+      });
+      if (hits.length >= limit) break;
+    }
+  }
+  return hits;
 }

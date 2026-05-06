@@ -489,20 +489,19 @@ function effectiveCursor(
 
 // ─── Activity computation ──────────────────────────────────────────────
 
-/** Set last_activity_at = max(pco_updated_at, max form submission created_at)
- *  for every person in the org. Cheap on a few hundred rows. */
+/** Sets last_form_submission_at = max(pco_created_at) per person across
+ *  pco_form_submissions. Used by the "Active" classification — someone
+ *  with a recent form submission is Active even if their PCO record
+ *  hasn't been touched in a while. */
 function refreshLastActivity(orgId: number) {
   const db = getDb();
   db.prepare(
     `UPDATE pco_people
-       SET last_activity_at = MAX(
-         COALESCE(pco_updated_at, ''),
-         COALESCE((
-           SELECT MAX(pco_created_at)
-             FROM pco_form_submissions
-             WHERE pco_form_submissions.org_id = pco_people.org_id
-               AND pco_form_submissions.person_id = pco_people.pco_id
-         ), '')
+       SET last_form_submission_at = (
+         SELECT MAX(pco_created_at)
+           FROM pco_form_submissions
+           WHERE pco_form_submissions.org_id = pco_people.org_id
+             AND pco_form_submissions.person_id = pco_people.pco_id
        )
      WHERE org_id = ?`,
   ).run(orgId);
