@@ -100,39 +100,41 @@ function toRow(r: RawRow, activityMonths: number): SyncedPersonRow {
   };
 }
 
-/** A subquery that's TRUE when the person is in at least one active
- *  group whose group_type isn't on the org's exclusion list. Build
- *  fresh per call so the exclusion list is honored at read time. */
-function shepherdedSubq(excludedGroupTypeIds: string[]): {
+/** A CTE that materializes the set of person_ids who are shepherded —
+ *  i.e. in at least one active group whose group_type isn't excluded.
+ *  Computed ONCE per query, then LEFT JOINed against pco_people. This is
+ *  much faster than a correlated EXISTS subquery, which re-evaluates
+ *  per row and was bottle-necking /attendance and /metrics on large
+ *  populations.
+ *
+ *  Use the SQL inside `WITH ${cte.sql} ...` and emit cte.args at the
+ *  start of the binding list. */
+function shepherdedIdsCte(orgId: number, excludedGroupTypeIds: string[]): {
   sql: string;
-  args: string[];
+  args: (string | number)[];
 } {
   if (excludedGroupTypeIds.length === 0) {
     return {
-      sql: `(
-        SELECT 1 FROM pco_group_memberships m
-         WHERE m.org_id = pco_people.org_id
-           AND m.person_id = pco_people.pco_id
-           AND m.archived_at IS NULL
-         LIMIT 1
+      sql: `shepherded_ids AS (
+        SELECT DISTINCT person_id
+          FROM pco_group_memberships
+         WHERE org_id = ?
+           AND archived_at IS NULL
       )`,
-      args: [],
+      args: [orgId],
     };
   }
   const placeholders = excludedGroupTypeIds.map(() => "?").join(",");
   return {
-    sql: `(
-      SELECT 1
+    sql: `shepherded_ids AS (
+      SELECT DISTINCT m.person_id
         FROM pco_group_memberships m
-        JOIN pco_groups g
-          ON g.org_id = m.org_id AND g.pco_id = m.group_id
-       WHERE m.org_id = pco_people.org_id
-         AND m.person_id = pco_people.pco_id
+        JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
+       WHERE m.org_id = ?
          AND m.archived_at IS NULL
          AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${placeholders}))
-       LIMIT 1
     )`,
-    args: excludedGroupTypeIds,
+    args: [orgId, ...excludedGroupTypeIds],
   };
 }
 
@@ -159,30 +161,32 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
   const cutoff = cutoffIso(opts.activityMonths);
   const excluded = getExcludedMembershipTypes(opts.orgId);
   const excludedGroupTypes = getExcludedGroupTypes(opts.orgId);
-  const shep = shepherdedSubq(excludedGroupTypes);
-  const { whereSql, whereArgs } = buildWhere(
-    opts.orgId,
-    opts.tab,
-    cutoff,
-    excluded,
-    shep,
-  );
+  const cte = shepherdedIdsCte(opts.orgId, excludedGroupTypes);
+  const { whereSql, whereArgs } = buildWhere(opts.orgId, opts.tab, cutoff, excluded);
   const orderSql = buildOrderBy(opts.sort, opts.dir, cutoff);
 
   const rows = db
     .prepare(
-      `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
+      `WITH ${cte.sql}
+       SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at,
-              CASE WHEN EXISTS ${shep.sql} THEN 1 ELSE 0 END AS is_shepherded
+              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
+         LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
          ${whereSql}
          ${orderSql}
          LIMIT ? OFFSET ?`,
     )
-    .all(...shep.args, ...whereArgs, opts.limit, opts.offset) as RawRow[];
+    .all(...cte.args, ...whereArgs, opts.limit, opts.offset) as RawRow[];
   const totalRow = db
-    .prepare(`SELECT COUNT(*) AS n FROM pco_people ${whereSql}`)
-    .get(...whereArgs) as { n: number };
+    .prepare(
+      `WITH ${cte.sql}
+       SELECT COUNT(*) AS n
+         FROM pco_people
+         LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
+         ${whereSql}`,
+    )
+    .get(...cte.args, ...whereArgs) as { n: number };
   return {
     rows: rows.map((r) => toRow(r, opts.activityMonths)),
     total: totalRow.n,
@@ -196,30 +200,27 @@ function buildWhere(
   tab: ListPeopleOptions["tab"],
   cutoff: string,
   excludedTypes: string[],
-  shep: { sql: string; args: string[] },
 ): { whereSql: string; whereArgs: (string | number)[] } {
-  const parts: string[] = ["org_id = ?"];
+  // Note: this WHERE assumes the caller has already LEFT JOINed
+  // shepherded_ids AS s. Use `s.person_id IS NOT NULL` for "shepherded".
+  const parts: string[] = ["pco_people.org_id = ?"];
   const args: (string | number)[] = [orgId];
 
   if (tab === "shepherded") {
-    parts.push(`EXISTS ${shep.sql}`);
-    args.push(...shep.args);
+    parts.push("s.person_id IS NOT NULL");
   } else if (tab === "active") {
-    parts.push(`NOT EXISTS ${shep.sql}`);
-    args.push(...shep.args);
+    parts.push("s.person_id IS NULL");
     parts.push("last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?");
     args.push(cutoff);
   } else if (tab === "present") {
-    parts.push(`NOT EXISTS ${shep.sql}`);
-    args.push(...shep.args);
+    parts.push("s.person_id IS NULL");
     parts.push(
       "(last_form_submission_at IS NULL OR last_form_submission_at < ?)",
       "pco_updated_at IS NOT NULL AND pco_updated_at >= ?",
     );
     args.push(cutoff, cutoff);
   } else if (tab === "inactive") {
-    parts.push(`NOT EXISTS ${shep.sql}`);
-    args.push(...shep.args);
+    parts.push("s.person_id IS NULL");
     parts.push(
       "(last_form_submission_at IS NULL OR last_form_submission_at < ?)",
       "(pco_updated_at IS NULL OR pco_updated_at < ?)",
@@ -227,11 +228,11 @@ function buildWhere(
     args.push(cutoff, cutoff);
   } else if (tab === "all") {
     parts.push(
-      `(EXISTS ${shep.sql}
+      `(s.person_id IS NOT NULL
          OR (last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
          OR (pco_updated_at IS NOT NULL AND pco_updated_at >= ?))`,
     );
-    args.push(...shep.args, cutoff, cutoff);
+    args.push(cutoff, cutoff);
   }
 
   if (excludedTypes.length > 0) {
@@ -291,52 +292,45 @@ export function getClassificationCounts(
       ? ""
       : ` AND (membership_type IS NULL OR membership_type NOT IN (${excluded.map(() => "?").join(",")}))`;
   const args = [cutoff, cutoff, cutoff, cutoff, orgId, ...excluded];
-  // Use a CTE so the shepherded subquery (and its bound parameters) only
-  // appears once in the SQL. Avoids the previous off-by-one parameter
-  // bookkeeping that crashed once any group types were excluded.
-  const shep = shepherdedSubq(getExcludedGroupTypes(orgId));
+  // Precompute shepherded_ids once via a CTE, then LEFT JOIN against
+  // pco_people. Was the per-row correlated EXISTS that bottle-necked
+  // /attendance and /metrics.
+  const cte = shepherdedIdsCte(orgId, getExcludedGroupTypes(orgId));
   const row = db
     .prepare(
-      `WITH classified AS (
-         SELECT
-           pco_id,
-           membership_type,
-           last_form_submission_at,
-           pco_updated_at,
-           CASE WHEN EXISTS ${shep.sql} THEN 1 ELSE 0 END AS shep
-         FROM pco_people
-         WHERE org_id = ?${exclSql}
-       )
+      `WITH ${cte.sql}
        SELECT
          COUNT(*) AS total,
-         SUM(CASE WHEN shep = 1 THEN 1 ELSE 0 END) AS shepherded,
+         SUM(CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END) AS shepherded,
          SUM(CASE
-               WHEN shep = 0
+               WHEN s.person_id IS NULL
                 AND last_form_submission_at IS NOT NULL
                 AND last_form_submission_at >= ?
                THEN 1 ELSE 0 END) AS active,
          SUM(CASE
-               WHEN shep = 0
+               WHEN s.person_id IS NULL
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
                 AND pco_updated_at IS NOT NULL
                 AND pco_updated_at >= ?
                THEN 1 ELSE 0 END) AS present,
          SUM(CASE
-               WHEN shep = 0
+               WHEN s.person_id IS NULL
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
                 AND (pco_updated_at IS NULL OR pco_updated_at < ?)
                THEN 1 ELSE 0 END) AS inactive
-       FROM classified`,
+       FROM pco_people
+       LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
+       WHERE pco_people.org_id = ?${exclSql}`,
     )
     .get(
-      ...shep.args, // for the EXISTS subquery in the CTE
+      ...cte.args, // for shepherded_ids CTE
+      cutoff,
+      cutoff,
+      cutoff,
+      cutoff,
+      cutoff,
       orgId,
       ...excluded,
-      cutoff, // active
-      cutoff, // present (last_form < cutoff)
-      cutoff, // present (pco_updated >= cutoff)
-      cutoff, // inactive (last_form < cutoff)
-      cutoff, // inactive (pco_updated < cutoff)
     ) as {
     total: number;
     shepherded: number | null;
@@ -366,16 +360,18 @@ export function getPersonByPcoId(
   pcoId: string,
   activityMonths: number,
 ): SyncedPersonRow | null {
-  const shep = shepherdedSubq(getExcludedGroupTypes(orgId));
+  const cte = shepherdedIdsCte(orgId, getExcludedGroupTypes(orgId));
   const row = getDb()
     .prepare(
-      `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
+      `WITH ${cte.sql}
+       SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at,
-              CASE WHEN EXISTS ${shep.sql} THEN 1 ELSE 0 END AS is_shepherded
+              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
-         WHERE org_id = ? AND pco_id = ?`,
+         LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
+         WHERE pco_people.org_id = ? AND pco_people.pco_id = ?`,
     )
-    .get(...shep.args, orgId, pcoId) as RawRow | undefined;
+    .get(...cte.args, orgId, pcoId) as RawRow | undefined;
   if (!row) return null;
   return toRow(row, activityMonths);
 }
@@ -437,16 +433,18 @@ export function searchPeople(
 ): SearchHit[] {
   const q = query.trim().toLowerCase();
   if (q.length < 2) return [];
-  const shep = shepherdedSubq(getExcludedGroupTypes(orgId));
+  const cte = shepherdedIdsCte(orgId, getExcludedGroupTypes(orgId));
   const rows = getDb()
     .prepare(
-      `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
+      `WITH ${cte.sql}
+       SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at,
-              CASE WHEN EXISTS ${shep.sql} THEN 1 ELSE 0 END AS is_shepherded
+              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
-         WHERE org_id = ?`,
+         LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
+         WHERE pco_people.org_id = ?`,
     )
-    .all(...shep.args, orgId) as RawRow[];
+    .all(...cte.args, orgId) as RawRow[];
   const hits: SearchHit[] = [];
   for (const r of rows) {
     const person = toRow(r, activityMonths);
