@@ -19,7 +19,7 @@ export default async function AttendancePage() {
 
   return (
     <AppShell active="Attendance" breadcrumb="Settings › Attendance">
-      <div className="px-5 md:px-7 py-7 max-w-5xl space-y-6">
+      <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <div className="text-muted text-xs mb-1">Settings</div>
           <h1 className="text-2xl font-semibold tracking-tight">Attendance</h1>
@@ -80,19 +80,23 @@ export default async function AttendancePage() {
               title="Simulated frequency distribution"
               right={
                 <span className="text-xs text-muted">
-                  predicts {Math.round(distribution.predictedWeekly).toLocaleString()} /
-                  week · target {distribution.targetWeekly.toLocaleString()}
+                  weekly bucket {distribution.targetWeekly.toLocaleString()} ·
+                  total {distribution.expected.toLocaleString()}
                 </span>
               }
             />
             <div className="p-5">
               <p className="text-sm text-muted mb-5">
-                Log-normal bell curve over the {expected.toLocaleString()} expected
-                attenders, centered on the implied{" "}
-                <span className="text-fg tnum">
-                  {distribution.meanVisitsPerYear.toFixed(0)} visits/year
-                </span>{" "}
-                mean and skewed so the implied weekly count balances against your input.
+                Anchored at <span className="text-fg tnum">{distribution.targetWeekly.toLocaleString()}</span>{" "}
+                people who attend every week, then geometrically tapering down through the
+                less-frequent buckets so the column sums to{" "}
+                <span className="text-fg tnum">{distribution.expected.toLocaleString()}</span>{" "}
+                total. Decay ratio{" "}
+                <span className="font-mono text-xs">r = {distribution.decayRatio.toFixed(2)}</span>.
+                Implied weekly attendance from the curve:{" "}
+                <span className="text-fg tnum">{distribution.impliedWeekly.toLocaleString()}</span>{" "}
+                (higher than the &ldquo;every week&rdquo; bucket because some people in the
+                tail still attend on any given week).
               </p>
               <DistributionChart distribution={distribution} />
             </div>
@@ -129,9 +133,9 @@ function DistributionChart({
 }: {
   distribution: NonNullable<ReturnType<typeof buildAttendanceDistribution>>;
 }) {
-  // Buckets ordered "Every week" → "Once a year". Reverse for left-to-right
-  // chronological reading: rare on the left, frequent on the right.
-  const ordered = [...distribution.buckets].reverse();
+  // X axis runs frequent → rare: "Every week" on the left, "Once a year"
+  // on the right. distribution.buckets is already in that order.
+  const ordered = distribution.buckets;
   const max = Math.max(...ordered.map((b) => b.people), 1);
 
   // SVG geometry

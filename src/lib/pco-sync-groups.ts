@@ -12,6 +12,7 @@ export interface GroupSyncResult {
   memberships: { fetched: number; upserted: number };
   applications: { fetched: number; upserted: number };
   events: { fetched: number; upserted: number };
+  attendances: { fetched: number; upserted: number };
 }
 
 export async function syncGroupsAll(
@@ -25,6 +26,7 @@ export async function syncGroupsAll(
     memberships: { fetched: 0, upserted: 0 },
     applications: { fetched: 0, upserted: 0 },
     events: { fetched: 0, upserted: 0 },
+    attendances: { fetched: 0, upserted: 0 },
   };
 
   // 1) Group types — usually a handful of rows.
@@ -136,11 +138,14 @@ export async function syncGroupsAll(
   }
   writeCursor(orgId, "groups:applications", maxAppliedAt);
 
-  // 5) Group events — incremental on starts_at.
+  // 5) Group events — incremental on starts_at. Track event ids that
+  //    have attendance enabled so we can fetch attendances for them.
   const eventCursor = readCursor(orgId, "groups:events", thresholdMonths);
   const eventParams = new URLSearchParams({ per_page: "100", order: "starts_at" });
   if (eventCursor) eventParams.set("where[starts_at][gt]", eventCursor);
   let maxStartsAt: string | null = eventCursor;
+  const attendanceTargetIds: { id: string; startsAt: string | null; groupId: string | null }[] =
+    [];
   for await (const { page } of client.paginate<PCOResource>(
     `/groups/v2/events?${eventParams.toString()}`,
   )) {
@@ -154,23 +159,114 @@ export async function syncGroupsAll(
       if (startsAt && (!maxStartsAt || startsAt > maxStartsAt)) {
         maxStartsAt = startsAt;
       }
+      const groupId = !Array.isArray(groupRel) && groupRel ? groupRel.id : null;
+      const attendanceRequestsEnabled = a.attendance_requests_enabled === true;
+      const canceled = a.canceled === true;
       upsertGroupEvent(orgId, {
         pcoId: ev.id,
-        groupId: !Array.isArray(groupRel) && groupRel ? groupRel.id : null,
+        groupId,
         startsAt,
-        attendanceRequestsEnabled: a.attendance_requests_enabled === true ? 1 : 0,
+        attendanceRequestsEnabled: attendanceRequestsEnabled ? 1 : 0,
         automatedReminderEnabled: a.automated_reminder_enabled === true ? 1 : 0,
-        canceled: a.canceled === true ? 1 : 0,
+        canceled: canceled ? 1 : 0,
         canceledAt: (a.canceled_at as string | undefined) ?? null,
         remindersSent: a.reminders_sent === true ? 1 : 0,
         remindersSentAt: (a.reminders_sent_at as string | undefined) ?? null,
       });
       result.events.upserted++;
+      if (attendanceRequestsEnabled && !canceled && startsAt) {
+        attendanceTargetIds.push({ id: ev.id, startsAt, groupId });
+      }
     }
   }
   writeCursor(orgId, "groups:events", maxStartsAt);
 
+  // 6) Attendance per event (only events with attendance_requests_enabled
+  //    that we just synced). PCO has /groups/v2/events/{id}/attendances.
+  for (const ev of attendanceTargetIds) {
+    try {
+      for await (const { page } of client.paginate<PCOResource>(
+        `/groups/v2/events/${ev.id}/attendances?per_page=100`,
+      )) {
+        const arr = Array.isArray(page.data) ? page.data : [page.data];
+        for (const att of arr) {
+          result.attendances.fetched++;
+          const a = (att.attributes ?? {}) as Record<string, unknown>;
+          const rels = att.relationships ?? {};
+          const personRel = rels.person?.data;
+          const personId =
+            !Array.isArray(personRel) && personRel ? personRel.id : null;
+          if (!personId) continue;
+          upsertEventAttendance(orgId, {
+            eventId: ev.id,
+            personId,
+            groupId: ev.groupId,
+            attended: a.attended === true ? 1 : 0,
+            pcoCreatedAt: (a.created_at as string | undefined) ?? null,
+            eventStartsAt: ev.startsAt,
+          });
+          result.attendances.upserted++;
+        }
+      }
+    } catch {
+      // PCO sometimes 404s for events whose attendance lookup is gated;
+      // skip and keep going so one bad event doesn't break the rest.
+    }
+  }
+
   return result;
+}
+
+function upsertEventAttendance(
+  orgId: number,
+  a: {
+    eventId: string;
+    personId: string;
+    groupId: string | null;
+    attended: number;
+    pcoCreatedAt: string | null;
+    eventStartsAt: string | null;
+  },
+) {
+  getDb()
+    .prepare(
+      `INSERT INTO pco_event_attendances
+        (org_id, event_id, person_id, group_id, attended, pco_created_at, event_starts_at, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       ON CONFLICT(org_id, event_id, person_id) DO UPDATE SET
+         group_id = excluded.group_id,
+         attended = excluded.attended,
+         pco_created_at = excluded.pco_created_at,
+         event_starts_at = excluded.event_starts_at,
+         synced_at = excluded.synced_at`,
+    )
+    .run(
+      orgId,
+      a.eventId,
+      a.personId,
+      a.groupId,
+      a.attended,
+      a.pcoCreatedAt,
+      a.eventStartsAt,
+    );
+}
+
+/** Recompute last_attended_at on every membership from attendance records. */
+export function refreshLastAttended(orgId: number) {
+  getDb()
+    .prepare(
+      `UPDATE pco_group_memberships
+         SET last_attended_at = (
+           SELECT MAX(a.event_starts_at)
+             FROM pco_event_attendances a
+             WHERE a.org_id = pco_group_memberships.org_id
+               AND a.person_id = pco_group_memberships.person_id
+               AND a.group_id = pco_group_memberships.group_id
+               AND a.attended = 1
+         )
+       WHERE org_id = ?`,
+    )
+    .run(orgId);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ import { encryptJson } from "./encryption";
 import { getDb } from "./db";
 import { getDecryptedCreds, getSyncEntities, getSyncSettings } from "./pco";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
-import { syncGroupsAll } from "./pco-sync-groups";
+import { refreshLastAttended, syncGroupsAll } from "./pco-sync-groups";
 
 // Forms the user explicitly asked to track (from the prompt).
 // Becomes user-configurable later; for now this is the canonical list.
@@ -92,6 +92,8 @@ export async function runSync(
         details.groupMemberships = g.memberships;
         details.groupApplications = g.applications;
         details.groupEvents = g.events;
+        // Recompute last-attended cache once attendance rows are in.
+        refreshLastAttended(orgId);
       } catch (e) {
         warning = appendWarning(
           warning,

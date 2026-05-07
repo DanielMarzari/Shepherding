@@ -183,6 +183,9 @@ export interface SyncSettings {
   activityTrackingMonths: number;
   /** Average weekly Sunday attendance (manually entered). Null = not set. */
   weeklyAttendance: number | null;
+  /** Weeks of consecutive non-attendance before a group member is treated
+   *  as having left the group (default 10). */
+  lapsedWeeks: number;
 }
 
 export function getSyncSettings(orgId: number): SyncSettings {
@@ -191,7 +194,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
       `SELECT enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
               email_on_failure, auto_resolve_conflicts,
               activity_months, sync_threshold_months,
-              activity_tracking_months, weekly_attendance
+              activity_tracking_months, weekly_attendance, lapsed_weeks
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -207,6 +210,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
         sync_threshold_months: number;
         activity_tracking_months: number | null;
         weekly_attendance: number | null;
+        lapsed_weeks: number | null;
       }
     | undefined;
   if (!row) {
@@ -222,6 +226,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
       syncThresholdMonths: 3,
       activityTrackingMonths: 3,
       weeklyAttendance: null,
+      lapsedWeeks: 10,
     };
   }
   const freq: SyncFrequency =
@@ -238,6 +243,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
     syncThresholdMonths: row.sync_threshold_months ?? 3,
     activityTrackingMonths: row.activity_tracking_months ?? 3,
     weeklyAttendance: row.weekly_attendance,
+    lapsedWeeks: row.lapsed_weeks ?? 10,
   };
 }
 
@@ -248,8 +254,8 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          (org_id, enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
           email_on_failure, auto_resolve_conflicts, activity_months,
           sync_threshold_months, activity_tracking_months, weekly_attendance,
-          updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          lapsed_weeks, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id) DO UPDATE SET
          enabled = excluded.enabled,
          frequency = excluded.frequency,
@@ -262,6 +268,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          sync_threshold_months = excluded.sync_threshold_months,
          activity_tracking_months = excluded.activity_tracking_months,
          weekly_attendance = excluded.weekly_attendance,
+         lapsed_weeks = excluded.lapsed_weeks,
          updated_at = excluded.updated_at`,
     )
     .run(
@@ -279,6 +286,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
       s.weeklyAttendance == null
         ? null
         : Math.max(0, Math.min(1_000_000, Math.floor(s.weeklyAttendance))),
+      Math.max(1, Math.min(52, Math.floor(s.lapsedWeeks))),
     );
 }
 
@@ -288,6 +296,7 @@ export function saveMetricsSettings(
   activityMonths: number,
   syncThresholdMonths: number,
   activityTrackingMonths: number,
+  lapsedWeeks: number,
 ) {
   const current = getSyncSettings(orgId);
   saveSyncSettings(orgId, {
@@ -295,6 +304,7 @@ export function saveMetricsSettings(
     activityMonths: Math.max(1, Math.min(60, Math.floor(activityMonths))),
     syncThresholdMonths: Math.max(1, Math.min(60, Math.floor(syncThresholdMonths))),
     activityTrackingMonths: Math.max(1, Math.min(36, Math.floor(activityTrackingMonths))),
+    lapsedWeeks: Math.max(1, Math.min(52, Math.floor(lapsedWeeks))),
   });
 }
 

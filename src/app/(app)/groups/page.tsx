@@ -14,8 +14,16 @@ const STATE_TONE = {
 export default async function GroupsPage() {
   const session = await requireOrg();
   const settings = getSyncSettings(session.orgId);
-  const groups = listGroups(session.orgId, settings.activityTrackingMonths);
-  const totals = getGroupTotals(session.orgId, settings.activityTrackingMonths);
+  const groups = listGroups(
+    session.orgId,
+    settings.activityTrackingMonths,
+    settings.lapsedWeeks,
+  );
+  const totals = getGroupTotals(
+    session.orgId,
+    settings.activityTrackingMonths,
+    settings.lapsedWeeks,
+  );
 
   return (
     <AppShell active="Groups" breadcrumb="Groups">
@@ -73,14 +81,16 @@ export default async function GroupsPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm table-fixed min-w-[860px]">
+              <table className="w-full text-sm table-fixed min-w-[1000px]">
                 <colgroup>
-                  <col className="w-[34%]" />
-                  <col className="w-[16%]" />
-                  <col className="w-[16%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[26%]" />
                   <col className="w-[14%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[10%]" />
                 </colgroup>
                 <thead className="text-xs text-muted">
                   <tr className="border-b border-border-soft">
@@ -91,6 +101,10 @@ export default async function GroupsPage() {
                     <th className="text-right font-medium px-5 py-2">
                       Joined ({settings.activityTrackingMonths}mo)
                     </th>
+                    <th className="text-right font-medium px-5 py-2">
+                      Left ({settings.activityTrackingMonths}mo)
+                    </th>
+                    <th className="text-right font-medium px-5 py-2">Lapsed</th>
                     <th className="text-right font-medium px-5 py-2">
                       Events ({settings.activityTrackingMonths}mo)
                     </th>
@@ -124,6 +138,12 @@ export default async function GroupsPage() {
                       <td className="px-5 py-2.5 text-right tnum">{g.members}</td>
                       <td className="px-5 py-2.5 text-right tnum text-good-soft-fg">
                         {g.joinedRecently > 0 ? `+${g.joinedRecently}` : "0"}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum text-warn-soft-fg">
+                        {g.leftRecently > 0 ? `−${g.leftRecently}` : "0"}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum text-muted">
+                        {g.currentlyLapsed}
                       </td>
                       <td className="px-5 py-2.5 text-right tnum text-muted">
                         {g.recentEvents}

@@ -126,7 +126,11 @@ export interface SyncedGroupRow {
   groupTypeName: string | null;
   members: number;
   joinedRecently: number;
-  archivedRecently: number;
+  /** Members who left in the tracking window: archived_at within window
+   *  OR last_attended_at older than the lapsed threshold. */
+  leftRecently: number;
+  /** Members currently flagged lapsed (no attendance for `lapsedWeeks` weeks). */
+  currentlyLapsed: number;
   recentEvents: number;
   pcoCreatedAt: string | null;
   archivedAt: string | null;
@@ -136,12 +140,20 @@ export interface SyncedGroupRow {
 export function listGroups(
   orgId: number,
   trackingMonths: number,
+  lapsedWeeks: number,
 ): SyncedGroupRow[] {
   const db = getDb();
   const trackingCutoff = new Date(
     Date.now() - trackingMonths * 30 * 24 * 60 * 60 * 1000,
   ).toISOString();
+  const lapsedCutoff = new Date(
+    Date.now() - lapsedWeeks * 7 * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
+  // A "currently in the group" condition: membership not archived, AND
+  // either last_attended_at is null/recent OR no attendance has ever
+  // been recorded (we don't penalize groups without attendance tracking).
+  // We'll build that condition inline in the SQL below.
   const rows = db
     .prepare(
       `SELECT
@@ -155,7 +167,8 @@ export function listGroups(
             FROM pco_group_memberships m
             WHERE m.org_id = g.org_id
               AND m.group_id = g.pco_id
-              AND m.archived_at IS NULL) AS members,
+              AND m.archived_at IS NULL
+              AND (m.last_attended_at IS NULL OR m.last_attended_at >= ?)) AS members,
          (SELECT COUNT(*)
             FROM pco_group_memberships m
             WHERE m.org_id = g.org_id
@@ -167,8 +180,20 @@ export function listGroups(
             FROM pco_group_memberships m
             WHERE m.org_id = g.org_id
               AND m.group_id = g.pco_id
-              AND m.archived_at IS NOT NULL
-              AND m.archived_at >= ?) AS archivedRecently,
+              AND (
+                (m.archived_at IS NOT NULL AND m.archived_at >= ?)
+                OR (m.archived_at IS NULL
+                    AND m.last_attended_at IS NOT NULL
+                    AND m.last_attended_at < ?
+                    AND m.last_attended_at >= ?)
+              )) AS leftRecently,
+         (SELECT COUNT(*)
+            FROM pco_group_memberships m
+            WHERE m.org_id = g.org_id
+              AND m.group_id = g.pco_id
+              AND m.archived_at IS NULL
+              AND m.last_attended_at IS NOT NULL
+              AND m.last_attended_at < ?) AS currentlyLapsed,
          (SELECT COUNT(*)
             FROM pco_group_events e
             WHERE e.org_id = g.org_id
@@ -181,7 +206,16 @@ export function listGroups(
        WHERE g.org_id = ?
        ORDER BY g.archived_at IS NULL DESC, members DESC, g.name ASC`,
     )
-    .all(trackingCutoff, trackingCutoff, trackingCutoff, orgId) as Array<{
+    .all(
+      lapsedCutoff,    // members: "still attending or no attendance signal"
+      trackingCutoff,  // joined recently
+      trackingCutoff,  // left: archived in window
+      lapsedCutoff,    // left: lapsed past threshold
+      trackingCutoff,  // left: but only counted for tracking window
+      lapsedCutoff,    // currently lapsed (irrespective of tracking window)
+      trackingCutoff,  // recent events
+      orgId,
+    ) as Array<{
     pcoId: string;
     name: string | null;
     schedule: string | null;
@@ -190,7 +224,8 @@ export function listGroups(
     archivedAt: string | null;
     members: number;
     joinedRecently: number;
-    archivedRecently: number;
+    leftRecently: number;
+    currentlyLapsed: number;
     recentEvents: number;
   }>;
 
@@ -199,7 +234,7 @@ export function listGroups(
     if (r.archivedAt) state = "paused";
     else if (r.recentEvents === 0 && r.members > 0) state = "paused";
     else {
-      const net = r.joinedRecently - r.archivedRecently;
+      const net = r.joinedRecently - r.leftRecently;
       if (net >= 2) state = "growing";
       else if (net <= -2) state = "shrinking";
       else state = "steady";
@@ -216,13 +251,17 @@ export interface GroupTotals {
   shrinking: number;
   paused: number;
   totalMembers: number;
+  joinedRecently: number;
+  leftRecently: number;
+  currentlyLapsed: number;
 }
 
 export function getGroupTotals(
   orgId: number,
   trackingMonths: number,
+  lapsedWeeks: number,
 ): GroupTotals {
-  const groups = listGroups(orgId, trackingMonths);
+  const groups = listGroups(orgId, trackingMonths, lapsedWeeks);
   const totals: GroupTotals = {
     totalGroups: groups.length,
     activeGroups: groups.filter((g) => !g.archivedAt).length,
@@ -231,8 +270,14 @@ export function getGroupTotals(
     shrinking: 0,
     paused: 0,
     totalMembers: 0,
+    joinedRecently: 0,
+    leftRecently: 0,
+    currentlyLapsed: 0,
   };
   for (const g of groups) {
+    totals.joinedRecently += g.joinedRecently;
+    totals.leftRecently += g.leftRecently;
+    totals.currentlyLapsed += g.currentlyLapsed;
     if (g.archivedAt) continue;
     totals.totalMembers += g.members;
     totals[g.state]++;

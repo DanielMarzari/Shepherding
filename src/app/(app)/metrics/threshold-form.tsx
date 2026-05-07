@@ -7,16 +7,19 @@ export function ThresholdForm({
   initialActivity,
   initialSync,
   initialTracking,
+  initialLapsed,
   isAdmin,
 }: {
   initialActivity: number;
   initialSync: number;
   initialTracking: number;
+  initialLapsed: number;
   isAdmin: boolean;
 }) {
   const [activity, setActivity] = useState(initialActivity);
   const [sync, setSync] = useState(initialSync);
   const [tracking, setTracking] = useState(initialTracking);
+  const [lapsed, setLapsed] = useState(initialLapsed);
   const [state, action, pending] = useActionState<MetricsSaveState | null, FormData>(
     saveThresholdsAction,
     null,
@@ -111,6 +114,36 @@ export function ThresholdForm({
         <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
           <span>1 month</span>
           <span>12 months</span>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-baseline justify-between mb-1.5">
+          <label className="text-sm font-medium" htmlFor="lapsedWeeks">
+            Lapsed-from-group threshold
+          </label>
+          <span className="tnum text-sm text-muted">{lapsed} weeks</span>
+        </div>
+        <p className="text-xs text-muted mb-2.5">
+          A group member who hasn&apos;t attended a meeting in this many weeks counts as
+          having left the group — alongside members whose group itself ends. Drives the
+          group-leaving feed and the &ldquo;left&rdquo; numbers on /groups.
+        </p>
+        <input
+          id="lapsedWeeks"
+          name="lapsedWeeks"
+          type="range"
+          min="2"
+          max="26"
+          step="1"
+          value={lapsed}
+          onChange={(e) => setLapsed(Number(e.target.value))}
+          disabled={!isAdmin}
+          className="w-full accent-[var(--accent)] disabled:opacity-50"
+        />
+        <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
+          <span>2 weeks</span>
+          <span>26 weeks</span>
         </div>
       </div>
 

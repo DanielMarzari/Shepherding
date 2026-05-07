@@ -42,7 +42,7 @@ export default async function FiltersPage({
 
   return (
     <AppShell active="Filters" breadcrumb="Settings › Filters">
-      <div className="px-5 md:px-7 py-7 max-w-5xl space-y-6">
+      <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <div className="text-muted text-xs mb-1">Settings · filters</div>
           <h1 className="text-2xl font-semibold tracking-tight">Filters</h1>

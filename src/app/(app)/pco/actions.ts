@@ -120,6 +120,7 @@ export async function saveSyncSettingsAction(
     syncThresholdMonths: current.syncThresholdMonths,
     activityTrackingMonths: current.activityTrackingMonths,
     weeklyAttendance: current.weeklyAttendance,
+    lapsedWeeks: current.lapsedWeeks,
   };
   saveSyncSettings(s.orgId, settings);
   revalidatePath("/pco");
