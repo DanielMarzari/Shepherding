@@ -174,7 +174,11 @@ export async function syncGroupsAll(
         remindersSentAt: (a.reminders_sent_at as string | undefined) ?? null,
       });
       result.events.upserted++;
-      if (attendanceRequestsEnabled && !canceled && startsAt) {
+      // Pull attendance for any non-canceled event with a start time —
+      // attendance_requests_enabled only controls reminder emails, not
+      // whether a leader took attendance. Many groups take attendance
+      // without enabling the request flow.
+      if (!canceled && startsAt) {
         attendanceTargetIds.push({ id: ev.id, startsAt, groupId });
       }
     }

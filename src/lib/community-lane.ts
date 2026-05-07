@@ -150,10 +150,25 @@ export function listGroups(
     Date.now() - lapsedWeeks * 7 * 24 * 60 * 60 * 1000,
   ).toISOString();
 
-  // A "currently in the group" condition: membership not archived, AND
-  // either last_attended_at is null/recent OR no attendance has ever
-  // been recorded (we don't penalize groups without attendance tracking).
-  // We'll build that condition inline in the SQL below.
+  const excludedGroupTypes = getExcludedGroupTypes(orgId);
+  const excludeFilter =
+    excludedGroupTypes.length === 0
+      ? ""
+      : ` AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${excludedGroupTypes
+          .map(() => "?")
+          .join(",")}))`;
+
+  // "leftRecently" = people who left this group within the tracking window.
+  // Two paths to "left":
+  //   1. Their membership was archived (archived_at within window).
+  //   2. They attended at least one of this group's events in the window
+  //      but no longer have an active membership. PCO often handles
+  //      churn by simply removing the membership row; the audit trail
+  //      lives in pco_event_attendances.
+  // Counted DISTINCT on person_id so the same person doesn't appear in
+  // both buckets.
+  //
+  // "currentlyLapsed" = active member who hasn't attended for `lapsedWeeks`+.
   const rows = db
     .prepare(
       `SELECT
@@ -176,17 +191,29 @@ export function listGroups(
               AND m.archived_at IS NULL
               AND m.joined_at IS NOT NULL
               AND m.joined_at >= ?) AS joinedRecently,
-         (SELECT COUNT(*)
-            FROM pco_group_memberships m
-            WHERE m.org_id = g.org_id
-              AND m.group_id = g.pco_id
-              AND (
-                (m.archived_at IS NOT NULL AND m.archived_at >= ?)
-                OR (m.archived_at IS NULL
-                    AND m.last_attended_at IS NOT NULL
-                    AND m.last_attended_at < ?
-                    AND m.last_attended_at >= ?)
-              )) AS leftRecently,
+         (SELECT COUNT(DISTINCT person_id) FROM (
+            SELECT m.person_id
+              FROM pco_group_memberships m
+              WHERE m.org_id = g.org_id
+                AND m.group_id = g.pco_id
+                AND m.archived_at IS NOT NULL
+                AND m.archived_at >= ?
+            UNION
+            SELECT a.person_id
+              FROM pco_event_attendances a
+              WHERE a.org_id = g.org_id
+                AND a.group_id = g.pco_id
+                AND a.attended = 1
+                AND a.event_starts_at IS NOT NULL
+                AND a.event_starts_at >= ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM pco_group_memberships m2
+                    WHERE m2.org_id = a.org_id
+                      AND m2.group_id = a.group_id
+                      AND m2.person_id = a.person_id
+                      AND m2.archived_at IS NULL
+                )
+         )) AS leftRecently,
          (SELECT COUNT(*)
             FROM pco_group_memberships m
             WHERE m.org_id = g.org_id
@@ -203,18 +230,18 @@ export function listGroups(
        FROM pco_groups g
        LEFT JOIN pco_group_types t
          ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
-       WHERE g.org_id = ?
+       WHERE g.org_id = ?${excludeFilter}
        ORDER BY g.archived_at IS NULL DESC, members DESC, g.name ASC`,
     )
     .all(
-      lapsedCutoff,    // members: "still attending or no attendance signal"
+      lapsedCutoff,    // members: still attending or no attendance signal
       trackingCutoff,  // joined recently
       trackingCutoff,  // left: archived in window
-      lapsedCutoff,    // left: lapsed past threshold
-      trackingCutoff,  // left: but only counted for tracking window
-      lapsedCutoff,    // currently lapsed (irrespective of tracking window)
+      trackingCutoff,  // left: attended-then-disappeared, within window
+      lapsedCutoff,    // currently lapsed
       trackingCutoff,  // recent events
       orgId,
+      ...excludedGroupTypes,
     ) as Array<{
     pcoId: string;
     name: string | null;
