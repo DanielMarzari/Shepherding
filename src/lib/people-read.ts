@@ -100,42 +100,44 @@ function toRow(r: RawRow, activityMonths: number): SyncedPersonRow {
   };
 }
 
-/** A CTE that materializes the set of person_ids who are shepherded —
- *  i.e. in at least one active group whose group_type isn't excluded.
- *  Computed ONCE per query, then LEFT JOINed against pco_people. This is
- *  much faster than a correlated EXISTS subquery, which re-evaluates
- *  per row and was bottle-necking /attendance and /metrics on large
- *  populations.
+/**
+ * Populate a connection-local TEMP TABLE with the set of person_ids who
+ * are shepherded — in at least one active group whose group_type isn't
+ * excluded. The TEMP TABLE has a PRIMARY KEY on person_id so any
+ * subsequent `LEFT JOIN temp.shep_set s ON s.person_id = ...` uses
+ * an indexed lookup (O(log N)) instead of the FULL SCAN that materialized
+ * CTEs do.
  *
- *  Use the SQL inside `WITH ${cte.sql} ...` and emit cte.args at the
- *  start of the binding list. */
-function shepherdedIdsCte(orgId: number, excludedGroupTypeIds: string[]): {
-  sql: string;
-  args: (string | number)[];
-} {
-  if (excludedGroupTypeIds.length === 0) {
-    return {
-      sql: `shepherded_ids AS (
+ * better-sqlite3 is synchronous on a single connection, so requests can't
+ * race to clobber this table.
+ */
+function populateShepherdedTempTable(orgId: number) {
+  const db = getDb();
+  const excluded = getExcludedGroupTypes(orgId);
+  db.exec(
+    "CREATE TEMP TABLE IF NOT EXISTS shep_set (person_id TEXT PRIMARY KEY)",
+  );
+  db.exec("DELETE FROM temp.shep_set");
+  if (excluded.length === 0) {
+    db.prepare(
+      `INSERT OR IGNORE INTO temp.shep_set (person_id)
         SELECT DISTINCT person_id
           FROM pco_group_memberships
          WHERE org_id = ?
-           AND archived_at IS NULL
-      )`,
-      args: [orgId],
-    };
+           AND archived_at IS NULL`,
+    ).run(orgId);
+  } else {
+    const placeholders = excluded.map(() => "?").join(",");
+    db.prepare(
+      `INSERT OR IGNORE INTO temp.shep_set (person_id)
+        SELECT DISTINCT m.person_id
+          FROM pco_group_memberships m
+          JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
+         WHERE m.org_id = ?
+           AND m.archived_at IS NULL
+           AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${placeholders}))`,
+    ).run(orgId, ...excluded);
   }
-  const placeholders = excludedGroupTypeIds.map(() => "?").join(",");
-  return {
-    sql: `shepherded_ids AS (
-      SELECT DISTINCT m.person_id
-        FROM pco_group_memberships m
-        JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
-       WHERE m.org_id = ?
-         AND m.archived_at IS NULL
-         AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${placeholders}))
-    )`,
-    args: [orgId, ...excludedGroupTypeIds],
-  };
 }
 
 export interface ListPeopleOptions {
@@ -160,33 +162,30 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
   const db = getDb();
   const cutoff = cutoffIso(opts.activityMonths);
   const excluded = getExcludedMembershipTypes(opts.orgId);
-  const excludedGroupTypes = getExcludedGroupTypes(opts.orgId);
-  const cte = shepherdedIdsCte(opts.orgId, excludedGroupTypes);
+  populateShepherdedTempTable(opts.orgId);
   const { whereSql, whereArgs } = buildWhere(opts.orgId, opts.tab, cutoff, excluded);
   const orderSql = buildOrderBy(opts.sort, opts.dir, cutoff);
 
   const rows = db
     .prepare(
-      `WITH ${cte.sql}
-       SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
+      `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at,
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
-         LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
+         LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
          ${whereSql}
          ${orderSql}
          LIMIT ? OFFSET ?`,
     )
-    .all(...cte.args, ...whereArgs, opts.limit, opts.offset) as RawRow[];
+    .all(...whereArgs, opts.limit, opts.offset) as RawRow[];
   const totalRow = db
     .prepare(
-      `WITH ${cte.sql}
-       SELECT COUNT(*) AS n
+      `SELECT COUNT(*) AS n
          FROM pco_people
-         LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
+         LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
          ${whereSql}`,
     )
-    .get(...cte.args, ...whereArgs) as { n: number };
+    .get(...whereArgs) as { n: number };
   return {
     rows: rows.map((r) => toRow(r, opts.activityMonths)),
     total: totalRow.n,
@@ -292,14 +291,12 @@ export function getClassificationCounts(
       ? ""
       : ` AND (membership_type IS NULL OR membership_type NOT IN (${excluded.map(() => "?").join(",")}))`;
   const args = [cutoff, cutoff, cutoff, cutoff, orgId, ...excluded];
-  // Precompute shepherded_ids once via a CTE, then LEFT JOIN against
-  // pco_people. Was the per-row correlated EXISTS that bottle-necked
-  // /attendance and /metrics.
-  const cte = shepherdedIdsCte(orgId, getExcludedGroupTypes(orgId));
+  // Precompute shepherded set into a TEMP TABLE (with PRIMARY KEY) so the
+  // LEFT JOIN below is indexed instead of a full scan per pco_people row.
+  populateShepherdedTempTable(orgId);
   const row = db
     .prepare(
-      `WITH ${cte.sql}
-       SELECT
+      `SELECT
          COUNT(*) AS total,
          SUM(CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END) AS shepherded,
          SUM(CASE
@@ -319,11 +316,10 @@ export function getClassificationCounts(
                 AND (pco_updated_at IS NULL OR pco_updated_at < ?)
                THEN 1 ELSE 0 END) AS inactive
        FROM pco_people
-       LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
+       LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
        WHERE pco_people.org_id = ?${exclSql}`,
     )
     .get(
-      ...cte.args, // for shepherded_ids CTE
       cutoff,
       cutoff,
       cutoff,
@@ -360,18 +356,17 @@ export function getPersonByPcoId(
   pcoId: string,
   activityMonths: number,
 ): SyncedPersonRow | null {
-  const cte = shepherdedIdsCte(orgId, getExcludedGroupTypes(orgId));
+  populateShepherdedTempTable(orgId);
   const row = getDb()
     .prepare(
-      `WITH ${cte.sql}
-       SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
+      `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at,
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
-         LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
+         LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
          WHERE pco_people.org_id = ? AND pco_people.pco_id = ?`,
     )
-    .get(...cte.args, orgId, pcoId) as RawRow | undefined;
+    .get(orgId, pcoId) as RawRow | undefined;
   if (!row) return null;
   return toRow(row, activityMonths);
 }
@@ -433,18 +428,17 @@ export function searchPeople(
 ): SearchHit[] {
   const q = query.trim().toLowerCase();
   if (q.length < 2) return [];
-  const cte = shepherdedIdsCte(orgId, getExcludedGroupTypes(orgId));
+  populateShepherdedTempTable(orgId);
   const rows = getDb()
     .prepare(
-      `WITH ${cte.sql}
-       SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
+      `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at,
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
-         LEFT JOIN shepherded_ids s ON s.person_id = pco_people.pco_id
+         LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
          WHERE pco_people.org_id = ?`,
     )
-    .all(...cte.args, orgId) as RawRow[];
+    .all(orgId) as RawRow[];
   const hits: SearchHit[] = [];
   for (const r of rows) {
     const person = toRow(r, activityMonths);
