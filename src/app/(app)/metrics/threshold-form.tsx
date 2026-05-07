@@ -8,18 +8,21 @@ export function ThresholdForm({
   initialSync,
   initialTracking,
   initialLapsed,
+  initialLapsedTeam,
   isAdmin,
 }: {
   initialActivity: number;
   initialSync: number;
   initialTracking: number;
   initialLapsed: number;
+  initialLapsedTeam: number;
   isAdmin: boolean;
 }) {
   const [activity, setActivity] = useState(initialActivity);
   const [sync, setSync] = useState(initialSync);
   const [tracking, setTracking] = useState(initialTracking);
   const [lapsed, setLapsed] = useState(initialLapsed);
+  const [lapsedTeam, setLapsedTeam] = useState(initialLapsedTeam);
   const [state, action, pending] = useActionState<MetricsSaveState | null, FormData>(
     saveThresholdsAction,
     null,
@@ -126,8 +129,7 @@ export function ThresholdForm({
         </div>
         <p className="text-xs text-muted mb-2.5">
           A group member who hasn&apos;t attended a meeting in this many weeks counts as
-          having left the group — alongside members whose group itself ends. Drives the
-          group-leaving feed and the &ldquo;left&rdquo; numbers on /groups.
+          having left the group — same with members whose group itself ends.
         </p>
         <input
           id="lapsedWeeks"
@@ -138,6 +140,36 @@ export function ThresholdForm({
           step="1"
           value={lapsed}
           onChange={(e) => setLapsed(Number(e.target.value))}
+          disabled={!isAdmin}
+          className="w-full accent-[var(--accent)] disabled:opacity-50"
+        />
+        <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
+          <span>2 weeks</span>
+          <span>26 weeks</span>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-baseline justify-between mb-1.5">
+          <label className="text-sm font-medium" htmlFor="lapsedFromTeamWeeks">
+            Lapsed-from-team threshold
+          </label>
+          <span className="tnum text-sm text-muted">{lapsedTeam} weeks</span>
+        </div>
+        <p className="text-xs text-muted mb-2.5">
+          A team member who hasn&apos;t served on a plan in this many weeks counts as
+          having dropped off the team. Drives the &ldquo;left&rdquo; numbers on /teams
+          and feeds the Serve lane.
+        </p>
+        <input
+          id="lapsedFromTeamWeeks"
+          name="lapsedFromTeamWeeks"
+          type="range"
+          min="2"
+          max="26"
+          step="1"
+          value={lapsedTeam}
+          onChange={(e) => setLapsedTeam(Number(e.target.value))}
           disabled={!isAdmin}
           className="w-full accent-[var(--accent)] disabled:opacity-50"
         />

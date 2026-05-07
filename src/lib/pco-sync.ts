@@ -4,6 +4,7 @@ import { getDb } from "./db";
 import { getDecryptedCreds, getSyncEntities, getSyncSettings } from "./pco";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 import { refreshLastAttended, syncGroupsAll } from "./pco-sync-groups";
+import { refreshLastServed, syncServicesAll } from "./pco-sync-services";
 
 // Forms the user explicitly asked to track (from the prompt).
 // Becomes user-configurable later; for now this is the canonical list.
@@ -27,6 +28,12 @@ export interface SyncDetails {
   groupMemberships: { fetched: number; upserted: number };
   groupApplications: { fetched: number; upserted: number };
   groupEvents: { fetched: number; upserted: number };
+  serviceTypes: { fetched: number; upserted: number };
+  teams: { fetched: number; upserted: number };
+  teamPositions: { fetched: number; upserted: number };
+  teamMemberships: { fetched: number; upserted: number };
+  plans: { fetched: number; upserted: number };
+  planPeople: { fetched: number; upserted: number };
   cutoff: string | null;
   durationMs: number;
   startedAt: string;
@@ -48,6 +55,12 @@ export async function runSync(
     groupMemberships: { fetched: 0, upserted: 0 },
     groupApplications: { fetched: 0, upserted: 0 },
     groupEvents: { fetched: 0, upserted: 0 },
+    serviceTypes: { fetched: 0, upserted: 0 },
+    teams: { fetched: 0, upserted: 0 },
+    teamPositions: { fetched: 0, upserted: 0 },
+    teamMemberships: { fetched: 0, upserted: 0 },
+    plans: { fetched: 0, upserted: 0 },
+    planPeople: { fetched: 0, upserted: 0 },
     cutoff: null,
     durationMs: 0,
     startedAt,
@@ -102,6 +115,29 @@ export async function runSync(
       }
     }
 
+    // ── Services / Teams (service_types, teams, positions, plans, etc.) ─
+    if (enabled.teams) {
+      try {
+        const t = await syncServicesAll(
+          client,
+          orgId,
+          settings.syncThresholdMonths,
+        );
+        details.serviceTypes = t.serviceTypes;
+        details.teams = t.teams;
+        details.teamPositions = t.teamPositions;
+        details.teamMemberships = t.teamMemberships;
+        details.plans = t.plans;
+        details.planPeople = t.planPeople;
+        refreshLastServed(orgId);
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Teams: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
+    }
+
     // ── Forms (only if "forms" entity is enabled) ────────────────────────
     if (enabled.forms) {
       for (const formId of TRACKED_FORM_IDS) {
@@ -139,7 +175,13 @@ export async function runSync(
       details.groupTypes.upserted +
       details.groupMemberships.upserted +
       details.groupApplications.upserted +
-      details.groupEvents.upserted;
+      details.groupEvents.upserted +
+      details.serviceTypes.upserted +
+      details.teams.upserted +
+      details.teamPositions.upserted +
+      details.teamMemberships.upserted +
+      details.plans.upserted +
+      details.planPeople.upserted;
 
     details.durationMs = Date.now() - startedMs;
     finishSyncRun(runId, "ok", changes, warning, details);
@@ -590,6 +632,12 @@ export interface SyncedDataCounts {
   groupMemberships: number;
   groupApplications: number;
   groupEvents: number;
+  serviceTypes: number;
+  teams: number;
+  teamPositions: number;
+  teamMemberships: number;
+  plans: number;
+  planPeople: number;
 }
 
 export function getSyncedCounts(orgId: number): SyncedDataCounts {
@@ -612,6 +660,20 @@ export function getSyncedCounts(orgId: number): SyncedDataCounts {
     ),
     groupEvents: one(
       "SELECT COUNT(*) AS n FROM pco_group_events WHERE org_id = ?",
+    ),
+    serviceTypes: one(
+      "SELECT COUNT(*) AS n FROM pco_service_types WHERE org_id = ?",
+    ),
+    teams: one("SELECT COUNT(*) AS n FROM pco_teams WHERE org_id = ?"),
+    teamPositions: one(
+      "SELECT COUNT(*) AS n FROM pco_team_positions WHERE org_id = ?",
+    ),
+    teamMemberships: one(
+      "SELECT COUNT(*) AS n FROM pco_team_memberships WHERE org_id = ?",
+    ),
+    plans: one("SELECT COUNT(*) AS n FROM pco_plans WHERE org_id = ?"),
+    planPeople: one(
+      "SELECT COUNT(*) AS n FROM pco_plan_people WHERE org_id = ?",
     ),
   };
 }

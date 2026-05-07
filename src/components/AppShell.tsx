@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { href: "/shepherds", label: "Shepherds" },
   { href: "/people", label: "People" },
   { href: "/groups", label: "Groups" },
+  { href: "/teams", label: "Teams" },
   { href: "/movement", label: "Movement" },
 ];
 

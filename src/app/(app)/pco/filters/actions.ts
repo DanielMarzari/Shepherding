@@ -2,7 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
-import { saveExcludedGroupTypes, saveExcludedMembershipTypes } from "@/lib/pco";
+import {
+  saveExcludedGroupTypes,
+  saveExcludedMembershipTypes,
+  saveExcludedTeamTypes,
+} from "@/lib/pco";
 
 export interface FilterSaveState {
   status: "idle" | "saved" | "error";
@@ -30,6 +34,30 @@ export async function saveFiltersAction(
       excluded.length === 0
         ? "All membership types are now included."
         : `Excluding ${excluded.length} membership type${excluded.length === 1 ? "" : "s"}.`,
+  };
+}
+
+export async function saveTeamTypeFiltersAction(
+  _prev: FilterSaveState | null,
+  formData: FormData,
+): Promise<FilterSaveState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") {
+    return { status: "error", message: "Only admins can change filters." };
+  }
+  const excluded = formData
+    .getAll("exclude_team_type")
+    .filter((v) => typeof v === "string") as string[];
+  saveExcludedTeamTypes(s.orgId, excluded);
+  revalidatePath("/pco/filters");
+  revalidatePath("/teams");
+  revalidatePath("/lanes/serv");
+  return {
+    status: "saved",
+    message:
+      excluded.length === 0
+        ? "All service types now count for Serve."
+        : `Excluding ${excluded.length} service type${excluded.length === 1 ? "" : "s"} from Serve.`,
   };
 }
 

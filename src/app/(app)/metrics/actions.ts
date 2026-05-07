@@ -21,7 +21,8 @@ export async function saveThresholdsAction(
   const sync = Number(formData.get("syncThresholdMonths") ?? 3);
   const tracking = Number(formData.get("activityTrackingMonths") ?? 3);
   const lapsed = Number(formData.get("lapsedWeeks") ?? 10);
-  saveMetricsSettings(s.orgId, activity, sync, tracking, lapsed);
+  const lapsedTeam = Number(formData.get("lapsedFromTeamWeeks") ?? 10);
+  saveMetricsSettings(s.orgId, activity, sync, tracking, lapsed, lapsedTeam);
   revalidatePath("/metrics");
   revalidatePath("/people");
   revalidatePath("/attendance");

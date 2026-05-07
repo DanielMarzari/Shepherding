@@ -186,6 +186,9 @@ export interface SyncSettings {
   /** Weeks of consecutive non-attendance before a group member is treated
    *  as having left the group (default 10). */
   lapsedWeeks: number;
+  /** Same idea for service teams — weeks since last serving before treated
+   *  as having dropped off the team (default 10). */
+  lapsedFromTeamWeeks: number;
 }
 
 export function getSyncSettings(orgId: number): SyncSettings {
@@ -194,7 +197,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
       `SELECT enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
               email_on_failure, auto_resolve_conflicts,
               activity_months, sync_threshold_months,
-              activity_tracking_months, weekly_attendance, lapsed_weeks
+              activity_tracking_months, weekly_attendance, lapsed_weeks,
+              lapsed_from_team_weeks
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -211,6 +215,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
         activity_tracking_months: number | null;
         weekly_attendance: number | null;
         lapsed_weeks: number | null;
+        lapsed_from_team_weeks: number | null;
       }
     | undefined;
   if (!row) {
@@ -227,6 +232,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
       activityTrackingMonths: 3,
       weeklyAttendance: null,
       lapsedWeeks: 10,
+      lapsedFromTeamWeeks: 10,
     };
   }
   const freq: SyncFrequency =
@@ -244,6 +250,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
     activityTrackingMonths: row.activity_tracking_months ?? 3,
     weeklyAttendance: row.weekly_attendance,
     lapsedWeeks: row.lapsed_weeks ?? 10,
+    lapsedFromTeamWeeks: row.lapsed_from_team_weeks ?? 10,
   };
 }
 
@@ -254,8 +261,8 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          (org_id, enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
           email_on_failure, auto_resolve_conflicts, activity_months,
           sync_threshold_months, activity_tracking_months, weekly_attendance,
-          lapsed_weeks, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          lapsed_weeks, lapsed_from_team_weeks, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id) DO UPDATE SET
          enabled = excluded.enabled,
          frequency = excluded.frequency,
@@ -269,6 +276,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          activity_tracking_months = excluded.activity_tracking_months,
          weekly_attendance = excluded.weekly_attendance,
          lapsed_weeks = excluded.lapsed_weeks,
+         lapsed_from_team_weeks = excluded.lapsed_from_team_weeks,
          updated_at = excluded.updated_at`,
     )
     .run(
@@ -287,6 +295,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
         ? null
         : Math.max(0, Math.min(1_000_000, Math.floor(s.weeklyAttendance))),
       Math.max(1, Math.min(52, Math.floor(s.lapsedWeeks))),
+      Math.max(1, Math.min(52, Math.floor(s.lapsedFromTeamWeeks))),
     );
 }
 
@@ -297,6 +306,7 @@ export function saveMetricsSettings(
   syncThresholdMonths: number,
   activityTrackingMonths: number,
   lapsedWeeks: number,
+  lapsedFromTeamWeeks: number,
 ) {
   const current = getSyncSettings(orgId);
   saveSyncSettings(orgId, {
@@ -305,6 +315,7 @@ export function saveMetricsSettings(
     syncThresholdMonths: Math.max(1, Math.min(60, Math.floor(syncThresholdMonths))),
     activityTrackingMonths: Math.max(1, Math.min(36, Math.floor(activityTrackingMonths))),
     lapsedWeeks: Math.max(1, Math.min(52, Math.floor(lapsedWeeks))),
+    lapsedFromTeamWeeks: Math.max(1, Math.min(52, Math.floor(lapsedFromTeamWeeks))),
   });
 }
 
@@ -399,6 +410,65 @@ export function saveExcludedGroupTypes(orgId: number, ids: string[]) {
     .run(json, orgId);
 }
 
+// ─── Team-type filters ──────────────────────────────────────────────────
+
+export function getExcludedTeamTypes(orgId: number): string[] {
+  const row = getDb()
+    .prepare(
+      "SELECT excluded_team_types FROM pco_sync_settings WHERE org_id = ?",
+    )
+    .get(orgId) as { excluded_team_types: string | null } | undefined;
+  if (!row?.excluded_team_types) return [];
+  try {
+    const parsed = JSON.parse(row.excluded_team_types);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveExcludedTeamTypes(orgId: number, ids: string[]) {
+  const cleaned = Array.from(new Set(ids.filter(Boolean)));
+  const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) saveSyncSettings(orgId, getSyncSettings(orgId));
+  getDb()
+    .prepare(
+      "UPDATE pco_sync_settings SET excluded_team_types = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
+    )
+    .run(json, orgId);
+}
+
+export function getServiceTypeStats(
+  orgId: number,
+): { serviceTypeId: string | null; name: string | null; teams: number; members: number }[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT
+         t.service_type_id AS serviceTypeId,
+         st.name           AS name,
+         COUNT(DISTINCT t.pco_id) AS teams,
+         COUNT(DISTINCT m.person_id) AS members
+       FROM pco_teams t
+       LEFT JOIN pco_service_types st
+         ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
+       LEFT JOIN pco_team_memberships m
+         ON m.org_id = t.org_id AND m.team_id = t.pco_id AND m.archived_at IS NULL
+       WHERE t.org_id = ? AND t.archived_at IS NULL AND t.deleted_at IS NULL
+       GROUP BY t.service_type_id, st.name
+       ORDER BY COUNT(DISTINCT t.pco_id) DESC, st.name ASC`,
+    )
+    .all(orgId) as {
+    serviceTypeId: string | null;
+    name: string | null;
+    teams: number;
+    members: number;
+  }[];
+  return rows;
+}
+
 /** Distinct group types in the synced groups, with member counts.
  *  Excluded types are still listed (so admins can re-include them). */
 export function getGroupTypeStats(
@@ -455,9 +525,10 @@ export const SYNC_ENTITIES: SyncEntity[] = [
     defaultEnabled: true,
   },
   {
-    key: "service_teams",
-    label: "Service teams",
-    description: "Worship, Hospitality, Greeters, Kids · membership + scheduling",
+    key: "teams",
+    label: "Service teams & plans",
+    description:
+      "Service types, teams, team positions, plan rosters. Drives the Serve lane and the Teams workspace.",
     defaultEnabled: true,
   },
   {

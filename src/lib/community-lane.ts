@@ -1,7 +1,7 @@
 import "server-only";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
-import { getExcludedGroupTypes, getExcludedMembershipTypes } from "./pco";
+import { getExcludedGroupTypes } from "./pco";
 
 interface PIIBlob {
   first_name?: string | null;
@@ -173,19 +173,15 @@ export function getCommunityLaneStats(
 ): CommunityLaneStats {
   const db = getDb();
   const excludedGroupTypes = getExcludedGroupTypes(orgId);
-  const excludedMembership = getExcludedMembershipTypes(orgId);
   const trackingCutoff = new Date(
     Date.now() - trackingMonths * 30 * 24 * 60 * 60 * 1000,
   ).toISOString();
   const { join, args: joinArgs } = nonExcludedJoin(excludedGroupTypes);
 
-  const memWhere =
-    excludedMembership.length === 0
-      ? ""
-      : ` AND (p.membership_type IS NULL OR p.membership_type NOT IN (${excludedMembership
-          .map(() => "?")
-          .join(",")}))`;
-
+  // "Members" for the Community lane = anyone who is currently a member or
+  // leader of a non-excluded group. We DON'T apply the person-level
+  // membership_type filter here — even if the person is e.g. classified
+  // "staff" by PCO, being in a group is what makes them Community.
   const memberRow = db
     .prepare(
       `SELECT
@@ -194,12 +190,10 @@ export function getCommunityLaneStats(
          COUNT(DISTINCT CASE WHEN m.joined_at IS NOT NULL AND m.joined_at >= ? THEN m.person_id END) AS joinedRecently
        FROM pco_group_memberships m
        ${join}
-       JOIN pco_people p ON p.org_id = m.org_id AND p.pco_id = m.person_id
        WHERE m.org_id = ?
-         AND m.archived_at IS NULL
-         ${memWhere}`,
+         AND m.archived_at IS NULL`,
     )
-    .get(trackingCutoff, ...joinArgs, orgId, ...excludedMembership) as {
+    .get(trackingCutoff, ...joinArgs, orgId) as {
     members: number;
     groups: number;
     joinedRecently: number;
@@ -242,14 +236,19 @@ export interface SyncedGroupRow {
   name: string | null;
   schedule: string | null;
   groupTypeName: string | null;
+  /** Active members + leaders (non-archived, non-lapsed). */
   members: number;
+  /** Subset of `members` whose role flags them as a leader. */
+  leaders: number;
   joinedRecently: number;
-  /** Members who left in the tracking window: archived_at within window
-   *  OR last_attended_at older than the lapsed threshold. */
+  /** People considered "out" within tracking window: archived in window
+   *  OR attended-then-disappeared OR active-but-lapsed (lapsed counts as
+   *  having left the group). */
   leftRecently: number;
-  /** Members currently flagged lapsed (no attendance for `lapsedWeeks` weeks). */
-  currentlyLapsed: number;
   recentEvents: number;
+  /** % of active members who attended in the tracking window. Null when
+   *  there are no events / members to measure against. */
+  attendancePct: number | null;
   pcoCreatedAt: string | null;
   archivedAt: string | null;
   state: "growing" | "shrinking" | "steady" | "paused";
@@ -276,17 +275,14 @@ export function listGroups(
           .map(() => "?")
           .join(",")}))`;
 
-  // "leftRecently" = people who left this group within the tracking window.
-  // Two paths to "left":
-  //   1. Their membership was archived (archived_at within window).
-  //   2. They attended at least one of this group's events in the window
-  //      but no longer have an active membership. PCO often handles
-  //      churn by simply removing the membership row; the audit trail
-  //      lives in pco_event_attendances.
-  // Counted DISTINCT on person_id so the same person doesn't appear in
-  // both buckets.
-  //
-  // "currentlyLapsed" = active member who hasn't attended for `lapsedWeeks`+.
+  // "members" = active membership AND not lapsed (still showing up)
+  // "leaders" = subset of members whose role indicates leader
+  // "leftRecently" UNIONS three paths: archived in window, attended-then-
+  //   disappeared, and lapsed (lapsed = "not part of the group" per the
+  //   user's definition; bound the count to the tracking window via
+  //   "last_attended_at >= trackingCutoff" so it's a recent-departure number)
+  // "attendancePct" = COUNT(distinct attended in window) / members × 100.
+  //   Computed in JS from the raw numbers below.
   const rows = db
     .prepare(
       `SELECT
@@ -302,6 +298,13 @@ export function listGroups(
               AND m.group_id = g.pco_id
               AND m.archived_at IS NULL
               AND (m.last_attended_at IS NULL OR m.last_attended_at >= ?)) AS members,
+         (SELECT COUNT(*)
+            FROM pco_group_memberships m
+            WHERE m.org_id = g.org_id
+              AND m.group_id = g.pco_id
+              AND m.archived_at IS NULL
+              AND (m.last_attended_at IS NULL OR m.last_attended_at >= ?)
+              AND lower(coalesce(m.role, '')) LIKE '%leader%') AS leaders,
          (SELECT COUNT(*)
             FROM pco_group_memberships m
             WHERE m.org_id = g.org_id
@@ -331,20 +334,29 @@ export function listGroups(
                       AND m2.person_id = a.person_id
                       AND m2.archived_at IS NULL
                 )
+            UNION
+            SELECT m.person_id
+              FROM pco_group_memberships m
+              WHERE m.org_id = g.org_id
+                AND m.group_id = g.pco_id
+                AND m.archived_at IS NULL
+                AND m.last_attended_at IS NOT NULL
+                AND m.last_attended_at >= ?
+                AND m.last_attended_at < ?
          )) AS leftRecently,
-         (SELECT COUNT(*)
-            FROM pco_group_memberships m
-            WHERE m.org_id = g.org_id
-              AND m.group_id = g.pco_id
-              AND m.archived_at IS NULL
-              AND m.last_attended_at IS NOT NULL
-              AND m.last_attended_at < ?) AS currentlyLapsed,
          (SELECT COUNT(*)
             FROM pco_group_events e
             WHERE e.org_id = g.org_id
               AND e.group_id = g.pco_id
               AND e.starts_at IS NOT NULL
-              AND e.starts_at >= ?) AS recentEvents
+              AND e.starts_at >= ?) AS recentEvents,
+         (SELECT COUNT(DISTINCT a.person_id)
+            FROM pco_event_attendances a
+            WHERE a.org_id = g.org_id
+              AND a.group_id = g.pco_id
+              AND a.attended = 1
+              AND a.event_starts_at IS NOT NULL
+              AND a.event_starts_at >= ?) AS attendedDistinctRecently
        FROM pco_groups g
        LEFT JOIN pco_group_types t
          ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
@@ -353,11 +365,14 @@ export function listGroups(
     )
     .all(
       lapsedCutoff,    // members: still attending or no attendance signal
+      lapsedCutoff,    // leaders: same filter
       trackingCutoff,  // joined recently
       trackingCutoff,  // left: archived in window
       trackingCutoff,  // left: attended-then-disappeared, within window
-      lapsedCutoff,    // currently lapsed
+      trackingCutoff,  // left: lapsed, last attended within window
+      lapsedCutoff,    //         …but before the lapsed threshold
       trackingCutoff,  // recent events
+      trackingCutoff,  // attended distinct in window
       orgId,
       ...excludedGroupTypes,
     ) as Array<{
@@ -368,10 +383,11 @@ export function listGroups(
     pcoCreatedAt: string | null;
     archivedAt: string | null;
     members: number;
+    leaders: number;
     joinedRecently: number;
     leftRecently: number;
-    currentlyLapsed: number;
     recentEvents: number;
+    attendedDistinctRecently: number;
   }>;
 
   return rows.map((r) => {
@@ -384,7 +400,23 @@ export function listGroups(
       else if (net <= -2) state = "shrinking";
       else state = "steady";
     }
-    return { ...r, state };
+    const attendancePct =
+      r.members > 0 ? (r.attendedDistinctRecently / r.members) * 100 : null;
+    return {
+      pcoId: r.pcoId,
+      name: r.name,
+      schedule: r.schedule,
+      groupTypeName: r.groupTypeName,
+      pcoCreatedAt: r.pcoCreatedAt,
+      archivedAt: r.archivedAt,
+      members: r.members,
+      leaders: r.leaders,
+      joinedRecently: r.joinedRecently,
+      leftRecently: r.leftRecently,
+      recentEvents: r.recentEvents,
+      attendancePct,
+      state,
+    };
   });
 }
 
@@ -396,9 +428,9 @@ export interface GroupTotals {
   shrinking: number;
   paused: number;
   totalMembers: number;
+  totalLeaders: number;
   joinedRecently: number;
   leftRecently: number;
-  currentlyLapsed: number;
 }
 
 export function getGroupTotals(
@@ -415,16 +447,16 @@ export function getGroupTotals(
     shrinking: 0,
     paused: 0,
     totalMembers: 0,
+    totalLeaders: 0,
     joinedRecently: 0,
     leftRecently: 0,
-    currentlyLapsed: 0,
   };
   for (const g of groups) {
     totals.joinedRecently += g.joinedRecently;
     totals.leftRecently += g.leftRecently;
-    totals.currentlyLapsed += g.currentlyLapsed;
     if (g.archivedAt) continue;
     totals.totalMembers += g.members;
+    totals.totalLeaders += g.leaders;
     totals[g.state]++;
   }
   return totals;
@@ -436,15 +468,10 @@ export function listCommunityPeople(
 ): CommunityPersonRow[] {
   const db = getDb();
   const excludedGroupTypes = getExcludedGroupTypes(orgId);
-  const excludedMembership = getExcludedMembershipTypes(orgId);
   const { join, args: joinArgs } = nonExcludedJoin(excludedGroupTypes);
-  const memWhere =
-    excludedMembership.length === 0
-      ? ""
-      : ` AND (p.membership_type IS NULL OR p.membership_type NOT IN (${excludedMembership
-          .map(() => "?")
-          .join(",")}))`;
 
+  // No person-level membership_type filter here — being in a group is what
+  // qualifies someone for the Community lane (member or leader).
   const rows = db
     .prepare(
       `SELECT
@@ -458,12 +485,11 @@ export function listCommunityPeople(
        JOIN pco_people p ON p.org_id = m.org_id AND p.pco_id = m.person_id
        WHERE m.org_id = ?
          AND m.archived_at IS NULL
-         ${memWhere}
        GROUP BY p.pco_id, p.enc_pii, p.membership_type
        ORDER BY COUNT(DISTINCT m.group_id) DESC, MIN(m.joined_at) DESC NULLS LAST
        LIMIT ?`,
     )
-    .all(...joinArgs, orgId, ...excludedMembership, limit) as {
+    .all(...joinArgs, orgId, limit) as {
     pcoId: string;
     encPii: string | null;
     membershipType: string | null;

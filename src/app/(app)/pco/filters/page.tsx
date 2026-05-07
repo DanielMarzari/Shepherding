@@ -5,15 +5,19 @@ import { requireOrg } from "@/lib/auth";
 import {
   getExcludedGroupTypes,
   getExcludedMembershipTypes,
+  getExcludedTeamTypes,
   getGroupTypeStats,
   getMembershipTypeStats,
+  getServiceTypeStats,
 } from "@/lib/pco";
 import { FiltersForm } from "./form";
 import { GroupTypeFiltersForm } from "./group-types-form";
+import { TeamTypeFiltersForm } from "./team-types-form";
 
 const TABS = [
   { key: "people", label: "Membership types" },
   { key: "groups", label: "Group types" },
+  { key: "teams", label: "Team types" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -39,6 +43,9 @@ export default async function FiltersPage({
   const groupExcludedMembers = groupStats
     .filter((r) => r.groupTypeId && groupExcluded.has(r.groupTypeId))
     .reduce((s, r) => s + r.members, 0);
+
+  const teamStats = getServiceTypeStats(session.orgId);
+  const teamExcluded = new Set(getExcludedTeamTypes(session.orgId));
 
   return (
     <AppShell active="Filters" breadcrumb="Settings › Filters">
@@ -88,7 +95,12 @@ export default async function FiltersPage({
           <nav className="flex gap-1 -mb-px overflow-x-auto">
             {TABS.map((t) => {
               const isActive = t.key === tab;
-              const count = t.key === "people" ? memStats.length : groupStats.length;
+              const count =
+                t.key === "people"
+                  ? memStats.length
+                  : t.key === "groups"
+                    ? groupStats.length
+                    : teamStats.length;
               return (
                 <Link
                   key={t.key}
@@ -111,7 +123,32 @@ export default async function FiltersPage({
           </nav>
         </div>
 
-        {tab === "people" ? (
+        {tab === "teams" ? (
+          <Card>
+            <CardHeader
+              title="Service team types"
+              badge={
+                session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
+              }
+              right={
+                <span className="text-xs text-muted">
+                  excluded service types don&apos;t count for the Serve lane
+                </span>
+              }
+            />
+            {teamStats.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-muted">
+                No service types yet — enable Teams under Sync settings and run a sync.
+              </div>
+            ) : (
+              <TeamTypeFiltersForm
+                stats={teamStats}
+                initialExcluded={Array.from(teamExcluded)}
+                isAdmin={session.role === "admin"}
+              />
+            )}
+          </Card>
+        ) : tab === "people" ? (
           <Card>
             <CardHeader
               title="Membership types"
