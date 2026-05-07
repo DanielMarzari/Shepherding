@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
@@ -10,8 +11,22 @@ import {
 import { FiltersForm } from "./form";
 import { GroupTypeFiltersForm } from "./group-types-form";
 
-export default async function FiltersPage() {
+const TABS = [
+  { key: "people", label: "Membership types" },
+  { key: "groups", label: "Group types" },
+] as const;
+
+type TabKey = (typeof TABS)[number]["key"];
+
+export default async function FiltersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
   const session = await requireOrg();
+  const params = await searchParams;
+  const tab = (TABS.find((t) => t.key === params.tab)?.key ?? "people") as TabKey;
+
   const memStats = getMembershipTypeStats(session.orgId);
   const memExcluded = new Set(getExcludedMembershipTypes(session.orgId));
   const totalSynced = memStats.reduce((s, r) => s + r.count, 0);
@@ -21,6 +36,9 @@ export default async function FiltersPage() {
 
   const groupStats = getGroupTypeStats(session.orgId);
   const groupExcluded = new Set(getExcludedGroupTypes(session.orgId));
+  const groupExcludedMembers = groupStats
+    .filter((r) => r.groupTypeId && groupExcluded.has(r.groupTypeId))
+    .reduce((s, r) => s + r.members, 0);
 
   return (
     <AppShell active="Filters" breadcrumb="Settings › Filters">
@@ -55,67 +73,95 @@ export default async function FiltersPage() {
             <div className="text-xs text-muted mt-1">distinct values</div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Group types excluded</div>
+            <div className="text-xs text-muted mb-1.5">Members in excluded types</div>
             <div className="tnum text-2xl font-semibold text-warn-soft-fg">
-              {groupExcluded.size}
+              {groupExcludedMembers.toLocaleString()}
             </div>
-            <div className="text-xs text-muted mt-1">won&apos;t count for Shepherded</div>
+            <div className="text-xs text-muted mt-1">
+              won&apos;t count for Shepherded
+            </div>
           </Card>
         </div>
 
-        <Card>
-          <CardHeader
-            title="Membership types"
-            badge={
-              session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
-            }
-            right={
-              <span className="text-xs text-muted">click to toggle exclusion</span>
-            }
-          />
-          {memStats.length === 0 ? (
-            <div className="px-5 py-12 text-center text-sm text-muted">
-              No membership types yet — run a sync first.
-            </div>
-          ) : (
-            <FiltersForm
-              stats={memStats}
-              initialExcluded={Array.from(memExcluded)}
-              isAdmin={session.role === "admin"}
-            />
-          )}
-        </Card>
+        {/* Tabs */}
+        <div className="border-b border-border-soft">
+          <nav className="flex gap-1 -mb-px overflow-x-auto">
+            {TABS.map((t) => {
+              const isActive = t.key === tab;
+              const count = t.key === "people" ? memStats.length : groupStats.length;
+              return (
+                <Link
+                  key={t.key}
+                  href={t.key === "people" ? "/pco/filters" : `/pco/filters?tab=${t.key}`}
+                  className={`px-3 py-2.5 text-sm border-b-2 transition-colors whitespace-nowrap inline-flex items-baseline gap-1.5 ${
+                    isActive
+                      ? "border-accent text-fg font-medium"
+                      : "border-transparent text-muted hover:text-fg hover:border-border-soft"
+                  }`}
+                >
+                  <span>{t.label}</span>
+                  <span
+                    className={`tnum text-xs ${isActive ? "text-accent" : "text-subtle"}`}
+                  >
+                    {count.toLocaleString()}
+                  </span>
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
 
-        <Card>
-          <CardHeader
-            title="Group types"
-            badge={
-              session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
-            }
-            right={
-              <span className="text-xs text-muted">
-                exclude types from Shepherded count
-              </span>
-            }
-          />
-          {groupStats.length === 0 ? (
-            <div className="px-5 py-12 text-center text-sm text-muted">
-              No group types yet — enable the Groups sync entity and run a sync.
-            </div>
-          ) : (
-            <GroupTypeFiltersForm
-              stats={groupStats}
-              initialExcluded={Array.from(groupExcluded)}
-              isAdmin={session.role === "admin"}
+        {tab === "people" ? (
+          <Card>
+            <CardHeader
+              title="Membership types"
+              badge={
+                session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
+              }
+              right={
+                <span className="text-xs text-muted">
+                  hides excluded rows from People, Metrics, Care queue
+                </span>
+              }
             />
-          )}
-        </Card>
-
-        <p className="text-xs text-muted">
-          Membership filters hide people from People, Metrics counts, and the Care queue.
-          Group-type filters affect the Shepherded classification — anyone whose only
-          memberships are in excluded types will fall back to Active / Present / Inactive.
-        </p>
+            {memStats.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-muted">
+                No membership types yet — run a sync first.
+              </div>
+            ) : (
+              <FiltersForm
+                stats={memStats}
+                initialExcluded={Array.from(memExcluded)}
+                isAdmin={session.role === "admin"}
+              />
+            )}
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader
+              title="Group types"
+              badge={
+                session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
+              }
+              right={
+                <span className="text-xs text-muted">
+                  excluded types don&apos;t count for Shepherded
+                </span>
+              }
+            />
+            {groupStats.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-muted">
+                No group types yet — enable Groups under Sync settings and run a sync.
+              </div>
+            ) : (
+              <GroupTypeFiltersForm
+                stats={groupStats}
+                initialExcluded={Array.from(groupExcluded)}
+                isAdmin={session.role === "admin"}
+              />
+            )}
+          </Card>
+        )}
       </div>
     </AppShell>
   );

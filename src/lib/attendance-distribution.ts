@@ -6,16 +6,18 @@ import "server-only";
  * average attendance W.
  *
  * Approach:
- *   1) 8 buckets from "Once a year" (1 visit/yr) to "Every week" (52 visits/yr).
- *   2) Build a log-normal-shaped population centered on the implied mean
- *      visits/year (= 52 × W/N). Real-world church attendance is heavy-
- *      tailed in log space, so log-normal fits better than a Gaussian
- *      in linear space.
- *   3) Iteratively swap whole-person counts between extreme buckets until
- *      the implied weekly attendance (Σ people_i × visits_i / 52) matches
- *      the observed W. This is the "skew it so it balances" step — a
- *      symmetric bell would over- or under-shoot W; the skew accounts
- *      for that.
+ *   1) 8 buckets from "Once a year" (1 visit/yr) up to "Every week" (52).
+ *   2) Log-normal weights — real church attendance is heavy-tailed in
+ *      log space (lots of regulars, long tail of irregulars), and a
+ *      log-normal in visits-per-year matches that shape better than a
+ *      Gaussian in linear space.
+ *   3) Binary-search the log-normal MEAN until the implied weekly
+ *      attendance exactly matches the target. The shape is naturally
+ *      skewed left or right depending on whether weekly is high or
+ *      low relative to expected — that's the "skewed so it balances".
+ *   4) Quantize to whole people preserving the population total, then
+ *      one final small-step pass to nudge the integer weekly attendance
+ *      back to within 0.5 of target.
  */
 
 export interface FrequencyBucket {
@@ -37,11 +39,11 @@ const BUCKETS = [
   { label: "Once a year", visitsPerYear: 1 },
 ] as const;
 
+const SIGMA = 0.95; // log-space spread
+
 export interface DistributionResult {
   buckets: FrequencyBucket[];
-  /** Weekly attendance the distribution actually produces. */
   predictedWeekly: number;
-  /** Weekly attendance the user provided. */
   targetWeekly: number;
   expected: number;
   meanVisitsPerYear: number;
@@ -52,60 +54,90 @@ export function buildAttendanceDistribution(
   weekly: number,
 ): DistributionResult | null {
   if (expected <= 0 || !weekly || weekly <= 0) return null;
-  // Cap mean at 52 (every-week ceiling) just in case W > E.
-  const cappedWeekly = Math.min(weekly, expected);
-  const meanVisits = 52 * (cappedWeekly / expected);
+  const target = Math.min(weekly, expected); // sanity cap
+  const targetMeanVisits = 52 * (target / expected);
 
-  // Log-normal weights, centered on the implied mean.
-  const lnMean = Math.log(Math.max(0.5, meanVisits));
-  const sigma = 0.95; // tunable spread
-  const weights = BUCKETS.map((b) =>
-    Math.exp(-Math.pow(Math.log(b.visitsPerYear) - lnMean, 2) / (2 * sigma * sigma)),
-  );
-  const wSum = weights.reduce((a, b) => a + b, 0);
+  // Continuous predicted weekly given log-mean μ.
+  function predict(lnMu: number): { allocation: number[]; sumWeekly: number } {
+    const weights = BUCKETS.map((b) =>
+      Math.exp(
+        -Math.pow(Math.log(b.visitsPerYear) - lnMu, 2) / (2 * SIGMA * SIGMA),
+      ),
+    );
+    const wSum = weights.reduce((a, b) => a + b, 0);
+    const allocation = weights.map((w) => (expected * w) / wSum);
+    const sumWeekly = allocation.reduce(
+      (s, n, i) => s + (n * BUCKETS[i].visitsPerYear) / 52,
+      0,
+    );
+    return { allocation, sumWeekly };
+  }
 
-  // Initial real-valued allocation that sums to `expected`.
-  let alloc = weights.map((w) => (expected * w) / wSum);
+  // Binary search for the lnMu where predict.sumWeekly == target.
+  // sumWeekly is monotonic in lnMu — higher μ → more frequent attenders →
+  // higher sumWeekly. So we can binary search.
+  let lo = Math.log(0.5);
+  let hi = Math.log(60);
+  let best = predict((lo + hi) / 2);
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const r = predict(mid);
+    if (Math.abs(r.sumWeekly - target) < 0.5) {
+      best = r;
+      break;
+    }
+    if (r.sumWeekly > target) hi = mid;
+    else lo = mid;
+    best = r;
+  }
 
-  // Snap to integers, preserving the row sum at `expected` via remainders.
-  let people = quantizePreservingSum(alloc, expected);
+  // Quantize to integers preserving the population sum.
+  const people = quantizePreservingSum(best.allocation, expected);
 
-  // Balance pass: swap one person at a time between the highest and lowest
-  // buckets until predicted weekly within 0.5 of target. Caps iterations.
-  for (let iter = 0; iter < 500; iter++) {
-    const predicted = sumWeekly(people);
-    const err = cappedWeekly - predicted;
+  // Final small-step balance: rounding can shift weekly by a couple.
+  for (let iter = 0; iter < 200; iter++) {
+    const sumW = sumWeekly(people);
+    const err = target - sumW;
     if (Math.abs(err) < 0.5) break;
-    if (err > 0) {
-      // Need more frequent attenders — move 1 person up the ladder.
-      const fromIdx = lowestNonZeroFrom(people, BUCKETS.length - 1);
-      if (fromIdx === -1 || fromIdx === 0) break;
-      people[fromIdx] -= 1;
-      people[0] += 1;
+    if (err < 0) {
+      // Shift one person from a high-frequency bucket to the lowest bucket.
+      let moved = false;
+      for (let i = 0; i < BUCKETS.length - 1; i++) {
+        if (people[i] >= 1) {
+          people[i]--;
+          people[BUCKETS.length - 1]++;
+          moved = true;
+          break;
+        }
+      }
+      if (!moved) break;
     } else {
-      // Too many regulars — move 1 person down.
-      if (people[0] < 1) break;
-      people[0] -= 1;
-      people[BUCKETS.length - 1] += 1;
+      let moved = false;
+      for (let i = BUCKETS.length - 1; i > 0; i--) {
+        if (people[i] >= 1) {
+          people[i]--;
+          people[0]++;
+          moved = true;
+          break;
+        }
+      }
+      if (!moved) break;
     }
   }
 
-  // Build result rows.
   const total = people.reduce((a, b) => a + b, 0);
-  const predictedWeekly = sumWeekly(people);
-  const buckets: FrequencyBucket[] = BUCKETS.map((b, i) => ({
-    label: b.label,
-    visitsPerYear: b.visitsPerYear,
-    people: people[i],
-    pct: total > 0 ? people[i] / total : 0,
-    weeklyContribution: (people[i] * b.visitsPerYear) / 52,
-  }));
   return {
-    buckets,
-    predictedWeekly,
+    buckets: BUCKETS.map((b, i) => ({
+      label: b.label,
+      visitsPerYear: b.visitsPerYear,
+      people: people[i],
+      pct: total > 0 ? people[i] / total : 0,
+      weeklyContribution: (people[i] * b.visitsPerYear) / 52,
+    })),
+    predictedWeekly: Math.round(sumWeekly(people)),
     targetWeekly: weekly,
     expected,
-    meanVisitsPerYear: meanVisits,
+    meanVisitsPerYear: targetMeanVisits,
   };
 }
 
@@ -116,19 +148,10 @@ function sumWeekly(people: number[]): number {
   );
 }
 
-function lowestNonZeroFrom(people: number[], startIdx: number): number {
-  for (let i = startIdx; i >= 1; i--) {
-    if (people[i] >= 1) return i;
-  }
-  return -1;
-}
-
-/** Round each value while preserving the total (largest-remainder method). */
 function quantizePreservingSum(values: number[], total: number): number[] {
   const floors = values.map((v) => Math.floor(v));
   const used = floors.reduce((a, b) => a + b, 0);
   let remainder = Math.round(total) - used;
-  // Sort by fractional part desc, allocate +1 to the largest fractions
   const indexed = values.map((v, i) => ({ i, frac: v - Math.floor(v) }));
   indexed.sort((a, b) => b.frac - a.frac);
   const out = floors.slice();

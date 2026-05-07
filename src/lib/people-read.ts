@@ -291,44 +291,52 @@ export function getClassificationCounts(
       ? ""
       : ` AND (membership_type IS NULL OR membership_type NOT IN (${excluded.map(() => "?").join(",")}))`;
   const args = [cutoff, cutoff, cutoff, cutoff, orgId, ...excluded];
+  // Use a CTE so the shepherded subquery (and its bound parameters) only
+  // appears once in the SQL. Avoids the previous off-by-one parameter
+  // bookkeeping that crashed once any group types were excluded.
   const shep = shepherdedSubq(getExcludedGroupTypes(orgId));
-  const shepCond = `EXISTS ${shep.sql}`;
   const row = db
     .prepare(
-      `SELECT
+      `WITH classified AS (
+         SELECT
+           pco_id,
+           membership_type,
+           last_form_submission_at,
+           pco_updated_at,
+           CASE WHEN EXISTS ${shep.sql} THEN 1 ELSE 0 END AS shep
+         FROM pco_people
+         WHERE org_id = ?${exclSql}
+       )
+       SELECT
          COUNT(*) AS total,
-         SUM(CASE WHEN ${shepCond} THEN 1 ELSE 0 END) AS shepherded,
+         SUM(CASE WHEN shep = 1 THEN 1 ELSE 0 END) AS shepherded,
          SUM(CASE
-               WHEN NOT (${shepCond})
-                AND last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?
+               WHEN shep = 0
+                AND last_form_submission_at IS NOT NULL
+                AND last_form_submission_at >= ?
                THEN 1 ELSE 0 END) AS active,
          SUM(CASE
-               WHEN NOT (${shepCond})
+               WHEN shep = 0
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
-                AND (pco_updated_at IS NOT NULL AND pco_updated_at >= ?)
+                AND pco_updated_at IS NOT NULL
+                AND pco_updated_at >= ?
                THEN 1 ELSE 0 END) AS present,
          SUM(CASE
-               WHEN NOT (${shepCond})
+               WHEN shep = 0
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
                 AND (pco_updated_at IS NULL OR pco_updated_at < ?)
                THEN 1 ELSE 0 END) AS inactive
-       FROM pco_people
-       WHERE org_id = ?${exclSql}`,
+       FROM classified`,
     )
     .get(
-      // shep args appear once for each ${shepCond} occurrence — there are 4 of them
-      ...shep.args,
-      ...shep.args,
-      ...shep.args,
-      ...shep.args,
-      ...shep.args,
-      cutoff,
-      cutoff,
-      cutoff,
-      cutoff,
-      cutoff,
+      ...shep.args, // for the EXISTS subquery in the CTE
       orgId,
       ...excluded,
+      cutoff, // active
+      cutoff, // present (last_form < cutoff)
+      cutoff, // present (pco_updated >= cutoff)
+      cutoff, // inactive (last_form < cutoff)
+      cutoff, // inactive (pco_updated < cutoff)
     ) as {
     total: number;
     shepherded: number | null;

@@ -117,6 +117,129 @@ export function getCommunityLaneStats(
   };
 }
 
+// ─── Groups list (used by /groups) ─────────────────────────────────────
+
+export interface SyncedGroupRow {
+  pcoId: string;
+  name: string | null;
+  schedule: string | null;
+  groupTypeName: string | null;
+  members: number;
+  joinedRecently: number;
+  archivedRecently: number;
+  recentEvents: number;
+  pcoCreatedAt: string | null;
+  archivedAt: string | null;
+  state: "growing" | "shrinking" | "steady" | "paused";
+}
+
+export function listGroups(
+  orgId: number,
+  trackingMonths: number,
+): SyncedGroupRow[] {
+  const db = getDb();
+  const trackingCutoff = new Date(
+    Date.now() - trackingMonths * 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+
+  const rows = db
+    .prepare(
+      `SELECT
+         g.pco_id            AS pcoId,
+         g.name              AS name,
+         g.schedule          AS schedule,
+         t.name              AS groupTypeName,
+         g.pco_created_at    AS pcoCreatedAt,
+         g.archived_at       AS archivedAt,
+         (SELECT COUNT(*)
+            FROM pco_group_memberships m
+            WHERE m.org_id = g.org_id
+              AND m.group_id = g.pco_id
+              AND m.archived_at IS NULL) AS members,
+         (SELECT COUNT(*)
+            FROM pco_group_memberships m
+            WHERE m.org_id = g.org_id
+              AND m.group_id = g.pco_id
+              AND m.archived_at IS NULL
+              AND m.joined_at IS NOT NULL
+              AND m.joined_at >= ?) AS joinedRecently,
+         (SELECT COUNT(*)
+            FROM pco_group_memberships m
+            WHERE m.org_id = g.org_id
+              AND m.group_id = g.pco_id
+              AND m.archived_at IS NOT NULL
+              AND m.archived_at >= ?) AS archivedRecently,
+         (SELECT COUNT(*)
+            FROM pco_group_events e
+            WHERE e.org_id = g.org_id
+              AND e.group_id = g.pco_id
+              AND e.starts_at IS NOT NULL
+              AND e.starts_at >= ?) AS recentEvents
+       FROM pco_groups g
+       LEFT JOIN pco_group_types t
+         ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
+       WHERE g.org_id = ?
+       ORDER BY g.archived_at IS NULL DESC, members DESC, g.name ASC`,
+    )
+    .all(trackingCutoff, trackingCutoff, trackingCutoff, orgId) as Array<{
+    pcoId: string;
+    name: string | null;
+    schedule: string | null;
+    groupTypeName: string | null;
+    pcoCreatedAt: string | null;
+    archivedAt: string | null;
+    members: number;
+    joinedRecently: number;
+    archivedRecently: number;
+    recentEvents: number;
+  }>;
+
+  return rows.map((r) => {
+    let state: SyncedGroupRow["state"];
+    if (r.archivedAt) state = "paused";
+    else if (r.recentEvents === 0 && r.members > 0) state = "paused";
+    else {
+      const net = r.joinedRecently - r.archivedRecently;
+      if (net >= 2) state = "growing";
+      else if (net <= -2) state = "shrinking";
+      else state = "steady";
+    }
+    return { ...r, state };
+  });
+}
+
+export interface GroupTotals {
+  totalGroups: number;
+  activeGroups: number;
+  growing: number;
+  steady: number;
+  shrinking: number;
+  paused: number;
+  totalMembers: number;
+}
+
+export function getGroupTotals(
+  orgId: number,
+  trackingMonths: number,
+): GroupTotals {
+  const groups = listGroups(orgId, trackingMonths);
+  const totals: GroupTotals = {
+    totalGroups: groups.length,
+    activeGroups: groups.filter((g) => !g.archivedAt).length,
+    growing: 0,
+    steady: 0,
+    shrinking: 0,
+    paused: 0,
+    totalMembers: 0,
+  };
+  for (const g of groups) {
+    if (g.archivedAt) continue;
+    totals.totalMembers += g.members;
+    totals[g.state]++;
+  }
+  return totals;
+}
+
 export function listCommunityPeople(
   orgId: number,
   limit = 100,

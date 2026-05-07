@@ -94,21 +94,36 @@ export default async function PCOSettingsPage() {
             </div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">In Shepherding</div>
-            <div className="tnum text-2xl font-semibold">{counts.people}</div>
-            <div className="text-xs text-muted mt-1">
-              people · {counts.forms} forms · {counts.formSubmissions} submissions
+            <div className="text-xs text-muted mb-1.5">Records in Shepherding</div>
+            <div className="tnum text-2xl font-semibold">
+              {(
+                counts.people +
+                counts.groups +
+                counts.formSubmissions
+              ).toLocaleString()}
             </div>
+            <div className="text-xs text-muted mt-1">people + groups + submissions</div>
           </Card>
         </div>
 
-        {/* Synced-data quick stats — only meaningful after first sync */}
+        {/* Synced-data quick stats — mirrors the "What to sync" entities */}
         {creds.hasCreds && counts.people > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <MiniStat label="People synced" value={counts.people} />
-            <MiniStat label="Forms tracked" value={counts.forms} />
-            <MiniStat label="Form fields" value={counts.formFields} />
-            <MiniStat label="Submissions" value={counts.formSubmissions} />
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <MiniStat
+              label="People"
+              value={counts.people}
+              detail="encrypted PII rows"
+            />
+            <MiniStat
+              label="Groups"
+              value={counts.groups}
+              detail={`${counts.groupMemberships.toLocaleString()} memberships · ${counts.groupEvents.toLocaleString()} events`}
+            />
+            <MiniStat
+              label="Forms"
+              value={counts.forms}
+              detail={`${counts.formSubmissions.toLocaleString()} submissions · ${counts.formFields.toLocaleString()} fields`}
+            />
           </div>
         )}
 
@@ -223,11 +238,20 @@ function ordinal(n: number) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-function MiniStat({ label, value }: { label: string; value: number }) {
+function MiniStat({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: number;
+  detail?: string;
+}) {
   return (
     <div className="rounded-[10px] bg-bg-elev border border-border-soft p-4">
       <div className="text-xs text-muted mb-1.5">{label}</div>
-      <div className="tnum text-2xl font-semibold">{value}</div>
+      <div className="tnum text-2xl font-semibold">{value.toLocaleString()}</div>
+      {detail && <div className="text-xs text-muted mt-1">{detail}</div>}
     </div>
   );
 }
