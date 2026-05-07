@@ -1,28 +1,36 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { getExcludedMembershipTypes, getMembershipTypeStats } from "@/lib/pco";
+import {
+  getExcludedGroupTypes,
+  getExcludedMembershipTypes,
+  getGroupTypeStats,
+  getMembershipTypeStats,
+} from "@/lib/pco";
 import { FiltersForm } from "./form";
+import { GroupTypeFiltersForm } from "./group-types-form";
 
 export default async function FiltersPage() {
   const session = await requireOrg();
-  const stats = getMembershipTypeStats(session.orgId);
-  const excluded = new Set(getExcludedMembershipTypes(session.orgId));
-  const totalSynced = stats.reduce((s, r) => s + r.count, 0);
-  const excludedCount = stats
-    .filter((r) => r.membershipType && excluded.has(r.membershipType))
+  const memStats = getMembershipTypeStats(session.orgId);
+  const memExcluded = new Set(getExcludedMembershipTypes(session.orgId));
+  const totalSynced = memStats.reduce((s, r) => s + r.count, 0);
+  const memExcludedCount = memStats
+    .filter((r) => r.membershipType && memExcluded.has(r.membershipType))
     .reduce((s, r) => s + r.count, 0);
+
+  const groupStats = getGroupTypeStats(session.orgId);
+  const groupExcluded = new Set(getExcludedGroupTypes(session.orgId));
 
   return (
     <AppShell active="Filters" breadcrumb="Settings › Filters">
       <div className="px-5 md:px-7 py-7 max-w-5xl space-y-6">
         <div>
-          <div className="text-muted text-xs mb-1">PCO · filters</div>
-          <h1 className="text-2xl font-semibold tracking-tight">People filters</h1>
+          <div className="text-muted text-xs mb-1">Settings · filters</div>
+          <h1 className="text-2xl font-semibold tracking-tight">Filters</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
-            Exclude PCO membership types you don&apos;t want counted as people in
-            Shepherding — staff, kids, archived contacts, etc. Excluded rows are still synced
-            and stored, but hidden from People, Metrics counts, and the Care queue.
+            Exclude PCO categories you don&apos;t want counted in Shepherding. Excluded
+            rows are still synced and stored — flip them back on any time.
           </p>
         </div>
 
@@ -33,25 +41,25 @@ export default async function FiltersPage() {
             <div className="text-xs text-muted mt-1">all rows in DB</div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Excluded</div>
+            <div className="text-xs text-muted mb-1.5">People excluded</div>
             <div className="tnum text-2xl font-semibold text-warn-soft-fg">
-              {excludedCount.toLocaleString()}
+              {memExcludedCount.toLocaleString()}
             </div>
             <div className="text-xs text-muted mt-1">
-              {excluded.size} membership type{excluded.size === 1 ? "" : "s"}
+              {memExcluded.size} membership type{memExcluded.size === 1 ? "" : "s"}
             </div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Visible</div>
-            <div className="tnum text-2xl font-semibold text-good-soft-fg">
-              {(totalSynced - excludedCount).toLocaleString()}
-            </div>
-            <div className="text-xs text-muted mt-1">shown in People</div>
-          </Card>
-          <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Membership types</div>
-            <div className="tnum text-2xl font-semibold">{stats.length}</div>
+            <div className="text-xs text-muted mb-1.5">Group types</div>
+            <div className="tnum text-2xl font-semibold">{groupStats.length}</div>
             <div className="text-xs text-muted mt-1">distinct values</div>
+          </Card>
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">Group types excluded</div>
+            <div className="tnum text-2xl font-semibold text-warn-soft-fg">
+              {groupExcluded.size}
+            </div>
+            <div className="text-xs text-muted mt-1">won&apos;t count for Shepherded</div>
           </Card>
         </div>
 
@@ -65,22 +73,48 @@ export default async function FiltersPage() {
               <span className="text-xs text-muted">click to toggle exclusion</span>
             }
           />
-          {stats.length === 0 ? (
+          {memStats.length === 0 ? (
             <div className="px-5 py-12 text-center text-sm text-muted">
               No membership types yet — run a sync first.
             </div>
           ) : (
             <FiltersForm
-              stats={stats}
-              initialExcluded={Array.from(excluded)}
+              stats={memStats}
+              initialExcluded={Array.from(memExcluded)}
+              isAdmin={session.role === "admin"}
+            />
+          )}
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Group types"
+            badge={
+              session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
+            }
+            right={
+              <span className="text-xs text-muted">
+                exclude types from Shepherded count
+              </span>
+            }
+          />
+          {groupStats.length === 0 ? (
+            <div className="px-5 py-12 text-center text-sm text-muted">
+              No group types yet — enable the Groups sync entity and run a sync.
+            </div>
+          ) : (
+            <GroupTypeFiltersForm
+              stats={groupStats}
+              initialExcluded={Array.from(groupExcluded)}
               isAdmin={session.role === "admin"}
             />
           )}
         </Card>
 
         <p className="text-xs text-muted">
-          Filters affect display only — your synced data stays intact in the encrypted store.
-          Toggle them off any time to bring people back.
+          Membership filters hide people from People, Metrics counts, and the Care queue.
+          Group-type filters affect the Shepherded classification — anyone whose only
+          memberships are in excluded types will fall back to Active / Present / Inactive.
         </p>
       </div>
     </AppShell>

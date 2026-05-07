@@ -1,11 +1,17 @@
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, CardHeader, LaneTag, Pill } from "@/components/ui";
+import { requireOrg } from "@/lib/auth";
+import {
+  getCommunityLaneStats,
+  listCommunityPeople,
+} from "@/lib/community-lane";
 import {
   LANE_STATS,
   type LaneKey,
   peopleInLane,
   RECENT_LANE_TRANSITIONS,
 } from "@/lib/mock";
+import { getSyncSettings } from "@/lib/pco";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -31,13 +37,32 @@ export default async function LanePage({
   const laneStats = LANE_STATS.find((l) => l.key === lane);
   if (!laneStats) notFound();
   const laneKey = laneStats.key as LaneKey;
+
+  // Community lane reads from real synced group data; other lanes use mock
+  // data until their own sources are wired up.
+  if (laneKey === "comm") {
+    const session = await requireOrg();
+    const settings = getSyncSettings(session.orgId);
+    const stats = getCommunityLaneStats(
+      session.orgId,
+      settings.activityTrackingMonths,
+    );
+    const people = listCommunityPeople(session.orgId, 100);
+    return (
+      <CommunityLane
+        laneStats={laneStats}
+        stats={stats}
+        people={people}
+        trackingMonths={settings.activityTrackingMonths}
+      />
+    );
+  }
+
   const people = peopleInLane(laneKey);
   const transitionsIn = RECENT_LANE_TRANSITIONS.filter(
     (t) => t.lane === laneKey,
   );
-  const transitionsOut = RECENT_LANE_TRANSITIONS.filter(
-    (t) => t.lane === null && t.tenurePrior?.toLowerCase().includes(laneStats.label.toLowerCase().slice(0, 4)),
-  );
+  // (transitionsOut reserved for future lane-exit feed)
 
   return (
     <AppShell active={`lane:${laneKey}`} breadcrumb={`Lanes › ${laneStats.label}`}>
@@ -228,4 +253,145 @@ function coOccurrenceSummary(
   return sorted
     .map(([k, n]) => `${labels[k]}: ${n}`)
     .join(" · ");
+}
+
+// ─── Community lane (real data from pco_group_memberships) ────────────────
+
+function CommunityLane({
+  laneStats,
+  stats,
+  people,
+  trackingMonths,
+}: {
+  laneStats: (typeof LANE_STATS)[number];
+  stats: ReturnType<typeof getCommunityLaneStats>;
+  people: Awaited<ReturnType<typeof listCommunityPeople>>;
+  trackingMonths: number;
+}) {
+  return (
+    <AppShell active="lane:comm" breadcrumb={`Lanes › ${laneStats.label}`}>
+      <div className="px-5 md:px-7 py-7 space-y-6">
+        <div>
+          <Link href="/lanes" className="text-xs text-muted hover:text-fg">
+            ← All lanes
+          </Link>
+          <div className="flex items-center gap-3 mt-3">
+            <span
+              className="w-2.5 h-2.5 rounded-full"
+              style={{ background: "var(--lane-comm)" }}
+            />
+            <h1 className="text-2xl font-semibold tracking-tight">{laneStats.label}</h1>
+            <Pill tone="muted">{stats.members.toLocaleString()} members</Pill>
+            <span className="text-xs text-muted">
+              real data from <code className="font-mono">pco_group_memberships</code>
+            </span>
+          </div>
+          <p className="text-muted text-sm mt-2 max-w-2xl">
+            Anyone with at least one active group membership counts as Community. Group
+            types you&apos;ve excluded on{" "}
+            <Link href="/pco/filters" className="text-accent hover:underline">
+              /pco/filters
+            </Link>{" "}
+            don&apos;t count toward this lane.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">Members</div>
+            <div className="tnum text-2xl font-semibold">
+              {stats.members.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">distinct people</div>
+          </Card>
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">Active groups</div>
+            <div className="tnum text-2xl font-semibold">
+              {stats.groups.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">non-archived</div>
+          </Card>
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">Joined recently</div>
+            <div className="tnum text-2xl font-semibold text-good-soft-fg">
+              {stats.joinedRecently.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">last {trackingMonths} months</div>
+          </Card>
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">In excluded types only</div>
+            <div className="tnum text-2xl font-semibold">
+              {stats.excludedOnly.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">filtered out of Shepherded</div>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader
+            title="People in Community"
+            right={
+              <span className="text-xs text-muted">
+                top {people.length} by group count
+              </span>
+            }
+          />
+          {people.length === 0 ? (
+            <div className="px-5 py-12 text-center text-sm text-muted">
+              No active group memberships synced yet. Run a sync from Settings › Sync.
+            </div>
+          ) : (
+            <table className="w-full text-sm table-fixed">
+              <colgroup>
+                <col className="w-[55%]" />
+                <col className="w-[20%]" />
+                <col className="w-[12%]" />
+                <col className="w-[13%]" />
+              </colgroup>
+              <thead className="text-xs text-muted">
+                <tr className="border-b border-border-soft">
+                  <th className="text-left font-medium px-5 py-2">Person</th>
+                  <th className="text-left font-medium px-5 py-2">Membership</th>
+                  <th className="text-right font-medium px-5 py-2">Groups</th>
+                  <th className="text-right font-medium px-5 py-2">First joined</th>
+                </tr>
+              </thead>
+              <tbody>
+                {people.map((p) => (
+                  <tr
+                    key={p.pcoId}
+                    className="border-b border-border-softer hover:bg-bg-elev-2/60"
+                  >
+                    <td className="px-5 py-2.5">
+                      <Link
+                        href={`/people/${p.pcoId}`}
+                        className="flex items-center gap-3 group"
+                      >
+                        <Avatar initials={p.initials} size="sm" />
+                        <div className="min-w-0">
+                          <div className="font-medium truncate group-hover:text-accent">
+                            {p.fullName}
+                          </div>
+                          <div className="text-xs text-muted">PCO #{p.pcoId}</div>
+                        </div>
+                      </Link>
+                    </td>
+                    <td className="px-5 py-2.5 text-muted truncate">
+                      {p.membershipType ?? <span className="text-subtle">—</span>}
+                    </td>
+                    <td className="px-5 py-2.5 text-right tnum">{p.groupCount}</td>
+                    <td className="px-5 py-2.5 text-right tnum text-muted">
+                      {p.joinedFirstAt
+                        ? new Date(p.joinedFirstAt).toLocaleDateString()
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      </div>
+    </AppShell>
+  );
 }

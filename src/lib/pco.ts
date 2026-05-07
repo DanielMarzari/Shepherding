@@ -356,6 +356,69 @@ export function getMembershipTypeStats(
   return rows;
 }
 
+// ─── Group-type filters ─────────────────────────────────────────────────
+
+export function getExcludedGroupTypes(orgId: number): string[] {
+  const row = getDb()
+    .prepare(
+      "SELECT excluded_group_types FROM pco_sync_settings WHERE org_id = ?",
+    )
+    .get(orgId) as { excluded_group_types: string | null } | undefined;
+  if (!row?.excluded_group_types) return [];
+  try {
+    const parsed = JSON.parse(row.excluded_group_types);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveExcludedGroupTypes(orgId: number, ids: string[]) {
+  const cleaned = Array.from(new Set(ids.filter(Boolean)));
+  const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) {
+    saveSyncSettings(orgId, getSyncSettings(orgId));
+  }
+  getDb()
+    .prepare(
+      "UPDATE pco_sync_settings SET excluded_group_types = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
+    )
+    .run(json, orgId);
+}
+
+/** Distinct group types in the synced groups, with member counts.
+ *  Excluded types are still listed (so admins can re-include them). */
+export function getGroupTypeStats(
+  orgId: number,
+): { groupTypeId: string | null; name: string | null; groups: number; members: number }[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT
+         g.group_type_id AS groupTypeId,
+         t.name AS name,
+         COUNT(DISTINCT g.pco_id) AS groups,
+         COUNT(DISTINCT m.person_id) AS members
+       FROM pco_groups g
+       LEFT JOIN pco_group_types t
+         ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
+       LEFT JOIN pco_group_memberships m
+         ON m.org_id = g.org_id AND m.group_id = g.pco_id AND m.archived_at IS NULL
+       WHERE g.org_id = ? AND g.archived_at IS NULL
+       GROUP BY g.group_type_id, t.name
+       ORDER BY COUNT(DISTINCT g.pco_id) DESC, t.name ASC`,
+    )
+    .all(orgId) as {
+    groupTypeId: string | null;
+    name: string | null;
+    groups: number;
+    members: number;
+  }[];
+  return rows;
+}
+
 // ─── What to sync (per-entity toggles) ────────────────────────────────────
 
 export interface SyncEntity {
@@ -376,15 +439,9 @@ export const SYNC_ENTITIES: SyncEntity[] = [
   },
   {
     key: "groups",
-    label: "Groups",
+    label: "Groups & attendance",
     description:
-      "Group definitions, memberships, applications, and meeting events. Drives Shepherded classification and group-health metrics.",
-    defaultEnabled: true,
-  },
-  {
-    key: "group_attendance",
-    label: "Group attendance",
-    description: "Per-meeting attendance records · used for personal frequency.",
+      "Group definitions, memberships, applications, meeting events, and per-meeting attendance. Drives Shepherded classification, group health, and the Community lane.",
     defaultEnabled: true,
   },
   {
