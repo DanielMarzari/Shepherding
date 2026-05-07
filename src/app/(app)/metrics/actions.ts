@@ -19,8 +19,10 @@ export async function saveThresholdsAction(
   }
   const activity = Number(formData.get("activityMonths") ?? 18);
   const sync = Number(formData.get("syncThresholdMonths") ?? 3);
-  saveMetricsSettings(s.orgId, activity, sync);
+  const tracking = Number(formData.get("activityTrackingMonths") ?? 3);
+  saveMetricsSettings(s.orgId, activity, sync, tracking);
   revalidatePath("/metrics");
   revalidatePath("/people");
+  revalidatePath("/attendance");
   return { status: "saved", message: "Thresholds saved." };
 }

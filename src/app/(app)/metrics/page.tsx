@@ -11,7 +11,7 @@ export default async function MetricsPage() {
   const counts = getClassificationCounts(session.orgId, settings.activityMonths);
 
   return (
-    <AppShell active="Metrics" breadcrumb="Metrics">
+    <AppShell active="Metrics" breadcrumb="Settings › Metrics">
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Metrics</h1>
@@ -60,6 +60,7 @@ export default async function MetricsPage() {
               <ThresholdForm
                 initialActivity={settings.activityMonths}
                 initialSync={settings.syncThresholdMonths}
+                initialTracking={settings.activityTrackingMonths}
                 isAdmin={session.role === "admin"}
               />
             </div>

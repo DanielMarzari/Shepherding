@@ -6,14 +6,17 @@ import { saveThresholdsAction, type MetricsSaveState } from "./actions";
 export function ThresholdForm({
   initialActivity,
   initialSync,
+  initialTracking,
   isAdmin,
 }: {
   initialActivity: number;
   initialSync: number;
+  initialTracking: number;
   isAdmin: boolean;
 }) {
   const [activity, setActivity] = useState(initialActivity);
   const [sync, setSync] = useState(initialSync);
+  const [tracking, setTracking] = useState(initialTracking);
   const [state, action, pending] = useActionState<MetricsSaveState | null, FormData>(
     saveThresholdsAction,
     null,
@@ -79,6 +82,35 @@ export function ThresholdForm({
         <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
           <span>1 month</span>
           <span>24 months</span>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-baseline justify-between mb-1.5">
+          <label className="text-sm font-medium" htmlFor="activityTrackingMonths">
+            Activity tracking window
+          </label>
+          <span className="tnum text-sm text-muted">{tracking} months</span>
+        </div>
+        <p className="text-xs text-muted mb-2.5">
+          The window for &ldquo;recent&rdquo; movement metrics — joins, leaves, attendance
+          changes. Smaller = more responsive to this week; larger = smoother trends.
+        </p>
+        <input
+          id="activityTrackingMonths"
+          name="activityTrackingMonths"
+          type="range"
+          min="1"
+          max="12"
+          step="1"
+          value={tracking}
+          onChange={(e) => setTracking(Number(e.target.value))}
+          disabled={!isAdmin}
+          className="w-full accent-[var(--accent)] disabled:opacity-50"
+        />
+        <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
+          <span>1 month</span>
+          <span>12 months</span>
         </div>
       </div>
 

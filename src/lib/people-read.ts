@@ -47,6 +47,7 @@ interface RawRow {
   pco_created_at: string | null;
   pco_updated_at: string | null;
   last_form_submission_at: string | null;
+  is_shepherded: number;
 }
 
 function cutoffIso(activityMonths: number): string {
@@ -58,9 +59,10 @@ function cutoffIso(activityMonths: number): string {
 function classify(
   pcoUpdatedAt: string | null,
   lastFormSubmissionAt: string | null,
+  isShepherded: boolean,
   activityMonths: number,
 ): ActivityClassification {
-  // Shepherded would be checked here once group/team membership lands.
+  if (isShepherded) return "shepherded";
   const cutoff = cutoffIso(activityMonths);
   if (lastFormSubmissionAt && lastFormSubmissionAt >= cutoff) return "active";
   if (pcoUpdatedAt && pcoUpdatedAt >= cutoff) return "present";
@@ -89,9 +91,22 @@ function toRow(r: RawRow, activityMonths: number): SyncedPersonRow {
     pcoCreatedAt: r.pco_created_at,
     pcoUpdatedAt: r.pco_updated_at,
     lastFormSubmissionAt: r.last_form_submission_at,
-    classification: classify(r.pco_updated_at, r.last_form_submission_at, activityMonths),
+    classification: classify(
+      r.pco_updated_at,
+      r.last_form_submission_at,
+      r.is_shepherded === 1,
+      activityMonths,
+    ),
   };
 }
+
+const SHEPHERDED_SUBQ = `(
+  SELECT 1 FROM pco_group_memberships m
+   WHERE m.org_id = pco_people.org_id
+     AND m.person_id = pco_people.pco_id
+     AND m.archived_at IS NULL
+   LIMIT 1
+)`;
 
 export interface ListPeopleOptions {
   orgId: number;
@@ -121,7 +136,8 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
   const rows = db
     .prepare(
       `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
-              pco_created_at, pco_updated_at, last_form_submission_at
+              pco_created_at, pco_updated_at, last_form_submission_at,
+              CASE WHEN EXISTS ${SHEPHERDED_SUBQ} THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          ${whereSql}
          ${orderSql}
@@ -153,27 +169,31 @@ function buildWhere(
   // negates the higher-priority ones (so a person never appears in both
   // active and present, etc.).
   if (tab === "shepherded") {
-    parts.push("1 = 0"); // no group/team data yet
+    parts.push(`EXISTS ${SHEPHERDED_SUBQ}`);
   } else if (tab === "active") {
+    parts.push(`NOT EXISTS ${SHEPHERDED_SUBQ}`);
     parts.push("last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?");
     args.push(cutoff);
   } else if (tab === "present") {
+    parts.push(`NOT EXISTS ${SHEPHERDED_SUBQ}`);
     parts.push(
       "(last_form_submission_at IS NULL OR last_form_submission_at < ?)",
       "pco_updated_at IS NOT NULL AND pco_updated_at >= ?",
     );
     args.push(cutoff, cutoff);
   } else if (tab === "inactive") {
+    parts.push(`NOT EXISTS ${SHEPHERDED_SUBQ}`);
     parts.push(
       "(last_form_submission_at IS NULL OR last_form_submission_at < ?)",
       "(pco_updated_at IS NULL OR pco_updated_at < ?)",
     );
     args.push(cutoff, cutoff);
   } else if (tab === "all") {
-    // "All" hides inactive by default — surface them only via the Inactive tab.
-    // Anyone with EITHER form-activity or recent updated_at is visible.
+    // "All" hides inactive — surface them only via the Inactive tab.
     parts.push(
-      "((last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?) OR (pco_updated_at IS NOT NULL AND pco_updated_at >= ?))",
+      `(EXISTS ${SHEPHERDED_SUBQ}
+         OR (last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
+         OR (pco_updated_at IS NOT NULL AND pco_updated_at >= ?))`,
     );
     args.push(cutoff, cutoff);
   }
@@ -236,35 +256,44 @@ export function getClassificationCounts(
       ? ""
       : ` AND (membership_type IS NULL OR membership_type NOT IN (${excluded.map(() => "?").join(",")}))`;
   const args = [cutoff, cutoff, cutoff, cutoff, orgId, ...excluded];
+  const shep = `EXISTS ${SHEPHERDED_SUBQ}`;
   const row = db
     .prepare(
       `SELECT
          COUNT(*) AS total,
-         SUM(CASE WHEN last_form_submission_at IS NOT NULL AND last_form_submission_at >= ? THEN 1 ELSE 0 END) AS active,
+         SUM(CASE WHEN ${shep} THEN 1 ELSE 0 END) AS shepherded,
          SUM(CASE
-               WHEN (last_form_submission_at IS NULL OR last_form_submission_at < ?)
+               WHEN NOT (${shep})
+                AND last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?
+               THEN 1 ELSE 0 END) AS active,
+         SUM(CASE
+               WHEN NOT (${shep})
+                AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
                 AND (pco_updated_at IS NOT NULL AND pco_updated_at >= ?)
                THEN 1 ELSE 0 END) AS present,
          SUM(CASE
-               WHEN (last_form_submission_at IS NULL OR last_form_submission_at < ?)
+               WHEN NOT (${shep})
+                AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
                 AND (pco_updated_at IS NULL OR pco_updated_at < ?)
                THEN 1 ELSE 0 END) AS inactive
        FROM pco_people
        WHERE org_id = ?${exclSql}`,
     )
-    .get(...[cutoff, cutoff, cutoff, cutoff, cutoff, orgId, ...excluded]) as {
+    .get(cutoff, cutoff, cutoff, cutoff, cutoff, orgId, ...excluded) as {
     total: number;
+    shepherded: number | null;
     active: number | null;
     present: number | null;
     inactive: number | null;
   };
-  void args; // (kept for potential future debug)
+  void args;
+  const shepherded = row.shepherded ?? 0;
   const active = row.active ?? 0;
   const present = row.present ?? 0;
   const inactive = row.inactive ?? 0;
   return {
     total: row.total,
-    shepherded: 0, // reserved — needs group/team data
+    shepherded,
     active,
     present,
     inactive,
@@ -282,7 +311,8 @@ export function getPersonByPcoId(
   const row = getDb()
     .prepare(
       `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
-              pco_created_at, pco_updated_at, last_form_submission_at
+              pco_created_at, pco_updated_at, last_form_submission_at,
+              CASE WHEN EXISTS ${SHEPHERDED_SUBQ} THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          WHERE org_id = ? AND pco_id = ?`,
     )
@@ -351,7 +381,8 @@ export function searchPeople(
   const rows = getDb()
     .prepare(
       `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
-              pco_created_at, pco_updated_at, last_form_submission_at
+              pco_created_at, pco_updated_at, last_form_submission_at,
+              CASE WHEN EXISTS ${SHEPHERDED_SUBQ} THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          WHERE org_id = ?`,
     )

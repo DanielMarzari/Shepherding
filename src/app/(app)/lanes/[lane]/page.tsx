@@ -40,7 +40,7 @@ export default async function LanePage({
   );
 
   return (
-    <AppShell active={`lane:${laneKey}`} breadcrumb={`Activity / Lanes › ${laneStats.label}`}>
+    <AppShell active={`lane:${laneKey}`} breadcrumb={`Lanes › ${laneStats.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
         {/* Header */}
         <div>

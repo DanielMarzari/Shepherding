@@ -36,7 +36,7 @@ export default async function PCOSettingsPage() {
     : "—";
 
   return (
-    <AppShell active="PCO" breadcrumb="PCO › Sync settings">
+    <AppShell active="Sync" breadcrumb="Settings › Sync">
       <div className="px-5 md:px-7 py-7 space-y-6">
         {/* Heading + Sync now */}
         <div className="flex items-start justify-between gap-4 flex-wrap">

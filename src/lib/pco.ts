@@ -178,6 +178,11 @@ export interface SyncSettings {
   /** Always look back this many months on each sync, even with a newer
    *  cursor — catches retroactive PCO edits (default 3). */
   syncThresholdMonths: number;
+  /** Window for "recent activity" metrics — joins, leaves, attendance
+   *  changes (default 3). Independent of activityMonths. */
+  activityTrackingMonths: number;
+  /** Average weekly Sunday attendance (manually entered). Null = not set. */
+  weeklyAttendance: number | null;
 }
 
 export function getSyncSettings(orgId: number): SyncSettings {
@@ -185,7 +190,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
     .prepare(
       `SELECT enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
               email_on_failure, auto_resolve_conflicts,
-              activity_months, sync_threshold_months
+              activity_months, sync_threshold_months,
+              activity_tracking_months, weekly_attendance
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -199,6 +205,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
         auto_resolve_conflicts: number;
         activity_months: number;
         sync_threshold_months: number;
+        activity_tracking_months: number | null;
+        weekly_attendance: number | null;
       }
     | undefined;
   if (!row) {
@@ -212,6 +220,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
       autoResolveConflicts: false,
       activityMonths: 18,
       syncThresholdMonths: 3,
+      activityTrackingMonths: 3,
+      weeklyAttendance: null,
     };
   }
   const freq: SyncFrequency =
@@ -226,6 +236,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
     autoResolveConflicts: !!row.auto_resolve_conflicts,
     activityMonths: row.activity_months ?? 18,
     syncThresholdMonths: row.sync_threshold_months ?? 3,
+    activityTrackingMonths: row.activity_tracking_months ?? 3,
+    weeklyAttendance: row.weekly_attendance,
   };
 }
 
@@ -235,8 +247,9 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
       `INSERT INTO pco_sync_settings
          (org_id, enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
           email_on_failure, auto_resolve_conflicts, activity_months,
-          sync_threshold_months, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          sync_threshold_months, activity_tracking_months, weekly_attendance,
+          updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id) DO UPDATE SET
          enabled = excluded.enabled,
          frequency = excluded.frequency,
@@ -247,6 +260,8 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          auto_resolve_conflicts = excluded.auto_resolve_conflicts,
          activity_months = excluded.activity_months,
          sync_threshold_months = excluded.sync_threshold_months,
+         activity_tracking_months = excluded.activity_tracking_months,
+         weekly_attendance = excluded.weekly_attendance,
          updated_at = excluded.updated_at`,
     )
     .run(
@@ -260,6 +275,10 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
       s.autoResolveConflicts ? 1 : 0,
       Math.max(1, Math.min(60, Math.floor(s.activityMonths))),
       Math.max(1, Math.min(60, Math.floor(s.syncThresholdMonths))),
+      Math.max(1, Math.min(36, Math.floor(s.activityTrackingMonths))),
+      s.weeklyAttendance == null
+        ? null
+        : Math.max(0, Math.min(1_000_000, Math.floor(s.weeklyAttendance))),
     );
 }
 
@@ -268,13 +287,20 @@ export function saveMetricsSettings(
   orgId: number,
   activityMonths: number,
   syncThresholdMonths: number,
+  activityTrackingMonths: number,
 ) {
   const current = getSyncSettings(orgId);
   saveSyncSettings(orgId, {
     ...current,
     activityMonths: Math.max(1, Math.min(60, Math.floor(activityMonths))),
     syncThresholdMonths: Math.max(1, Math.min(60, Math.floor(syncThresholdMonths))),
+    activityTrackingMonths: Math.max(1, Math.min(36, Math.floor(activityTrackingMonths))),
   });
+}
+
+export function saveWeeklyAttendance(orgId: number, weekly: number | null) {
+  const current = getSyncSettings(orgId);
+  saveSyncSettings(orgId, { ...current, weeklyAttendance: weekly });
 }
 
 // ─── Filters ──────────────────────────────────────────────────────────────
@@ -349,15 +375,16 @@ export const SYNC_ENTITIES: SyncEntity[] = [
     defaultEnabled: true,
   },
   {
-    key: "group_memberships",
-    label: "Group memberships",
-    description: "Who is in which group, since when, role",
+    key: "groups",
+    label: "Groups",
+    description:
+      "Group definitions, memberships, applications, and meeting events. Drives Shepherded classification and group-health metrics.",
     defaultEnabled: true,
   },
   {
     key: "group_attendance",
     label: "Group attendance",
-    description: "Per-meeting attendance · used for activity tracking",
+    description: "Per-meeting attendance records · used for personal frequency.",
     defaultEnabled: true,
   },
   {

@@ -14,7 +14,7 @@ export default async function FiltersPage() {
     .reduce((s, r) => s + r.count, 0);
 
   return (
-    <AppShell active="Filters" breadcrumb="PCO › Filters">
+    <AppShell active="Filters" breadcrumb="Settings › Filters">
       <div className="px-5 md:px-7 py-7 max-w-5xl space-y-6">
         <div>
           <div className="text-muted text-xs mb-1">PCO · filters</div>

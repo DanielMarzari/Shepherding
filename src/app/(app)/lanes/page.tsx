@@ -10,7 +10,7 @@ import Link from "next/link";
 
 export default function LanesPage() {
   return (
-    <AppShell active="Activity / Lanes" breadcrumb="Activity / Lanes">
+    <AppShell active="Activity / Lanes" breadcrumb="Lanes">
       <div className="px-5 md:px-7 py-7">
         <div className="flex items-baseline justify-between mb-6 flex-wrap gap-3">
           <div>

@@ -3,6 +3,7 @@ import { encryptJson } from "./encryption";
 import { getDb } from "./db";
 import { getDecryptedCreds, getSyncEntities, getSyncSettings } from "./pco";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
+import { syncGroupsAll } from "./pco-sync-groups";
 
 // Forms the user explicitly asked to track (from the prompt).
 // Becomes user-configurable later; for now this is the canonical list.
@@ -21,6 +22,11 @@ export interface SyncDetails {
   forms: { fetched: number; upserted: number };
   formFields: { fetched: number; upserted: number };
   formSubmissions: { fetched: number; upserted: number };
+  groups: { fetched: number; upserted: number };
+  groupTypes: { fetched: number; upserted: number };
+  groupMemberships: { fetched: number; upserted: number };
+  groupApplications: { fetched: number; upserted: number };
+  groupEvents: { fetched: number; upserted: number };
   cutoff: string | null;
   durationMs: number;
   startedAt: string;
@@ -37,6 +43,11 @@ export async function runSync(
     forms: { fetched: 0, upserted: 0 },
     formFields: { fetched: 0, upserted: 0 },
     formSubmissions: { fetched: 0, upserted: 0 },
+    groups: { fetched: 0, upserted: 0 },
+    groupTypes: { fetched: 0, upserted: 0 },
+    groupMemberships: { fetched: 0, upserted: 0 },
+    groupApplications: { fetched: 0, upserted: 0 },
+    groupEvents: { fetched: 0, upserted: 0 },
     cutoff: null,
     durationMs: 0,
     startedAt,
@@ -66,6 +77,27 @@ export async function runSync(
       details.people.fetched = peopleCount.fetched;
       details.people.upserted = peopleCount.upserted;
       writeCursor(orgId, "people", peopleCount.maxUpdatedAt);
+    }
+
+    // ── Groups (types, groups, memberships, applications, events) ───────
+    if (enabled.groups) {
+      try {
+        const g = await syncGroupsAll(
+          client,
+          orgId,
+          settings.syncThresholdMonths,
+        );
+        details.groupTypes = g.groupTypes;
+        details.groups = g.groups;
+        details.groupMemberships = g.memberships;
+        details.groupApplications = g.applications;
+        details.groupEvents = g.events;
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Groups: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
     }
 
     // ── Forms (only if "forms" entity is enabled) ────────────────────────
@@ -100,7 +132,12 @@ export async function runSync(
       details.people.upserted +
       details.forms.upserted +
       details.formFields.upserted +
-      details.formSubmissions.upserted;
+      details.formSubmissions.upserted +
+      details.groups.upserted +
+      details.groupTypes.upserted +
+      details.groupMemberships.upserted +
+      details.groupApplications.upserted +
+      details.groupEvents.upserted;
 
     details.durationMs = Date.now() - startedMs;
     finishSyncRun(runId, "ok", changes, warning, details);
@@ -547,21 +584,32 @@ export interface SyncedDataCounts {
   forms: number;
   formFields: number;
   formSubmissions: number;
+  groups: number;
+  groupMemberships: number;
+  groupApplications: number;
+  groupEvents: number;
 }
 
 export function getSyncedCounts(orgId: number): SyncedDataCounts {
   const db = getDb();
-  const r1 = db
-    .prepare("SELECT COUNT(*) AS n FROM pco_people WHERE org_id = ?")
-    .get(orgId) as { n: number };
-  const r2 = db
-    .prepare("SELECT COUNT(*) AS n FROM pco_forms WHERE org_id = ?")
-    .get(orgId) as { n: number };
-  const r3 = db
-    .prepare("SELECT COUNT(*) AS n FROM pco_form_fields WHERE org_id = ?")
-    .get(orgId) as { n: number };
-  const r4 = db
-    .prepare("SELECT COUNT(*) AS n FROM pco_form_submissions WHERE org_id = ?")
-    .get(orgId) as { n: number };
-  return { people: r1.n, forms: r2.n, formFields: r3.n, formSubmissions: r4.n };
+  const one = (sql: string) =>
+    (db.prepare(sql).get(orgId) as { n: number }).n;
+  return {
+    people: one("SELECT COUNT(*) AS n FROM pco_people WHERE org_id = ?"),
+    forms: one("SELECT COUNT(*) AS n FROM pco_forms WHERE org_id = ?"),
+    formFields: one("SELECT COUNT(*) AS n FROM pco_form_fields WHERE org_id = ?"),
+    formSubmissions: one(
+      "SELECT COUNT(*) AS n FROM pco_form_submissions WHERE org_id = ?",
+    ),
+    groups: one("SELECT COUNT(*) AS n FROM pco_groups WHERE org_id = ?"),
+    groupMemberships: one(
+      "SELECT COUNT(*) AS n FROM pco_group_memberships WHERE org_id = ?",
+    ),
+    groupApplications: one(
+      "SELECT COUNT(*) AS n FROM pco_group_applications WHERE org_id = ?",
+    ),
+    groupEvents: one(
+      "SELECT COUNT(*) AS n FROM pco_group_events WHERE org_id = ?",
+    ),
+  };
 }

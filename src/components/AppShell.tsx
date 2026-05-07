@@ -16,9 +16,10 @@ const NAV_ITEMS = [
   { href: "/movement", label: "Movement" },
 ];
 
-const PCO_NAV_ITEMS = [
-  { href: "/pco", label: "Sync settings" },
+const SETTINGS_NAV_ITEMS = [
+  { href: "/pco", label: "Sync" },
   { href: "/pco/filters", label: "Filters" },
+  { href: "/attendance", label: "Attendance" },
   { href: "/metrics", label: "Metrics" },
 ];
 
@@ -114,12 +115,10 @@ export async function AppShell({
           })}
         </ul>
 
-        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">PCO</div>
+        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Settings</div>
         <ul className="space-y-0.5">
-          {PCO_NAV_ITEMS.map((item) => {
-            const isActive =
-              (item.label === "Sync settings" && active === "PCO") ||
-              item.label === active;
+          {SETTINGS_NAV_ITEMS.map((item) => {
+            const isActive = item.label === active;
             return (
               <li key={item.href}>
                 <Link
@@ -167,8 +166,6 @@ export async function AppShell({
       <div className="flex-1 min-w-0">
         <header className="flex items-center justify-between border-b border-border-soft px-5 md:px-7 py-3 text-sm">
           <div className="flex items-center gap-2 text-muted min-w-0">
-            <span className="hidden sm:inline">Workspace</span>
-            <span className="hidden sm:inline">›</span>
             <span className="text-fg truncate">{breadcrumb}</span>
           </div>
           <div className="flex items-center gap-3">

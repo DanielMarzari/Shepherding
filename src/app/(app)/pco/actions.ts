@@ -106,7 +106,7 @@ export async function saveSyncSettingsAction(
   const runAtDom = clamp(runAtDomRaw, 1, 28);
   const emailOnFailure = formData.get("emailOnFailure") === "on";
   const autoResolveConflicts = formData.get("autoResolveConflicts") === "on";
-  // Preserve threshold values managed on the Metrics page.
+  // Preserve values managed on Metrics + Attendance.
   const current = getSyncSettings(s.orgId);
   const settings: SyncSettings = {
     enabled,
@@ -118,6 +118,8 @@ export async function saveSyncSettingsAction(
     autoResolveConflicts,
     activityMonths: current.activityMonths,
     syncThresholdMonths: current.syncThresholdMonths,
+    activityTrackingMonths: current.activityTrackingMonths,
+    weeklyAttendance: current.weeklyAttendance,
   };
   saveSyncSettings(s.orgId, settings);
   revalidatePath("/pco");

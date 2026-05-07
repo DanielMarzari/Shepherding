@@ -79,7 +79,7 @@ export default async function PeoplePage({
   }
 
   return (
-    <AppShell active="People" breadcrumb={`People · ${TABS.find((t) => t.key === tab)!.label}`}>
+    <AppShell active="People" breadcrumb={`People › ${TABS.find((t) => t.key === tab)!.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div className="flex items-baseline justify-between flex-wrap gap-3">
           <div>
