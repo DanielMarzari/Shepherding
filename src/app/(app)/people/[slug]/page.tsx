@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
+import { listGroupsAttendedByPerson } from "@/lib/community-lane";
 import { getSyncSettings } from "@/lib/pco";
 import {
   type ActivityClassification,
@@ -28,6 +29,7 @@ export default async function PersonProfilePage({
   const person = getPersonByPcoId(session.orgId, slug, settings.activityMonths);
   if (!person) notFound();
   const submissions = listPersonFormSubmissions(session.orgId, slug);
+  const groupAttendance = listGroupsAttendedByPerson(session.orgId, slug);
 
   const age = person.birthdate ? computeAge(person.birthdate) : null;
 
@@ -167,10 +169,83 @@ export default async function PersonProfilePage({
           </Card>
         </div>
 
+        <Card>
+          <CardHeader
+            title="Group attendance"
+            right={
+              <span className="text-xs text-muted">
+                {groupAttendance.length} group{groupAttendance.length === 1 ? "" : "s"}
+              </span>
+            }
+          />
+          {groupAttendance.length === 0 ? (
+            <div className="px-5 py-8 text-sm text-muted text-center">
+              No group memberships or attendance recorded.
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="text-xs text-muted">
+                <tr className="border-b border-border-soft">
+                  <th className="text-left font-medium px-5 py-2">Group</th>
+                  <th className="text-left font-medium px-5 py-2">Status</th>
+                  <th className="text-right font-medium px-5 py-2">Attended</th>
+                  <th className="text-right font-medium px-5 py-2">First</th>
+                  <th className="text-right font-medium px-5 py-2">Last</th>
+                </tr>
+              </thead>
+              <tbody>
+                {groupAttendance.map((g) => {
+                  const ratio =
+                    g.totalEventCount > 0
+                      ? `${g.attendedCount}/${g.totalEventCount}`
+                      : `${g.attendedCount}`;
+                  let status: { label: string; tone: "good" | "warn" | "muted" } = {
+                    label: "no data",
+                    tone: "muted",
+                  };
+                  if (g.isCurrentMember) status = { label: "current member", tone: "good" };
+                  else if (g.membershipArchivedAt)
+                    status = { label: "archived", tone: "warn" };
+                  else if (g.attendedCount > 0)
+                    status = { label: "attended, not member", tone: "warn" };
+                  return (
+                    <tr
+                      key={g.groupId}
+                      className="border-b border-border-softer hover:bg-bg-elev-2/60"
+                    >
+                      <td className="px-5 py-2.5">
+                        <div className="font-medium truncate">
+                          {g.groupName ?? `(unnamed #${g.groupId})`}
+                        </div>
+                        <div className="text-xs text-muted truncate">
+                          {g.groupTypeName ?? "—"}
+                        </div>
+                      </td>
+                      <td className="px-5 py-2.5">
+                        <Pill tone={status.tone}>{status.label}</Pill>
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum">{ratio}</td>
+                      <td className="px-5 py-2.5 text-right tnum text-muted">
+                        {g.firstAttendedAt
+                          ? new Date(g.firstAttendedAt).toLocaleDateString()
+                          : "—"}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum text-muted">
+                        {g.lastAttendedAt
+                          ? new Date(g.lastAttendedAt).toLocaleDateString()
+                          : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </Card>
+
         <Card className="p-5">
           <h2 className="text-sm font-semibold mb-2">Coming next</h2>
           <ul className="text-sm text-muted space-y-1.5 list-disc list-inside">
-            <li>Group + team memberships (drives the Shepherded classification).</li>
             <li>Sunday check-in / attendance history.</li>
             <li>Pastoral notes and touchpoints.</li>
             <li>Lane journey and movement timeline.</li>

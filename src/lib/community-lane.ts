@@ -8,6 +8,124 @@ interface PIIBlob {
   last_name?: string | null;
 }
 
+// ─── Per-person group attendance (used by /people/[slug]) ──────────────
+
+export interface PersonGroupAttendance {
+  groupId: string;
+  groupName: string | null;
+  groupTypeName: string | null;
+  isCurrentMember: boolean;
+  membershipArchivedAt: string | null;
+  attendedCount: number;
+  totalEventCount: number;
+  firstAttendedAt: string | null;
+  lastAttendedAt: string | null;
+}
+
+/**
+ * Every group this person has touched — current memberships AND any group
+ * they attended an event for, even if they aren't a member anymore.
+ * Surfaces the "they were here, then they weren't" pattern that PCO loses
+ * by simply removing the membership row.
+ */
+export function listGroupsAttendedByPerson(
+  orgId: number,
+  personId: string,
+): PersonGroupAttendance[] {
+  const rows = getDb()
+    .prepare(
+      `WITH person_groups AS (
+         SELECT DISTINCT m.group_id
+           FROM pco_group_memberships m
+           WHERE m.org_id = ? AND m.person_id = ?
+         UNION
+         SELECT DISTINCT a.group_id
+           FROM pco_event_attendances a
+           WHERE a.org_id = ? AND a.person_id = ? AND a.group_id IS NOT NULL
+       )
+       SELECT
+         g.pco_id            AS groupId,
+         g.name              AS groupName,
+         t.name              AS groupTypeName,
+         (SELECT 1
+            FROM pco_group_memberships m
+            WHERE m.org_id = g.org_id
+              AND m.group_id = g.pco_id
+              AND m.person_id = ?
+              AND m.archived_at IS NULL
+            LIMIT 1) AS isCurrentMember,
+         (SELECT m.archived_at
+            FROM pco_group_memberships m
+            WHERE m.org_id = g.org_id
+              AND m.group_id = g.pco_id
+              AND m.person_id = ?
+            ORDER BY m.archived_at DESC NULLS LAST
+            LIMIT 1) AS membershipArchivedAt,
+         (SELECT COUNT(*)
+            FROM pco_event_attendances a
+            WHERE a.org_id = g.org_id
+              AND a.group_id = g.pco_id
+              AND a.person_id = ?
+              AND a.attended = 1) AS attendedCount,
+         (SELECT COUNT(*)
+            FROM pco_event_attendances a
+            WHERE a.org_id = g.org_id
+              AND a.group_id = g.pco_id
+              AND a.person_id = ?) AS totalEventCount,
+         (SELECT MIN(a.event_starts_at)
+            FROM pco_event_attendances a
+            WHERE a.org_id = g.org_id
+              AND a.group_id = g.pco_id
+              AND a.person_id = ?
+              AND a.attended = 1) AS firstAttendedAt,
+         (SELECT MAX(a.event_starts_at)
+            FROM pco_event_attendances a
+            WHERE a.org_id = g.org_id
+              AND a.group_id = g.pco_id
+              AND a.person_id = ?
+              AND a.attended = 1) AS lastAttendedAt
+       FROM pco_groups g
+       JOIN person_groups pg ON pg.group_id = g.pco_id
+       LEFT JOIN pco_group_types t
+         ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
+       WHERE g.org_id = ?
+       ORDER BY isCurrentMember DESC, lastAttendedAt DESC NULLS LAST, g.name ASC`,
+    )
+    .all(
+      orgId, personId, // person_groups CTE
+      orgId, personId,
+      personId, // isCurrentMember subquery
+      personId, // membershipArchivedAt
+      personId, // attendedCount
+      personId, // totalEventCount
+      personId, // firstAttendedAt
+      personId, // lastAttendedAt
+      orgId,    // outer WHERE
+    ) as Array<{
+    groupId: string;
+    groupName: string | null;
+    groupTypeName: string | null;
+    isCurrentMember: number | null;
+    membershipArchivedAt: string | null;
+    attendedCount: number;
+    totalEventCount: number;
+    firstAttendedAt: string | null;
+    lastAttendedAt: string | null;
+  }>;
+
+  return rows.map((r) => ({
+    groupId: r.groupId,
+    groupName: r.groupName,
+    groupTypeName: r.groupTypeName,
+    isCurrentMember: !!r.isCurrentMember,
+    membershipArchivedAt: r.membershipArchivedAt,
+    attendedCount: r.attendedCount,
+    totalEventCount: r.totalEventCount,
+    firstAttendedAt: r.firstAttendedAt,
+    lastAttendedAt: r.lastAttendedAt,
+  }));
+}
+
 export interface CommunityPersonRow {
   pcoId: string;
   fullName: string;
