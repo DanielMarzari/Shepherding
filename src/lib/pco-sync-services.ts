@@ -1,10 +1,14 @@
 import "server-only";
 import { getDb } from "./db";
-import { PCOClient, type PCOResource } from "./pco-client";
+import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 
 /** PCO Services / Teams sync — service_types, teams, team_positions,
  *  team memberships (the standing roster), plans, and per-plan-per-person
- *  serving records. Drives the Serve lane and the Teams workspace. */
+ *  serving records. Drives the Serve lane and the Teams workspace.
+ *
+ *  Endpoint shape note: PCO Services nests most resources under their
+ *  parent (team_positions under teams, plans under service_types, etc.).
+ *  An earlier version used flat endpoints and 404'd. */
 
 export interface ServicesSyncResult {
   serviceTypes: { fetched: number; upserted: number };
@@ -29,7 +33,8 @@ export async function syncServicesAll(
     planPeople: { fetched: 0, upserted: 0 },
   };
 
-  // 1) Service types — small list of "Sunday Services", "Special Services", etc.
+  // 1) Service types — small list ("Sunday Services", "Special Services", etc.)
+  const serviceTypeIds: string[] = [];
   for await (const { page } of client.paginate<PCOResource>(
     "/services/v2/service_types?per_page=100",
   )) {
@@ -45,58 +50,46 @@ export async function syncServicesAll(
         archivedAt: (a.archived_at as string | undefined) ?? null,
       });
       result.serviceTypes.upserted++;
+      serviceTypeIds.push(st.id);
     }
   }
 
-  // 2) Teams — under service types. Pull all in one query with the
-  //    service_type relationship, since not too many.
+  // 2) Teams — under service types. The flat /services/v2/teams works but
+  //    we pull per-service-type to also catch teams unique to a type.
   const teamRecords: PCOResource[] = [];
-  for await (const { page } of client.paginate<PCOResource>(
-    "/services/v2/teams?per_page=100&include=service_type",
-  )) {
-    const arr = Array.isArray(page.data) ? page.data : [page.data];
-    teamRecords.push(...arr);
-  }
-  for (const t of teamRecords) {
-    result.teams.fetched++;
-    const a = (t.attributes ?? {}) as Record<string, unknown>;
-    const rels = t.relationships ?? {};
-    const stRel = rels.service_type?.data;
-    const stId = !Array.isArray(stRel) && stRel ? stRel.id : null;
-    upsertTeam(orgId, {
-      pcoId: t.id,
-      name: (a.name as string | undefined) ?? null,
-      serviceTypeId: stId,
-      pcoCreatedAt: (a.created_at as string | undefined) ?? null,
-      pcoUpdatedAt: (a.updated_at as string | undefined) ?? null,
-      archivedAt: (a.archived_at as string | undefined) ?? null,
-      deletedAt: (a.deleted_at as string | undefined) ?? null,
-    });
-    result.teams.upserted++;
-  }
-
-  // 3) Team positions — flat list across all teams.
-  for await (const { page } of client.paginate<PCOResource>(
-    "/services/v2/team_positions?per_page=100&include=team",
-  )) {
-    const arr = Array.isArray(page.data) ? page.data : [page.data];
-    for (const tp of arr) {
-      result.teamPositions.fetched++;
-      const a = (tp.attributes ?? {}) as Record<string, unknown>;
-      const rels = tp.relationships ?? {};
-      const teamRel = rels.team?.data;
-      const teamId = !Array.isArray(teamRel) && teamRel ? teamRel.id : null;
-      upsertTeamPosition(orgId, {
-        pcoId: tp.id,
-        teamId,
-        name: (a.name as string | undefined) ?? null,
-      });
-      result.teamPositions.upserted++;
+  const seenTeams = new Set<string>();
+  for (const stId of serviceTypeIds) {
+    try {
+      for await (const { page } of client.paginate<PCOResource>(
+        `/services/v2/service_types/${stId}/teams?per_page=100`,
+      )) {
+        const arr = Array.isArray(page.data) ? page.data : [page.data];
+        for (const t of arr) {
+          if (seenTeams.has(t.id)) continue;
+          seenTeams.add(t.id);
+          result.teams.fetched++;
+          const a = (t.attributes ?? {}) as Record<string, unknown>;
+          upsertTeam(orgId, {
+            pcoId: t.id,
+            name: (a.name as string | undefined) ?? null,
+            serviceTypeId: stId,
+            pcoCreatedAt: (a.created_at as string | undefined) ?? null,
+            pcoUpdatedAt: (a.updated_at as string | undefined) ?? null,
+            archivedAt: (a.archived_at as string | undefined) ?? null,
+            deletedAt: (a.deleted_at as string | undefined) ?? null,
+          });
+          result.teams.upserted++;
+          teamRecords.push(t);
+        }
+      }
+    } catch (e) {
+      if (e instanceof PCOError && e.status === 404) continue;
+      throw e;
     }
   }
 
-  // 4) Standing roster: who's assigned to each team & in what position.
-  //    Per-team replace-in-transaction so dropped people actually disappear.
+  // 3) Per-team: team_positions, person_team_position_assignments, team_leaders.
+  //    Positions live under teams (NOT flat).
   const replaceMemberships = getDb().transaction(
     (teamId: string, rows: ReturnType<typeof toTeamMembershipRow>[]) => {
       getDb()
@@ -134,27 +127,82 @@ export async function syncServicesAll(
   );
 
   for (const team of teamRecords) {
+    // 3a) Positions for this team
+    try {
+      for await (const { page } of client.paginate<PCOResource>(
+        `/services/v2/teams/${team.id}/team_positions?per_page=100`,
+      )) {
+        const arr = Array.isArray(page.data) ? page.data : [page.data];
+        for (const tp of arr) {
+          result.teamPositions.fetched++;
+          const a = (tp.attributes ?? {}) as Record<string, unknown>;
+          upsertTeamPosition(orgId, {
+            pcoId: tp.id,
+            teamId: team.id,
+            name: (a.name as string | undefined) ?? null,
+          });
+          result.teamPositions.upserted++;
+        }
+      }
+    } catch (e) {
+      if (!(e instanceof PCOError && e.status === 404)) throw e;
+    }
+
+    // 3b) Team leaders — separate resource from regular assignments.
+    //     Used to mark is_team_leader on the matching membership.
+    const leaderPersonIds = new Set<string>();
+    try {
+      for await (const { page } of client.paginate<PCOResource>(
+        `/services/v2/teams/${team.id}/team_leaders?per_page=100&include=people`,
+      )) {
+        const arr = Array.isArray(page.data) ? page.data : [page.data];
+        const included = page.included ?? [];
+        // team_leaders may include people via included; or via relationships.people
+        for (const tl of arr) {
+          const rels = tl.relationships ?? {};
+          const peopleRel = rels.people?.data ?? rels.person?.data;
+          if (Array.isArray(peopleRel)) {
+            for (const p of peopleRel) leaderPersonIds.add(p.id);
+          } else if (peopleRel) {
+            leaderPersonIds.add(peopleRel.id);
+          }
+        }
+        for (const inc of included) {
+          if (inc.type === "Person") leaderPersonIds.add(inc.id);
+        }
+      }
+    } catch (e) {
+      if (!(e instanceof PCOError && e.status === 404)) {
+        // Don't blow up sync if team_leaders isn't accessible
+      }
+    }
+
+    // 3c) Person assignments (the standing roster)
     const memberships: ReturnType<typeof toTeamMembershipRow>[] = [];
     try {
       for await (const { page } of client.paginate<PCOResource>(
         `/services/v2/teams/${team.id}/person_team_position_assignments?per_page=100&include=team_position`,
       )) {
         const arr = Array.isArray(page.data) ? page.data : [page.data];
-        const positionByPersonAssignmentRels = new Map<string, string>(); // unused; team_position rel below
-        void positionByPersonAssignmentRels;
         for (const m of arr) {
           result.teamMemberships.fetched++;
-          memberships.push(toTeamMembershipRow(team.id, m));
+          const row = toTeamMembershipRow(team.id, m);
+          if (row.personId && leaderPersonIds.has(row.personId)) {
+            row.isTeamLeader = 1;
+          }
+          memberships.push(row);
         }
       }
-    } catch {
-      // Some teams 404 on the assignments endpoint; skip.
+    } catch (e) {
+      if (!(e instanceof PCOError && e.status === 404)) {
+        // Skip team on transient error
+      }
     }
+
     if (memberships.length > 0) {
       replaceMemberships(team.id, memberships);
       result.teamMemberships.upserted += memberships.length;
     } else {
-      // Still wipe the team's roster so it isn't stale.
       getDb()
         .prepare(
           "DELETE FROM pco_team_memberships WHERE org_id = ? AND team_id = ?",
@@ -163,46 +211,47 @@ export async function syncServicesAll(
     }
   }
 
-  // 5) Plans — incremental on sort_date. Cursor-aware so subsequent syncs
-  //    pull only newer plans, with the threshold backstop.
+  // 4) Plans — nested under service_type. Incremental on sort_date with
+  //    threshold backstop. Cursor stored as "services:plans" globally so
+  //    next sync picks up after the latest seen date.
   const planCursor = readCursor(orgId, "services:plans", thresholdMonths);
-  const planParams = new URLSearchParams({
-    per_page: "100",
-    order: "-sort_date",
-    include: "service_type",
-  });
-  if (planCursor) planParams.set("where[sort_date][gt]", planCursor);
   let maxSortDate: string | null = planCursor;
-  const recentPlanIds: string[] = [];
-  for await (const { page } of client.paginate<PCOResource>(
-    `/services/v2/plans?${planParams.toString()}`,
-  )) {
-    const arr = Array.isArray(page.data) ? page.data : [page.data];
-    for (const p of arr) {
-      result.plans.fetched++;
-      const a = (p.attributes ?? {}) as Record<string, unknown>;
-      const rels = p.relationships ?? {};
-      const stRel = rels.service_type?.data;
-      const stId = !Array.isArray(stRel) && stRel ? stRel.id : null;
-      const sortDate = (a.sort_date as string | undefined) ?? null;
-      if (sortDate && (!maxSortDate || sortDate > maxSortDate)) {
-        maxSortDate = sortDate;
+  const recentPlans: Array<{ planId: string; serviceTypeId: string }> = [];
+
+  for (const stId of serviceTypeIds) {
+    const params = new URLSearchParams({ per_page: "100", order: "-sort_date" });
+    if (planCursor) params.set("where[sort_date][gt]", planCursor);
+    try {
+      for await (const { page } of client.paginate<PCOResource>(
+        `/services/v2/service_types/${stId}/plans?${params.toString()}`,
+      )) {
+        const arr = Array.isArray(page.data) ? page.data : [page.data];
+        for (const p of arr) {
+          result.plans.fetched++;
+          const a = (p.attributes ?? {}) as Record<string, unknown>;
+          const sortDate = (a.sort_date as string | undefined) ?? null;
+          if (sortDate && (!maxSortDate || sortDate > maxSortDate)) {
+            maxSortDate = sortDate;
+          }
+          upsertPlan(orgId, {
+            pcoId: p.id,
+            serviceTypeId: stId,
+            title: (a.title as string | undefined) ?? null,
+            sortDate,
+            pcoCreatedAt: (a.created_at as string | undefined) ?? null,
+            pcoUpdatedAt: (a.updated_at as string | undefined) ?? null,
+          });
+          result.plans.upserted++;
+          recentPlans.push({ planId: p.id, serviceTypeId: stId });
+        }
       }
-      upsertPlan(orgId, {
-        pcoId: p.id,
-        serviceTypeId: stId,
-        title: (a.title as string | undefined) ?? null,
-        sortDate,
-        pcoCreatedAt: (a.created_at as string | undefined) ?? null,
-        pcoUpdatedAt: (a.updated_at as string | undefined) ?? null,
-      });
-      result.plans.upserted++;
-      recentPlanIds.push(p.id);
+    } catch (e) {
+      if (!(e instanceof PCOError && e.status === 404)) throw e;
     }
   }
   writeCursor(orgId, "services:plans", maxSortDate);
 
-  // 6) Plan people — per plan. Replace in transaction per plan.
+  // 5) Plan team_members — nested under (service_type, plan).
   const replacePlanPeople = getDb().transaction(
     (planId: string, rows: ReturnType<typeof toPlanPersonRow>[]) => {
       getDb()
@@ -236,11 +285,11 @@ export async function syncServicesAll(
     },
   );
 
-  for (const planId of recentPlanIds) {
+  for (const { planId, serviceTypeId } of recentPlans) {
     const ppRows: ReturnType<typeof toPlanPersonRow>[] = [];
     try {
       for await (const { page } of client.paginate<PCOResource>(
-        `/services/v2/plans/${planId}/team_members?per_page=100&include=team`,
+        `/services/v2/service_types/${serviceTypeId}/plans/${planId}/team_members?per_page=100&include=team`,
       )) {
         const arr = Array.isArray(page.data) ? page.data : [page.data];
         for (const pp of arr) {
@@ -248,8 +297,10 @@ export async function syncServicesAll(
           ppRows.push(toPlanPersonRow(planId, pp));
         }
       }
-    } catch {
-      // Skip on 404
+    } catch (e) {
+      if (!(e instanceof PCOError && e.status === 404)) {
+        // Skip on transient error
+      }
     }
     if (ppRows.length > 0) {
       replacePlanPeople(planId, ppRows);
@@ -273,7 +324,7 @@ function toTeamMembershipRow(teamId: string, m: PCOResource) {
     personId: !Array.isArray(personRel) && personRel ? personRel.id : "",
     positionId: !Array.isArray(positionRel) && positionRel ? positionRel.id : null,
     positionName: (a.position_name as string | undefined) ?? null,
-    isTeamLeader: (a.is_team_leader === true ? 1 : 0) as 0 | 1,
+    isTeamLeader: 0 as 0 | 1,
     archivedAt: (a.archived_at as string | undefined) ?? null,
   };
 }
@@ -409,7 +460,9 @@ function upsertPlan(
 }
 
 /** Recompute last_served_at per team membership from pco_plan_people +
- *  pco_plans.sort_date (when they served). */
+ *  pco_plans.sort_date (when they served). PCO uses single-letter status
+ *  codes ('C'=confirmed, 'U'=unconfirmed, 'D'=declined, 'P'=pending) and
+ *  occasionally returns the long form. We count anything not declined. */
 export function refreshLastServed(orgId: number) {
   getDb()
     .prepare(
@@ -422,7 +475,7 @@ export function refreshLastServed(orgId: number) {
              WHERE pp.org_id = pco_team_memberships.org_id
                AND pp.team_id = pco_team_memberships.team_id
                AND pp.person_id = pco_team_memberships.person_id
-               AND lower(coalesce(pp.status, 'c')) IN ('c', 'confirmed', 'u', 'unconfirmed')
+               AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')
          )
        WHERE org_id = ?`,
     )

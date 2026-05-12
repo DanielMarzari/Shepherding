@@ -246,8 +246,13 @@ export interface SyncedGroupRow {
    *  having left the group). */
   leftRecently: number;
   recentEvents: number;
-  /** % of active members who attended in the tracking window. Null when
-   *  there are no events / members to measure against. */
+  /** % of `recentEvents` that had attendance actually recorded. Null when
+   *  there are no events in the window. 0% means events happened but no
+   *  one took attendance — distinct from "100% of members were absent." */
+  attendanceTakenPct: number | null;
+  /** % of active members who attended at least once in the tracking window.
+   *  Null when no attendance was taken (can't measure). When attendance
+   *  WAS taken, 0% is a real (concerning) signal. */
   attendancePct: number | null;
   pcoCreatedAt: string | null;
   archivedAt: string | null;
@@ -356,7 +361,13 @@ export function listGroups(
               AND a.group_id = g.pco_id
               AND a.attended = 1
               AND a.event_starts_at IS NOT NULL
-              AND a.event_starts_at >= ?) AS attendedDistinctRecently
+              AND a.event_starts_at >= ?) AS attendedDistinctRecently,
+         (SELECT COUNT(DISTINCT a.event_id)
+            FROM pco_event_attendances a
+            WHERE a.org_id = g.org_id
+              AND a.group_id = g.pco_id
+              AND a.event_starts_at IS NOT NULL
+              AND a.event_starts_at >= ?) AS eventsWithAttendance
        FROM pco_groups g
        LEFT JOIN pco_group_types t
          ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
@@ -373,6 +384,7 @@ export function listGroups(
       lapsedCutoff,    //         …but before the lapsed threshold
       trackingCutoff,  // recent events
       trackingCutoff,  // attended distinct in window
+      trackingCutoff,  // events with attendance taken in window
       orgId,
       ...excludedGroupTypes,
     ) as Array<{
@@ -388,6 +400,7 @@ export function listGroups(
     leftRecently: number;
     recentEvents: number;
     attendedDistinctRecently: number;
+    eventsWithAttendance: number;
   }>;
 
   return rows.map((r) => {
@@ -400,8 +413,18 @@ export function listGroups(
       else if (net <= -2) state = "shrinking";
       else state = "steady";
     }
+    // % of events that had attendance actually recorded. NULL if there
+    // were no events in the window.
+    const attendanceTakenPct =
+      r.recentEvents > 0
+        ? (r.eventsWithAttendance / r.recentEvents) * 100
+        : null;
+    // % of members who attended ≥ once in the window. Only meaningful
+    // when attendance was actually taken — otherwise NULL, not 0%.
     const attendancePct =
-      r.members > 0 ? (r.attendedDistinctRecently / r.members) * 100 : null;
+      r.eventsWithAttendance > 0 && r.members > 0
+        ? (r.attendedDistinctRecently / r.members) * 100
+        : null;
     return {
       pcoId: r.pcoId,
       name: r.name,
@@ -414,6 +437,7 @@ export function listGroups(
       joinedRecently: r.joinedRecently,
       leftRecently: r.leftRecently,
       recentEvents: r.recentEvents,
+      attendanceTakenPct,
       attendancePct,
       state,
     };

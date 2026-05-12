@@ -1,15 +1,9 @@
 import { AppShell } from "@/components/AppShell";
-import { Card, CardHeader, Pill } from "@/components/ui";
+import { Card, CardHeader } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { getGroupTotals, listGroups } from "@/lib/community-lane";
 import { getSyncSettings } from "@/lib/pco";
-
-const STATE_TONE = {
-  growing: "good",
-  steady: "muted",
-  shrinking: "warn",
-  paused: "warn",
-} as const;
+import { GroupsTable } from "./groups-table";
 
 export default async function GroupsPage() {
   const session = await requireOrg();
@@ -93,99 +87,10 @@ export default async function GroupsPage() {
               No groups synced yet.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm table-fixed min-w-[1100px]">
-                <colgroup>
-                  <col className="w-[24%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[8%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[9%]" />
-                </colgroup>
-                <thead className="text-xs text-muted">
-                  <tr className="border-b border-border-soft">
-                    <th className="text-left font-medium px-5 py-2">Group</th>
-                    <th className="text-left font-medium px-5 py-2">Type</th>
-                    <th className="text-left font-medium px-5 py-2">State</th>
-                    <th className="text-right font-medium px-5 py-2">Members</th>
-                    <th className="text-right font-medium px-5 py-2">Leaders</th>
-                    <th className="text-right font-medium px-5 py-2">
-                      Attend %
-                    </th>
-                    <th className="text-right font-medium px-5 py-2">
-                      Joined ({settings.activityTrackingMonths}mo)
-                    </th>
-                    <th className="text-right font-medium px-5 py-2">
-                      Left ({settings.activityTrackingMonths}mo)
-                    </th>
-                    <th className="text-right font-medium px-5 py-2">
-                      Events ({settings.activityTrackingMonths}mo)
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groups.map((g) => {
-                    const leaderRatio =
-                      g.members > 0 ? (g.leaders / g.members) * 100 : null;
-                    return (
-                      <tr
-                        key={g.pcoId}
-                        className={`border-b border-border-softer hover:bg-bg-elev-2/60 ${
-                          g.archivedAt ? "opacity-60" : ""
-                        }`}
-                      >
-                        <td className="px-5 py-2.5">
-                          <div className="font-medium truncate">
-                            {g.name ?? `(unnamed #${g.pcoId})`}
-                            {g.archivedAt && (
-                              <span className="ml-2 text-xs text-muted">archived</span>
-                            )}
-                          </div>
-                          <div className="text-xs text-muted truncate">
-                            {g.schedule ?? "—"}
-                          </div>
-                        </td>
-                        <td className="px-5 py-2.5 text-muted truncate">
-                          {g.groupTypeName ?? <span className="text-subtle">—</span>}
-                        </td>
-                        <td className="px-5 py-2.5">
-                          <Pill tone={STATE_TONE[g.state]}>{g.state}</Pill>
-                        </td>
-                        <td className="px-5 py-2.5 text-right tnum">{g.members}</td>
-                        <td className="px-5 py-2.5 text-right tnum text-muted">
-                          {g.leaders}
-                          {leaderRatio != null && (
-                            <span className="text-subtle ml-1">
-                              ({Math.round(leaderRatio)}%)
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-5 py-2.5 text-right tnum">
-                          {g.attendancePct == null ? (
-                            <span className="text-subtle">—</span>
-                          ) : (
-                            `${Math.round(g.attendancePct)}%`
-                          )}
-                        </td>
-                        <td className="px-5 py-2.5 text-right tnum text-good-soft-fg">
-                          {g.joinedRecently > 0 ? `+${g.joinedRecently}` : "0"}
-                        </td>
-                        <td className="px-5 py-2.5 text-right tnum text-warn-soft-fg">
-                          {g.leftRecently > 0 ? `−${g.leftRecently}` : "0"}
-                        </td>
-                        <td className="px-5 py-2.5 text-right tnum text-muted">
-                          {g.recentEvents}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <GroupsTable
+              groups={groups}
+              activityMonths={settings.activityTrackingMonths}
+            />
           )}
         </Card>
       </div>
