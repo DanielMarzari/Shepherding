@@ -286,8 +286,13 @@ export function listGroups(
   //   disappeared, and lapsed (lapsed = "not part of the group" per the
   //   user's definition; bound the count to the tracking window via
   //   "last_attended_at >= trackingCutoff" so it's a recent-departure number)
-  // "attendancePct" = COUNT(distinct attended in window) / members × 100.
-  //   Computed in JS from the raw numbers below.
+  // "attendancePct" = COUNT(distinct attended in window who are still active
+  //   members) / members × 100. Restricting attendees to current members
+  //   prevents > 100% when lapsed people showed up earlier in the window.
+  // "eventsWithAttendance" = events with at LEAST one attended=1 row.
+  //   Events where everyone is marked absent are treated as canceled
+  //   (leaders sometimes mark 0/N to record "we didn't meet"), so they
+  //   don't pollute the attendance-taken percentage.
   const rows = db
     .prepare(
       `SELECT
@@ -361,11 +366,20 @@ export function listGroups(
               AND a.group_id = g.pco_id
               AND a.attended = 1
               AND a.event_starts_at IS NOT NULL
-              AND a.event_starts_at >= ?) AS attendedDistinctRecently,
+              AND a.event_starts_at >= ?
+              AND EXISTS (
+                SELECT 1 FROM pco_group_memberships m2
+                  WHERE m2.org_id = a.org_id
+                    AND m2.group_id = a.group_id
+                    AND m2.person_id = a.person_id
+                    AND m2.archived_at IS NULL
+                    AND (m2.last_attended_at IS NULL OR m2.last_attended_at >= ?)
+              )) AS attendedDistinctRecently,
          (SELECT COUNT(DISTINCT a.event_id)
             FROM pco_event_attendances a
             WHERE a.org_id = g.org_id
               AND a.group_id = g.pco_id
+              AND a.attended = 1
               AND a.event_starts_at IS NOT NULL
               AND a.event_starts_at >= ?) AS eventsWithAttendance
        FROM pco_groups g
@@ -384,7 +398,8 @@ export function listGroups(
       lapsedCutoff,    //         …but before the lapsed threshold
       trackingCutoff,  // recent events
       trackingCutoff,  // attended distinct in window
-      trackingCutoff,  // events with attendance taken in window
+      lapsedCutoff,    //  …restricted to current (not-lapsed) members
+      trackingCutoff,  // events with ≥1 attended=1 row (treat 0-attended events as canceled)
       orgId,
       ...excludedGroupTypes,
     ) as Array<{

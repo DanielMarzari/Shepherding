@@ -128,8 +128,6 @@ export function GroupsTable({
         </thead>
         <tbody>
           {sorted.map((g) => {
-            const leaderRatio =
-              g.members > 0 ? (g.leaders / g.members) * 100 : null;
             return (
               <tr
                 key={g.pcoId}
@@ -157,11 +155,6 @@ export function GroupsTable({
                 <td className="px-5 py-2.5 text-right tnum">{g.members}</td>
                 <td className="px-5 py-2.5 text-right tnum text-muted">
                   {g.leaders}
-                  {leaderRatio != null && (
-                    <span className="text-subtle ml-1">
-                      ({Math.round(leaderRatio)}%)
-                    </span>
-                  )}
                 </td>
                 <td className="px-5 py-2.5 text-right tnum">
                   {g.attendanceTakenPct == null ? (
