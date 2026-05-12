@@ -280,15 +280,16 @@ export function listGroups(
           .map(() => "?")
           .join(",")}))`;
 
-  // "members" = active membership AND not lapsed (still showing up)
-  // "leaders" = subset of members whose role indicates leader
+  // "members"  = active PCO membership (archived_at IS NULL). Matches the
+  //   PCO roster headcount. We do NOT cut lapsed people from this number —
+  //   they're still on the roster — but they DO show up in `leftRecently`
+  //   so the lead pastor can see at-a-glance who's drifted.
+  // "leaders"  = subset of members whose role contains "leader".
   // "leftRecently" UNIONS three paths: archived in window, attended-then-
-  //   disappeared, and lapsed (lapsed = "not part of the group" per the
-  //   user's definition; bound the count to the tracking window via
-  //   "last_attended_at >= trackingCutoff" so it's a recent-departure number)
-  // "attendancePct" = COUNT(distinct attended in window who are still active
-  //   members) / members × 100. Restricting attendees to current members
-  //   prevents > 100% when lapsed people showed up earlier in the window.
+  //   disappeared (only flag people not currently on the roster), and
+  //   currently-lapsed members whose lapse falls inside the tracking window.
+  // "attendancePct" = distinct attendees-still-on-roster / members × 100,
+  //   bounded ≤ 100%.
   // "eventsWithAttendance" = events with at LEAST one attended=1 row.
   //   Events where everyone is marked absent are treated as canceled
   //   (leaders sometimes mark 0/N to record "we didn't meet"), so they
@@ -306,14 +307,12 @@ export function listGroups(
             FROM pco_group_memberships m
             WHERE m.org_id = g.org_id
               AND m.group_id = g.pco_id
-              AND m.archived_at IS NULL
-              AND (m.last_attended_at IS NULL OR m.last_attended_at >= ?)) AS members,
+              AND m.archived_at IS NULL) AS members,
          (SELECT COUNT(*)
             FROM pco_group_memberships m
             WHERE m.org_id = g.org_id
               AND m.group_id = g.pco_id
               AND m.archived_at IS NULL
-              AND (m.last_attended_at IS NULL OR m.last_attended_at >= ?)
               AND lower(coalesce(m.role, '')) LIKE '%leader%') AS leaders,
          (SELECT COUNT(*)
             FROM pco_group_memberships m
@@ -373,7 +372,6 @@ export function listGroups(
                     AND m2.group_id = a.group_id
                     AND m2.person_id = a.person_id
                     AND m2.archived_at IS NULL
-                    AND (m2.last_attended_at IS NULL OR m2.last_attended_at >= ?)
               )) AS attendedDistinctRecently,
          (SELECT COUNT(DISTINCT a.event_id)
             FROM pco_event_attendances a
@@ -389,16 +387,13 @@ export function listGroups(
        ORDER BY g.archived_at IS NULL DESC, members DESC, g.name ASC`,
     )
     .all(
-      lapsedCutoff,    // members: still attending or no attendance signal
-      lapsedCutoff,    // leaders: same filter
       trackingCutoff,  // joined recently
       trackingCutoff,  // left: archived in window
       trackingCutoff,  // left: attended-then-disappeared, within window
       trackingCutoff,  // left: lapsed, last attended within window
       lapsedCutoff,    //         …but before the lapsed threshold
       trackingCutoff,  // recent events
-      trackingCutoff,  // attended distinct in window
-      lapsedCutoff,    //  …restricted to current (not-lapsed) members
+      trackingCutoff,  // attended distinct in window (restricted to roster)
       trackingCutoff,  // events with ≥1 attended=1 row (treat 0-attended events as canceled)
       orgId,
       ...excludedGroupTypes,
@@ -436,9 +431,11 @@ export function listGroups(
         : null;
     // % of members who attended ≥ once in the window. Only meaningful
     // when attendance was actually taken — otherwise NULL, not 0%.
+    // The SQL already constrains attendees to current roster members,
+    // so the ratio is bounded ≤ 100%; the Math.min is belt-and-suspenders.
     const attendancePct =
       r.eventsWithAttendance > 0 && r.members > 0
-        ? (r.attendedDistinctRecently / r.members) * 100
+        ? Math.min(100, (r.attendedDistinctRecently / r.members) * 100)
         : null;
     return {
       pcoId: r.pcoId,
