@@ -14,6 +14,9 @@ export interface DemographicSnapshot {
   ageBuckets: Array<{ label: string; count: number }>;
   /** Gender counts: male / female / unknown. */
   genderBuckets: Array<{ label: string; count: number }>;
+  /** Parent / not-parent counts across adults. Kids and unknown-age
+   *  adults are bucketed under "Unknown" so the chart stays interpretable. */
+  hasKidsBuckets: Array<{ label: string; count: number }>;
   /** How many in the scope had a usable birthdate. Surfaced so the age
    *  curve can show coverage in the subtitle. */
   totalWithBirthYear: number;
@@ -114,6 +117,27 @@ export function getDemographics(
     count: genderByLabel.get(label) ?? 0,
   }));
 
+  // Parent / not-parent — only meaningful for adults; minors and
+  // unknown-age people bucket to "Unknown".
+  const kidsRows = db
+    .prepare(
+      `SELECT
+         CASE
+           WHEN is_minor = 1 OR birth_year IS NULL THEN 'Unknown'
+           WHEN is_parent = 1 THEN 'Has kids'
+           ELSE 'No kids'
+         END AS label,
+         COUNT(*) AS count
+       FROM ${fromSql}
+       GROUP BY label`,
+    )
+    .all(...args) as Array<{ label: string; count: number }>;
+  const kidsByLabel = new Map(kidsRows.map((r) => [r.label, r.count]));
+  const orderedKids = ["Has kids", "No kids", "Unknown"].map((label) => ({
+    label,
+    count: kidsByLabel.get(label) ?? 0,
+  }));
+
   const totalWithBirthYear = orderedAge
     .filter((b) => b.label !== "Unknown")
     .reduce((s, b) => s + b.count, 0);
@@ -125,6 +149,7 @@ export function getDemographics(
     membershipBuckets: membershipRows,
     ageBuckets: orderedAge,
     genderBuckets: orderedGender,
+    hasKidsBuckets: orderedKids,
     totalWithBirthYear,
     totalWithGender,
   };

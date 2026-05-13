@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/AppShell";
+import { AttendanceTrendCard } from "@/components/AttendanceTrendCard";
 import { DemographicCharts } from "@/components/DemographicCharts";
 import { requireOrg } from "@/lib/auth";
 import { listGroups } from "@/lib/community-lane";
@@ -38,6 +39,9 @@ export default async function GroupsPage() {
             scope="groups"
             title="Demographics — people currently in groups"
           />
+        )}
+        {groups.length > 0 && (
+          <AttendanceTrendCard orgId={session.orgId} scope="groups" />
         )}
       </div>
     </AppShell>

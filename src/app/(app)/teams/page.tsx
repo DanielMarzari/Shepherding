@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/AppShell";
+import { AttendanceTrendCard } from "@/components/AttendanceTrendCard";
 import { Card } from "@/components/ui";
 import { DemographicCharts } from "@/components/DemographicCharts";
 import { requireOrg } from "@/lib/auth";
@@ -121,6 +122,9 @@ export default async function TeamsPage() {
             scope="teams"
             title="Demographics — people currently on teams"
           />
+        )}
+        {teams.length > 0 && (
+          <AttendanceTrendCard orgId={session.orgId} scope="teams" />
         )}
       </div>
     </AppShell>

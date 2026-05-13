@@ -5,6 +5,7 @@ import { getDecryptedCreds, getSyncEntities, getSyncSettings } from "./pco";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 import { refreshLastCheckIn, syncCheckinsAll } from "./pco-sync-checkins";
 import { refreshLastAttended, syncGroupsAll } from "./pco-sync-groups";
+import { refreshIsParent, syncHouseholdsAll } from "./pco-sync-households";
 import { refreshLastServed, syncServicesAll } from "./pco-sync-services";
 
 // Forms the user explicitly asked to track (from the prompt).
@@ -21,6 +22,8 @@ export interface SyncResult {
 
 export interface SyncDetails {
   people: { fetched: number; upserted: number };
+  households: { fetched: number; upserted: number };
+  householdMemberships: { fetched: number; upserted: number };
   forms: { fetched: number; upserted: number };
   formFields: { fetched: number; upserted: number };
   formSubmissions: { fetched: number; upserted: number };
@@ -102,6 +105,8 @@ export async function runSync(
   const startedMs = Date.now();
   const details: SyncDetails = {
     people: { fetched: 0, upserted: 0 },
+    households: { fetched: 0, upserted: 0 },
+    householdMemberships: { fetched: 0, upserted: 0 },
     forms: { fetched: 0, upserted: 0 },
     formFields: { fetched: 0, upserted: 0 },
     formSubmissions: { fetched: 0, upserted: 0 },
@@ -148,6 +153,19 @@ export async function runSync(
       details.people.fetched = peopleCount.fetched;
       details.people.upserted = peopleCount.upserted;
       writeCursor(orgId, "people", peopleCount.maxUpdatedAt);
+
+      // Households piggyback on the People product — pulled whenever
+      // people sync is on. Drives the is_parent flag for demographics.
+      try {
+        const h = await syncHouseholdsAll(client, orgId);
+        details.households = h.households;
+        details.householdMemberships = h.householdMemberships;
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Households: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
     }
 
     // ── Groups (types, groups, memberships, applications, events) ───────
@@ -246,9 +264,13 @@ export async function runSync(
     // Update minors flag from decrypted birthdate; gates the kids-checked-
     // in-to-shepherded-event rule.
     refreshIsMinor(orgId);
+    // is_parent depends on is_minor + households, so it must run AFTER both.
+    refreshIsParent(orgId);
 
     const changes =
       details.people.upserted +
+      details.households.upserted +
+      details.householdMemberships.upserted +
       details.forms.upserted +
       details.formFields.upserted +
       details.formSubmissions.upserted +
@@ -762,6 +784,8 @@ function appendWarning(prev: string | undefined, msg: string): string {
 
 export interface SyncedDataCounts {
   people: number;
+  households: number;
+  householdMemberships: number;
   forms: number;
   formFields: number;
   formSubmissions: number;
@@ -786,6 +810,10 @@ export function getSyncedCounts(orgId: number): SyncedDataCounts {
     (db.prepare(sql).get(orgId) as { n: number }).n;
   return {
     people: one("SELECT COUNT(*) AS n FROM pco_people WHERE org_id = ?"),
+    households: one("SELECT COUNT(*) AS n FROM pco_households WHERE org_id = ?"),
+    householdMemberships: one(
+      "SELECT COUNT(*) AS n FROM pco_household_memberships WHERE org_id = ?",
+    ),
     forms: one("SELECT COUNT(*) AS n FROM pco_forms WHERE org_id = ?"),
     formFields: one("SELECT COUNT(*) AS n FROM pco_form_fields WHERE org_id = ?"),
     formSubmissions: one(

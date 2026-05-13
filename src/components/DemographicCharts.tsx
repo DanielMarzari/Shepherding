@@ -36,7 +36,7 @@ export function DemographicCharts({
           {ageCoverage}% · gender coverage {genderCoverage}%
         </p>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <ChartCard
           title="Membership types"
           subtitle={`${demo.membershipBuckets.length} distinct values`}
@@ -51,6 +51,12 @@ export function DemographicCharts({
         </ChartCard>
         <ChartCard title="Gender" subtitle="self-reported in PCO">
           <BarChart data={demo.genderBuckets} />
+        </ChartCard>
+        <ChartCard
+          title="Parents"
+          subtitle="adult sharing a household with a minor"
+        >
+          <BarChart data={demo.hasKidsBuckets} />
         </ChartCard>
       </div>
     </div>

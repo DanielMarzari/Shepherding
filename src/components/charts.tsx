@@ -193,6 +193,133 @@ export function BarChart({ data }: { data: ChartDatum[] }) {
   );
 }
 
+// ─── Multi-line time series ───────────────────────────────────────────
+
+interface MultiLineSeries {
+  label: string;
+  values: number[];
+}
+
+/** Multi-series line chart. Each series gets one color from the palette;
+ *  shared y-axis scales to the max across all series. */
+export function MultiLineChart({
+  series,
+  xLabels,
+  height = 200,
+}: {
+  series: MultiLineSeries[];
+  xLabels: string[];
+  height?: number;
+}) {
+  const flatMax = series.reduce(
+    (m, s) => Math.max(m, ...s.values),
+    0,
+  );
+  if (flatMax === 0 || xLabels.length === 0) {
+    return <div className="text-xs text-muted py-6 text-center">No data</div>;
+  }
+  const width = 600;
+  const padX = 36;
+  const padTop = 14;
+  const padBottom = 28;
+  const innerW = width - padX * 2;
+  const innerH = height - padTop - padBottom;
+  const stepX = xLabels.length > 1 ? innerW / (xLabels.length - 1) : innerW;
+
+  // Y axis: 4 gridlines (0, 25%, 50%, 75%, 100% of max).
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(flatMax * f));
+
+  function pathFor(values: number[]): string {
+    return values
+      .map((v, i) => {
+        const x = padX + i * stepX;
+        const y = padTop + innerH - (v / flatMax) * innerH;
+        return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+      })
+      .join(" ");
+  }
+
+  return (
+    <div>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        height={height}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Trend over time"
+      >
+        {/* Horizontal gridlines + y-axis labels */}
+        {yTicks.map((tick, i) => {
+          const y = padTop + innerH - (tick / flatMax) * innerH;
+          return (
+            <g key={i}>
+              <line
+                x1={padX}
+                x2={width - padX}
+                y1={y}
+                y2={y}
+                stroke="var(--border-soft)"
+                strokeDasharray="2 3"
+                strokeWidth="0.5"
+              />
+              <text
+                x={padX - 6}
+                y={y + 3}
+                textAnchor="end"
+                fontSize="9"
+                fill="var(--subtle)"
+              >
+                {tick.toLocaleString()}
+              </text>
+            </g>
+          );
+        })}
+        {/* X-axis labels */}
+        {xLabels.map((label, i) => {
+          if (xLabels.length > 6 && i % 2 !== 0) return null;
+          const x = padX + i * stepX;
+          return (
+            <text
+              key={i}
+              x={x}
+              y={height - padBottom + 14}
+              textAnchor="middle"
+              fontSize="9"
+              fill="var(--subtle)"
+            >
+              {label}
+            </text>
+          );
+        })}
+        {/* Series */}
+        {series.map((s, i) => (
+          <path
+            key={s.label}
+            d={pathFor(s.values)}
+            fill="none"
+            stroke={PALETTE[i % PALETTE.length]}
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+        ))}
+      </svg>
+      {/* Legend */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs mt-1">
+        {series.map((s, i) => (
+          <span key={s.label} className="inline-flex items-center gap-1.5">
+            <span
+              className="w-3 h-0.5 inline-block"
+              style={{ background: PALETTE[i % PALETTE.length] }}
+            />
+            <span className="text-muted">{s.label}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Distribution curve (smooth area) ─────────────────────────────────
 
 /** Smooth area chart — quadratic Bezier through bucket midpoints. Used
