@@ -59,8 +59,12 @@ export function listTeams(
   // Special showed 1289 because each person held ~6 positions on average.
   //
   // Pre-aggregate per team_id in CTEs instead of correlated subqueries.
-  // For 140 teams that previously meant ~560 subqueries; this is 3 passes
-  // total (memberships once, plan_people once, plans once).
+  // Archived teams (t.archived_at IS NOT NULL) are dropped entirely —
+  // they shouldn't count toward Shepherding or appear on /teams.
+  //
+  // "lapsed" requires evidence: at least one plan in the lapsed window for
+  // this team. If no plans were scheduled in the threshold months, we can't
+  // confidently say someone has dropped off — no evidence either way.
   const rows = db
     .prepare(
       `WITH roster AS (
@@ -70,7 +74,7 @@ export function listTeams(
            COUNT(DISTINCT CASE WHEN m.is_team_leader = 1 THEN m.person_id END) AS leaders,
            COUNT(DISTINCT CASE
              WHEN m.last_served_at IS NULL OR m.last_served_at < ?
-             THEN m.person_id END) AS lapsed
+             THEN m.person_id END) AS lapsedCandidates
          FROM pco_team_memberships m
          WHERE m.org_id = ?
            AND m.archived_at IS NULL
@@ -87,6 +91,16 @@ export function listTeams(
            AND p.sort_date >= ?
            AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')
          GROUP BY pp.team_id
+       ),
+       team_plans_in_window AS (
+         -- "Has this team had any plans scheduled in the lapsed window?"
+         -- If not, we can't say anyone has lapsed — no evidence.
+         SELECT DISTINCT pp.team_id
+         FROM pco_plan_people pp
+         JOIN pco_plans p
+           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+         WHERE pp.org_id = ?
+           AND p.sort_date >= ?
        )
        SELECT
          t.pco_id          AS pcoId,
@@ -96,25 +110,29 @@ export function listTeams(
          COALESCE(r.members, 0)  AS members,
          COALESCE(r.leaders, 0)  AS leaders,
          COALESCE(s.n, 0)        AS servedRecently,
-         COALESCE(r.lapsed, 0)   AS lapsed
+         CASE WHEN tpw.team_id IS NOT NULL
+              THEN COALESCE(r.lapsedCandidates, 0)
+              ELSE 0
+         END                     AS lapsed
        FROM pco_teams t
        LEFT JOIN pco_service_types st
          ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
        LEFT JOIN roster r ON r.team_id = t.pco_id
        LEFT JOIN served s ON s.team_id = t.pco_id
+       LEFT JOIN team_plans_in_window tpw ON tpw.team_id = t.pco_id
        WHERE t.org_id = ?
          AND t.deleted_at IS NULL
+         AND t.archived_at IS NULL
          ${exclusionPlaceholders}
-       ORDER BY
-         CASE WHEN t.archived_at IS NULL THEN 0 ELSE 1 END,
-         members DESC,
-         t.name ASC`,
+       ORDER BY members DESC, t.name ASC`,
     )
     .all(
       lapsedCutoff,
       orgId,
       orgId,
       activityCutoff,
+      orgId,
+      lapsedCutoff,
       orgId,
       ...excludedTypes,
     ) as Array<{

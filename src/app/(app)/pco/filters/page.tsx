@@ -3,13 +3,16 @@ import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import {
+  getCheckinEventStats,
   getExcludedGroupTypes,
   getExcludedMembershipTypes,
   getExcludedTeamTypes,
   getGroupTypeStats,
   getMembershipTypeStats,
   getServiceTypeStats,
+  getShepherdedCheckinEvents,
 } from "@/lib/pco";
+import { CheckinEventsForm } from "./checkin-events-form";
 import { FiltersForm } from "./form";
 import { GroupTypeFiltersForm } from "./group-types-form";
 import { TeamTypeFiltersForm } from "./team-types-form";
@@ -18,6 +21,7 @@ const TABS = [
   { key: "people", label: "Membership types" },
   { key: "groups", label: "Group types" },
   { key: "teams", label: "Team types" },
+  { key: "checkins", label: "Check-in events" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -46,6 +50,11 @@ export default async function FiltersPage({
 
   const teamStats = getServiceTypeStats(session.orgId);
   const teamExcluded = new Set(getExcludedTeamTypes(session.orgId));
+
+  const checkinStats = getCheckinEventStats(session.orgId);
+  const shepherdedCheckinSet = new Set(
+    getShepherdedCheckinEvents(session.orgId),
+  );
 
   return (
     <AppShell active="Filters" breadcrumb="Settings › Filters">
@@ -100,7 +109,9 @@ export default async function FiltersPage({
                   ? memStats.length
                   : t.key === "groups"
                     ? groupStats.length
-                    : teamStats.length;
+                    : t.key === "teams"
+                      ? teamStats.length
+                      : checkinStats.length;
               return (
                 <Link
                   key={t.key}
@@ -123,7 +134,32 @@ export default async function FiltersPage({
           </nav>
         </div>
 
-        {tab === "teams" ? (
+        {tab === "checkins" ? (
+          <Card>
+            <CardHeader
+              title="Check-in events"
+              badge={
+                session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
+              }
+              right={
+                <span className="text-xs text-muted">
+                  flagged events count check-ins as Shepherded (kids / students)
+                </span>
+              }
+            />
+            {checkinStats.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-muted">
+                No check-in events yet — enable Check-ins under Sync settings and run a sync.
+              </div>
+            ) : (
+              <CheckinEventsForm
+                stats={checkinStats}
+                initialShepherded={Array.from(shepherdedCheckinSet)}
+                isAdmin={session.role === "admin"}
+              />
+            )}
+          </Card>
+        ) : tab === "teams" ? (
           <Card>
             <CardHeader
               title="Service team types"

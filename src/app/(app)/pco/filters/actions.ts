@@ -6,6 +6,7 @@ import {
   saveExcludedGroupTypes,
   saveExcludedMembershipTypes,
   saveExcludedTeamTypes,
+  saveShepherdedCheckinEvents,
 } from "@/lib/pco";
 
 export interface FilterSaveState {
@@ -58,6 +59,33 @@ export async function saveTeamTypeFiltersAction(
       excluded.length === 0
         ? "All service types now count for Serve."
         : `Excluding ${excluded.length} service type${excluded.length === 1 ? "" : "s"} from Serve.`,
+  };
+}
+
+export async function saveCheckinEventsAction(
+  _prev: FilterSaveState | null,
+  formData: FormData,
+): Promise<FilterSaveState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") {
+    return { status: "error", message: "Only admins can change filters." };
+  }
+  const ids = formData
+    .getAll("shepherded_checkin_event")
+    .filter((v) => typeof v === "string") as string[];
+  saveShepherdedCheckinEvents(s.orgId, ids);
+  revalidatePath("/pco/filters");
+  revalidatePath("/people");
+  revalidatePath("/metrics");
+  revalidatePath("/care-queue");
+  revalidatePath("/lanes");
+  revalidatePath("/lanes/care");
+  return {
+    status: "saved",
+    message:
+      ids.length === 0
+        ? "No events flagged — check-ins won't push anyone to Shepherded."
+        : `${ids.length} event${ids.length === 1 ? "" : "s"} flagged as shepherded.`,
   };
 }
 

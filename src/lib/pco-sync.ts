@@ -3,6 +3,7 @@ import { encryptJson } from "./encryption";
 import { getDb } from "./db";
 import { getDecryptedCreds, getSyncEntities, getSyncSettings } from "./pco";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
+import { refreshLastCheckIn, syncCheckinsAll } from "./pco-sync-checkins";
 import { refreshLastAttended, syncGroupsAll } from "./pco-sync-groups";
 import { refreshLastServed, syncServicesAll } from "./pco-sync-services";
 
@@ -28,6 +29,9 @@ export interface SyncDetails {
   groupMemberships: { fetched: number; upserted: number };
   groupApplications: { fetched: number; upserted: number };
   groupEvents: { fetched: number; upserted: number };
+  checkinEvents: { fetched: number; upserted: number };
+  checkinLocations: { fetched: number; upserted: number };
+  checkIns: { fetched: number; upserted: number };
   serviceTypes: { fetched: number; upserted: number };
   teams: { fetched: number; upserted: number };
   teamPositions: { fetched: number; upserted: number };
@@ -55,6 +59,9 @@ export async function runSync(
     groupMemberships: { fetched: 0, upserted: 0 },
     groupApplications: { fetched: 0, upserted: 0 },
     groupEvents: { fetched: 0, upserted: 0 },
+    checkinEvents: { fetched: 0, upserted: 0 },
+    checkinLocations: { fetched: 0, upserted: 0 },
+    checkIns: { fetched: 0, upserted: 0 },
     serviceTypes: { fetched: 0, upserted: 0 },
     teams: { fetched: 0, upserted: 0 },
     teamPositions: { fetched: 0, upserted: 0 },
@@ -111,6 +118,26 @@ export async function runSync(
         warning = appendWarning(
           warning,
           `Groups: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
+    }
+
+    // ── Check-ins (events, locations, individual check-in records) ──────
+    if (enabled.check_ins) {
+      try {
+        const c = await syncCheckinsAll(
+          client,
+          orgId,
+          settings.syncThresholdMonths,
+        );
+        details.checkinEvents = c.events;
+        details.checkinLocations = c.locations;
+        details.checkIns = c.checkIns;
+        refreshLastCheckIn(orgId);
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Check-ins: ${e instanceof Error ? e.message : "failed"}`,
         );
       }
     }
@@ -176,6 +203,9 @@ export async function runSync(
       details.groupMemberships.upserted +
       details.groupApplications.upserted +
       details.groupEvents.upserted +
+      details.checkinEvents.upserted +
+      details.checkinLocations.upserted +
+      details.checkIns.upserted +
       details.serviceTypes.upserted +
       details.teams.upserted +
       details.teamPositions.upserted +
@@ -632,6 +662,9 @@ export interface SyncedDataCounts {
   groupMemberships: number;
   groupApplications: number;
   groupEvents: number;
+  checkinEvents: number;
+  checkinLocations: number;
+  checkIns: number;
   serviceTypes: number;
   teams: number;
   teamPositions: number;
@@ -660,6 +693,15 @@ export function getSyncedCounts(orgId: number): SyncedDataCounts {
     ),
     groupEvents: one(
       "SELECT COUNT(*) AS n FROM pco_group_events WHERE org_id = ?",
+    ),
+    checkinEvents: one(
+      "SELECT COUNT(*) AS n FROM pco_checkin_events WHERE org_id = ?",
+    ),
+    checkinLocations: one(
+      "SELECT COUNT(*) AS n FROM pco_checkin_locations WHERE org_id = ?",
+    ),
+    checkIns: one(
+      "SELECT COUNT(*) AS n FROM pco_check_ins WHERE org_id = ?",
     ),
     serviceTypes: one(
       "SELECT COUNT(*) AS n FROM pco_service_types WHERE org_id = ?",

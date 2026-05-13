@@ -411,6 +411,77 @@ export function saveExcludedGroupTypes(orgId: number, ids: string[]) {
     .run(json, orgId);
 }
 
+// ─── Check-in event filters (kids/student → shepherded) ───────────────
+
+/** Event pco_ids the admin has flagged as "shepherded" — check-ins to
+ *  these events count people as shepherded (kids services, student
+ *  ministry, etc.). Everything else only bumps Active. */
+export function getShepherdedCheckinEvents(orgId: number): string[] {
+  const row = getDb()
+    .prepare(
+      "SELECT shepherded_checkin_events FROM pco_sync_settings WHERE org_id = ?",
+    )
+    .get(orgId) as { shepherded_checkin_events: string | null } | undefined;
+  if (!row?.shepherded_checkin_events) return [];
+  try {
+    const parsed = JSON.parse(row.shepherded_checkin_events);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveShepherdedCheckinEvents(orgId: number, ids: string[]) {
+  const cleaned = Array.from(new Set(ids.filter(Boolean)));
+  const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) saveSyncSettings(orgId, getSyncSettings(orgId));
+  getDb()
+    .prepare(
+      "UPDATE pco_sync_settings SET shepherded_checkin_events = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
+    )
+    .run(json, orgId);
+}
+
+export function getCheckinEventStats(orgId: number): {
+  eventId: string;
+  name: string | null;
+  frequency: string | null;
+  archivedAt: string | null;
+  totalCheckins: number;
+  distinctPeople: number;
+}[] {
+  return getDb()
+    .prepare(
+      `SELECT
+         e.pco_id        AS eventId,
+         e.name          AS name,
+         e.frequency     AS frequency,
+         e.archived_at   AS archivedAt,
+         COUNT(ci.pco_id)               AS totalCheckins,
+         COUNT(DISTINCT ci.person_id)   AS distinctPeople
+       FROM pco_checkin_events e
+       LEFT JOIN pco_check_ins ci
+         ON ci.org_id = e.org_id AND ci.event_id = e.pco_id
+       WHERE e.org_id = ?
+       GROUP BY e.pco_id, e.name, e.frequency, e.archived_at
+       ORDER BY
+         CASE WHEN e.archived_at IS NULL THEN 0 ELSE 1 END,
+         totalCheckins DESC,
+         e.name ASC`,
+    )
+    .all(orgId) as {
+    eventId: string;
+    name: string | null;
+    frequency: string | null;
+    archivedAt: string | null;
+    totalCheckins: number;
+    distinctPeople: number;
+  }[];
+}
+
 // ─── Team-type filters ──────────────────────────────────────────────────
 
 export function getExcludedTeamTypes(orgId: number): string[] {
@@ -548,9 +619,10 @@ export const SYNC_ENTITIES: SyncEntity[] = [
     defaultEnabled: true,
   },
   {
-    key: "sunday_attendance",
-    label: "Sunday attendance (Check-Ins)",
-    description: "Required for Worship lane and falling-through-cracks rules",
+    key: "check_ins",
+    label: "Check-ins (events, locations, individual records)",
+    description:
+      "Drives the Care lane (kids/student check-ins → shepherded) and the Active classification. Mark which events count as shepherded under Filters → Check-in events.",
     defaultEnabled: true,
   },
   {

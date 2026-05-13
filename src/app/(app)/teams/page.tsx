@@ -28,7 +28,7 @@ export default async function TeamsPage() {
             <p className="text-muted text-sm mt-1">
               {totals.totalTeams === 0
                 ? "No teams synced yet — turn on Service teams under Sync settings and run a sync."
-                : `${totals.activeTeams.toLocaleString()} active · ${totals.totalTeams - totals.activeTeams} archived · lapsed-from-team threshold ${settings.lapsedFromTeamMonths}mo`}
+                : `${totals.activeTeams.toLocaleString()} active teams · lapsed-from-team threshold ${settings.lapsedFromTeamMonths}mo · archived teams hidden`}
             </p>
           </div>
         </div>
