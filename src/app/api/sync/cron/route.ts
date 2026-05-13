@@ -17,7 +17,18 @@ import { runSync } from "@/lib/pco-sync";
  */
 export async function GET(req: Request) {
   if (!isAuthorized(req)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    return NextResponse.json(
+      {
+        error: "forbidden",
+        seen: {
+          host: req.headers.get("host"),
+          xForwardedFor: req.headers.get("x-forwarded-for"),
+          xForwardedHost: req.headers.get("x-forwarded-host"),
+          userAgent: req.headers.get("user-agent"),
+        },
+      },
+      { status: 403 },
+    );
   }
 
   // List all organizations with PCO settings on file. (One row per org.)
