@@ -1,5 +1,5 @@
 import "server-only";
-import { encryptJson } from "./encryption";
+import { decryptJson, encryptJson } from "./encryption";
 import { getDb } from "./db";
 import { getDecryptedCreds, getSyncEntities, getSyncSettings } from "./pco";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
@@ -243,6 +243,9 @@ export async function runSync(
 
     // ── Compute last_activity_at for affected people ─────────────────────
     refreshLastActivity(orgId);
+    // Update minors flag from decrypted birthdate; gates the kids-checked-
+    // in-to-shepherded-event rule.
+    refreshIsMinor(orgId);
 
     const changes =
       details.people.upserted +
@@ -667,6 +670,47 @@ function refreshLastActivity(orgId: number) {
        )
      WHERE org_id = ?`,
   ).run(orgId);
+}
+
+/** Refresh the is_minor flag on every person row by decrypting birthdate
+ *  from enc_pii. Anyone under 18 today gets is_minor=1. Used to gate the
+ *  "checked in to a shepherded event → shepherded" rule so adults doing
+ *  the checking-in aren't reclassified as shepherded themselves. */
+function refreshIsMinor(orgId: number) {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT pco_id, enc_pii FROM pco_people WHERE org_id = ?`,
+    )
+    .all(orgId) as Array<{ pco_id: string; enc_pii: string | null }>;
+  const now = Date.now();
+  const update = db.prepare(
+    `UPDATE pco_people SET is_minor = ? WHERE org_id = ? AND pco_id = ?`,
+  );
+  const tx = db.transaction((items: Array<{ pcoId: string; minor: number }>) => {
+    for (const it of items) update.run(it.minor, orgId, it.pcoId);
+  });
+  const batch: Array<{ pcoId: string; minor: number }> = [];
+  for (const r of rows) {
+    const pii = r.enc_pii
+      ? decryptJson<{ birthdate?: string | null }>(r.enc_pii)
+      : null;
+    const b = pii?.birthdate ?? null;
+    const minor = b && isUnder18(b, now) ? 1 : 0;
+    batch.push({ pcoId: r.pco_id, minor });
+  }
+  tx(batch);
+}
+
+function isUnder18(birthdateIso: string, nowMs: number): boolean {
+  const dob = new Date(birthdateIso);
+  if (isNaN(dob.getTime())) return false;
+  const now = new Date(nowMs);
+  let age = now.getUTCFullYear() - dob.getUTCFullYear();
+  const monthDiff = now.getUTCMonth() - dob.getUTCMonth();
+  const dayDiff = now.getUTCDate() - dob.getUTCDate();
+  if (monthDiff < 0 || (monthDiff === 0 && dayDiff < 0)) age--;
+  return age < 18;
 }
 
 // ─── Run-row helpers ───────────────────────────────────────────────────

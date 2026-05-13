@@ -18,7 +18,8 @@ type SortKey =
   | "members"
   | "leaders"
   | "servedRecently"
-  | "lapsed";
+  | "lapsed"
+  | "recentPlans";
 
 type SortDir = "asc" | "desc";
 
@@ -75,15 +76,16 @@ export function TeamsTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm table-fixed min-w-[1000px]">
+      <table className="w-full text-sm table-fixed min-w-[1150px]">
         <colgroup>
-          <col className="w-[26%]" />
-          <col className="w-[16%]" />
-          <col className="w-[10%]" />
-          <col className="w-[10%]" />
-          <col className="w-[10%]" />
+          <col className="w-[22%]" />
           <col className="w-[14%]" />
-          <col className="w-[14%]" />
+          <col className="w-[9%]" />
+          <col className="w-[9%]" />
+          <col className="w-[9%]" />
+          <col className="w-[12%]" />
+          <col className="w-[12%]" />
+          <col className="w-[13%]" />
         </colgroup>
         <thead className="text-xs text-muted">
           <tr className="border-b border-border-soft">
@@ -107,6 +109,9 @@ export function TeamsTable({
             </SortHeader>
             <SortHeader k="lapsed" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right">
               Lapsed ({lapsedMonths}mo)
+            </SortHeader>
+            <SortHeader k="recentPlans" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right">
+              Plans ({activityMonths}mo)
             </SortHeader>
           </tr>
         </thead>
@@ -142,6 +147,9 @@ export function TeamsTable({
               <td className="px-5 py-2.5 text-right tnum text-warn-soft-fg">
                 {t.lapsed > 0 ? t.lapsed : "0"}
               </td>
+              <td className="px-5 py-2.5 text-right tnum text-muted">
+                {t.recentPlans}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -162,6 +170,7 @@ function pickSortVal(t: SyncedTeamRow, key: SortKey): string | number | null {
     case "leaders":
     case "servedRecently":
     case "lapsed":
+    case "recentPlans":
       return t[key];
   }
 }

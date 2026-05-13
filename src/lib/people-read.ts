@@ -176,16 +176,22 @@ function populateShepherdedTempTable(orgId: number) {
 
   // Source 3: kids/student check-ins. The check-in's `person_id` is the
   // kid being checked in → they're being shepherded by whoever checked
-  // them in. Only counts for events the admin has flagged as shepherded.
+  // them in. Only counts for events the admin has flagged as shepherded
+  // AND only for people currently under 18 (an adult checking in to a
+  // kids event is the parent/leader doing the check-in, not the one
+  // being shepherded).
   if (shepherdedCheckinEvents.length > 0) {
     const placeholders = shepherdedCheckinEvents.map(() => "?").join(",");
     db.prepare(
       `INSERT OR IGNORE INTO temp.shep_set (person_id)
-        SELECT DISTINCT person_id
-          FROM pco_check_ins
-         WHERE org_id = ?
-           AND person_id IS NOT NULL
-           AND event_id IN (${placeholders})`,
+        SELECT DISTINCT ci.person_id
+          FROM pco_check_ins ci
+          JOIN pco_people p
+            ON p.org_id = ci.org_id AND p.pco_id = ci.person_id
+         WHERE ci.org_id = ?
+           AND ci.person_id IS NOT NULL
+           AND ci.event_id IN (${placeholders})
+           AND p.is_minor = 1`,
     ).run(orgId, ...shepherdedCheckinEvents);
   }
 }
@@ -199,6 +205,8 @@ export interface ListPeopleOptions {
   offset: number;
   sort: SortColumn;
   dir: SortDir;
+  /** Optional: restrict to a single membership_type value. */
+  membershipType?: string;
 }
 
 export interface ListPeopleResult {
@@ -213,7 +221,13 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
   const cutoff = cutoffIso(opts.activityMonths);
   const excluded = getExcludedMembershipTypes(opts.orgId);
   populateShepherdedTempTable(opts.orgId);
-  const { whereSql, whereArgs } = buildWhere(opts.orgId, opts.tab, cutoff, excluded);
+  const { whereSql, whereArgs } = buildWhere(
+    opts.orgId,
+    opts.tab,
+    cutoff,
+    excluded,
+    opts.membershipType,
+  );
   const orderSql = buildOrderBy(opts.sort, opts.dir, cutoff);
 
   const rows = db
@@ -249,6 +263,7 @@ function buildWhere(
   tab: ListPeopleOptions["tab"],
   cutoff: string,
   excludedTypes: string[],
+  membershipType?: string,
 ): { whereSql: string; whereArgs: (string | number)[] } {
   // Note: this WHERE assumes the caller has already LEFT JOINed
   // shepherded_ids AS s. Use `s.person_id IS NOT NULL` for "shepherded".
@@ -297,6 +312,16 @@ function buildWhere(
     const placeholders = excludedTypes.map(() => "?").join(",");
     parts.push(`(membership_type IS NULL OR membership_type NOT IN (${placeholders}))`);
     args.push(...excludedTypes);
+  }
+
+  // Optional UI filter: pin the list to one membership_type.
+  if (membershipType) {
+    if (membershipType === "__none__") {
+      parts.push("membership_type IS NULL");
+    } else {
+      parts.push("membership_type = ?");
+      args.push(membershipType);
+    }
   }
 
   return { whereSql: `WHERE ${parts.join(" AND ")}`, whereArgs: args };

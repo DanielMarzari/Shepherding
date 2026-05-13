@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { getSyncSettings } from "@/lib/pco";
+import { getMembershipTypeStats, getSyncSettings } from "@/lib/pco";
 import {
   type ActivityClassification,
   getClassificationCounts,
@@ -11,6 +11,8 @@ import {
   type SortDir,
   type SyncedPersonRow,
 } from "@/lib/people-read";
+import { MembershipFilter } from "./membership-filter";
+import { PageJump } from "./page-jump";
 
 const PAGE_SIZE = 100;
 
@@ -31,6 +33,7 @@ interface SearchParams {
   page?: string;
   sort?: string;
   dir?: string;
+  membership?: string;
 }
 
 export default async function PeoplePage({
@@ -48,8 +51,10 @@ export default async function PeoplePage({
     ? (params.sort as SortColumn)
     : "updated";
   const dir: SortDir = params.dir === "asc" ? "asc" : "desc";
+  const membership = (params.membership ?? "").trim() || undefined;
 
   const counts = getClassificationCounts(session.orgId, settings.activityMonths);
+  const memTypeStats = getMembershipTypeStats(session.orgId);
   const result = listPeople({
     orgId: session.orgId,
     activityMonths: settings.activityMonths,
@@ -58,16 +63,25 @@ export default async function PeoplePage({
     offset,
     sort,
     dir,
+    membershipType: membership,
   });
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
 
   function buildLink(overrides: Partial<SearchParams>): string {
-    const merged: SearchParams = { tab, page: String(page), sort, dir, ...overrides };
+    const merged: SearchParams = {
+      tab,
+      page: String(page),
+      sort,
+      dir,
+      membership,
+      ...overrides,
+    };
     const search = new URLSearchParams();
     if (merged.tab && merged.tab !== "all") search.set("tab", merged.tab);
     if (merged.page && merged.page !== "1") search.set("page", merged.page);
     if (merged.sort && merged.sort !== "updated") search.set("sort", merged.sort);
     if (merged.dir && merged.dir !== "desc") search.set("dir", merged.dir);
+    if (merged.membership) search.set("membership", merged.membership);
     const qs = search.toString();
     return qs ? `/people?${qs}` : "/people";
   }
@@ -81,7 +95,7 @@ export default async function PeoplePage({
   return (
     <AppShell active="People" breadcrumb={`People › ${TABS.find((t) => t.key === tab)!.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
-        <div className="flex items-baseline justify-between flex-wrap gap-3">
+        <div className="flex items-end justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">People</h1>
             <p className="text-muted text-sm mt-1">
@@ -90,6 +104,16 @@ export default async function PeoplePage({
                 : `${counts.visibleByDefault.toLocaleString()} visible · ${counts.inactive.toLocaleString()} inactive (hidden) · activity threshold ${settings.activityMonths}mo (set in Metrics)`}
             </p>
           </div>
+          {counts.total > 0 && (
+            <MembershipFilter
+              current={membership ?? ""}
+              options={memTypeStats.map((s) => ({
+                value: s.membershipType ?? "__none__",
+                label: s.membershipType ?? "(no membership)",
+                count: s.count,
+              }))}
+            />
+          )}
         </div>
 
         {/* Stat strip: Shepherded · Active · Present · Inactive */}
@@ -104,7 +128,7 @@ export default async function PeoplePage({
             <div className="tnum text-2xl font-semibold text-good-soft-fg">
               {counts.active.toLocaleString()}
             </div>
-            <div className="text-xs text-muted mt-1">forms · registrations · etc.</div>
+            <div className="text-xs text-muted mt-1">forms · check-ins · etc.</div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Present</div>
@@ -112,7 +136,7 @@ export default async function PeoplePage({
               {counts.present.toLocaleString()}
             </div>
             <div className="text-xs text-muted mt-1">
-              touched in last {settings.activityMonths}mo
+              record edited in {settings.activityMonths}mo
             </div>
           </Card>
           <Card className="p-4">
@@ -173,14 +197,6 @@ export default async function PeoplePage({
               , every person from your PCO database will appear here — encrypted at rest.
             </p>
           </Card>
-        ) : tab === "shepherded" ? (
-          <Card className="p-10 text-center">
-            <h3 className="font-semibold mb-2">Coming with group/team sync</h3>
-            <p className="text-sm text-muted max-w-md mx-auto">
-              Shepherded counts everyone in a group or team. Once group + team membership is
-              synced from PCO, this tab populates.
-            </p>
-          </Card>
         ) : (
           <PeopleTable
             people={result.rows}
@@ -191,7 +207,7 @@ export default async function PeoplePage({
           />
         )}
 
-        {tab !== "shepherded" && counts.total > 0 && (
+        {counts.total > 0 && (
           <Pagination
             page={page}
             totalPages={totalPages}
@@ -386,8 +402,9 @@ function Pagination({
             ← Prev
           </span>
         )}
-        <span className="text-muted text-xs tnum">
-          Page {page} of {totalPages.toLocaleString()}
+        <span className="text-muted text-xs tnum inline-flex items-center gap-1">
+          Page <PageJump currentPage={page} totalPages={totalPages} />
+          <span>of {totalPages.toLocaleString()}</span>
         </span>
         {nextHref ? (
           <Link

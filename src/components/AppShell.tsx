@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { href: "/people", label: "People" },
   { href: "/groups", label: "Groups" },
   { href: "/teams", label: "Teams" },
+  { href: "/checkins", label: "Check-ins" },
   { href: "/movement", label: "Movement" },
 ];
 

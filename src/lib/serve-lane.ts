@@ -16,6 +16,8 @@ export interface SyncedTeamRow {
   /** Roster members whose last_served_at is older than the lapsed-from-team
    *  threshold (or null = never served on a recorded plan). */
   lapsed: number;
+  /** Number of plans this team appears on within the activity window. */
+  recentPlans: number;
   state: "growing" | "steady" | "shrinking" | "paused";
 }
 
@@ -92,7 +94,7 @@ export function listTeams(
            AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')
          GROUP BY pp.team_id
        ),
-       team_plans_in_window AS (
+       team_plans_in_lapsed AS (
          -- "Has this team had any plans scheduled in the lapsed window?"
          -- If not, we can't say anyone has lapsed — no evidence.
          SELECT DISTINCT pp.team_id
@@ -101,6 +103,17 @@ export function listTeams(
            ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
          WHERE pp.org_id = ?
            AND p.sort_date >= ?
+       ),
+       team_plans_in_activity AS (
+         -- Count distinct plans per team within the activity window.
+         -- Surfaced in the table as "Plans (Xmo)".
+         SELECT pp.team_id, COUNT(DISTINCT p.pco_id) AS n
+         FROM pco_plan_people pp
+         JOIN pco_plans p
+           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+         WHERE pp.org_id = ?
+           AND p.sort_date >= ?
+         GROUP BY pp.team_id
        )
        SELECT
          t.pco_id          AS pcoId,
@@ -110,16 +123,18 @@ export function listTeams(
          COALESCE(r.members, 0)  AS members,
          COALESCE(r.leaders, 0)  AS leaders,
          COALESCE(s.n, 0)        AS servedRecently,
-         CASE WHEN tpw.team_id IS NOT NULL
+         CASE WHEN tpl.team_id IS NOT NULL
               THEN COALESCE(r.lapsedCandidates, 0)
               ELSE 0
-         END                     AS lapsed
+         END                     AS lapsed,
+         COALESCE(tpa.n, 0)      AS recentPlans
        FROM pco_teams t
        LEFT JOIN pco_service_types st
          ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
        LEFT JOIN roster r ON r.team_id = t.pco_id
        LEFT JOIN served s ON s.team_id = t.pco_id
-       LEFT JOIN team_plans_in_window tpw ON tpw.team_id = t.pco_id
+       LEFT JOIN team_plans_in_lapsed tpl ON tpl.team_id = t.pco_id
+       LEFT JOIN team_plans_in_activity tpa ON tpa.team_id = t.pco_id
        WHERE t.org_id = ?
          AND t.deleted_at IS NULL
          AND t.archived_at IS NULL
@@ -127,13 +142,15 @@ export function listTeams(
        ORDER BY members DESC, t.name ASC`,
     )
     .all(
-      lapsedCutoff,
-      orgId,
-      orgId,
-      activityCutoff,
-      orgId,
-      lapsedCutoff,
-      orgId,
+      lapsedCutoff,    // roster: lapsedCandidates threshold
+      orgId,           // roster CTE org
+      orgId,           // served CTE org
+      activityCutoff,  // served CTE plan window
+      orgId,           // team_plans_in_lapsed org
+      lapsedCutoff,    // team_plans_in_lapsed cutoff
+      orgId,           // team_plans_in_activity org
+      activityCutoff,  // team_plans_in_activity cutoff
+      orgId,           // outer where
       ...excludedTypes,
     ) as Array<{
     pcoId: string;
@@ -144,6 +161,7 @@ export function listTeams(
     leaders: number;
     servedRecently: number;
     lapsed: number;
+    recentPlans: number;
   }>;
 
   return rows.map((r) => ({
