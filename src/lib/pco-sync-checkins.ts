@@ -137,6 +137,9 @@ export async function syncCheckinsAll(
         });
         result.checkIns.upserted++;
       }
+      // Checkpoint the cursor at every page so a process restart mid-sync
+      // doesn't lose the whole backfill.
+      writeCursor(orgId, "checkins:check_ins", maxCreatedAt);
     }
   } catch (e) {
     // /check-ins/v2/check_ins requires the Check-Ins product to be enabled
@@ -150,24 +153,51 @@ export async function syncCheckinsAll(
 
 /** Set pco_people.last_check_in_at = MAX(pco_created_at) across every
  *  check-in this person touched — being checked in, doing the check-in,
- *  or doing the checkout. Any role counts as activity. */
+ *  or doing the checkout. Any role counts as activity.
+ *
+ *  Earlier version was a correlated subquery (33k people × 3 indexed
+ *  scans of 265k check-ins) and hung on first backfill. New version
+ *  precomputes the per-person max in one UNION-ALL + GROUP BY pass over
+ *  pco_check_ins (3 sequential index scans, ~O(N_check_ins)) and joins
+ *  via UPDATE…FROM. */
 export function refreshLastCheckIn(orgId: number) {
-  getDb()
-    .prepare(
-      `UPDATE pco_people
-         SET last_check_in_at = (
-           SELECT MAX(pco_created_at)
-             FROM pco_check_ins ci
-             WHERE ci.org_id = pco_people.org_id
-               AND (
-                 ci.person_id        = pco_people.pco_id
-                 OR ci.checked_in_by_id  = pco_people.pco_id
-                 OR ci.checked_out_by_id = pco_people.pco_id
-               )
-         )
-       WHERE org_id = ?`,
-    )
-    .run(orgId);
+  const db = getDb();
+  // Step 1: build a temp table indexed on person_id with the latest
+  // check-in timestamp per person across all three roles.
+  db.exec("DROP TABLE IF EXISTS temp.checkin_latest");
+  db.exec(
+    `CREATE TEMP TABLE checkin_latest (
+       person_id TEXT PRIMARY KEY,
+       latest_at TEXT NOT NULL
+     )`,
+  );
+  db.prepare(
+    `INSERT INTO temp.checkin_latest (person_id, latest_at)
+       SELECT pid, MAX(t) AS latest_at FROM (
+         SELECT person_id        AS pid, pco_created_at AS t FROM pco_check_ins
+           WHERE org_id = ? AND person_id        IS NOT NULL AND pco_created_at IS NOT NULL
+         UNION ALL
+         SELECT checked_in_by_id, pco_created_at FROM pco_check_ins
+           WHERE org_id = ? AND checked_in_by_id IS NOT NULL AND pco_created_at IS NOT NULL
+         UNION ALL
+         SELECT checked_out_by_id, pco_created_at FROM pco_check_ins
+           WHERE org_id = ? AND checked_out_by_id IS NOT NULL AND pco_created_at IS NOT NULL
+       )
+       WHERE pid IS NOT NULL
+       GROUP BY pid`,
+  ).run(orgId, orgId, orgId);
+
+  // Step 2: join the temp set against pco_people in one shot.
+  db.prepare(
+    `UPDATE pco_people
+        SET last_check_in_at = (
+          SELECT latest_at FROM temp.checkin_latest cl
+           WHERE cl.person_id = pco_people.pco_id
+        )
+      WHERE org_id = ?`,
+  ).run(orgId);
+
+  db.exec("DROP TABLE IF EXISTS temp.checkin_latest");
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
