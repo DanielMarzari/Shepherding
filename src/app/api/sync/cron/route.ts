@@ -17,18 +17,7 @@ import { runSync } from "@/lib/pco-sync";
  */
 export async function GET(req: Request) {
   if (!isAuthorized(req)) {
-    return NextResponse.json(
-      {
-        error: "forbidden",
-        seen: {
-          host: req.headers.get("host"),
-          xForwardedFor: req.headers.get("x-forwarded-for"),
-          xForwardedHost: req.headers.get("x-forwarded-host"),
-          userAgent: req.headers.get("user-agent"),
-        },
-      },
-      { status: 403 },
-    );
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   // List all organizations with PCO settings on file. (One row per org.)
@@ -85,13 +74,22 @@ export async function GET(req: Request) {
 }
 
 function isAuthorized(req: Request): boolean {
-  // Direct loopback hit: Caddy proxies set x-forwarded-for; a direct curl
-  // from the cron daemon hitting 127.0.0.1:3000 doesn't.
-  const xff = req.headers.get("x-forwarded-for");
+  // Next.js 16 auto-populates X-Forwarded-For even on direct loopback
+  // connections, so we can't rely on its absence. Instead, check that
+  // the LEFTMOST entry (the original client IP per the XFF convention)
+  // is a loopback address. A request coming through Caddy from the open
+  // internet will have a real public IP here.
+  const xff = req.headers.get("x-forwarded-for") ?? "";
+  const firstHop = xff.split(",")[0]?.trim().toLowerCase() ?? "";
   const host = req.headers.get("host") ?? "";
-  const isLoopback =
-    !xff && (host.startsWith("localhost") || host.startsWith("127.0.0.1"));
-  if (isLoopback) return true;
+  const hostIsLoopback =
+    host.startsWith("localhost") || host.startsWith("127.0.0.1");
+  const remoteIsLoopback =
+    firstHop === "" ||
+    firstHop === "127.0.0.1" ||
+    firstHop === "::1" ||
+    firstHop.startsWith("::ffff:127.");
+  if (hostIsLoopback && remoteIsLoopback) return true;
 
   // Off-host hit: only allowed with a shared secret. Lets us trigger the
   // cron from an external scheduler if/when we drop the local crontab.
