@@ -7,9 +7,14 @@ export interface SyncedTeamRow {
   name: string | null;
   serviceTypeName: string | null;
   archivedAt: string | null;
+  /** Distinct people on the active roster (PersonTeamPositionAssignment can
+   *  have one person × many positions; we want the headcount). */
   members: number;
   leaders: number;
+  /** Distinct people who served in any plan during the activity window. */
   servedRecently: number;
+  /** Roster members whose last_served_at is older than the lapsed-from-team
+   *  threshold (or null = never served on a recorded plan). */
   lapsed: number;
   state: "growing" | "steady" | "shrinking" | "paused";
 }
@@ -27,11 +32,13 @@ export interface TeamTotals {
   paused: number;
 }
 
+const MS_PER_MONTH = 30 * 24 * 60 * 60 * 1000;
+
 /** List teams with member/leader counts + recent serving activity. */
 export function listTeams(
   orgId: number,
   activityMonths: number,
-  lapsedWeeks: number,
+  lapsedMonths: number,
 ): SyncedTeamRow[] {
   const db = getDb();
   const excludedTypes = getExcludedTeamTypes(orgId);
@@ -40,51 +47,61 @@ export function listTeams(
     : "";
 
   const activityCutoff = new Date(
-    Date.now() - activityMonths * 30 * 24 * 60 * 60 * 1000,
+    Date.now() - activityMonths * MS_PER_MONTH,
   ).toISOString();
   const lapsedCutoff = new Date(
-    Date.now() - lapsedWeeks * 7 * 24 * 60 * 60 * 1000,
+    Date.now() - lapsedMonths * MS_PER_MONTH,
   ).toISOString();
 
+  // members = COUNT(DISTINCT person_id) on the active roster. PCO models
+  // assignments per (person, position), so a single person can have several
+  // rows on one team. Previously the count was raw rows — Guest Experience -
+  // Special showed 1289 because each person held ~6 positions on average.
+  //
+  // Pre-aggregate per team_id in CTEs instead of correlated subqueries.
+  // For 140 teams that previously meant ~560 subqueries; this is 3 passes
+  // total (memberships once, plan_people once, plans once).
   const rows = db
     .prepare(
-      `SELECT
+      `WITH roster AS (
+         SELECT
+           m.team_id,
+           COUNT(DISTINCT m.person_id) AS members,
+           COUNT(DISTINCT CASE WHEN m.is_team_leader = 1 THEN m.person_id END) AS leaders,
+           COUNT(DISTINCT CASE
+             WHEN m.last_served_at IS NULL OR m.last_served_at < ?
+             THEN m.person_id END) AS lapsed
+         FROM pco_team_memberships m
+         WHERE m.org_id = ?
+           AND m.archived_at IS NULL
+           AND m.person_id != ''
+         GROUP BY m.team_id
+       ),
+       served AS (
+         SELECT pp.team_id, COUNT(DISTINCT pp.person_id) AS n
+         FROM pco_plan_people pp
+         JOIN pco_plans p
+           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+         WHERE pp.org_id = ?
+           AND pp.person_id != ''
+           AND p.sort_date >= ?
+           AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')
+         GROUP BY pp.team_id
+       )
+       SELECT
          t.pco_id          AS pcoId,
          t.name            AS name,
          st.name           AS serviceTypeName,
          t.archived_at     AS archivedAt,
-         (SELECT COUNT(*)
-            FROM pco_team_memberships m
-            WHERE m.org_id = t.org_id
-              AND m.team_id = t.pco_id
-              AND m.archived_at IS NULL
-              AND m.person_id != '') AS members,
-         (SELECT COUNT(*)
-            FROM pco_team_memberships m
-            WHERE m.org_id = t.org_id
-              AND m.team_id = t.pco_id
-              AND m.archived_at IS NULL
-              AND m.is_team_leader = 1
-              AND m.person_id != '') AS leaders,
-         (SELECT COUNT(DISTINCT pp.person_id)
-            FROM pco_plan_people pp
-            JOIN pco_plans p
-              ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-            WHERE pp.org_id = t.org_id
-              AND pp.team_id = t.pco_id
-              AND pp.person_id != ''
-              AND p.sort_date >= ?
-              AND lower(coalesce(pp.status, 'c')) IN ('c','confirmed','u','unconfirmed')) AS servedRecently,
-         (SELECT COUNT(*)
-            FROM pco_team_memberships m
-            WHERE m.org_id = t.org_id
-              AND m.team_id = t.pco_id
-              AND m.archived_at IS NULL
-              AND m.person_id != ''
-              AND (m.last_served_at IS NULL OR m.last_served_at < ?)) AS lapsed
+         COALESCE(r.members, 0)  AS members,
+         COALESCE(r.leaders, 0)  AS leaders,
+         COALESCE(s.n, 0)        AS servedRecently,
+         COALESCE(r.lapsed, 0)   AS lapsed
        FROM pco_teams t
        LEFT JOIN pco_service_types st
          ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
+       LEFT JOIN roster r ON r.team_id = t.pco_id
+       LEFT JOIN served s ON s.team_id = t.pco_id
        WHERE t.org_id = ?
          AND t.deleted_at IS NULL
          ${exclusionPlaceholders}
@@ -93,7 +110,14 @@ export function listTeams(
          members DESC,
          t.name ASC`,
     )
-    .all(activityCutoff, lapsedCutoff, orgId, ...excludedTypes) as Array<{
+    .all(
+      lapsedCutoff,
+      orgId,
+      orgId,
+      activityCutoff,
+      orgId,
+      ...excludedTypes,
+    ) as Array<{
     pcoId: string;
     name: string | null;
     serviceTypeName: string | null;
@@ -125,12 +149,7 @@ function classifyState(
   return "steady";
 }
 
-export function getTeamTotals(
-  orgId: number,
-  activityMonths: number,
-  lapsedWeeks: number,
-): TeamTotals {
-  const rows = listTeams(orgId, activityMonths, lapsedWeeks);
+export function getTeamTotals(rows: SyncedTeamRow[]): TeamTotals {
   const t: TeamTotals = {
     totalTeams: rows.length,
     activeTeams: 0,

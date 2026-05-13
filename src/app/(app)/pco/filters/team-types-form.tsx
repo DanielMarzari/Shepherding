@@ -8,6 +8,7 @@ interface Stat {
   name: string | null;
   teams: number;
   members: number;
+  archivedAt: string | null;
 }
 
 export function TeamTypeFiltersForm({
@@ -41,11 +42,16 @@ export function TeamTypeFiltersForm({
           const id = s.serviceTypeId;
           const label = s.name ?? "(no service type)";
           const isExcluded = !!id && excluded.has(id);
+          const isArchived = !!s.archivedAt;
           return (
             <li
               key={id ?? label}
               className={`px-5 py-3.5 flex items-center justify-between gap-4 transition-colors ${
-                id === null ? "opacity-60" : isExcluded ? "bg-warn-soft-bg/20" : ""
+                id === null || isArchived
+                  ? "opacity-60"
+                  : isExcluded
+                    ? "bg-warn-soft-bg/20"
+                    : ""
               }`}
             >
               <label
@@ -63,7 +69,14 @@ export function TeamTypeFiltersForm({
                   className="accent-[var(--accent)] w-4 h-4"
                 />
                 <div>
-                  <div className="font-medium">{label}</div>
+                  <div className="font-medium">
+                    {label}
+                    {isArchived && (
+                      <span className="ml-2 text-xs text-muted font-normal">
+                        archived
+                      </span>
+                    )}
+                  </div>
                   {id === null && (
                     <div className="text-xs text-muted">
                       Always included (teams without a service type are never excluded).

@@ -186,9 +186,10 @@ export interface SyncSettings {
   /** Weeks of consecutive non-attendance before a group member is treated
    *  as having left the group (default 10). */
   lapsedWeeks: number;
-  /** Same idea for service teams — weeks since last serving before treated
-   *  as having dropped off the team (default 10). */
-  lapsedFromTeamWeeks: number;
+  /** Same idea for service teams — months since last serving before
+   *  treated as having dropped off the team (default 6). Pastors think
+   *  about serving cadence monthly, not weekly. */
+  lapsedFromTeamMonths: number;
 }
 
 export function getSyncSettings(orgId: number): SyncSettings {
@@ -198,7 +199,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
               email_on_failure, auto_resolve_conflicts,
               activity_months, sync_threshold_months,
               activity_tracking_months, weekly_attendance, lapsed_weeks,
-              lapsed_from_team_weeks
+              lapsed_from_team_months
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -215,7 +216,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
         activity_tracking_months: number | null;
         weekly_attendance: number | null;
         lapsed_weeks: number | null;
-        lapsed_from_team_weeks: number | null;
+        lapsed_from_team_months: number | null;
       }
     | undefined;
   if (!row) {
@@ -232,7 +233,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
       activityTrackingMonths: 3,
       weeklyAttendance: null,
       lapsedWeeks: 10,
-      lapsedFromTeamWeeks: 10,
+      lapsedFromTeamMonths: 6,
     };
   }
   const freq: SyncFrequency =
@@ -250,7 +251,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
     activityTrackingMonths: row.activity_tracking_months ?? 3,
     weeklyAttendance: row.weekly_attendance,
     lapsedWeeks: row.lapsed_weeks ?? 10,
-    lapsedFromTeamWeeks: row.lapsed_from_team_weeks ?? 10,
+    lapsedFromTeamMonths: row.lapsed_from_team_months ?? 6,
   };
 }
 
@@ -261,7 +262,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          (org_id, enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
           email_on_failure, auto_resolve_conflicts, activity_months,
           sync_threshold_months, activity_tracking_months, weekly_attendance,
-          lapsed_weeks, lapsed_from_team_weeks, updated_at)
+          lapsed_weeks, lapsed_from_team_months, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id) DO UPDATE SET
          enabled = excluded.enabled,
@@ -276,7 +277,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          activity_tracking_months = excluded.activity_tracking_months,
          weekly_attendance = excluded.weekly_attendance,
          lapsed_weeks = excluded.lapsed_weeks,
-         lapsed_from_team_weeks = excluded.lapsed_from_team_weeks,
+         lapsed_from_team_months = excluded.lapsed_from_team_months,
          updated_at = excluded.updated_at`,
     )
     .run(
@@ -295,7 +296,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
         ? null
         : Math.max(0, Math.min(1_000_000, Math.floor(s.weeklyAttendance))),
       Math.max(1, Math.min(52, Math.floor(s.lapsedWeeks))),
-      Math.max(1, Math.min(52, Math.floor(s.lapsedFromTeamWeeks))),
+      Math.max(1, Math.min(24, Math.floor(s.lapsedFromTeamMonths))),
     );
 }
 
@@ -306,7 +307,7 @@ export function saveMetricsSettings(
   syncThresholdMonths: number,
   activityTrackingMonths: number,
   lapsedWeeks: number,
-  lapsedFromTeamWeeks: number,
+  lapsedFromTeamMonths: number,
 ) {
   const current = getSyncSettings(orgId);
   saveSyncSettings(orgId, {
@@ -315,7 +316,7 @@ export function saveMetricsSettings(
     syncThresholdMonths: Math.max(1, Math.min(60, Math.floor(syncThresholdMonths))),
     activityTrackingMonths: Math.max(1, Math.min(36, Math.floor(activityTrackingMonths))),
     lapsedWeeks: Math.max(1, Math.min(52, Math.floor(lapsedWeeks))),
-    lapsedFromTeamWeeks: Math.max(1, Math.min(52, Math.floor(lapsedFromTeamWeeks))),
+    lapsedFromTeamMonths: Math.max(1, Math.min(24, Math.floor(lapsedFromTeamMonths))),
   });
 }
 
@@ -443,26 +444,41 @@ export function saveExcludedTeamTypes(orgId: number, ids: string[]) {
 
 export function getServiceTypeStats(
   orgId: number,
-): { serviceTypeId: string | null; name: string | null; teams: number; members: number }[] {
+): {
+  serviceTypeId: string | null;
+  name: string | null;
+  teams: number;
+  members: number;
+  archivedAt: string | null;
+}[] {
+  // Include archived service types (so admins can still exclude/include
+  // them in filters); show their archived_at via MAX since the join is
+  // on service_type rather than per-row. We also count active teams in
+  // each type, not just total — archived teams shouldn't inflate it.
   const rows = getDb()
     .prepare(
       `SELECT
          t.service_type_id AS serviceTypeId,
          st.name           AS name,
-         COUNT(DISTINCT t.pco_id) AS teams,
+         st.archived_at    AS archivedAt,
+         COUNT(DISTINCT CASE WHEN t.archived_at IS NULL THEN t.pco_id END) AS teams,
          COUNT(DISTINCT m.person_id) AS members
        FROM pco_teams t
        LEFT JOIN pco_service_types st
          ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
        LEFT JOIN pco_team_memberships m
          ON m.org_id = t.org_id AND m.team_id = t.pco_id AND m.archived_at IS NULL
-       WHERE t.org_id = ? AND t.archived_at IS NULL AND t.deleted_at IS NULL
-       GROUP BY t.service_type_id, st.name
-       ORDER BY COUNT(DISTINCT t.pco_id) DESC, st.name ASC`,
+       WHERE t.org_id = ? AND t.deleted_at IS NULL
+       GROUP BY t.service_type_id, st.name, st.archived_at
+       ORDER BY
+         CASE WHEN st.archived_at IS NULL THEN 0 ELSE 1 END,
+         teams DESC,
+         st.name ASC`,
     )
     .all(orgId) as {
     serviceTypeId: string | null;
     name: string | null;
+    archivedAt: string | null;
     teams: number;
     members: number;
   }[];

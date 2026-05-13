@@ -287,115 +287,123 @@ export function listGroups(
   // "leaders"  = subset of members whose role contains "leader".
   // "leftRecently" UNIONS three paths: archived in window, attended-then-
   //   disappeared (only flag people not currently on the roster), and
-  //   currently-lapsed members whose lapse falls inside the tracking window.
+  //   currently-lapsed members whose lapse falls inside the tracking window
+  //   AND for whom we have evidence-of-absence (attendance was actually
+  //   taken in the lapsed window — no attendance taken means we can't
+  //   confidently say they stopped showing up).
   // "attendancePct" = distinct attendees-still-on-roster / members × 100,
   //   bounded ≤ 100%.
   // "eventsWithAttendance" = events with at LEAST one attended=1 row.
-  //   Events where everyone is marked absent are treated as canceled
-  //   (leaders sometimes mark 0/N to record "we didn't meet"), so they
-  //   don't pollute the attendance-taken percentage.
+  //   Events where everyone is marked absent are treated as canceled.
+  //
+  // Pre-aggregate per group_id in CTEs to avoid 9 correlated subqueries
+  // × N groups (was ~1000 subquery executions for ~110 groups; now 5
+  // sequential scans of indexes).
   const rows = db
     .prepare(
-      `SELECT
+      `WITH attended_roster_lookup AS (
+         -- Per (group_id, person_id), does this person have an active
+         -- membership? Used to scope "attended distinct" to current roster
+         -- and to detect "attended-then-disappeared".
+         SELECT group_id, person_id, 1 AS active
+           FROM pco_group_memberships
+          WHERE org_id = ?
+            AND archived_at IS NULL
+       ),
+       members_per_group AS (
+         SELECT m.group_id,
+                SUM(CASE WHEN m.archived_at IS NULL THEN 1 ELSE 0 END) AS members,
+                SUM(CASE WHEN m.archived_at IS NULL
+                          AND lower(coalesce(m.role, '')) LIKE '%leader%'
+                         THEN 1 ELSE 0 END) AS leaders,
+                SUM(CASE WHEN m.archived_at IS NULL
+                          AND m.joined_at IS NOT NULL
+                          AND m.joined_at >= ?
+                         THEN 1 ELSE 0 END) AS joinedRecently,
+                SUM(CASE WHEN m.archived_at IS NOT NULL
+                          AND m.archived_at >= ?
+                         THEN 1 ELSE 0 END) AS archivedInWindow,
+                COUNT(DISTINCT CASE
+                  WHEN m.archived_at IS NULL
+                    AND m.last_attended_at IS NOT NULL
+                    AND m.last_attended_at >= ?
+                    AND m.last_attended_at < ?
+                  THEN m.person_id END) AS lapsedCandidates
+           FROM pco_group_memberships m
+          WHERE m.org_id = ?
+          GROUP BY m.group_id
+       ),
+       events_per_group AS (
+         SELECT e.group_id,
+                COUNT(*) AS recentEvents
+           FROM pco_group_events e
+          WHERE e.org_id = ?
+            AND e.starts_at IS NOT NULL
+            AND e.starts_at >= ?
+          GROUP BY e.group_id
+       ),
+       attendance_per_group AS (
+         SELECT a.group_id,
+                COUNT(DISTINCT CASE
+                  WHEN arl.active = 1
+                  THEN a.person_id END) AS attendedDistinctRecently,
+                COUNT(DISTINCT a.event_id) AS eventsWithAttendance,
+                COUNT(DISTINCT CASE
+                  WHEN arl.active IS NULL
+                  THEN a.person_id END) AS attendedThenDisappeared,
+                -- Was attendance taken in the LAPSED window? (used to gate
+                -- the "lapsed" left-path: no taken-attendance → no evidence)
+                MAX(CASE WHEN a.event_starts_at >= ? THEN 1 ELSE 0 END)
+                  AS attendanceTakenInLapsedWindow
+           FROM pco_event_attendances a
+           LEFT JOIN attended_roster_lookup arl
+             ON arl.group_id = a.group_id AND arl.person_id = a.person_id
+          WHERE a.org_id = ?
+            AND a.attended = 1
+            AND a.event_starts_at IS NOT NULL
+            AND a.event_starts_at >= ?
+          GROUP BY a.group_id
+       )
+       SELECT
          g.pco_id            AS pcoId,
          g.name              AS name,
          g.schedule          AS schedule,
-         t.name              AS groupTypeName,
+         gt.name             AS groupTypeName,
          g.pco_created_at    AS pcoCreatedAt,
          g.archived_at       AS archivedAt,
-         (SELECT COUNT(*)
-            FROM pco_group_memberships m
-            WHERE m.org_id = g.org_id
-              AND m.group_id = g.pco_id
-              AND m.archived_at IS NULL) AS members,
-         (SELECT COUNT(*)
-            FROM pco_group_memberships m
-            WHERE m.org_id = g.org_id
-              AND m.group_id = g.pco_id
-              AND m.archived_at IS NULL
-              AND lower(coalesce(m.role, '')) LIKE '%leader%') AS leaders,
-         (SELECT COUNT(*)
-            FROM pco_group_memberships m
-            WHERE m.org_id = g.org_id
-              AND m.group_id = g.pco_id
-              AND m.archived_at IS NULL
-              AND m.joined_at IS NOT NULL
-              AND m.joined_at >= ?) AS joinedRecently,
-         (SELECT COUNT(DISTINCT person_id) FROM (
-            SELECT m.person_id
-              FROM pco_group_memberships m
-              WHERE m.org_id = g.org_id
-                AND m.group_id = g.pco_id
-                AND m.archived_at IS NOT NULL
-                AND m.archived_at >= ?
-            UNION
-            SELECT a.person_id
-              FROM pco_event_attendances a
-              WHERE a.org_id = g.org_id
-                AND a.group_id = g.pco_id
-                AND a.attended = 1
-                AND a.event_starts_at IS NOT NULL
-                AND a.event_starts_at >= ?
-                AND NOT EXISTS (
-                  SELECT 1 FROM pco_group_memberships m2
-                    WHERE m2.org_id = a.org_id
-                      AND m2.group_id = a.group_id
-                      AND m2.person_id = a.person_id
-                      AND m2.archived_at IS NULL
-                )
-            UNION
-            SELECT m.person_id
-              FROM pco_group_memberships m
-              WHERE m.org_id = g.org_id
-                AND m.group_id = g.pco_id
-                AND m.archived_at IS NULL
-                AND m.last_attended_at IS NOT NULL
-                AND m.last_attended_at >= ?
-                AND m.last_attended_at < ?
-         )) AS leftRecently,
-         (SELECT COUNT(*)
-            FROM pco_group_events e
-            WHERE e.org_id = g.org_id
-              AND e.group_id = g.pco_id
-              AND e.starts_at IS NOT NULL
-              AND e.starts_at >= ?) AS recentEvents,
-         (SELECT COUNT(DISTINCT a.person_id)
-            FROM pco_event_attendances a
-            WHERE a.org_id = g.org_id
-              AND a.group_id = g.pco_id
-              AND a.attended = 1
-              AND a.event_starts_at IS NOT NULL
-              AND a.event_starts_at >= ?
-              AND EXISTS (
-                SELECT 1 FROM pco_group_memberships m2
-                  WHERE m2.org_id = a.org_id
-                    AND m2.group_id = a.group_id
-                    AND m2.person_id = a.person_id
-                    AND m2.archived_at IS NULL
-              )) AS attendedDistinctRecently,
-         (SELECT COUNT(DISTINCT a.event_id)
-            FROM pco_event_attendances a
-            WHERE a.org_id = g.org_id
-              AND a.group_id = g.pco_id
-              AND a.attended = 1
-              AND a.event_starts_at IS NOT NULL
-              AND a.event_starts_at >= ?) AS eventsWithAttendance
+         COALESCE(mpg.members, 0)        AS members,
+         COALESCE(mpg.leaders, 0)        AS leaders,
+         COALESCE(mpg.joinedRecently, 0) AS joinedRecently,
+         COALESCE(mpg.archivedInWindow, 0)
+           + COALESCE(apg.attendedThenDisappeared, 0)
+           + CASE WHEN COALESCE(apg.attendanceTakenInLapsedWindow, 0) = 1
+                  THEN COALESCE(mpg.lapsedCandidates, 0)
+                  ELSE 0 END AS leftRecently,
+         COALESCE(epg.recentEvents, 0)              AS recentEvents,
+         COALESCE(apg.attendedDistinctRecently, 0)  AS attendedDistinctRecently,
+         COALESCE(apg.eventsWithAttendance, 0)      AS eventsWithAttendance
        FROM pco_groups g
-       LEFT JOIN pco_group_types t
-         ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
+       LEFT JOIN pco_group_types gt
+         ON gt.org_id = g.org_id AND gt.pco_id = g.group_type_id
+       LEFT JOIN members_per_group   mpg ON mpg.group_id = g.pco_id
+       LEFT JOIN events_per_group    epg ON epg.group_id = g.pco_id
+       LEFT JOIN attendance_per_group apg ON apg.group_id = g.pco_id
        WHERE g.org_id = ?${excludeFilter}
        ORDER BY g.archived_at IS NULL DESC, members DESC, g.name ASC`,
     )
     .all(
-      trackingCutoff,  // joined recently
-      trackingCutoff,  // left: archived in window
-      trackingCutoff,  // left: attended-then-disappeared, within window
-      trackingCutoff,  // left: lapsed, last attended within window
-      lapsedCutoff,    //         …but before the lapsed threshold
-      trackingCutoff,  // recent events
-      trackingCutoff,  // attended distinct in window (restricted to roster)
-      trackingCutoff,  // events with ≥1 attended=1 row (treat 0-attended events as canceled)
-      orgId,
+      orgId,           // attended_roster_lookup org filter
+      trackingCutoff,  // members CTE: joinedRecently
+      trackingCutoff,  // members CTE: archivedInWindow
+      trackingCutoff,  // members CTE: lapsed last_attended_at >=
+      lapsedCutoff,    // members CTE: lapsed last_attended_at <
+      orgId,           // members CTE org filter
+      orgId,           // events CTE org
+      trackingCutoff,  // events CTE: recent events
+      lapsedCutoff,    // attendance CTE: attendance-taken-in-lapsed-window flag
+      orgId,           // attendance CTE org
+      trackingCutoff,  // attendance CTE: in window
+      orgId,           // outer where
       ...excludedGroupTypes,
     ) as Array<{
     pcoId: string;

@@ -151,22 +151,22 @@ export function ThresholdForm({
 
       <div>
         <div className="flex items-baseline justify-between mb-1.5">
-          <label className="text-sm font-medium" htmlFor="lapsedFromTeamWeeks">
+          <label className="text-sm font-medium" htmlFor="lapsedFromTeamMonths">
             Lapsed-from-team threshold
           </label>
-          <span className="tnum text-sm text-muted">{lapsedTeam} weeks</span>
+          <span className="tnum text-sm text-muted">{lapsedTeam} months</span>
         </div>
         <p className="text-xs text-muted mb-2.5">
-          A team member who hasn&apos;t served on a plan in this many weeks counts as
+          A team member who hasn&apos;t served on a plan in this many months counts as
           having dropped off the team. Drives the &ldquo;left&rdquo; numbers on /teams
-          and feeds the Serve lane.
+          and feeds the Serve lane. (Pastors think about serving cadence monthly.)
         </p>
         <input
-          id="lapsedFromTeamWeeks"
-          name="lapsedFromTeamWeeks"
+          id="lapsedFromTeamMonths"
+          name="lapsedFromTeamMonths"
           type="range"
-          min="2"
-          max="26"
+          min="1"
+          max="24"
           step="1"
           value={lapsedTeam}
           onChange={(e) => setLapsedTeam(Number(e.target.value))}
@@ -174,8 +174,8 @@ export function ThresholdForm({
           className="w-full accent-[var(--accent)] disabled:opacity-50"
         />
         <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
-          <span>2 weeks</span>
-          <span>26 weeks</span>
+          <span>1 month</span>
+          <span>24 months</span>
         </div>
       </div>
 
