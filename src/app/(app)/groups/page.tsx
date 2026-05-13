@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/AppShell";
+import { DemographicCharts } from "@/components/DemographicCharts";
 import { requireOrg } from "@/lib/auth";
 import { listGroups } from "@/lib/community-lane";
 import { getSyncSettings } from "@/lib/pco";
@@ -29,6 +30,13 @@ export default async function GroupsPage() {
           <GroupsExplorer
             groups={groups}
             activityMonths={settings.activityTrackingMonths}
+          />
+        )}
+        {groups.length > 0 && (
+          <DemographicCharts
+            orgId={session.orgId}
+            scope="groups"
+            title="Demographics — people currently in groups"
           />
         )}
       </div>

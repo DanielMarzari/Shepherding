@@ -48,7 +48,9 @@ export default async function MetricsPage() {
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Shepherded</div>
             <div className="tnum text-2xl font-semibold">{counts.shepherded}</div>
-            <div className="text-xs text-muted mt-1">in a group or team</div>
+            <div className="text-xs text-muted mt-1">
+              group, team, or Sunday program
+            </div>
           </Card>
         </div>
 
@@ -107,7 +109,8 @@ export default async function MetricsPage() {
                   <span>●</span> Shepherded
                 </dt>
                 <dd className="text-muted text-xs mt-0.5">
-                  Currently in at least one group or team. Independent of active/present/
+                  Currently in at least one group, team, or Sunday program (kids /
+                  student check-in). Independent of active/present/
                   inactive — someone can be Active but not Shepherded (just attending Sundays).
                 </dd>
               </div>

@@ -452,6 +452,7 @@ export function getCheckinEventStats(orgId: number): {
   archivedAt: string | null;
   totalCheckins: number;
   distinctPeople: number;
+  lastEventAt: string | null;
 }[] {
   return getDb()
     .prepare(
@@ -461,7 +462,8 @@ export function getCheckinEventStats(orgId: number): {
          e.frequency     AS frequency,
          e.archived_at   AS archivedAt,
          COUNT(ci.pco_id)               AS totalCheckins,
-         COUNT(DISTINCT ci.person_id)   AS distinctPeople
+         COUNT(DISTINCT ci.person_id)   AS distinctPeople,
+         MAX(ci.pco_created_at)         AS lastEventAt
        FROM pco_checkin_events e
        LEFT JOIN pco_check_ins ci
          ON ci.org_id = e.org_id AND ci.event_id = e.pco_id
@@ -479,6 +481,7 @@ export function getCheckinEventStats(orgId: number): {
     archivedAt: string | null;
     totalCheckins: number;
     distinctPeople: number;
+    lastEventAt: string | null;
   }[];
 }
 
@@ -521,11 +524,12 @@ export function getServiceTypeStats(
   teams: number;
   members: number;
   archivedAt: string | null;
+  lastEventAt: string | null;
 }[] {
-  // Include archived service types (so admins can still exclude/include
-  // them in filters); show their archived_at via MAX since the join is
-  // on service_type rather than per-row. We also count active teams in
-  // each type, not just total — archived teams shouldn't inflate it.
+  // Include archived service types; show active-team count + members.
+  // "lastEventAt" is the most recent plan.sort_date for any plan of this
+  // service type — surfaces in /pco/filters so admins can see whether a
+  // service type has been used recently.
   const rows = getDb()
     .prepare(
       `SELECT
@@ -533,7 +537,11 @@ export function getServiceTypeStats(
          st.name           AS name,
          st.archived_at    AS archivedAt,
          COUNT(DISTINCT CASE WHEN t.archived_at IS NULL THEN t.pco_id END) AS teams,
-         COUNT(DISTINCT m.person_id) AS members
+         COUNT(DISTINCT m.person_id) AS members,
+         (SELECT MAX(p.sort_date)
+            FROM pco_plans p
+            WHERE p.org_id = t.org_id
+              AND p.service_type_id = t.service_type_id) AS lastEventAt
        FROM pco_teams t
        LEFT JOIN pco_service_types st
          ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
@@ -552,38 +560,64 @@ export function getServiceTypeStats(
     archivedAt: string | null;
     teams: number;
     members: number;
+    lastEventAt: string | null;
   }[];
   return rows;
 }
 
 /** Distinct group types in the synced groups, with member counts.
  *  Excluded types are still listed (so admins can re-include them). */
-export function getGroupTypeStats(
-  orgId: number,
-): { groupTypeId: string | null; name: string | null; groups: number; members: number }[] {
+export function getGroupTypeStats(orgId: number): {
+  groupTypeId: string | null;
+  name: string | null;
+  groups: number;
+  members: number;
+  lastEventAt: string | null;
+  /** True when every group in this type is archived (PCO doesn't archive
+   *  the type itself, but we can infer it). */
+  allArchived: boolean;
+}[] {
   const rows = getDb()
     .prepare(
       `SELECT
          g.group_type_id AS groupTypeId,
          t.name AS name,
-         COUNT(DISTINCT g.pco_id) AS groups,
-         COUNT(DISTINCT m.person_id) AS members
+         COUNT(DISTINCT g.pco_id) AS totalGroups,
+         COUNT(DISTINCT CASE WHEN g.archived_at IS NULL THEN g.pco_id END) AS activeGroups,
+         COUNT(DISTINCT CASE WHEN g.archived_at IS NULL THEN m.person_id END) AS members,
+         (SELECT MAX(e.starts_at)
+            FROM pco_group_events e
+            JOIN pco_groups g2 ON g2.org_id = e.org_id AND g2.pco_id = e.group_id
+            WHERE e.org_id = g.org_id
+              AND coalesce(g2.group_type_id, '') = coalesce(g.group_type_id, '')) AS lastEventAt
        FROM pco_groups g
        LEFT JOIN pco_group_types t
          ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
        LEFT JOIN pco_group_memberships m
          ON m.org_id = g.org_id AND m.group_id = g.pco_id AND m.archived_at IS NULL
-       WHERE g.org_id = ? AND g.archived_at IS NULL
+       WHERE g.org_id = ?
        GROUP BY g.group_type_id, t.name
-       ORDER BY COUNT(DISTINCT g.pco_id) DESC, t.name ASC`,
+       ORDER BY
+         CASE WHEN COUNT(DISTINCT CASE WHEN g.archived_at IS NULL THEN g.pco_id END) > 0 THEN 0 ELSE 1 END,
+         activeGroups DESC,
+         t.name ASC`,
     )
     .all(orgId) as {
     groupTypeId: string | null;
     name: string | null;
-    groups: number;
+    totalGroups: number;
+    activeGroups: number;
     members: number;
+    lastEventAt: string | null;
   }[];
-  return rows;
+  return rows.map((r) => ({
+    groupTypeId: r.groupTypeId,
+    name: r.name,
+    groups: r.activeGroups,
+    members: r.members,
+    lastEventAt: r.lastEventAt,
+    allArchived: r.totalGroups > 0 && r.activeGroups === 0,
+  }));
 }
 
 // ─── What to sync (per-entity toggles) ────────────────────────────────────

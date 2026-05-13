@@ -125,6 +125,11 @@ export default async function PCOSettingsPage() {
               detail={`${counts.teamMemberships.toLocaleString()} roster · ${counts.plans.toLocaleString()} plans`}
             />
             <MiniStat
+              label="Check-ins"
+              value={counts.checkIns}
+              detail={`${counts.checkinEvents.toLocaleString()} events · ${counts.checkinLocations.toLocaleString()} locations`}
+            />
+            <MiniStat
               label="Forms"
               value={counts.forms}
               detail={`${counts.formSubmissions.toLocaleString()} submissions · ${counts.formFields.toLocaleString()} fields`}

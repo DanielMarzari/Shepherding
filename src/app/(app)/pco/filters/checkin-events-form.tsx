@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { saveCheckinEventsAction, type FilterSaveState } from "./actions";
+import { formatLastEvent } from "./filter-helpers";
 
 interface Stat {
   eventId: string;
@@ -10,6 +11,7 @@ interface Stat {
   archivedAt: string | null;
   totalCheckins: number;
   distinctPeople: number;
+  lastEventAt: string | null;
 }
 
 export function CheckinEventsForm({
@@ -24,9 +26,19 @@ export function CheckinEventsForm({
   const [flagged, setFlagged] = useState<Set<string>>(
     new Set(initialShepherded),
   );
+  const [showArchived, setShowArchived] = useState(false);
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
     saveCheckinEventsAction,
     null,
+  );
+
+  const archivedCount = useMemo(
+    () => stats.filter((s) => s.archivedAt).length,
+    [stats],
+  );
+  const visible = useMemo(
+    () => (showArchived ? stats : stats.filter((s) => !s.archivedAt)),
+    [stats, showArchived],
   );
 
   function toggle(id: string) {
@@ -40,13 +52,26 @@ export function CheckinEventsForm({
 
   return (
     <form action={action}>
-      <p className="px-5 py-3 text-xs text-muted border-b border-border-soft">
-        Flag the kids / student / discipleship events where being checked-in means
-        the person is being shepherded by name. Whoever does the check-in or
-        check-out also bumps to Active automatically.
-      </p>
+      <div className="px-5 py-3 border-b border-border-soft flex items-center justify-between gap-4 flex-wrap">
+        <p className="text-xs text-muted max-w-2xl">
+          Flag the kids / student / discipleship events where being checked-in means
+          the person is being shepherded by name. Whoever does the check-in or
+          check-out also bumps to Active automatically.
+        </p>
+        {archivedCount > 0 && (
+          <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              className="accent-[var(--accent)] w-3.5 h-3.5"
+            />
+            Show {archivedCount} archived
+          </label>
+        )}
+      </div>
       <ul className="divide-y divide-border-softer">
-        {stats.map((s) => {
+        {visible.map((s) => {
           const label = s.name ?? `(unnamed #${s.eventId})`;
           const isFlagged = flagged.has(s.eventId);
           const isArchived = !!s.archivedAt;
@@ -62,7 +87,7 @@ export function CheckinEventsForm({
               }`}
             >
               <label
-                className={`flex items-center gap-3 flex-1 ${
+                className={`flex items-center gap-3 flex-1 min-w-0 ${
                   isAdmin ? "cursor-pointer" : ""
                 }`}
               >
@@ -73,10 +98,10 @@ export function CheckinEventsForm({
                   checked={isFlagged}
                   onChange={() => toggle(s.eventId)}
                   disabled={!isAdmin}
-                  className="accent-[var(--accent)] w-4 h-4"
+                  className="accent-[var(--accent)] w-4 h-4 shrink-0"
                 />
-                <div>
-                  <div className="font-medium">
+                <div className="min-w-0">
+                  <div className="font-medium truncate">
                     {label}
                     {isArchived && (
                       <span className="ml-2 text-xs text-muted font-normal">
@@ -91,13 +116,12 @@ export function CheckinEventsForm({
                   </div>
                 </div>
               </label>
-              <div className="flex items-center gap-3 text-xs text-muted shrink-0">
-                <span className="tnum">
-                  {s.totalCheckins.toLocaleString()} check-ins
+              <div className="flex items-center gap-3 text-xs text-muted shrink-0 tnum">
+                <span title="Last check-in">
+                  {formatLastEvent(s.lastEventAt)}
                 </span>
-                <span className="tnum">
-                  {s.distinctPeople.toLocaleString()} people
-                </span>
+                <span>{s.totalCheckins.toLocaleString()} check-ins</span>
+                <span>{s.distinctPeople.toLocaleString()} people</span>
                 {isFlagged && (
                   <span className="text-good-soft-fg font-medium">shepherded</span>
                 )}

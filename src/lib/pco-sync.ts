@@ -672,10 +672,11 @@ function refreshLastActivity(orgId: number) {
   ).run(orgId);
 }
 
-/** Refresh the is_minor flag on every person row by decrypting birthdate
- *  from enc_pii. Anyone under 18 today gets is_minor=1. Used to gate the
- *  "checked in to a shepherded event → shepherded" rule so adults doing
- *  the checking-in aren't reclassified as shepherded themselves. */
+/** Refresh the is_minor + birth_year denormalized columns by decrypting
+ *  each person's birthdate from enc_pii. is_minor gates the kids-checked-
+ *  in-to-shepherded-event rule; birth_year drives the demographic charts
+ *  on /people, /groups, and /teams (so age buckets can be computed in
+ *  SQL without a per-page decrypt pass). */
 function refreshIsMinor(orgId: number) {
   const db = getDb();
   const rows = db
@@ -685,19 +686,30 @@ function refreshIsMinor(orgId: number) {
     .all(orgId) as Array<{ pco_id: string; enc_pii: string | null }>;
   const now = Date.now();
   const update = db.prepare(
-    `UPDATE pco_people SET is_minor = ? WHERE org_id = ? AND pco_id = ?`,
+    `UPDATE pco_people SET is_minor = ?, birth_year = ? WHERE org_id = ? AND pco_id = ?`,
   );
-  const tx = db.transaction((items: Array<{ pcoId: string; minor: number }>) => {
-    for (const it of items) update.run(it.minor, orgId, it.pcoId);
-  });
-  const batch: Array<{ pcoId: string; minor: number }> = [];
+  const tx = db.transaction(
+    (items: Array<{ pcoId: string; minor: number; birthYear: number | null }>) => {
+      for (const it of items) update.run(it.minor, it.birthYear, orgId, it.pcoId);
+    },
+  );
+  const batch: Array<{
+    pcoId: string;
+    minor: number;
+    birthYear: number | null;
+  }> = [];
   for (const r of rows) {
     const pii = r.enc_pii
       ? decryptJson<{ birthdate?: string | null }>(r.enc_pii)
       : null;
     const b = pii?.birthdate ?? null;
+    let birthYear: number | null = null;
+    if (b) {
+      const d = new Date(b);
+      if (!isNaN(d.getTime())) birthYear = d.getUTCFullYear();
+    }
     const minor = b && isUnder18(b, now) ? 1 : 0;
-    batch.push({ pcoId: r.pco_id, minor });
+    batch.push({ pcoId: r.pco_id, minor, birthYear });
   }
   tx(batch);
 }

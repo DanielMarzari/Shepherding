@@ -29,6 +29,9 @@ export function MembershipFilter({
     sp.delete("page"); // reset paging when filter changes
     const qs = sp.toString();
     router.push(qs ? `${pathname}?${qs}` : pathname);
+    // Force RSC re-fetch — push alone sometimes returns the cached payload
+    // when only searchParams differ on the same route segment.
+    router.refresh();
   }
 
   return (

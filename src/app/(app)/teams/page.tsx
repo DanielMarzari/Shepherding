@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
+import { DemographicCharts } from "@/components/DemographicCharts";
 import { requireOrg } from "@/lib/auth";
 import { getSyncSettings } from "@/lib/pco";
 import { getTeamTotals, listTeams } from "@/lib/serve-lane";
@@ -113,6 +114,14 @@ export default async function TeamsPage() {
             />
           )}
         </div>
+
+        {teams.length > 0 && (
+          <DemographicCharts
+            orgId={session.orgId}
+            scope="teams"
+            title="Demographics — people currently on teams"
+          />
+        )}
       </div>
     </AppShell>
   );

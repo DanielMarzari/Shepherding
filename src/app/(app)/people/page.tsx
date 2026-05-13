@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, CardHeader, Pill } from "@/components/ui";
+import { DemographicCharts } from "@/components/DemographicCharts";
 import { requireOrg } from "@/lib/auth";
 import { getMembershipTypeStats, getSyncSettings } from "@/lib/pco";
 import {
@@ -121,7 +122,9 @@ export default async function PeoplePage({
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Shepherded</div>
             <div className="tnum text-2xl font-semibold">{counts.shepherded}</div>
-            <div className="text-xs text-muted mt-1">in a group or team</div>
+            <div className="text-xs text-muted mt-1">
+              group, team, or Sunday program
+            </div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Active</div>
@@ -213,6 +216,14 @@ export default async function PeoplePage({
             totalPages={totalPages}
             total={result.total}
             buildLink={buildLink}
+          />
+        )}
+
+        {counts.total > 0 && (
+          <DemographicCharts
+            orgId={session.orgId}
+            scope="all"
+            title="Demographics — all people"
           />
         )}
       </div>

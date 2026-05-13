@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { saveTeamTypeFiltersAction, type FilterSaveState } from "./actions";
+import { formatLastEvent } from "./filter-helpers";
 
 interface Stat {
   serviceTypeId: string | null;
@@ -9,6 +10,7 @@ interface Stat {
   teams: number;
   members: number;
   archivedAt: string | null;
+  lastEventAt: string | null;
 }
 
 export function TeamTypeFiltersForm({
@@ -21,9 +23,19 @@ export function TeamTypeFiltersForm({
   isAdmin: boolean;
 }) {
   const [excluded, setExcluded] = useState<Set<string>>(new Set(initialExcluded));
+  const [showArchived, setShowArchived] = useState(false);
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
     saveTeamTypeFiltersAction,
     null,
+  );
+
+  const archivedCount = useMemo(
+    () => stats.filter((s) => s.archivedAt).length,
+    [stats],
+  );
+  const visible = useMemo(
+    () => (showArchived ? stats : stats.filter((s) => !s.archivedAt)),
+    [stats, showArchived],
   );
 
   function toggle(id: string) {
@@ -37,8 +49,21 @@ export function TeamTypeFiltersForm({
 
   return (
     <form action={action}>
+      {archivedCount > 0 && (
+        <div className="px-5 py-2 border-b border-border-soft flex items-center justify-end">
+          <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              className="accent-[var(--accent)] w-3.5 h-3.5"
+            />
+            Show {archivedCount} archived
+          </label>
+        </div>
+      )}
       <ul className="divide-y divide-border-softer">
-        {stats.map((s) => {
+        {visible.map((s) => {
           const id = s.serviceTypeId;
           const label = s.name ?? "(no service type)";
           const isExcluded = !!id && excluded.has(id);
@@ -55,7 +80,7 @@ export function TeamTypeFiltersForm({
               }`}
             >
               <label
-                className={`flex items-center gap-3 flex-1 ${
+                className={`flex items-center gap-3 flex-1 min-w-0 ${
                   isAdmin && id !== null ? "cursor-pointer" : ""
                 }`}
               >
@@ -66,10 +91,10 @@ export function TeamTypeFiltersForm({
                   checked={isExcluded}
                   onChange={() => id && toggle(id)}
                   disabled={!isAdmin || id === null}
-                  className="accent-[var(--accent)] w-4 h-4"
+                  className="accent-[var(--accent)] w-4 h-4 shrink-0"
                 />
-                <div>
-                  <div className="font-medium">
+                <div className="min-w-0">
+                  <div className="font-medium truncate">
                     {label}
                     {isArchived && (
                       <span className="ml-2 text-xs text-muted font-normal">
@@ -84,9 +109,12 @@ export function TeamTypeFiltersForm({
                   )}
                 </div>
               </label>
-              <div className="flex items-center gap-3 text-xs text-muted shrink-0">
-                <span className="tnum">{s.teams.toLocaleString()} teams</span>
-                <span className="tnum">{s.members.toLocaleString()} members</span>
+              <div className="flex items-center gap-3 text-xs text-muted shrink-0 tnum">
+                <span title="Last plan in this service type">
+                  {formatLastEvent(s.lastEventAt)}
+                </span>
+                <span>{s.teams.toLocaleString()} teams</span>
+                <span>{s.members.toLocaleString()} members</span>
                 {isExcluded && (
                   <span className="text-warn-soft-fg font-medium">excluded</span>
                 )}

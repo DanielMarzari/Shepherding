@@ -1,13 +1,16 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { saveGroupTypeFiltersAction, type FilterSaveState } from "./actions";
+import { formatLastEvent } from "./filter-helpers";
 
 interface Stat {
   groupTypeId: string | null;
   name: string | null;
   groups: number;
   members: number;
+  lastEventAt: string | null;
+  allArchived: boolean;
 }
 
 export function GroupTypeFiltersForm({
@@ -20,9 +23,19 @@ export function GroupTypeFiltersForm({
   isAdmin: boolean;
 }) {
   const [excluded, setExcluded] = useState<Set<string>>(new Set(initialExcluded));
+  const [showArchived, setShowArchived] = useState(false);
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
     saveGroupTypeFiltersAction,
     null,
+  );
+
+  const archivedCount = useMemo(
+    () => stats.filter((s) => s.allArchived).length,
+    [stats],
+  );
+  const visible = useMemo(
+    () => (showArchived ? stats : stats.filter((s) => !s.allArchived)),
+    [stats, showArchived],
   );
 
   function toggle(id: string) {
@@ -36,20 +49,38 @@ export function GroupTypeFiltersForm({
 
   return (
     <form action={action}>
+      {archivedCount > 0 && (
+        <div className="px-5 py-2 border-b border-border-soft flex items-center justify-end">
+          <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              className="accent-[var(--accent)] w-3.5 h-3.5"
+            />
+            Show {archivedCount} archived
+          </label>
+        </div>
+      )}
       <ul className="divide-y divide-border-softer">
-        {stats.map((s) => {
+        {visible.map((s) => {
           const id = s.groupTypeId;
           const label = s.name ?? "(no type)";
           const isExcluded = !!id && excluded.has(id);
+          const isArchived = s.allArchived;
           return (
             <li
               key={id ?? label}
               className={`px-5 py-3.5 flex items-center justify-between gap-4 transition-colors ${
-                id === null ? "opacity-60" : isExcluded ? "bg-warn-soft-bg/20" : ""
+                id === null || isArchived
+                  ? "opacity-60"
+                  : isExcluded
+                    ? "bg-warn-soft-bg/20"
+                    : ""
               }`}
             >
               <label
-                className={`flex items-center gap-3 flex-1 ${
+                className={`flex items-center gap-3 flex-1 min-w-0 ${
                   isAdmin && id !== null ? "cursor-pointer" : ""
                 }`}
               >
@@ -60,10 +91,17 @@ export function GroupTypeFiltersForm({
                   checked={isExcluded}
                   onChange={() => id && toggle(id)}
                   disabled={!isAdmin || id === null}
-                  className="accent-[var(--accent)] w-4 h-4"
+                  className="accent-[var(--accent)] w-4 h-4 shrink-0"
                 />
-                <div>
-                  <div className="font-medium">{label}</div>
+                <div className="min-w-0">
+                  <div className="font-medium truncate">
+                    {label}
+                    {isArchived && (
+                      <span className="ml-2 text-xs text-muted font-normal">
+                        archived
+                      </span>
+                    )}
+                  </div>
                   {id === null && (
                     <div className="text-xs text-muted">
                       Always included (groups without a type are never excluded).
@@ -71,9 +109,12 @@ export function GroupTypeFiltersForm({
                   )}
                 </div>
               </label>
-              <div className="flex items-center gap-3 text-xs text-muted shrink-0">
-                <span className="tnum">{s.groups.toLocaleString()} groups</span>
-                <span className="tnum">{s.members.toLocaleString()} members</span>
+              <div className="flex items-center gap-3 text-xs text-muted shrink-0 tnum">
+                <span title="Last meeting in this type">
+                  {formatLastEvent(s.lastEventAt)}
+                </span>
+                <span>{s.groups.toLocaleString()} groups</span>
+                <span>{s.members.toLocaleString()} members</span>
                 {isExcluded && (
                   <span className="text-warn-soft-fg font-medium">excluded</span>
                 )}
