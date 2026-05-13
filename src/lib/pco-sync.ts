@@ -43,10 +43,61 @@ export interface SyncDetails {
   startedAt: string;
 }
 
+/** Stalled runs older than this are auto-marked as error on the next
+ *  sync. A real full sync should comfortably finish in well under an
+ *  hour for this scale of org. */
+const STALE_RUN_MINUTES = 65;
+
+/** Mark any leftover "running" rows older than STALE_RUN_MINUTES as
+ *  failed. Catches processes killed mid-sync by a deploy/restart so the
+ *  UI doesn't show "running" forever. */
+function cleanupStaleSyncRuns(orgId: number) {
+  const cutoff = new Date(
+    Date.now() - STALE_RUN_MINUTES * 60 * 1000,
+  ).toISOString();
+  getDb()
+    .prepare(
+      `UPDATE pco_sync_runs
+          SET status = 'error',
+              finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              warning = COALESCE(warning || ' | ', '') ||
+                        'Stalled — auto-cleaned (likely killed by deploy/restart mid-sync)'
+        WHERE org_id = ?
+          AND status = 'running'
+          AND started_at < ?`,
+    )
+    .run(orgId, cutoff);
+}
+
+/** Is there a currently-running sync for this org (started within the
+ *  stale window)? Returns its row if so. Used to short-circuit duplicate
+ *  manual + scheduled triggers. */
+function findActiveSyncRun(orgId: number): { id: number; startedAt: string } | null {
+  const row = getDb()
+    .prepare(
+      `SELECT id, started_at AS startedAt
+         FROM pco_sync_runs
+        WHERE org_id = ? AND status = 'running'
+        ORDER BY id DESC LIMIT 1`,
+    )
+    .get(orgId) as { id: number; startedAt: string } | undefined;
+  return row ?? null;
+}
+
 export async function runSync(
   orgId: number,
   trigger: "manual" | "auto" = "manual",
 ): Promise<SyncResult> {
+  cleanupStaleSyncRuns(orgId);
+  const inFlight = findActiveSyncRun(orgId);
+  if (inFlight) {
+    return {
+      ok: false,
+      changes: 0,
+      details: {} as SyncDetails,
+      error: `Another sync is already running for this org (started ${inFlight.startedAt}). Auto-cleans after ${STALE_RUN_MINUTES} minutes.`,
+    };
+  }
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const details: SyncDetails = {
