@@ -1,11 +1,11 @@
 import { BarChart, ChartCard, DistributionCurve, PieChart } from "./charts";
 import {
-  getDemographics,
   type DemographicScope,
+  getDemographics,
 } from "@/lib/demographics";
 
-/** Three-up demographics row: membership pie, age curve, gender bars.
- *  Shared across /people, /groups, /teams. */
+/** Four-up demographics row: membership pie, age curve, gender bar,
+ *  has-kids bar. Shared across /people, /groups, /teams. */
 export function DemographicCharts({
   orgId,
   scope,
@@ -16,16 +16,22 @@ export function DemographicCharts({
   title: string;
 }) {
   const demo = getDemographics(orgId, scope);
-  if (demo.total === 0) return null;
+  if (demo.total === 0) {
+    return (
+      <div className="space-y-3 pt-3">
+        <div>
+          <h2 className="text-sm font-semibold">{title}</h2>
+          <p className="text-xs text-muted">
+            No people in scope yet — once the next sync finishes (which populates
+            age + parent flags), demographics will appear here.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
-  const genderCoverage =
-    demo.total > 0
-      ? Math.round((demo.totalWithGender / demo.total) * 100)
-      : 0;
-  const ageCoverage =
-    demo.total > 0
-      ? Math.round((demo.totalWithBirthYear / demo.total) * 100)
-      : 0;
+  const genderCoverage = Math.round((demo.totalWithGender / demo.total) * 100);
+  const ageCoverage = Math.round((demo.totalWithBirthYear / demo.total) * 100);
 
   return (
     <div className="space-y-3 pt-3">

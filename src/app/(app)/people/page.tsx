@@ -15,7 +15,7 @@ import {
 import { MembershipFilter } from "./membership-filter";
 import { PageJump } from "./page-jump";
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 50;
 
 type TabKey = "all" | "shepherded" | "active" | "present" | "inactive";
 
@@ -222,7 +222,7 @@ export default async function PeoplePage({
         {counts.total > 0 && (
           <DemographicCharts
             orgId={session.orgId}
-            scope="all"
+            scope={{ kind: "all" }}
             title="Demographics — all people"
           />
         )}

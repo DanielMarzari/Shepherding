@@ -4,35 +4,40 @@ import {
   type TrendDimension,
   type TrendScope,
 } from "@/lib/attendance-trends";
+import type { DemographicScope } from "@/lib/demographics";
 
-/** Three side-by-side trend charts: attendance over the last 12 months
- *  broken by gender, by age band, by parent status. Used at the bottom
- *  of /groups and /teams. */
+/** Three side-by-side trend charts: attendance over 12 months broken
+ *  by age band / gender / parent status. Used at the bottom of
+ *  /groups and /teams. `trendScope` picks the data source (group
+ *  attendance vs. team serving). `filterScope` narrows to a specific
+ *  group/team/type, or stays at the cohort default. */
 export function AttendanceTrendCard({
   orgId,
-  scope,
+  trendScope,
+  filterScope,
   months = 12,
 }: {
   orgId: number;
-  scope: TrendScope;
+  trendScope: TrendScope;
+  filterScope: DemographicScope;
   months?: number;
 }) {
   const dims: Array<{ dimension: TrendDimension; title: string; subtitle: string }> = [
     {
       dimension: "ageBand",
-      title: scope === "groups" ? "Group attendance by age" : "Serving by age",
+      title: trendScope === "groups" ? "Group attendance by age" : "Serving by age",
       subtitle: "distinct people per month, last 12mo",
     },
     {
       dimension: "gender",
       title:
-        scope === "groups" ? "Group attendance by gender" : "Serving by gender",
+        trendScope === "groups" ? "Group attendance by gender" : "Serving by gender",
       subtitle: "distinct people per month",
     },
     {
       dimension: "hasKids",
       title:
-        scope === "groups"
+        trendScope === "groups"
           ? "Group attendance by parent status"
           : "Serving by parent status",
       subtitle: "minors / parents / non-parents",
@@ -43,18 +48,27 @@ export function AttendanceTrendCard({
     <div className="space-y-3 pt-3">
       <div>
         <h2 className="text-sm font-semibold">
-          {scope === "groups"
+          {trendScope === "groups"
             ? "Attendance trends across demographics"
             : "Serving trends across demographics"}
         </h2>
         <p className="text-xs text-muted">
-          Distinct people {scope === "groups" ? "attending a group event" : "on a confirmed plan"} per month, broken
-          down by demographic line. Sliced from synced PCO data — no third-party tracking.
+          Distinct people{" "}
+          {trendScope === "groups"
+            ? "attending a group event"
+            : "on a confirmed plan"}{" "}
+          per month, broken down by demographic line.
         </p>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {dims.map((d) => {
-          const trend = getAttendanceTrend(orgId, scope, d.dimension, months);
+          const trend = getAttendanceTrend(
+            orgId,
+            trendScope,
+            d.dimension,
+            filterScope,
+            months,
+          );
           const xLabels = trend.months.map(formatMonthLabel);
           return (
             <ChartCard
@@ -71,7 +85,6 @@ export function AttendanceTrendCard({
   );
 }
 
-/** "2026-05" → "May '26" — short enough for x-axis labels. */
 function formatMonthLabel(yyyymm: string): string {
   const m = yyyymm.match(/^(\d{4})-(\d{2})$/);
   if (!m) return yyyymm;

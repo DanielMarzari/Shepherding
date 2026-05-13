@@ -35,6 +35,9 @@ export function getCheckinSummary(orgId: number): CheckinSummary {
   const monthAgo = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
   const shepherdedEvents = new Set(getShepherdedCheckinEvents(orgId));
 
+  // Single scan with 4 conditional aggregates. The COUNT(DISTINCT person_id)
+  // is the costly piece on 265k rows; SQLite has to materialise the
+  // distinct set, but it's still one pass.
   const overall = db
     .prepare(
       `SELECT
@@ -83,38 +86,50 @@ export function listCheckinEvents(orgId: number): CheckinEventRow[] {
   const monthAgo = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
   const shepherdedEvents = new Set(getShepherdedCheckinEvents(orgId));
 
+  // Pre-aggregate pco_check_ins per event in a CTE — one pass over the
+  // big table — then LEFT JOIN that small per-event summary against
+  // pco_checkin_events. Previously the LEFT JOIN + GROUP BY ran across
+  // the full 265k-row check-in table with a sort on every page hit.
   const rows = db
     .prepare(
-      `SELECT
-         e.pco_id          AS eventId,
-         e.name            AS name,
-         e.frequency       AS frequency,
-         e.archived_at     AS archivedAt,
-         COUNT(ci.pco_id)                                AS totalCheckins,
-         COUNT(DISTINCT ci.person_id)                    AS distinctPeople,
-         SUM(CASE WHEN ci.pco_created_at >= ? THEN 1 ELSE 0 END)
-                                                         AS checkinsLast30,
-         COUNT(DISTINCT CASE WHEN ci.pco_created_at >= ? THEN ci.person_id END)
-                                                         AS peopleLast30,
-         MAX(ci.pco_created_at)                          AS lastCheckinAt
+      `WITH event_stats AS (
+         SELECT
+           event_id,
+           COUNT(*) AS totalCheckins,
+           COUNT(DISTINCT person_id) AS distinctPeople,
+           SUM(CASE WHEN pco_created_at >= ? THEN 1 ELSE 0 END) AS checkinsLast30,
+           COUNT(DISTINCT CASE WHEN pco_created_at >= ? THEN person_id END) AS peopleLast30,
+           MAX(pco_created_at) AS lastCheckinAt
+         FROM pco_check_ins
+         WHERE org_id = ? AND event_id IS NOT NULL
+         GROUP BY event_id
+       )
+       SELECT
+         e.pco_id        AS eventId,
+         e.name          AS name,
+         e.frequency     AS frequency,
+         e.archived_at   AS archivedAt,
+         COALESCE(s.totalCheckins, 0)   AS totalCheckins,
+         COALESCE(s.distinctPeople, 0)  AS distinctPeople,
+         COALESCE(s.checkinsLast30, 0)  AS checkinsLast30,
+         COALESCE(s.peopleLast30, 0)    AS peopleLast30,
+         s.lastCheckinAt                AS lastCheckinAt
        FROM pco_checkin_events e
-       LEFT JOIN pco_check_ins ci
-         ON ci.org_id = e.org_id AND ci.event_id = e.pco_id
+       LEFT JOIN event_stats s ON s.event_id = e.pco_id
        WHERE e.org_id = ?
-       GROUP BY e.pco_id, e.name, e.frequency, e.archived_at
        ORDER BY
          CASE WHEN e.archived_at IS NULL THEN 0 ELSE 1 END,
          totalCheckins DESC,
          e.name ASC`,
     )
-    .all(monthAgo, monthAgo, orgId) as Array<{
+    .all(monthAgo, monthAgo, orgId, orgId) as Array<{
     eventId: string;
     name: string | null;
     frequency: string | null;
     archivedAt: string | null;
     totalCheckins: number;
     distinctPeople: number;
-    checkinsLast30: number | null;
+    checkinsLast30: number;
     peopleLast30: number;
     lastCheckinAt: string | null;
   }>;
@@ -126,7 +141,7 @@ export function listCheckinEvents(orgId: number): CheckinEventRow[] {
     archivedAt: r.archivedAt,
     totalCheckins: r.totalCheckins,
     distinctPeople: r.distinctPeople,
-    checkinsLast30: r.checkinsLast30 ?? 0,
+    checkinsLast30: r.checkinsLast30,
     peopleLast30: r.peopleLast30,
     lastCheckinAt: r.lastCheckinAt,
     shepherded: shepherdedEvents.has(r.eventId),

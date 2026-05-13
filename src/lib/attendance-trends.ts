@@ -1,5 +1,9 @@
 import "server-only";
 import { getDb } from "./db";
+import {
+  type DemographicScope,
+  populatePeopleInScope,
+} from "./demographics";
 
 export type TrendScope = "groups" | "teams";
 export type TrendDimension = "gender" | "ageBand" | "hasKids";
@@ -12,47 +16,69 @@ export interface TrendSeries {
     label: string;
     values: number[];
   }>;
-  /** Total attended people per month across all series — handy for
-   *  rendering "% of cohort" if we want later. */
+  /** Total attended people per month across all series. */
   totals: number[];
 }
 
-/** Build a 12-month time series of attendance (groups → distinct
- *  attendees per month; teams → distinct servers per month) broken
- *  down by a demographic dimension. */
+/** 12-month time series of attendance (groups → distinct attendees per
+ *  month; teams → distinct servers per month) broken by a demographic
+ *  dimension. The `filterScope` lets the caller narrow the underlying
+ *  attendance / serving rows to a specific group / team / type. */
 export function getAttendanceTrend(
   orgId: number,
-  scope: TrendScope,
+  trendScope: TrendScope,
   dimension: TrendDimension,
-  months: number = 12,
+  filterScope: DemographicScope,
+  months = 12,
 ): TrendSeries {
   const db = getDb();
-  const now = new Date();
-  const monthsList: string[] = [];
-  for (let i = months - 1; i >= 0; i--) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-    monthsList.push(d.toISOString().slice(0, 7)); // YYYY-MM
-  }
-  const sinceIso =
-    monthsList[0] && monthsList[0].length === 7
-      ? `${monthsList[0]}-01T00:00:00Z`
-      : new Date(now.getTime() - months * 30 * 24 * 60 * 60 * 1000).toISOString();
+  populatePeopleInScope(orgId, filterScope);
 
+  const monthsList = buildMonthsList(months);
+  const sinceIso = `${monthsList[0]}-01T00:00:00Z`;
   const dimensionExpr = dimensionSql(dimension);
+
+  // Rows are restricted both by:
+  //   (a) the demographic scope filter (temp.people_scope) and
+  //   (b) for "group"/"team" filters, the matching group/team id.
+  const groupIdFilter =
+    filterScope.kind === "group"
+      ? ` AND a.group_id = ${escapeId(filterScope.id)}`
+      : filterScope.kind === "groupType"
+        ? ` AND EXISTS (
+              SELECT 1 FROM pco_groups gg
+              WHERE gg.org_id = a.org_id
+                AND gg.pco_id = a.group_id
+                AND coalesce(gg.group_type_id, '') = ${escapeId(filterScope.id)}
+            )`
+        : "";
+  const teamIdFilter =
+    filterScope.kind === "team"
+      ? ` AND pp.team_id = ${escapeId(filterScope.id)}`
+      : filterScope.kind === "serviceType"
+        ? ` AND EXISTS (
+              SELECT 1 FROM pco_teams tt
+              WHERE tt.org_id = pp.org_id
+                AND tt.pco_id = pp.team_id
+                AND coalesce(tt.service_type_id, '') = ${escapeId(filterScope.id)}
+            )`
+        : "";
+
   const sql =
-    scope === "groups"
+    trendScope === "groups"
       ? `
         SELECT
           substr(a.event_starts_at, 1, 7) AS month,
           ${dimensionExpr} AS dim,
           COUNT(DISTINCT a.person_id) AS n
         FROM pco_event_attendances a
+        JOIN temp.people_scope s ON s.person_id = a.person_id
         JOIN pco_people p
           ON p.org_id = a.org_id AND p.pco_id = a.person_id
         WHERE a.org_id = ?
           AND a.attended = 1
           AND a.event_starts_at IS NOT NULL
-          AND a.event_starts_at >= ?
+          AND a.event_starts_at >= ?${groupIdFilter}
         GROUP BY month, dim
         ORDER BY month ASC`
       : `
@@ -63,12 +89,13 @@ export function getAttendanceTrend(
         FROM pco_plan_people pp
         JOIN pco_plans pl
           ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+        JOIN temp.people_scope s ON s.person_id = pp.person_id
         JOIN pco_people p
           ON p.org_id = pp.org_id AND p.pco_id = pp.person_id
         WHERE pp.org_id = ?
           AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')
           AND pl.sort_date IS NOT NULL
-          AND pl.sort_date >= ?
+          AND pl.sort_date >= ?${teamIdFilter}
         GROUP BY month, dim
         ORDER BY month ASC`;
 
@@ -78,21 +105,19 @@ export function getAttendanceTrend(
     n: number;
   }>;
 
-  // Pivot rows into a per-label values[] array, indexed by month position.
   const monthIndex = new Map(monthsList.map((m, i) => [m, i]));
   const byLabel = new Map<string, number[]>();
   for (const r of rows) {
     if (!monthIndex.has(r.month)) continue;
     const idx = monthIndex.get(r.month)!;
-    let series = byLabel.get(r.dim);
-    if (!series) {
-      series = new Array(monthsList.length).fill(0);
-      byLabel.set(r.dim, series);
+    let arr = byLabel.get(r.dim);
+    if (!arr) {
+      arr = new Array(monthsList.length).fill(0);
+      byLabel.set(r.dim, arr);
     }
-    series[idx] = r.n;
+    arr[idx] = r.n;
   }
 
-  // Canonical order per dimension; unknown last.
   const canonical = canonicalOrder(dimension);
   const seenLabels = new Set(byLabel.keys());
   const orderedLabels = [
@@ -104,13 +129,28 @@ export function getAttendanceTrend(
     label,
     values: byLabel.get(label) ?? new Array(monthsList.length).fill(0),
   }));
-
   const totals = new Array(monthsList.length).fill(0);
   for (const s of series) {
     for (let i = 0; i < monthsList.length; i++) totals[i] += s.values[i];
   }
-
   return { months: monthsList, series, totals };
+}
+
+function buildMonthsList(months: number): string[] {
+  const out: string[] = [];
+  const now = new Date();
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    out.push(d.toISOString().slice(0, 7));
+  }
+  return out;
+}
+
+/** Naive SQL-string escape for the id values we pass into trend filters.
+ *  All callers supply ids from internal navigation, never user input, so
+ *  this just defends against quotes if PCO ever returns one. */
+function escapeId(id: string): string {
+  return `'${id.replace(/'/g, "''")}'`;
 }
 
 function dimensionSql(dimension: TrendDimension): string {
@@ -129,7 +169,6 @@ function dimensionSql(dimension: TrendDimension): string {
         ELSE 'Unknown'
       END`;
     case "ageBand": {
-      // Inline age-band classifier mirroring lib/demographics.ts.
       const thisYear = new Date().getUTCFullYear();
       return `CASE
         WHEN p.birth_year IS NULL OR p.birth_year < 1900 THEN 'Unknown'

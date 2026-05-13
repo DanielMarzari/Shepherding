@@ -13,6 +13,9 @@ export interface SyncedTeamRow {
   leaders: number;
   /** Distinct people who served in any plan during the activity window. */
   servedRecently: number;
+  /** People whose FIRST plan for this team landed inside the activity
+   *  window — i.e. just started serving here. Inferred from plan_people. */
+  joinedRecently: number;
   /** Roster members whose last_served_at is older than the lapsed-from-team
    *  threshold (or null = never served on a recorded plan). */
   lapsed: number;
@@ -27,6 +30,7 @@ export interface TeamTotals {
   totalMembers: number;
   totalLeaders: number;
   totalLapsed: number;
+  joinedRecently: number;
   servedRecently: number;
   growing: number;
   steady: number;
@@ -114,6 +118,25 @@ export function listTeams(
          WHERE pp.org_id = ?
            AND p.sort_date >= ?
          GROUP BY pp.team_id
+       ),
+       first_serve_per_person AS (
+         -- The earliest non-declined plan we've ever seen for each
+         -- (team, person) pair. Used to detect "joined the team
+         -- recently" — first time they served falls in the window.
+         SELECT pp.team_id, pp.person_id, MIN(p.sort_date) AS firstServed
+         FROM pco_plan_people pp
+         JOIN pco_plans p
+           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+         WHERE pp.org_id = ?
+           AND pp.person_id != ''
+           AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')
+         GROUP BY pp.team_id, pp.person_id
+       ),
+       joined_per_team AS (
+         SELECT team_id, COUNT(*) AS n
+         FROM first_serve_per_person
+         WHERE firstServed >= ?
+         GROUP BY team_id
        )
        SELECT
          t.pco_id          AS pcoId,
@@ -123,6 +146,7 @@ export function listTeams(
          COALESCE(r.members, 0)  AS members,
          COALESCE(r.leaders, 0)  AS leaders,
          COALESCE(s.n, 0)        AS servedRecently,
+         COALESCE(j.n, 0)        AS joinedRecently,
          CASE WHEN tpl.team_id IS NOT NULL
               THEN COALESCE(r.lapsedCandidates, 0)
               ELSE 0
@@ -133,6 +157,7 @@ export function listTeams(
          ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
        LEFT JOIN roster r ON r.team_id = t.pco_id
        LEFT JOIN served s ON s.team_id = t.pco_id
+       LEFT JOIN joined_per_team j ON j.team_id = t.pco_id
        LEFT JOIN team_plans_in_lapsed tpl ON tpl.team_id = t.pco_id
        LEFT JOIN team_plans_in_activity tpa ON tpa.team_id = t.pco_id
        WHERE t.org_id = ?
@@ -150,6 +175,8 @@ export function listTeams(
       lapsedCutoff,    // team_plans_in_lapsed cutoff
       orgId,           // team_plans_in_activity org
       activityCutoff,  // team_plans_in_activity cutoff
+      orgId,           // first_serve_per_person org
+      activityCutoff,  // joined_per_team: firstServed >= window
       orgId,           // outer where
       ...excludedTypes,
     ) as Array<{
@@ -160,6 +187,7 @@ export function listTeams(
     members: number;
     leaders: number;
     servedRecently: number;
+    joinedRecently: number;
     lapsed: number;
     recentPlans: number;
   }>;
@@ -192,6 +220,7 @@ export function getTeamTotals(rows: SyncedTeamRow[]): TeamTotals {
     totalMembers: 0,
     totalLeaders: 0,
     totalLapsed: 0,
+    joinedRecently: 0,
     servedRecently: 0,
     growing: 0,
     steady: 0,
@@ -203,6 +232,7 @@ export function getTeamTotals(rows: SyncedTeamRow[]): TeamTotals {
     t.totalMembers += r.members;
     t.totalLeaders += r.leaders;
     t.totalLapsed += r.lapsed;
+    t.joinedRecently += r.joinedRecently;
     t.servedRecently += r.servedRecently;
     t[r.state]++;
   }

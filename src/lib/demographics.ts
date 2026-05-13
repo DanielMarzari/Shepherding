@@ -1,26 +1,22 @@
 import "server-only";
 import { getDb } from "./db";
 
-export type DemographicScope = "all" | "groups" | "teams";
+export type DemographicScope =
+  | { kind: "all" }
+  | { kind: "groups" }
+  | { kind: "teams" }
+  | { kind: "group"; id: string }
+  | { kind: "team"; id: string }
+  | { kind: "groupType"; id: string }
+  | { kind: "serviceType"; id: string };
 
 export interface DemographicSnapshot {
-  /** Total people in scope (i.e. denominator for percentages). */
   total: number;
-  /** Membership type counts, biggest first. */
   membershipBuckets: Array<{ label: string; count: number }>;
-  /** Age buckets keyed by label, in display order. NULLs/unknown bucketed
-   *  to "Unknown". Computed from pco_people.birth_year (denormalized at
-   *  sync time from the encrypted birthdate). */
   ageBuckets: Array<{ label: string; count: number }>;
-  /** Gender counts: male / female / unknown. */
   genderBuckets: Array<{ label: string; count: number }>;
-  /** Parent / not-parent counts across adults. Kids and unknown-age
-   *  adults are bucketed under "Unknown" so the chart stays interpretable. */
   hasKidsBuckets: Array<{ label: string; count: number }>;
-  /** How many in the scope had a usable birthdate. Surfaced so the age
-   *  curve can show coverage in the subtitle. */
   totalWithBirthYear: number;
-  /** Same idea for gender. */
   totalWithGender: number;
 }
 
@@ -35,72 +31,175 @@ const AGE_BANDS: Array<{ label: string; max: number }> = [
   { label: "66+", max: 200 },
 ];
 
-/** Returns membership / age / gender breakdowns for the people in scope.
- *  scope:
- *    - "all"    → every pco_people row.
- *    - "groups" → distinct people in an active membership of any
- *                 (non-excluded) active group.
- *    - "teams"  → distinct people on the active roster of a non-archived,
- *                 non-excluded team. */
+/** Populate a connection-local TEMP TABLE with the set of person_ids that
+ *  match a given scope. Subsequent queries can JOIN against this temp set
+ *  via an O(log N) indexed lookup instead of re-evaluating an EXISTS
+ *  subquery per row. Returns the table name to JOIN against. */
+export function populatePeopleInScope(
+  orgId: number,
+  scope: DemographicScope,
+): string {
+  const db = getDb();
+  const tableName = "people_scope";
+  db.exec(
+    `CREATE TEMP TABLE IF NOT EXISTS ${tableName} (person_id TEXT PRIMARY KEY)`,
+  );
+  db.exec(`DELETE FROM temp.${tableName}`);
+
+  switch (scope.kind) {
+    case "all":
+      db.prepare(
+        `INSERT OR IGNORE INTO temp.${tableName} (person_id)
+           SELECT pco_id FROM pco_people WHERE org_id = ?`,
+      ).run(orgId);
+      break;
+    case "groups":
+      db.prepare(
+        `INSERT OR IGNORE INTO temp.${tableName} (person_id)
+           SELECT DISTINCT m.person_id
+             FROM pco_group_memberships m
+             JOIN pco_groups g
+               ON g.org_id = m.org_id AND g.pco_id = m.group_id
+            WHERE m.org_id = ?
+              AND m.archived_at IS NULL
+              AND g.archived_at IS NULL`,
+      ).run(orgId);
+      break;
+    case "teams":
+      db.prepare(
+        `INSERT OR IGNORE INTO temp.${tableName} (person_id)
+           SELECT DISTINCT m.person_id
+             FROM pco_team_memberships m
+             JOIN pco_teams t
+               ON t.org_id = m.org_id AND t.pco_id = m.team_id
+            WHERE m.org_id = ?
+              AND m.archived_at IS NULL
+              AND m.person_id != ''
+              AND t.archived_at IS NULL
+              AND t.deleted_at IS NULL`,
+      ).run(orgId);
+      break;
+    case "group":
+      db.prepare(
+        `INSERT OR IGNORE INTO temp.${tableName} (person_id)
+           SELECT DISTINCT person_id
+             FROM pco_group_memberships
+            WHERE org_id = ? AND group_id = ? AND archived_at IS NULL`,
+      ).run(orgId, scope.id);
+      break;
+    case "team":
+      db.prepare(
+        `INSERT OR IGNORE INTO temp.${tableName} (person_id)
+           SELECT DISTINCT person_id
+             FROM pco_team_memberships
+            WHERE org_id = ? AND team_id = ? AND archived_at IS NULL AND person_id != ''`,
+      ).run(orgId, scope.id);
+      break;
+    case "groupType":
+      db.prepare(
+        `INSERT OR IGNORE INTO temp.${tableName} (person_id)
+           SELECT DISTINCT m.person_id
+             FROM pco_group_memberships m
+             JOIN pco_groups g
+               ON g.org_id = m.org_id AND g.pco_id = m.group_id
+            WHERE m.org_id = ?
+              AND m.archived_at IS NULL
+              AND g.archived_at IS NULL
+              AND coalesce(g.group_type_id, '') = ?`,
+      ).run(orgId, scope.id);
+      break;
+    case "serviceType":
+      db.prepare(
+        `INSERT OR IGNORE INTO temp.${tableName} (person_id)
+           SELECT DISTINCT m.person_id
+             FROM pco_team_memberships m
+             JOIN pco_teams t
+               ON t.org_id = m.org_id AND t.pco_id = m.team_id
+            WHERE m.org_id = ?
+              AND m.archived_at IS NULL
+              AND m.person_id != ''
+              AND t.archived_at IS NULL
+              AND t.deleted_at IS NULL
+              AND coalesce(t.service_type_id, '') = ?`,
+      ).run(orgId, scope.id);
+      break;
+  }
+  return tableName;
+}
+
 export function getDemographics(
   orgId: number,
   scope: DemographicScope,
 ): DemographicSnapshot {
   const db = getDb();
-  const { fromSql, args } = scopeClause(scope, orgId);
-  const now = new Date();
-  const thisYear = now.getUTCFullYear();
+  populatePeopleInScope(orgId, scope);
+  const thisYear = new Date().getUTCFullYear();
+  // Everything reads from pco_people via the scoped temp table — one
+  // indexed inner-join, no per-row EXISTS work.
+  const baseFrom = `pco_people p
+    JOIN temp.people_scope s ON s.person_id = p.pco_id
+    WHERE p.org_id = ?`;
 
-  // Membership types
   const membershipRows = db
     .prepare(
-      `SELECT coalesce(membership_type, '(unknown)') AS label,
+      `SELECT coalesce(p.membership_type, '(unknown)') AS label,
               COUNT(*) AS count
-         FROM ${fromSql}
-         GROUP BY membership_type
-         ORDER BY COUNT(*) DESC, membership_type ASC`,
+         FROM ${baseFrom}
+         GROUP BY p.membership_type
+         ORDER BY COUNT(*) DESC, p.membership_type ASC`,
     )
-    .all(...args) as Array<{ label: string; count: number }>;
+    .all(orgId) as Array<{ label: string; count: number }>;
 
-  // Gender
   const genderRows = db
     .prepare(
       `SELECT
          CASE
-           WHEN lower(coalesce(gender, '')) IN ('m', 'male') THEN 'Male'
-           WHEN lower(coalesce(gender, '')) IN ('f', 'female') THEN 'Female'
+           WHEN lower(coalesce(p.gender, '')) IN ('m', 'male') THEN 'Male'
+           WHEN lower(coalesce(p.gender, '')) IN ('f', 'female') THEN 'Female'
            ELSE 'Unknown'
          END AS label,
          COUNT(*) AS count
-       FROM ${fromSql}
+       FROM ${baseFrom}
        GROUP BY label`,
     )
-    .all(...args) as Array<{ label: string; count: number }>;
+    .all(orgId) as Array<{ label: string; count: number }>;
 
-  // Age buckets — compute from birth_year in SQL with a CASE.
   const caseClauses = AGE_BANDS.map(
-    (band) => `WHEN (${thisYear} - birth_year) <= ${band.max} THEN '${band.label}'`,
+    (band) => `WHEN (${thisYear} - p.birth_year) <= ${band.max} THEN '${band.label}'`,
   ).join("\n");
   const ageRows = db
     .prepare(
       `SELECT
          CASE
-           WHEN birth_year IS NULL OR birth_year < 1900 THEN 'Unknown'
+           WHEN p.birth_year IS NULL OR p.birth_year < 1900 THEN 'Unknown'
            ${caseClauses}
            ELSE 'Unknown'
          END AS label,
          COUNT(*) AS count
-       FROM ${fromSql}
+       FROM ${baseFrom}
        GROUP BY label`,
     )
-    .all(...args) as Array<{ label: string; count: number }>;
+    .all(orgId) as Array<{ label: string; count: number }>;
+
+  const kidsRows = db
+    .prepare(
+      `SELECT
+         CASE
+           WHEN p.is_minor = 1 OR p.birth_year IS NULL THEN 'Unknown'
+           WHEN p.is_parent = 1 THEN 'Has kids'
+           ELSE 'No kids'
+         END AS label,
+         COUNT(*) AS count
+       FROM ${baseFrom}
+       GROUP BY label`,
+    )
+    .all(orgId) as Array<{ label: string; count: number }>;
 
   const totalRow = db
-    .prepare(`SELECT COUNT(*) AS n FROM ${fromSql}`)
-    .get(...args) as { n: number };
+    .prepare(`SELECT COUNT(*) AS n FROM ${baseFrom}`)
+    .get(orgId) as { n: number };
   const total = totalRow.n;
 
-  // Re-order age buckets to canonical sequence (Unknown last).
   const ageByLabel = new Map(ageRows.map((r) => [r.label, r.count]));
   const orderedAge: Array<{ label: string; count: number }> = [
     ...AGE_BANDS.map((b) => ({
@@ -110,28 +209,12 @@ export function getDemographics(
     { label: "Unknown", count: ageByLabel.get("Unknown") ?? 0 },
   ];
 
-  // Same for gender — canonical M / F / Unknown.
   const genderByLabel = new Map(genderRows.map((r) => [r.label, r.count]));
   const orderedGender = ["Male", "Female", "Unknown"].map((label) => ({
     label,
     count: genderByLabel.get(label) ?? 0,
   }));
 
-  // Parent / not-parent — only meaningful for adults; minors and
-  // unknown-age people bucket to "Unknown".
-  const kidsRows = db
-    .prepare(
-      `SELECT
-         CASE
-           WHEN is_minor = 1 OR birth_year IS NULL THEN 'Unknown'
-           WHEN is_parent = 1 THEN 'Has kids'
-           ELSE 'No kids'
-         END AS label,
-         COUNT(*) AS count
-       FROM ${fromSql}
-       GROUP BY label`,
-    )
-    .all(...args) as Array<{ label: string; count: number }>;
   const kidsByLabel = new Map(kidsRows.map((r) => [r.label, r.count]));
   const orderedKids = ["Has kids", "No kids", "Unknown"].map((label) => ({
     label,
@@ -152,57 +235,5 @@ export function getDemographics(
     hasKidsBuckets: orderedKids,
     totalWithBirthYear,
     totalWithGender,
-  };
-}
-
-/** Build the FROM clause for a given scope. Returns SQL fragment + args.
- *  All three scopes resolve to a row source we can group from. */
-function scopeClause(
-  scope: DemographicScope,
-  orgId: number,
-): { fromSql: string; args: (string | number)[] } {
-  if (scope === "all") {
-    return {
-      fromSql: `(SELECT * FROM pco_people WHERE org_id = ?) AS s`,
-      args: [orgId],
-    };
-  }
-  if (scope === "groups") {
-    return {
-      fromSql: `(
-        SELECT p.*
-        FROM pco_people p
-        WHERE p.org_id = ?
-          AND EXISTS (
-            SELECT 1 FROM pco_group_memberships m
-            JOIN pco_groups g
-              ON g.org_id = m.org_id AND g.pco_id = m.group_id
-            WHERE m.org_id = p.org_id
-              AND m.person_id = p.pco_id
-              AND m.archived_at IS NULL
-              AND g.archived_at IS NULL
-          )
-      ) AS s`,
-      args: [orgId],
-    };
-  }
-  // scope === "teams"
-  return {
-    fromSql: `(
-      SELECT p.*
-      FROM pco_people p
-      WHERE p.org_id = ?
-        AND EXISTS (
-          SELECT 1 FROM pco_team_memberships m
-          JOIN pco_teams t
-            ON t.org_id = m.org_id AND t.pco_id = m.team_id
-          WHERE m.org_id = p.org_id
-            AND m.person_id = p.pco_id
-            AND m.archived_at IS NULL
-            AND t.archived_at IS NULL
-            AND t.deleted_at IS NULL
-        )
-    ) AS s`,
-    args: [orgId],
   };
 }

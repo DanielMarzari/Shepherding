@@ -1,21 +1,33 @@
 import { AppShell } from "@/components/AppShell";
 import { AttendanceTrendCard } from "@/components/AttendanceTrendCard";
 import { Card } from "@/components/ui";
+import { ChartScopeFilter } from "@/components/ChartScopeFilter";
 import { DemographicCharts } from "@/components/DemographicCharts";
 import { requireOrg } from "@/lib/auth";
-import { getSyncSettings } from "@/lib/pco";
+import type { DemographicScope } from "@/lib/demographics";
+import { getServiceTypeStats, getSyncSettings } from "@/lib/pco";
 import { getTeamTotals, listTeams } from "@/lib/serve-lane";
 import { TeamsTable } from "./teams-table";
 
-export default async function TeamsPage() {
+export default async function TeamsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ chart?: string }>;
+}) {
   const session = await requireOrg();
   const settings = getSyncSettings(session.orgId);
+  const params = await searchParams;
   const teams = listTeams(
     session.orgId,
     settings.activityTrackingMonths,
     settings.lapsedFromTeamMonths,
   );
   const totals = getTeamTotals(teams);
+  const { scope, scopeLabel, options } = resolveTeamScope(
+    params.chart,
+    teams,
+    getServiceTypeStats(session.orgId),
+  );
   const ratio =
     totals.totalLeaders > 0
       ? totals.totalMembers / totals.totalLeaders
@@ -67,14 +79,15 @@ export default async function TeamsPage() {
             </Card>
             <Card className="p-4">
               <div className="text-xs text-muted mb-1.5">
-                Served / Lapsed ({settings.activityTrackingMonths}mo)
+                Joined / Lapsed ({settings.activityTrackingMonths}mo)
               </div>
               <div className="tnum text-2xl font-semibold">
-                <span className="text-good-soft-fg">{totals.servedRecently}</span>
+                <span className="text-good-soft-fg">+{totals.joinedRecently}</span>
                 <span className="text-muted mx-1.5">/</span>
-                <span className="text-warn-soft-fg">{totals.totalLapsed}</span>
+                <span className="text-warn-soft-fg">−{totals.totalLapsed}</span>
               </div>
               <div className="text-xs text-muted mt-1">
+                {totals.servedRecently.toLocaleString()} served ·
                 lapsed = no plan in {settings.lapsedFromTeamMonths}mo
               </div>
             </Card>
@@ -117,16 +130,77 @@ export default async function TeamsPage() {
         </div>
 
         {teams.length > 0 && (
+          <div className="flex items-end justify-between gap-3 flex-wrap border-t border-border-soft pt-5">
+            <p className="text-xs text-muted">
+              Charts below are scoped to <span className="text-fg">{scopeLabel}</span>
+            </p>
+            <ChartScopeFilter current={params.chart ?? "all"} groups={options} />
+          </div>
+        )}
+        {teams.length > 0 && (
           <DemographicCharts
             orgId={session.orgId}
-            scope="teams"
-            title="Demographics — people currently on teams"
+            scope={scope}
+            title={`Demographics — ${scopeLabel}`}
           />
         )}
         {teams.length > 0 && (
-          <AttendanceTrendCard orgId={session.orgId} scope="teams" />
+          <AttendanceTrendCard
+            orgId={session.orgId}
+            trendScope="teams"
+            filterScope={scope}
+          />
         )}
       </div>
     </AppShell>
   );
+}
+
+function resolveTeamScope(
+  raw: string | undefined,
+  teams: Array<{ pcoId: string; name: string | null; serviceTypeName: string | null }>,
+  types: Array<{ serviceTypeId: string | null; name: string | null }>,
+): {
+  scope: DemographicScope;
+  scopeLabel: string;
+  options: Array<{ label: string; options: Array<{ value: string; label: string }> }>;
+} {
+  let scope: DemographicScope = { kind: "teams" };
+  let scopeLabel = "all teams";
+
+  if (raw && raw.startsWith("team:")) {
+    const id = raw.slice(5);
+    const t = teams.find((x) => x.pcoId === id);
+    if (t) {
+      scope = { kind: "team", id };
+      scopeLabel = t.name ?? `Team #${id}`;
+    }
+  } else if (raw && raw.startsWith("serviceType:")) {
+    const id = raw.slice(12);
+    const st = types.find((x) => (x.serviceTypeId ?? "") === id);
+    if (st) {
+      scope = { kind: "serviceType", id };
+      scopeLabel = st.name ?? "(no service type)";
+    }
+  }
+
+  const options = [
+    { label: "Cohort", options: [{ value: "all", label: "All teams (active)" }] },
+    {
+      label: "By service type",
+      options: types.map((t) => ({
+        value: `serviceType:${t.serviceTypeId ?? ""}`,
+        label: t.name ?? "(no service type)",
+      })),
+    },
+    {
+      label: "Single team",
+      options: teams.map((t) => ({
+        value: `team:${t.pcoId}`,
+        label: t.name ?? `Team #${t.pcoId}`,
+      })),
+    },
+  ];
+
+  return { scope, scopeLabel, options };
 }

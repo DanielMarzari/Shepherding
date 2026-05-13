@@ -17,6 +17,7 @@ type SortKey =
   | "state"
   | "members"
   | "leaders"
+  | "joinedRecently"
   | "servedRecently"
   | "lapsed"
   | "recentPlans";
@@ -76,15 +77,16 @@ export function TeamsTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm table-fixed min-w-[1150px]">
+      <table className="w-full text-sm table-fixed min-w-[1250px]">
         <colgroup>
-          <col className="w-[22%]" />
-          <col className="w-[14%]" />
-          <col className="w-[9%]" />
-          <col className="w-[9%]" />
-          <col className="w-[9%]" />
-          <col className="w-[12%]" />
-          <col className="w-[12%]" />
+          <col className="w-[20%]" />
+          <col className="w-[13%]" />
+          <col className="w-[8%]" />
+          <col className="w-[8%]" />
+          <col className="w-[8%]" />
+          <col className="w-[10%]" />
+          <col className="w-[10%]" />
+          <col className="w-[10%]" />
           <col className="w-[13%]" />
         </colgroup>
         <thead className="text-xs text-muted">
@@ -103,6 +105,9 @@ export function TeamsTable({
             </SortHeader>
             <SortHeader k="leaders" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right">
               Leaders
+            </SortHeader>
+            <SortHeader k="joinedRecently" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right">
+              Joined ({activityMonths}mo)
             </SortHeader>
             <SortHeader k="servedRecently" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right">
               Served ({activityMonths}mo)
@@ -142,6 +147,9 @@ export function TeamsTable({
                 {t.leaders}
               </td>
               <td className="px-5 py-2.5 text-right tnum text-good-soft-fg">
+                {t.joinedRecently > 0 ? `+${t.joinedRecently}` : "0"}
+              </td>
+              <td className="px-5 py-2.5 text-right tnum text-good-soft-fg">
                 {t.servedRecently > 0 ? t.servedRecently : "0"}
               </td>
               <td className="px-5 py-2.5 text-right tnum text-warn-soft-fg">
@@ -168,6 +176,7 @@ function pickSortVal(t: SyncedTeamRow, key: SortKey): string | number | null {
       return STATE_ORDER[t.state];
     case "members":
     case "leaders":
+    case "joinedRecently":
     case "servedRecently":
     case "lapsed":
     case "recentPlans":
