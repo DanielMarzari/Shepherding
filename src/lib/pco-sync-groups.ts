@@ -138,12 +138,19 @@ export async function syncGroupsAll(
   }
   writeCursor(orgId, "groups:applications", maxAppliedAt);
 
-  // 5) Group events — incremental on starts_at. Track event ids that
-  //    have attendance enabled so we can fetch attendances for them.
-  const eventCursor = readCursor(orgId, "groups:events", thresholdMonths);
+  // 5) Group events — re-fetch the recent window every sync so admin
+  //    edits to attendance / details land. Initial sync (no rows yet)
+  //    pulls the complete history once; older-than-window events become
+  //    effectively immutable after that.
+  const eventsAlreadySynced = !!getDb()
+    .prepare("SELECT 1 FROM pco_group_events WHERE org_id = ? LIMIT 1")
+    .get(orgId);
   const eventParams = new URLSearchParams({ per_page: "100", order: "starts_at" });
-  if (eventCursor) eventParams.set("where[starts_at][gt]", eventCursor);
-  let maxStartsAt: string | null = eventCursor;
+  if (eventsAlreadySynced) {
+    const lookbackMs = thresholdMonths * 30 * 24 * 60 * 60 * 1000;
+    const since = new Date(Date.now() - lookbackMs).toISOString();
+    eventParams.set("where[starts_at][gte]", since);
+  }
   const attendanceTargetIds: { id: string; startsAt: string | null; groupId: string | null }[] =
     [];
   for await (const { page } of client.paginate<PCOResource>(
@@ -156,9 +163,6 @@ export async function syncGroupsAll(
       const rels = ev.relationships ?? {};
       const groupRel = rels.group?.data;
       const startsAt = (a.starts_at as string | undefined) ?? null;
-      if (startsAt && (!maxStartsAt || startsAt > maxStartsAt)) {
-        maxStartsAt = startsAt;
-      }
       const groupId = !Array.isArray(groupRel) && groupRel ? groupRel.id : null;
       const attendanceRequestsEnabled = a.attendance_requests_enabled === true;
       const canceled = a.canceled === true;
@@ -183,7 +187,7 @@ export async function syncGroupsAll(
       }
     }
   }
-  writeCursor(orgId, "groups:events", maxStartsAt);
+  // No cursor write — we always re-fetch by the rolling window above.
 
   // 6) Attendance per event (only events with attendance_requests_enabled
   //    that we just synced). PCO has /groups/v2/events/{id}/attendances.

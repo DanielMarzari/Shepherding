@@ -211,16 +211,20 @@ export async function syncServicesAll(
     }
   }
 
-  // 4) Plans — nested under service_type. Incremental on sort_date with
-  //    threshold backstop. Cursor stored as "services:plans" globally so
-  //    next sync picks up after the latest seen date.
-  const planCursor = readCursor(orgId, "services:plans", thresholdMonths);
-  let maxSortDate: string | null = planCursor;
+  // 4) Plans — re-fetch the recent window every sync so plan_people
+  //    status edits (confirm / decline / remove) get refreshed. Initial
+  //    sync pulls everything once. Older-than-window plans become
+  //    effectively immutable, same model as group events.
+  const plansAlreadySynced = !!getDb()
+    .prepare("SELECT 1 FROM pco_plans WHERE org_id = ? LIMIT 1")
+    .get(orgId);
+  const lookbackMs = thresholdMonths * 30 * 24 * 60 * 60 * 1000;
+  const planSince = new Date(Date.now() - lookbackMs).toISOString();
   const recentPlans: Array<{ planId: string; serviceTypeId: string }> = [];
 
   for (const stId of serviceTypeIds) {
     const params = new URLSearchParams({ per_page: "100", order: "-sort_date" });
-    if (planCursor) params.set("where[sort_date][gt]", planCursor);
+    if (plansAlreadySynced) params.set("where[sort_date][gte]", planSince);
     try {
       for await (const { page } of client.paginate<PCOResource>(
         `/services/v2/service_types/${stId}/plans?${params.toString()}`,
@@ -230,9 +234,6 @@ export async function syncServicesAll(
           result.plans.fetched++;
           const a = (p.attributes ?? {}) as Record<string, unknown>;
           const sortDate = (a.sort_date as string | undefined) ?? null;
-          if (sortDate && (!maxSortDate || sortDate > maxSortDate)) {
-            maxSortDate = sortDate;
-          }
           upsertPlan(orgId, {
             pcoId: p.id,
             serviceTypeId: stId,
@@ -249,7 +250,7 @@ export async function syncServicesAll(
       if (!(e instanceof PCOError && e.status === 404)) throw e;
     }
   }
-  writeCursor(orgId, "services:plans", maxSortDate);
+  // No cursor write — we always re-fetch by the rolling window above.
 
   // 5) Plan team_members — nested under (service_type, plan).
   const replacePlanPeople = getDb().transaction(
@@ -482,34 +483,3 @@ export function refreshLastServed(orgId: number) {
     .run(orgId);
 }
 
-// ─── Cursor helpers (mirror pco-sync-groups to avoid circular imports) ────
-
-function readStoredCursor(orgId: number, resource: string): string | null {
-  const row = getDb()
-    .prepare(
-      "SELECT last_updated_at FROM pco_sync_cursor WHERE org_id = ? AND resource = ?",
-    )
-    .get(orgId, resource) as { last_updated_at: string | null } | undefined;
-  return row?.last_updated_at ?? null;
-}
-
-function readCursor(orgId: number, resource: string, thresholdMonths: number): string | null {
-  const stored = readStoredCursor(orgId, resource);
-  if (!stored) return null;
-  const lookbackMs = thresholdMonths * 30 * 24 * 60 * 60 * 1000;
-  const lookbackIso = new Date(Date.now() - lookbackMs).toISOString();
-  return stored < lookbackIso ? stored : lookbackIso;
-}
-
-function writeCursor(orgId: number, resource: string, updatedAt: string | null) {
-  if (!updatedAt) return;
-  getDb()
-    .prepare(
-      `INSERT INTO pco_sync_cursor (org_id, resource, last_updated_at, last_synced_at)
-       VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, resource) DO UPDATE SET
-         last_updated_at = excluded.last_updated_at,
-         last_synced_at = excluded.last_synced_at`,
-    )
-    .run(orgId, resource, updatedAt);
-}

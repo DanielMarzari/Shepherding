@@ -72,9 +72,11 @@ export function ThresholdForm({
           <span className="tnum text-sm text-muted">{sync} months</span>
         </div>
         <p className="text-xs text-muted mb-2.5">
-          Each sync always pulls at least the last <em>{sync}</em> months — even when our
-          cursor is more recent. Catches retroactive PCO edits without re-fetching ancient
-          records that won&apos;t change.
+          Group events, attendance, plans, and plan_people inside the last{" "}
+          <em>{sync}</em> months get re-pulled on <em>every</em> sync — catches leaders
+          who go back and edit attendance, plans that get rescheduled, etc. The first
+          sync pulls full history; older-than-window records become effectively immutable
+          after that.
         </p>
         <input
           id="syncThresholdMonths"
