@@ -9,6 +9,7 @@ export function ThresholdForm({
   initialTracking,
   initialLapsed,
   initialLapsedTeam,
+  initialLapsedTeamEvents,
   isAdmin,
 }: {
   initialActivity: number;
@@ -16,6 +17,7 @@ export function ThresholdForm({
   initialTracking: number;
   initialLapsed: number;
   initialLapsedTeam: number;
+  initialLapsedTeamEvents: number;
   isAdmin: boolean;
 }) {
   const [activity, setActivity] = useState(initialActivity);
@@ -23,6 +25,7 @@ export function ThresholdForm({
   const [tracking, setTracking] = useState(initialTracking);
   const [lapsed, setLapsed] = useState(initialLapsed);
   const [lapsedTeam, setLapsedTeam] = useState(initialLapsedTeam);
+  const [lapsedTeamEvents, setLapsedTeamEvents] = useState(initialLapsedTeamEvents);
   const [state, action, pending] = useActionState<MetricsSaveState | null, FormData>(
     saveThresholdsAction,
     null,
@@ -176,6 +179,42 @@ export function ThresholdForm({
         <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
           <span>1 month</span>
           <span>24 months</span>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-baseline justify-between mb-1.5">
+          <label
+            className="text-sm font-medium"
+            htmlFor="lapsedFromTeamEvents"
+          >
+            Lapsed-from-team event count
+          </label>
+          <span className="tnum text-sm text-muted">
+            {lapsedTeamEvents} event{lapsedTeamEvents === 1 ? "" : "s"}
+          </span>
+        </div>
+        <p className="text-xs text-muted mb-2.5">
+          A team needs to have had at least this many scheduled plans inside
+          the lapsed window before we&apos;ll mark its roster members as
+          &ldquo;lapsed.&rdquo; Lets you distinguish &ldquo;they phased out / declined&rdquo;
+          from &ldquo;the team just hasn&apos;t been scheduled lately.&rdquo;
+        </p>
+        <input
+          id="lapsedFromTeamEvents"
+          name="lapsedFromTeamEvents"
+          type="range"
+          min="1"
+          max="20"
+          step="1"
+          value={lapsedTeamEvents}
+          onChange={(e) => setLapsedTeamEvents(Number(e.target.value))}
+          disabled={!isAdmin}
+          className="w-full accent-[var(--accent)] disabled:opacity-50"
+        />
+        <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
+          <span>1 event</span>
+          <span>20 events</span>
         </div>
       </div>
 

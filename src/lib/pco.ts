@@ -190,6 +190,11 @@ export interface SyncSettings {
    *  treated as having dropped off the team (default 6). Pastors think
    *  about serving cadence monthly, not weekly. */
   lapsedFromTeamMonths: number;
+  /** Secondary check: a team needs at least this many plans scheduled
+   *  inside the lapsed window before we'll flag its roster members as
+   *  lapsed (default 3). Lets pastors distinguish "phased out" from
+   *  "team just isn't being scheduled." */
+  lapsedFromTeamEvents: number;
 }
 
 export function getSyncSettings(orgId: number): SyncSettings {
@@ -199,7 +204,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
               email_on_failure, auto_resolve_conflicts,
               activity_months, sync_threshold_months,
               activity_tracking_months, weekly_attendance, lapsed_weeks,
-              lapsed_from_team_months
+              lapsed_from_team_months, lapsed_from_team_events
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -217,6 +222,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
         weekly_attendance: number | null;
         lapsed_weeks: number | null;
         lapsed_from_team_months: number | null;
+        lapsed_from_team_events: number | null;
       }
     | undefined;
   if (!row) {
@@ -234,6 +240,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
       weeklyAttendance: null,
       lapsedWeeks: 10,
       lapsedFromTeamMonths: 6,
+      lapsedFromTeamEvents: 3,
     };
   }
   const freq: SyncFrequency =
@@ -252,6 +259,7 @@ export function getSyncSettings(orgId: number): SyncSettings {
     weeklyAttendance: row.weekly_attendance,
     lapsedWeeks: row.lapsed_weeks ?? 10,
     lapsedFromTeamMonths: row.lapsed_from_team_months ?? 6,
+    lapsedFromTeamEvents: row.lapsed_from_team_events ?? 3,
   };
 }
 
@@ -262,8 +270,8 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          (org_id, enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
           email_on_failure, auto_resolve_conflicts, activity_months,
           sync_threshold_months, activity_tracking_months, weekly_attendance,
-          lapsed_weeks, lapsed_from_team_months, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          lapsed_weeks, lapsed_from_team_months, lapsed_from_team_events, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id) DO UPDATE SET
          enabled = excluded.enabled,
          frequency = excluded.frequency,
@@ -278,6 +286,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          weekly_attendance = excluded.weekly_attendance,
          lapsed_weeks = excluded.lapsed_weeks,
          lapsed_from_team_months = excluded.lapsed_from_team_months,
+         lapsed_from_team_events = excluded.lapsed_from_team_events,
          updated_at = excluded.updated_at`,
     )
     .run(
@@ -297,6 +306,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
         : Math.max(0, Math.min(1_000_000, Math.floor(s.weeklyAttendance))),
       Math.max(1, Math.min(52, Math.floor(s.lapsedWeeks))),
       Math.max(1, Math.min(24, Math.floor(s.lapsedFromTeamMonths))),
+      Math.max(1, Math.min(20, Math.floor(s.lapsedFromTeamEvents))),
     );
 }
 
@@ -308,6 +318,7 @@ export function saveMetricsSettings(
   activityTrackingMonths: number,
   lapsedWeeks: number,
   lapsedFromTeamMonths: number,
+  lapsedFromTeamEvents: number,
 ) {
   const current = getSyncSettings(orgId);
   saveSyncSettings(orgId, {
@@ -317,6 +328,7 @@ export function saveMetricsSettings(
     activityTrackingMonths: Math.max(1, Math.min(36, Math.floor(activityTrackingMonths))),
     lapsedWeeks: Math.max(1, Math.min(52, Math.floor(lapsedWeeks))),
     lapsedFromTeamMonths: Math.max(1, Math.min(24, Math.floor(lapsedFromTeamMonths))),
+    lapsedFromTeamEvents: Math.max(1, Math.min(20, Math.floor(lapsedFromTeamEvents))),
   });
 }
 

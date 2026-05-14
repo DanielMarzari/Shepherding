@@ -22,7 +22,16 @@ export async function saveThresholdsAction(
   const tracking = Number(formData.get("activityTrackingMonths") ?? 3);
   const lapsed = Number(formData.get("lapsedWeeks") ?? 10);
   const lapsedTeamMonths = Number(formData.get("lapsedFromTeamMonths") ?? 6);
-  saveMetricsSettings(s.orgId, activity, sync, tracking, lapsed, lapsedTeamMonths);
+  const lapsedTeamEvents = Number(formData.get("lapsedFromTeamEvents") ?? 3);
+  saveMetricsSettings(
+    s.orgId,
+    activity,
+    sync,
+    tracking,
+    lapsed,
+    lapsedTeamMonths,
+    lapsedTeamEvents,
+  );
   revalidatePath("/teams");
   revalidatePath("/lanes/serv");
   revalidatePath("/metrics");

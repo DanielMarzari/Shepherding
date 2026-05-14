@@ -1,5 +1,6 @@
 "use client";
 
+import { useTransition } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 
 interface Option {
@@ -12,9 +13,10 @@ interface Group {
   options: Option[];
 }
 
-/** Single dropdown that controls the demographic + trend charts on
- *  /groups and /teams. URL is the source of truth (?chart=<value>) so
- *  back/forward and link-sharing both work. */
+/** Dropdown that controls the demographic + trend charts on /groups and
+ *  /teams. URL is the source of truth (?chart=<value>). Selection wraps
+ *  in startTransition so React can keep the existing UI visible while
+ *  the new charts compute — no jarring full reload. */
 export function ChartScopeFilter({
   current,
   groups,
@@ -25,14 +27,17 @@ export function ChartScopeFilter({
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
+  const [isPending, startTransition] = useTransition();
 
   function pick(value: string) {
     const sp = new URLSearchParams(params.toString());
     if (!value || value === "all") sp.delete("chart");
     else sp.set("chart", value);
     const qs = sp.toString();
-    router.push(qs ? `${pathname}?${qs}` : pathname);
-    router.refresh();
+    startTransition(() => {
+      // Use replace so back/forward isn't cluttered with chart picks.
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    });
   }
 
   return (
@@ -41,7 +46,10 @@ export function ChartScopeFilter({
       <select
         value={current || "all"}
         onChange={(e) => pick(e.target.value)}
-        className="bg-bg-elev border border-border-soft rounded px-2 py-1 text-fg text-xs cursor-pointer"
+        disabled={isPending}
+        className={`bg-bg-elev border border-border-soft rounded px-2 py-1 text-fg text-xs cursor-pointer ${
+          isPending ? "opacity-60" : ""
+        }`}
       >
         {groups.map((g) => (
           <optgroup key={g.label} label={g.label}>
@@ -53,6 +61,14 @@ export function ChartScopeFilter({
           </optgroup>
         ))}
       </select>
+      {isPending && (
+        <span
+          className="text-[10px] text-subtle italic"
+          aria-live="polite"
+        >
+          loading…
+        </span>
+      )}
     </label>
   );
 }

@@ -11,10 +11,13 @@ export type TrendDimension = "gender" | "ageBand" | "hasKids";
 export interface TrendSeries {
   /** ISO YYYY-MM strings, oldest first. */
   months: string[];
-  /** Per-dimension-value series of attendance counts per month. */
+  /** Per-dimension-value series of attendance counts per month plus the
+   *  current cohort size for that dimension value (denominator for the
+   *  "% of cohort attending" view). */
   series: Array<{
     label: string;
     values: number[];
+    cohortSize: number;
   }>;
   /** Total attended people per month across all series. */
   totals: number[];
@@ -118,8 +121,25 @@ export function getAttendanceTrend(
     arr[idx] = r.n;
   }
 
+  // Cohort sizes per dimension value — the denominator for "% of cohort
+  // attending in month X" charts. Computed from the same temp.people_scope
+  // we already populated for the time-series query.
+  const cohortRows = db
+    .prepare(
+      `SELECT ${dimensionExpr} AS dim, COUNT(*) AS n
+         FROM pco_people p
+         JOIN temp.people_scope s ON s.person_id = p.pco_id
+        WHERE p.org_id = ?
+        GROUP BY dim`,
+    )
+    .all(orgId) as Array<{ dim: string; n: number }>;
+  const cohortByLabel = new Map(cohortRows.map((r) => [r.dim, r.n]));
+
   const canonical = canonicalOrder(dimension);
-  const seenLabels = new Set(byLabel.keys());
+  const seenLabels = new Set([
+    ...byLabel.keys(),
+    ...cohortByLabel.keys(),
+  ]);
   const orderedLabels = [
     ...canonical.filter((l) => seenLabels.has(l)),
     ...Array.from(seenLabels).filter((l) => !canonical.includes(l)),
@@ -128,6 +148,7 @@ export function getAttendanceTrend(
   const series = orderedLabels.map((label) => ({
     label,
     values: byLabel.get(label) ?? new Array(monthsList.length).fill(0),
+    cohortSize: cohortByLabel.get(label) ?? 0,
   }));
   const totals = new Array(monthsList.length).fill(0);
   for (const s of series) {

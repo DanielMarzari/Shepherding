@@ -65,6 +65,7 @@ export default async function MetricsPage() {
                 initialTracking={settings.activityTrackingMonths}
                 initialLapsed={settings.lapsedWeeks}
                 initialLapsedTeam={settings.lapsedFromTeamMonths}
+                initialLapsedTeamEvents={settings.lapsedFromTeamEvents}
                 isAdmin={session.role === "admin"}
               />
             </div>

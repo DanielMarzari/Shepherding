@@ -122,6 +122,7 @@ export async function saveSyncSettingsAction(
     weeklyAttendance: current.weeklyAttendance,
     lapsedWeeks: current.lapsedWeeks,
     lapsedFromTeamMonths: current.lapsedFromTeamMonths,
+    lapsedFromTeamEvents: current.lapsedFromTeamEvents,
   };
   saveSyncSettings(s.orgId, settings);
   revalidatePath("/pco");

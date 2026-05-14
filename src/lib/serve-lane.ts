@@ -45,6 +45,7 @@ export function listTeams(
   orgId: number,
   activityMonths: number,
   lapsedMonths: number,
+  lapsedEvents: number = 3,
 ): SyncedTeamRow[] {
   const db = getDb();
   const excludedTypes = getExcludedTeamTypes(orgId);
@@ -99,14 +100,18 @@ export function listTeams(
          GROUP BY pp.team_id
        ),
        team_plans_in_lapsed AS (
-         -- "Has this team had any plans scheduled in the lapsed window?"
-         -- If not, we can't say anyone has lapsed — no evidence.
-         SELECT DISTINCT pp.team_id
+         -- "Has this team had at least lapsedFromTeamEvents plans in the
+         -- lapsed window?" Without enough scheduled events we can't tell
+         -- whether someone phased out or just wasn't asked — so no one
+         -- gets flagged.
+         SELECT pp.team_id
          FROM pco_plan_people pp
          JOIN pco_plans p
            ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
          WHERE pp.org_id = ?
            AND p.sort_date >= ?
+         GROUP BY pp.team_id
+         HAVING COUNT(DISTINCT p.pco_id) >= ?
        ),
        team_plans_in_activity AS (
          -- Count distinct plans per team within the activity window.
@@ -173,6 +178,7 @@ export function listTeams(
       activityCutoff,  // served CTE plan window
       orgId,           // team_plans_in_lapsed org
       lapsedCutoff,    // team_plans_in_lapsed cutoff
+      lapsedEvents,    // team_plans_in_lapsed: required plan count
       orgId,           // team_plans_in_activity org
       activityCutoff,  // team_plans_in_activity cutoff
       orgId,           // first_serve_per_person org

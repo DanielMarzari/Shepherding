@@ -21,6 +21,7 @@ export default async function TeamsPage({
     session.orgId,
     settings.activityTrackingMonths,
     settings.lapsedFromTeamMonths,
+    settings.lapsedFromTeamEvents,
   );
   const totals = getTeamTotals(teams);
   const { scope, scopeLabel, options } = resolveTeamScope(

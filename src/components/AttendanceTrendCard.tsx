@@ -26,13 +26,13 @@ export function AttendanceTrendCard({
     {
       dimension: "ageBand",
       title: trendScope === "groups" ? "Group attendance by age" : "Serving by age",
-      subtitle: "distinct people per month, last 12mo",
+      subtitle: "% of each age band participating per month",
     },
     {
       dimension: "gender",
       title:
         trendScope === "groups" ? "Group attendance by gender" : "Serving by gender",
-      subtitle: "distinct people per month",
+      subtitle: "% of each gender participating per month",
     },
     {
       dimension: "hasKids",
@@ -40,7 +40,7 @@ export function AttendanceTrendCard({
         trendScope === "groups"
           ? "Group attendance by parent status"
           : "Serving by parent status",
-      subtitle: "minors / parents / non-parents",
+      subtitle: "% of parents / non-parents / minors participating",
     },
   ];
 
@@ -76,7 +76,15 @@ export function AttendanceTrendCard({
               title={d.title}
               subtitle={d.subtitle}
             >
-              <MultiLineChart series={trend.series} xLabels={xLabels} />
+              <MultiLineChart
+                series={trend.series.map((s) => ({
+                  label: s.label,
+                  values: s.values,
+                  cohortSize: s.cohortSize,
+                }))}
+                xLabels={xLabels}
+                yMode="percent"
+              />
             </ChartCard>
           );
         })}
