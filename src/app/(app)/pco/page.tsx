@@ -71,9 +71,12 @@ export default async function PCOSettingsPage() {
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Last sync</div>
             <div className="font-medium">{lastSyncLabel}</div>
-            <div className="text-xs text-muted mt-1">
+            <div
+              className="text-xs text-muted mt-1 cursor-help"
+              title="Total rows upserted across all entities. Includes no-op writes (where the row matches what we already had), so this is closer to 'sync window size' than 'diff size'."
+            >
               {recentSyncs[0]?.changes != null
-                ? `${recentSyncs[0].changes} changes`
+                ? `${recentSyncs[0].changes.toLocaleString()} rows synced`
                 : "—"}
             </div>
           </Card>
@@ -189,28 +192,56 @@ export default async function PCOSettingsPage() {
             </div>
           ) : (
             <ul className="divide-y divide-border-softer">
-              {recentSyncs.map((r) => (
-                <li key={r.id} className="px-5 py-3 text-sm">
-                  <div className="flex items-baseline justify-between mb-0.5">
-                    <span className="tnum text-xs text-muted">
-                      {new Date(r.startedAt).toLocaleString()}
-                    </span>
-                    <span
-                      className={
-                        r.status === "ok"
-                          ? "text-good-soft-fg text-xs font-medium"
-                          : "text-warn-soft-fg text-xs font-medium"
-                      }
-                    >
-                      {r.status === "ok" ? "OK" : "Partial"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted text-xs">{r.trigger}</span>
-                    <span className="tnum text-xs">{r.changes} changes</span>
-                  </div>
-                </li>
-              ))}
+              {recentSyncs.map((r) => {
+                const topBreakdown = r.breakdown.slice(0, 3);
+                const others = r.breakdown.slice(3);
+                return (
+                  <li key={r.id} className="px-5 py-3 text-sm">
+                    <div className="flex items-baseline justify-between mb-0.5">
+                      <span className="tnum text-xs text-muted">
+                        {new Date(r.startedAt).toLocaleString()}
+                      </span>
+                      <span
+                        className={
+                          r.status === "ok"
+                            ? "text-good-soft-fg text-xs font-medium"
+                            : "text-warn-soft-fg text-xs font-medium"
+                        }
+                      >
+                        {r.status === "ok" ? "OK" : "Partial"}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between">
+                      <span className="text-muted text-xs">{r.trigger}</span>
+                      <span
+                        className="tnum text-xs cursor-help"
+                        title="Total rows upserted across all entities. A 'row' is every record PCO returned in our sync window — most are no-op writes when nothing actually changed."
+                      >
+                        {r.changes.toLocaleString()} rows synced
+                      </span>
+                    </div>
+                    {topBreakdown.length > 0 && (
+                      <div className="mt-1 text-[11px] text-subtle">
+                        {topBreakdown
+                          .map((b) => `${b.label} ${b.count.toLocaleString()}`)
+                          .join(" · ")}
+                        {others.length > 0 && (
+                          <span
+                            className="ml-1 cursor-help"
+                            title={others
+                              .map(
+                                (b) => `${b.label}: ${b.count.toLocaleString()}`,
+                              )
+                              .join("\n")}
+                          >
+                            · +{others.length} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Card>

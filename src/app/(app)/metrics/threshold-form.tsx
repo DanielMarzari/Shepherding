@@ -104,8 +104,12 @@ export function ThresholdForm({
           <span className="tnum text-sm text-muted">{tracking} months</span>
         </div>
         <p className="text-xs text-muted mb-2.5">
-          The window for &ldquo;recent&rdquo; movement metrics — joins, leaves, attendance
-          changes. Smaller = more responsive to this week; larger = smoother trends.
+          The rolling window for every &ldquo;recent&rdquo; metric you see across the
+          app — joined, left, attended-recently, served-recently, plans-in-window,
+          group-events-in-window. Changing this affects every column labelled
+          &ldquo;(Nmo)&rdquo; on /groups, /teams, and the lane pages. Smaller = more
+          responsive to this week; larger = smoother trends. Separate from the
+          sync look-back below, which controls what gets <em>re-pulled</em> from PCO.
         </p>
         <input
           id="activityTrackingMonths"

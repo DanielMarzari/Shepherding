@@ -9,8 +9,9 @@ import { SearchBar } from "./SearchBar";
 const NAV_ITEMS = [
   { href: "/", label: "Home" },
   { href: "/care-queue", label: "Care queue", badge: 17 },
-  { href: "/lanes", label: "Activity / Lanes" },
   { href: "/shepherds", label: "Shepherds" },
+  { href: "/staff", label: "Staff" },
+  { href: "/shepherd-team", label: "Shepherd team" },
   { href: "/people", label: "People" },
   { href: "/groups", label: "Groups" },
   { href: "/teams", label: "Teams" },
@@ -91,6 +92,18 @@ export async function AppShell({
 
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Lanes</div>
         <ul className="space-y-0.5 text-sm">
+          <li>
+            <Link
+              href="/lanes"
+              className={`px-2 py-1.5 rounded flex items-center transition-colors ${
+                active === "Activity / Lanes"
+                  ? "bg-bg-elev-2 text-fg font-medium"
+                  : "text-fg hover:bg-bg-elev-2"
+              }`}
+            >
+              <span>Activity overview</span>
+            </Link>
+          </li>
           {LANE_STATS.map((lane) => {
             const isActive = active === `lane:${lane.key}`;
             return (

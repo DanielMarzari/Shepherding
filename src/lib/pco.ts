@@ -722,26 +722,36 @@ export interface SyncRun {
   finishedAt: string | null;
   trigger: string;
   status: string;
+  /** Sum of upserted rows across every entity. NOT a measure of "things
+   *  that actually changed" — every row PCO returned in the window gets
+   *  upserted (a no-op when nothing differs), so this number is roughly
+   *  "size of the working set" not "size of the diff". */
   changes: number;
   warning: string | null;
+  /** Per-resource breakdown of changes (rows upserted) — used to surface
+   *  a hover/inline summary so admins can see what dominates a sync. */
+  breakdown: Array<{ label: string; count: number }>;
+}
+
+interface SyncRunRow {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  trigger: string;
+  status: string;
+  changes: number;
+  warning: string | null;
+  details: string | null;
 }
 
 export function listRecentSyncs(orgId: number, limit = 8): SyncRun[] {
   return (
     getDb()
       .prepare(
-        `SELECT id, started_at, finished_at, trigger, status, changes, warning
+        `SELECT id, started_at, finished_at, trigger, status, changes, warning, details
        FROM pco_sync_runs WHERE org_id = ? ORDER BY started_at DESC LIMIT ?`,
       )
-      .all(orgId, limit) as {
-      id: number;
-      started_at: string;
-      finished_at: string | null;
-      trigger: string;
-      status: string;
-      changes: number;
-      warning: string | null;
-    }[]
+      .all(orgId, limit) as SyncRunRow[]
   ).map((r) => ({
     id: r.id,
     startedAt: r.started_at,
@@ -750,5 +760,42 @@ export function listRecentSyncs(orgId: number, limit = 8): SyncRun[] {
     status: r.status,
     changes: r.changes,
     warning: r.warning,
+    breakdown: parseBreakdown(r.details),
   }));
+}
+
+/** Pull the per-resource upsert counts out of the `details` JSON blob
+ *  stored at sync completion. Returns only the non-zero rows, sorted by
+ *  count descending — that's what the UI shows. */
+function parseBreakdown(
+  detailsJson: string | null,
+): Array<{ label: string; count: number }> {
+  if (!detailsJson) return [];
+  let details: Record<string, unknown>;
+  try {
+    details = JSON.parse(detailsJson) as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+  const out: Array<{ label: string; count: number }> = [];
+  for (const [key, value] of Object.entries(details)) {
+    if (
+      value &&
+      typeof value === "object" &&
+      "upserted" in (value as Record<string, unknown>)
+    ) {
+      const upserted = Number((value as { upserted: unknown }).upserted) || 0;
+      if (upserted > 0) {
+        out.push({ label: prettifyKey(key), count: upserted });
+      }
+    }
+  }
+  out.sort((a, b) => b.count - a.count);
+  return out;
+}
+
+function prettifyKey(key: string): string {
+  // people → People, groupMemberships → Group memberships, etc.
+  const spaced = key.replace(/([A-Z])/g, " $1").toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }

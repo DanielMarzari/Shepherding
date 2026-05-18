@@ -360,6 +360,13 @@ export interface ClassificationCounts {
   active: number;
   present: number;
   inactive: number;
+  /** Subset of each bucket that is currently a minor (is_minor=1). Lets
+   *  the UI show "1500 (+200 kids)" so the adult-only number is the
+   *  headline for outreach/next-steps work. */
+  shepherdedKids: number;
+  activeKids: number;
+  presentKids: number;
+  inactiveKids: number;
   /** Total minus inactive — what "All" shows by default. */
   visibleByDefault: number;
 }
@@ -386,11 +393,18 @@ export function getClassificationCounts(
       `SELECT
          COUNT(*) AS total,
          SUM(CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END) AS shepherded,
+         SUM(CASE WHEN s.person_id IS NOT NULL AND is_minor = 1 THEN 1 ELSE 0 END) AS shepherdedKids,
          SUM(CASE
                WHEN s.person_id IS NULL
                 AND ((last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
                   OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?))
                THEN 1 ELSE 0 END) AS active,
+         SUM(CASE
+               WHEN s.person_id IS NULL
+                AND is_minor = 1
+                AND ((last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
+                  OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?))
+               THEN 1 ELSE 0 END) AS activeKids,
          SUM(CASE
                WHEN s.person_id IS NULL
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
@@ -400,26 +414,48 @@ export function getClassificationCounts(
                THEN 1 ELSE 0 END) AS present,
          SUM(CASE
                WHEN s.person_id IS NULL
+                AND is_minor = 1
+                AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
+                AND (last_check_in_at IS NULL OR last_check_in_at < ?)
+                AND pco_updated_at IS NOT NULL
+                AND pco_updated_at >= ?
+               THEN 1 ELSE 0 END) AS presentKids,
+         SUM(CASE
+               WHEN s.person_id IS NULL
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
                 AND (last_check_in_at IS NULL OR last_check_in_at < ?)
                 AND (pco_updated_at IS NULL OR pco_updated_at < ?)
-               THEN 1 ELSE 0 END) AS inactive
+               THEN 1 ELSE 0 END) AS inactive,
+         SUM(CASE
+               WHEN s.person_id IS NULL
+                AND is_minor = 1
+                AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
+                AND (last_check_in_at IS NULL OR last_check_in_at < ?)
+                AND (pco_updated_at IS NULL OR pco_updated_at < ?)
+               THEN 1 ELSE 0 END) AS inactiveKids
        FROM pco_people
        LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
        WHERE pco_people.org_id = ?${exclSql}`,
     )
     .get(
-      cutoff, cutoff,   // active: form OR check-in
-      cutoff, cutoff, cutoff,  // present: not-active + pco_updated_at recent
-      cutoff, cutoff, cutoff,  // inactive: none of the above
+      cutoff, cutoff,            // active total
+      cutoff, cutoff,            // activeKids
+      cutoff, cutoff, cutoff,    // present total
+      cutoff, cutoff, cutoff,    // presentKids
+      cutoff, cutoff, cutoff,    // inactive total
+      cutoff, cutoff, cutoff,    // inactiveKids
       orgId,
       ...excluded,
     ) as {
     total: number;
     shepherded: number | null;
+    shepherdedKids: number | null;
     active: number | null;
+    activeKids: number | null;
     present: number | null;
+    presentKids: number | null;
     inactive: number | null;
+    inactiveKids: number | null;
   };
   const shepherded = row.shepherded ?? 0;
   const active = row.active ?? 0;
@@ -431,6 +467,10 @@ export function getClassificationCounts(
     active,
     present,
     inactive,
+    shepherdedKids: row.shepherdedKids ?? 0,
+    activeKids: row.activeKids ?? 0,
+    presentKids: row.presentKids ?? 0,
+    inactiveKids: row.inactiveKids ?? 0,
     visibleByDefault: row.total - inactive,
   };
 }

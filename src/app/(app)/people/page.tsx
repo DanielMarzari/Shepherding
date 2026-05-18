@@ -123,32 +123,41 @@ export default async function PeoplePage({
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Shepherded</div>
-            <div className="tnum text-2xl font-semibold">{counts.shepherded}</div>
+            <AdultKidNumber
+              adults={counts.shepherded - counts.shepherdedKids}
+              kids={counts.shepherdedKids}
+            />
             <div className="text-xs text-muted mt-1">
               group, team, or Sunday program
             </div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Active</div>
-            <div className="tnum text-2xl font-semibold text-good-soft-fg">
-              {counts.active.toLocaleString()}
-            </div>
+            <AdultKidNumber
+              adults={counts.active - counts.activeKids}
+              kids={counts.activeKids}
+              tone="good"
+            />
             <div className="text-xs text-muted mt-1">forms · check-ins · etc.</div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Present</div>
-            <div className="tnum text-2xl font-semibold text-accent">
-              {counts.present.toLocaleString()}
-            </div>
+            <AdultKidNumber
+              adults={counts.present - counts.presentKids}
+              kids={counts.presentKids}
+              tone="accent"
+            />
             <div className="text-xs text-muted mt-1">
               record edited in {settings.activityMonths}mo
             </div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Inactive</div>
-            <div className="tnum text-2xl font-semibold text-warn-soft-fg">
-              {counts.inactive.toLocaleString()}
-            </div>
+            <AdultKidNumber
+              adults={counts.inactive - counts.inactiveKids}
+              kids={counts.inactiveKids}
+              tone="warn"
+            />
             <div className="text-xs text-muted mt-1">hidden from All — historical</div>
           </Card>
         </div>
@@ -236,6 +245,41 @@ export default async function PeoplePage({
         )}
       </div>
     </AppShell>
+  );
+}
+
+/** Stat-card body that shows ADULT count as the headline and the kids
+ *  count as a small "(+N kids)" hint underneath. The user almost never
+ *  cares about kids for next-step / outreach lists, so the adult number
+ *  is the one that pops; the kids count stays visible for context. */
+function AdultKidNumber({
+  adults,
+  kids,
+  tone,
+}: {
+  adults: number;
+  kids: number;
+  tone?: "good" | "accent" | "warn";
+}) {
+  const toneCls =
+    tone === "good"
+      ? "text-good-soft-fg"
+      : tone === "accent"
+        ? "text-accent"
+        : tone === "warn"
+          ? "text-warn-soft-fg"
+          : "";
+  return (
+    <div className="flex items-baseline gap-2">
+      <div className={`tnum text-2xl font-semibold ${toneCls}`}>
+        {adults.toLocaleString()}
+      </div>
+      {kids > 0 && (
+        <div className="tnum text-xs text-muted">
+          +{kids.toLocaleString()} kids
+        </div>
+      )}
+    </div>
   );
 }
 
