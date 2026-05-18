@@ -3,11 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
 import {
+  saveExcludedCheckinEvents,
   saveExcludedGroupTypes,
   saveExcludedMembershipTypes,
   saveExcludedTeamPositions,
   saveExcludedTeamTypes,
-  saveShepherdedCheckinEvents,
 } from "@/lib/pco";
 
 export interface FilterSaveState {
@@ -76,21 +76,22 @@ export async function saveCheckinEventsAction(
     return { status: "error", message: "Only admins can change filters." };
   }
   const ids = formData
-    .getAll("shepherded_checkin_event")
+    .getAll("excluded_checkin_event")
     .filter((v) => typeof v === "string") as string[];
-  saveShepherdedCheckinEvents(s.orgId, ids);
+  saveExcludedCheckinEvents(s.orgId, ids);
   revalidatePath("/pco/filters");
   revalidatePath("/people");
   revalidatePath("/metrics");
   revalidatePath("/care-queue");
   revalidatePath("/lanes");
   revalidatePath("/lanes/care");
+  revalidatePath("/checkins");
   return {
     status: "saved",
     message:
       ids.length === 0
-        ? "No events flagged — check-ins won't push anyone to Shepherded."
-        : `${ids.length} event${ids.length === 1 ? "" : "s"} flagged as shepherded.`,
+        ? "Every check-in event counts as a kid event."
+        : `Ignoring ${ids.length} event${ids.length === 1 ? "" : "s"} — the rest count as kid events.`,
   };
 }
 

@@ -3,7 +3,7 @@ import { decryptJson, encryptJson } from "./encryption";
 import { getDb } from "./db";
 import {
   getDecryptedCreds,
-  getShepherdedCheckinEvents,
+  getExcludedCheckinEvents,
   getSyncEntities,
   getSyncSettings,
 } from "./pco";
@@ -825,17 +825,27 @@ function refreshIsMinor(orgId: number) {
   }
   tx(batch);
 
-  // Overlay pass: anyone with at least one check-in to a flagged
-  // event AND no birthdate on file is treated as a minor. The user's
-  // convention is that flagged events ("Sunday AM Kids", "Wednesday PM
-  // Students", "Monday Care Kids", etc.) are kids-and-students events
-  // by definition, so a check-in there is itself proof of kid-ness.
-  // We require birth_year IS NULL so PCO-known adults who appear in
-  // those events (volunteers, parents who get scanned alongside their
-  // kids for security) don't get flipped to is_minor=1.
-  const shepherdedEvents = getShepherdedCheckinEvents(orgId);
-  if (shepherdedEvents.length > 0) {
-    const placeholders = shepherdedEvents.map(() => "?").join(",");
+  // Overlay pass: any person with no birthdate AND at least one check-in
+  // to a non-excluded event is flipped to is_minor=1. By default every
+  // check-in event is a kids/student event in this org's PCO setup; the
+  // excluded list pulls out the exceptions (Office Visitors, Volunteer
+  // sign-ups, etc.). The birth_year IS NULL guard keeps PCO-known
+  // adults safe from being mis-flipped.
+  const excludedEvents = getExcludedCheckinEvents(orgId);
+  if (excludedEvents.length === 0) {
+    db.prepare(
+      `UPDATE pco_people
+          SET is_minor = 1
+        WHERE org_id = ?
+          AND birth_year IS NULL
+          AND pco_id IN (
+            SELECT DISTINCT person_id
+              FROM pco_check_ins
+             WHERE org_id = ? AND person_id IS NOT NULL
+          )`,
+    ).run(orgId, orgId);
+  } else {
+    const placeholders = excludedEvents.map(() => "?").join(",");
     db.prepare(
       `UPDATE pco_people
           SET is_minor = 1
@@ -846,9 +856,9 @@ function refreshIsMinor(orgId: number) {
               FROM pco_check_ins
              WHERE org_id = ?
                AND person_id IS NOT NULL
-               AND event_id IN (${placeholders})
+               AND event_id NOT IN (${placeholders})
           )`,
-    ).run(orgId, orgId, ...shepherdedEvents);
+    ).run(orgId, orgId, ...excludedEvents);
   }
 }
 

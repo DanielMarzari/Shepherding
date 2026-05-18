@@ -448,27 +448,31 @@ export function saveExcludedGroupTypes(orgId: number, ids: string[]) {
     .run(json, orgId);
 }
 
-// ─── Check-in event filters (kids/student → shepherded) ───────────────
+// ─── Check-in event filters (exclude list — inverted meaning) ─────────
 
-/** Event pco_ids the admin has flagged as "shepherded" — check-ins to
- *  these events count people as shepherded (kids services, student
- *  ministry, etc.). Everything else only bumps Active. */
-export function getShepherdedCheckinEvents(orgId: number): string[] {
+/** Event pco_ids the admin has marked to IGNORE. By default every
+ *  check-in event is treated as a kid/student event (the church's
+ *  default usage of PCO Check-Ins), so this list pulls OUT the
+ *  exceptions — Office Visitors, Volunteer sign-ups, etc.
+ *
+ *  Naming convention: callers ask "should this event count toward
+ *  Shepherded?" → check if its id is NOT in this set. */
+export function getExcludedCheckinEvents(orgId: number): string[] {
   const row = getDb()
     .prepare(
-      "SELECT shepherded_checkin_events FROM pco_sync_settings WHERE org_id = ?",
+      "SELECT excluded_checkin_events FROM pco_sync_settings WHERE org_id = ?",
     )
-    .get(orgId) as { shepherded_checkin_events: string | null } | undefined;
-  if (!row?.shepherded_checkin_events) return [];
+    .get(orgId) as { excluded_checkin_events: string | null } | undefined;
+  if (!row?.excluded_checkin_events) return [];
   try {
-    const parsed = JSON.parse(row.shepherded_checkin_events);
+    const parsed = JSON.parse(row.excluded_checkin_events);
     return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
   } catch {
     return [];
   }
 }
 
-export function saveShepherdedCheckinEvents(orgId: number, ids: string[]) {
+export function saveExcludedCheckinEvents(orgId: number, ids: string[]) {
   const cleaned = Array.from(new Set(ids.filter(Boolean)));
   const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
   const exists = getDb()
@@ -477,16 +481,29 @@ export function saveShepherdedCheckinEvents(orgId: number, ids: string[]) {
   if (!exists) saveSyncSettings(orgId, getSyncSettings(orgId));
   getDb()
     .prepare(
-      "UPDATE pco_sync_settings SET shepherded_checkin_events = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
+      "UPDATE pco_sync_settings SET excluded_checkin_events = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
     )
     .run(json, orgId);
-  // Apply the implied-minor overlay immediately so newly-flagged events
-  // take effect without waiting for the next sync. (We never UNSET
-  // is_minor here — once a kid, always a kid in our records; if an
-  // event was flagged in error the admin can fix the affected rows
-  // manually in PCO or wait for the next refreshIsMinor pass which
-  // re-evaluates from birthdates.)
-  if (cleaned.length > 0) {
+  // Apply the implied-minor overlay immediately so the new exclusion
+  // list takes effect without waiting for the next sync. Any person
+  // with no birthdate who has check-ins to NON-excluded events gets
+  // flipped to is_minor=1. We never UNSET is_minor here — once a kid,
+  // always a kid in our records.
+  if (cleaned.length === 0) {
+    getDb()
+      .prepare(
+        `UPDATE pco_people
+            SET is_minor = 1
+          WHERE org_id = ?
+            AND birth_year IS NULL
+            AND pco_id IN (
+              SELECT DISTINCT person_id
+                FROM pco_check_ins
+               WHERE org_id = ? AND person_id IS NOT NULL
+            )`,
+      )
+      .run(orgId, orgId);
+  } else {
     const placeholders = cleaned.map(() => "?").join(",");
     getDb()
       .prepare(
@@ -499,7 +516,7 @@ export function saveShepherdedCheckinEvents(orgId: number, ids: string[]) {
                 FROM pco_check_ins
                WHERE org_id = ?
                  AND person_id IS NOT NULL
-                 AND event_id IN (${placeholders})
+                 AND event_id NOT IN (${placeholders})
             )`,
       )
       .run(orgId, orgId, ...cleaned);

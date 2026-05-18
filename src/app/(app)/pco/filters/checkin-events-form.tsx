@@ -16,15 +16,15 @@ interface Stat {
 
 export function CheckinEventsForm({
   stats,
-  initialShepherded,
+  initialExcluded,
   isAdmin,
 }: {
   stats: Stat[];
-  initialShepherded: string[];
+  initialExcluded: string[];
   isAdmin: boolean;
 }) {
-  const [flagged, setFlagged] = useState<Set<string>>(
-    new Set(initialShepherded),
+  const [excluded, setExcluded] = useState<Set<string>>(
+    new Set(initialExcluded),
   );
   const [showArchived, setShowArchived] = useState(false);
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
@@ -42,7 +42,7 @@ export function CheckinEventsForm({
   );
 
   function toggle(id: string) {
-    setFlagged((prev) => {
+    setExcluded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -54,16 +54,12 @@ export function CheckinEventsForm({
     <form action={action}>
       <div className="px-5 py-3 border-b border-border-soft flex items-center justify-between gap-4 flex-wrap">
         <p className="text-xs text-muted max-w-2xl">
-          Flag the kids / student / discipleship events where being checked-in
-          means the person is being shepherded by name. Three effects:
-          <span className="text-fg"> (1)</span> the person counts as
-          <span className="text-accent"> Shepherded</span> once they cross the
-          check-in cadence threshold on /metrics,
-          <span className="text-fg"> (2)</span> anyone with a flagged check-in
-          and no birthdate on file is treated as a minor (kid-ness is implied
-          by the event), and
-          <span className="text-fg"> (3)</span> whoever does the check-in or
-          check-out bumps to Active automatically.
+          <strong>Check the events to IGNORE.</strong> By default every check-in
+          event is treated as a kids / student event — checking in there counts
+          toward Shepherded once a person crosses the cadence threshold on
+          /metrics, and a person without a birthdate gets flipped to
+          &ldquo;minor&rdquo;. Use this list to pull out the non-kid events
+          (Office Visitors, Volunteer sign-ups, adult Bible studies, etc.).
         </p>
         {archivedCount > 0 && (
           <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer shrink-0">
@@ -80,7 +76,7 @@ export function CheckinEventsForm({
       <ul className="divide-y divide-border-softer">
         {visible.map((s) => {
           const label = s.name ?? `(unnamed #${s.eventId})`;
-          const isFlagged = flagged.has(s.eventId);
+          const isExcluded = excluded.has(s.eventId);
           const isArchived = !!s.archivedAt;
           return (
             <li
@@ -88,8 +84,8 @@ export function CheckinEventsForm({
               className={`px-5 py-3.5 flex items-center justify-between gap-4 transition-colors ${
                 isArchived
                   ? "opacity-60"
-                  : isFlagged
-                    ? "bg-good-soft-bg/20"
+                  : isExcluded
+                    ? "bg-warn-soft-bg/20"
                     : ""
               }`}
             >
@@ -100,9 +96,9 @@ export function CheckinEventsForm({
               >
                 <input
                   type="checkbox"
-                  name="shepherded_checkin_event"
+                  name="excluded_checkin_event"
                   value={s.eventId}
-                  checked={isFlagged}
+                  checked={isExcluded}
                   onChange={() => toggle(s.eventId)}
                   disabled={!isAdmin}
                   className="accent-[var(--accent)] w-4 h-4 shrink-0"
@@ -129,8 +125,10 @@ export function CheckinEventsForm({
                 </span>
                 <span>{s.totalCheckins.toLocaleString()} check-ins</span>
                 <span>{s.distinctPeople.toLocaleString()} people</span>
-                {isFlagged && (
-                  <span className="text-good-soft-fg font-medium">shepherded</span>
+                {isExcluded ? (
+                  <span className="text-warn-soft-fg font-medium">ignored</span>
+                ) : (
+                  <span className="text-good-soft-fg font-medium">kid event</span>
                 )}
               </div>
             </li>
@@ -148,9 +146,9 @@ export function CheckinEventsForm({
           )}
           {!state && (
             <span className="text-muted">
-              {flagged.size === 0
-                ? "No events flagged — check-ins only bump Active right now."
-                : `${flagged.size} event${flagged.size === 1 ? "" : "s"} flagged.`}
+              {excluded.size === 0
+                ? "Every check-in event counts as a kid event."
+                : `Ignoring ${excluded.size} event${excluded.size === 1 ? "" : "s"} — the rest count as kid events.`}
             </span>
           )}
         </div>

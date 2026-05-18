@@ -2,11 +2,11 @@ import "server-only";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 import {
+  getExcludedCheckinEvents,
   getExcludedGroupTypes,
   getExcludedMembershipTypes,
   getExcludedTeamPositions,
   getExcludedTeamTypes,
-  getShepherdedCheckinEvents,
   getSyncSettings,
 } from "./pco";
 
@@ -133,7 +133,7 @@ function populateShepherdedTempTable(orgId: number) {
   const excludedGroups = getExcludedGroupTypes(orgId);
   const excludedTeams = getExcludedTeamTypes(orgId);
   const excludedPositions = getExcludedTeamPositions(orgId);
-  const shepherdedCheckinEvents = getShepherdedCheckinEvents(orgId);
+  const excludedCheckinEvents = getExcludedCheckinEvents(orgId);
   db.exec(
     "CREATE TEMP TABLE IF NOT EXISTS shep_set (person_id TEXT PRIMARY KEY)",
   );
@@ -191,50 +191,49 @@ function populateShepherdedTempTable(orgId: number) {
          ${posWhere}`,
   ).run(orgId, ...excludedTeams, ...excludedPositions);
 
-  // Source 3: dependent check-ins to flagged events. A person counts as
-  // shepherded via check-ins when they meet TWO conditions:
-  //   (a) ≥ shepherdedCheckinMinEvents flagged check-ins in the window
-  //   (b) at least one of those check-ins was done BY someone else
-  //       (checked_in_by_id != person_id) OR they're recorded is_minor=1
-  // The "checked-in-by-someone-else" signal is the real giveaway for a
-  // dependent (kid, special-needs adult, etc.) regardless of whether
-  // PCO has their birthdate on file. Kids without birthdates were
-  // previously getting stuck in Active because we required is_minor=1;
-  // a parent doing the check-in is the more reliable signal. Adults
-  // who self-check-in (or volunteer) are not caught.
-  if (shepherdedCheckinEvents.length > 0) {
-    const settings = getSyncSettings(orgId);
-    const windowCutoff = new Date(
-      Date.now() -
-        settings.shepherdedCheckinWindowMonths * 30 * 24 * 60 * 60 * 1000,
-    ).toISOString();
-    const placeholders = shepherdedCheckinEvents.map(() => "?").join(",");
-    db.prepare(
-      `INSERT OR IGNORE INTO temp.shep_set (person_id)
-        SELECT ci.person_id
-          FROM pco_check_ins ci
-          JOIN pco_people p
-            ON p.org_id = ci.org_id AND p.pco_id = ci.person_id
-         WHERE ci.org_id = ?
-           AND ci.person_id IS NOT NULL
-           AND ci.event_id IN (${placeholders})
-           AND ci.pco_created_at >= ?
-         GROUP BY ci.person_id
-         HAVING COUNT(*) >= ?
-            AND (
-              MAX(p.is_minor) = 1
-              OR SUM(CASE
-                       WHEN ci.checked_in_by_id IS NOT NULL
-                        AND ci.checked_in_by_id != ci.person_id
-                       THEN 1 ELSE 0 END) > 0
-            )`,
-    ).run(
-      orgId,
-      ...shepherdedCheckinEvents,
-      windowCutoff,
-      settings.shepherdedCheckinMinEvents,
-    );
-  }
+  // Source 3: dependent check-ins to NON-excluded events. By default
+  // every check-in event is treated as a kid/student event; the
+  // excludedCheckinEvents list pulls out the exceptions (Office
+  // Visitors, Volunteer sign-ups, etc.).
+  //
+  // A person counts as shepherded via check-ins when:
+  //   (a) ≥ shepherdedCheckinMinEvents qualifying check-ins in the window
+  //   (b) EITHER they're is_minor=1 already OR at least one of those
+  //       check-ins was done BY someone else (the dependent signal).
+  const settings = getSyncSettings(orgId);
+  const windowCutoff = new Date(
+    Date.now() -
+      settings.shepherdedCheckinWindowMonths * 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const excludeClause =
+    excludedCheckinEvents.length === 0
+      ? ""
+      : `AND ci.event_id NOT IN (${excludedCheckinEvents.map(() => "?").join(",")})`;
+  db.prepare(
+    `INSERT OR IGNORE INTO temp.shep_set (person_id)
+      SELECT ci.person_id
+        FROM pco_check_ins ci
+        JOIN pco_people p
+          ON p.org_id = ci.org_id AND p.pco_id = ci.person_id
+       WHERE ci.org_id = ?
+         AND ci.person_id IS NOT NULL
+         AND ci.pco_created_at >= ?
+         ${excludeClause}
+       GROUP BY ci.person_id
+       HAVING COUNT(*) >= ?
+          AND (
+            MAX(p.is_minor) = 1
+            OR SUM(CASE
+                     WHEN ci.checked_in_by_id IS NOT NULL
+                      AND ci.checked_in_by_id != ci.person_id
+                     THEN 1 ELSE 0 END) > 0
+          )`,
+  ).run(
+    orgId,
+    windowCutoff,
+    ...excludedCheckinEvents,
+    settings.shepherdedCheckinMinEvents,
+  );
 }
 
 export interface ListPeopleOptions {

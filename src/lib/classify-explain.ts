@@ -1,10 +1,10 @@
 import "server-only";
 import { getDb } from "./db";
 import {
+  getExcludedCheckinEvents,
   getExcludedGroupTypes,
   getExcludedTeamPositions,
   getExcludedTeamTypes,
-  getShepherdedCheckinEvents,
   getSyncSettings,
 } from "./pco";
 
@@ -36,7 +36,7 @@ export function explainClassification(
   const excludedGroups = new Set(getExcludedGroupTypes(orgId));
   const excludedTeams = new Set(getExcludedTeamTypes(orgId));
   const excludedPositions = new Set(getExcludedTeamPositions(orgId));
-  const shepherdedEvents = new Set(getShepherdedCheckinEvents(orgId));
+  const excludedEvents = new Set(getExcludedCheckinEvents(orgId));
   const cutoff = new Date(
     Date.now() - activityMonths * 30 * MS_PER_DAY,
   ).toISOString();
@@ -196,73 +196,69 @@ export function explainClassification(
   const isMinor = personRow?.is_minor === 1;
 
   if (checkinRow.total > 0) {
-    if (shepherdedEvents.size > 0) {
-      const settings = getSyncSettings(orgId);
-      const windowCutoff = new Date(
-        Date.now() -
-          settings.shepherdedCheckinWindowMonths * 30 * MS_PER_DAY,
-      ).toISOString();
-      const placeholders = Array.from(shepherdedEvents)
-        .map(() => "?")
-        .join(",");
-      // Pull all-time count, in-window count, AND in-window count where
-      // someone else did the check-in (the "dependent" signal).
-      const flaggedRow = db
-        .prepare(
-          `SELECT
-             COUNT(*) AS allTime,
-             SUM(CASE WHEN pco_created_at >= ? THEN 1 ELSE 0 END) AS inWindow,
-             SUM(CASE
-                   WHEN pco_created_at >= ?
-                    AND checked_in_by_id IS NOT NULL
-                    AND checked_in_by_id != person_id
-                   THEN 1 ELSE 0 END) AS dependentInWindow
-           FROM pco_check_ins
-           WHERE org_id = ?
-             AND person_id = ?
-             AND event_id IN (${placeholders})`,
-        )
-        .get(
-          windowCutoff,
-          windowCutoff,
-          orgId,
-          personId,
-          ...shepherdedEvents,
-        ) as {
-        allTime: number;
-        inWindow: number | null;
-        dependentInWindow: number | null;
-      };
-      const inWindow = flaggedRow.inWindow ?? 0;
-      const dependentInWindow = flaggedRow.dependentInWindow ?? 0;
-      const min = settings.shepherdedCheckinMinEvents;
-      if (flaggedRow.allTime > 0) {
-        const meetsCount = inWindow >= min;
-        const dependentSignal = isMinor || dependentInWindow > 0;
-        if (meetsCount && dependentSignal) {
-          const reason = isMinor
-            ? "they're a minor"
-            : `${dependentInWindow} of those check-ins were done by someone else (dependent signal)`;
-          shepherdedReasons.push(
-            `${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the last ${settings.shepherdedCheckinWindowMonths}mo (≥ ${min}) — ${reason}.`,
-          );
-        } else if (!meetsCount) {
-          const outside = flaggedRow.allTime - inWindow;
-          blockers.push(
-            `Only ${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the last ${settings.shepherdedCheckinWindowMonths}mo — needs ≥ ${min} to count as Shepherded.${outside > 0 ? ` ${outside} earlier check-in${outside === 1 ? "" : "s"} sit outside the window.` : ""}`,
-          );
-        } else {
-          // Met count threshold but failed the dependent signal —
-          // they're a self-check-in adult.
-          blockers.push(
-            `${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the window, but they self-check-in (no parent / leader on record). The rule treats those as Active, not Shepherded.`,
-          );
-        }
+    const settings = getSyncSettings(orgId);
+    const windowCutoff = new Date(
+      Date.now() -
+        settings.shepherdedCheckinWindowMonths * 30 * MS_PER_DAY,
+    ).toISOString();
+    // Default: every check-in event counts; admin's excluded list pulls
+    // out non-kid events.
+    const excludeClause =
+      excludedEvents.size === 0
+        ? ""
+        : `AND event_id NOT IN (${Array.from(excludedEvents)
+            .map(() => "?")
+            .join(",")})`;
+    const args: Array<string | number> = [
+      windowCutoff,
+      windowCutoff,
+      orgId,
+      personId,
+      ...excludedEvents,
+    ];
+    const row = db
+      .prepare(
+        `SELECT
+           COUNT(*) AS allTime,
+           SUM(CASE WHEN pco_created_at >= ? THEN 1 ELSE 0 END) AS inWindow,
+           SUM(CASE
+                 WHEN pco_created_at >= ?
+                  AND checked_in_by_id IS NOT NULL
+                  AND checked_in_by_id != person_id
+                 THEN 1 ELSE 0 END) AS dependentInWindow
+         FROM pco_check_ins
+         WHERE org_id = ?
+           AND person_id = ?
+           ${excludeClause}`,
+      )
+      .get(...args) as {
+      allTime: number;
+      inWindow: number | null;
+      dependentInWindow: number | null;
+    };
+    const inWindow = row.inWindow ?? 0;
+    const dependentInWindow = row.dependentInWindow ?? 0;
+    const min = settings.shepherdedCheckinMinEvents;
+    if (row.allTime > 0) {
+      const meetsCount = inWindow >= min;
+      const dependentSignal = isMinor || dependentInWindow > 0;
+      if (meetsCount && dependentSignal) {
+        const reason = isMinor
+          ? "they're a minor"
+          : `${dependentInWindow} of those check-ins were done by someone else (dependent signal)`;
+        shepherdedReasons.push(
+          `${inWindow} kid-event check-in${inWindow === 1 ? "" : "s"} in the last ${settings.shepherdedCheckinWindowMonths}mo (≥ ${min}) — ${reason}.`,
+        );
+      } else if (!meetsCount) {
+        const outside = row.allTime - inWindow;
+        blockers.push(
+          `Only ${inWindow} kid-event check-in${inWindow === 1 ? "" : "s"} in the last ${settings.shepherdedCheckinWindowMonths}mo — needs ≥ ${min} to count as Shepherded.${outside > 0 ? ` ${outside} earlier check-in${outside === 1 ? "" : "s"} sit outside the window.` : ""}`,
+        );
+      } else {
+        blockers.push(
+          `${inWindow} kid-event check-in${inWindow === 1 ? "" : "s"} in the window, but they always self-check-in (no parent / leader on record). The rule treats those as Active, not Shepherded.`,
+        );
       }
-    } else {
-      blockers.push(
-        `No check-in events are flagged as shepherded yet — flag the kids / student services on /pco/filters → Check-in events.`,
-      );
     }
   }
 

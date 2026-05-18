@@ -56,12 +56,13 @@ export default async function CheckinsPage() {
               <div className="text-xs text-muted mt-1">ever checked in</div>
             </Card>
             <Card className="p-4">
-              <div className="text-xs text-muted mb-1.5">Shepherded events</div>
-              <div className="tnum text-2xl font-semibold text-accent">
-                {summary.shepherdedEvents}
+              <div className="text-xs text-muted mb-1.5">Ignored events</div>
+              <div className="tnum text-2xl font-semibold text-warn-soft-fg">
+                {summary.excludedEvents}
               </div>
               <div className="text-xs text-muted mt-1">
-                of {summary.activeEvents} active
+                of {summary.activeEvents} active · everything else counts
+                as a kid event
               </div>
             </Card>
           </div>

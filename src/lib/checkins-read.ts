@@ -1,6 +1,6 @@
 import "server-only";
 import { getDb } from "./db";
-import { getShepherdedCheckinEvents, getSyncSettings } from "./pco";
+import { getExcludedCheckinEvents, getSyncSettings } from "./pco";
 
 export interface CheckinSummary {
   totalCheckins: number;
@@ -11,7 +11,10 @@ export interface CheckinSummary {
   peopleLastMonth: number;
   totalEvents: number;
   activeEvents: number;
-  shepherdedEvents: number;
+  /** Active events the admin has flagged to IGNORE (Office Visitors,
+   *  Volunteer sign-ups, etc.). Everything else counts as a kid event
+   *  and feeds the shepherded set. */
+  excludedEvents: number;
 }
 
 export interface CheckinEventRow {
@@ -33,7 +36,7 @@ export function getCheckinSummary(orgId: number): CheckinSummary {
   const db = getDb();
   const weekAgo = new Date(Date.now() - 7 * MS_PER_DAY).toISOString();
   const monthAgo = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
-  const shepherdedEvents = new Set(getShepherdedCheckinEvents(orgId));
+  const excludedEvents = new Set(getExcludedCheckinEvents(orgId));
 
   // Single scan with 4 conditional aggregates. The COUNT(DISTINCT person_id)
   // is the costly piece on 265k rows; SQLite has to materialise the
@@ -77,14 +80,14 @@ export function getCheckinSummary(orgId: number): CheckinSummary {
     peopleLastMonth: overall.peopleLastMonth,
     totalEvents: events.totalEvents,
     activeEvents: events.activeEvents ?? 0,
-    shepherdedEvents: shepherdedEvents.size,
+    excludedEvents: excludedEvents.size,
   };
 }
 
 export function listCheckinEvents(orgId: number): CheckinEventRow[] {
   const db = getDb();
   const monthAgo = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
-  const shepherdedEvents = new Set(getShepherdedCheckinEvents(orgId));
+  const excludedEvents = new Set(getExcludedCheckinEvents(orgId));
 
   // Pre-aggregate pco_check_ins per event in a CTE — one pass over the
   // big table — then LEFT JOIN that small per-event summary against
@@ -142,7 +145,7 @@ export function listCheckinEvents(orgId: number): CheckinEventRow[] {
     checkinsLast30: r.checkinsLast30,
     peopleLast30: r.peopleLast30,
     lastCheckinAt: r.lastCheckinAt,
-    shepherded: shepherdedEvents.has(r.eventId),
+    shepherded: !excludedEvents.has(r.eventId),
   }));
 }
 
@@ -179,7 +182,7 @@ export function listPersonCheckins(
 ): PersonCheckinSummary {
   const db = getDb();
   const settings = getSyncSettings(orgId);
-  const shepherdedEvents = new Set(getShepherdedCheckinEvents(orgId));
+  const excludedEvents = new Set(getExcludedCheckinEvents(orgId));
   const windowMonths = settings.shepherdedCheckinWindowMonths;
   const windowCutoff = new Date(
     Date.now() - windowMonths * 30 * MS_PER_DAY,
@@ -237,7 +240,7 @@ export function listPersonCheckins(
       eventId: r.eventId,
       eventName: r.eventName,
       eventArchived: !!r.archivedAt,
-      shepherdedEvent: shepherdedEvents.has(r.eventId),
+      shepherdedEvent: !excludedEvents.has(r.eventId),
       total: r.total,
       inWindow: r.inWindow ?? 0,
       byOther: r.byOther ?? 0,

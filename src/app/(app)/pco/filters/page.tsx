@@ -11,7 +11,7 @@ import {
   getGroupTypeStats,
   getMembershipTypeStats,
   getServiceTypeStats,
-  getShepherdedCheckinEvents,
+  getExcludedCheckinEvents,
   getTeamPositionStats,
 } from "@/lib/pco";
 import { CheckinEventsForm } from "./checkin-events-form";
@@ -56,8 +56,8 @@ export default async function FiltersPage({
   const positionExcluded = getExcludedTeamPositions(session.orgId);
 
   const checkinStats = getCheckinEventStats(session.orgId);
-  const shepherdedCheckinSet = new Set(
-    getShepherdedCheckinEvents(session.orgId),
+  const excludedCheckinSet = new Set(
+    getExcludedCheckinEvents(session.orgId),
   );
 
   return (
@@ -158,7 +158,7 @@ export default async function FiltersPage({
             ) : (
               <CheckinEventsForm
                 stats={checkinStats}
-                initialShepherded={Array.from(shepherdedCheckinSet)}
+                initialExcluded={Array.from(excludedCheckinSet)}
                 isAdmin={session.role === "admin"}
               />
             )}
