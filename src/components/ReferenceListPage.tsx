@@ -85,19 +85,19 @@ export async function ReferenceListPage({
                     <tr className="border-b border-border-soft">
                       <th className="text-left font-medium px-5 py-2">Name</th>
                       <th className="text-left font-medium px-5 py-2">
-                        Membership
+                        Age group
                       </th>
                       <th className="text-left font-medium px-5 py-2">
-                        Demographics
+                        Membership
                       </th>
                     </tr>
                   </thead>
                   <tbody>
                     {list.members.map((m) => {
-                      const age =
-                        m.birthYear != null
-                          ? new Date().getUTCFullYear() - m.birthYear
-                          : null;
+                      // Reference-list pages deliberately don't surface
+                      // exact ages or parent flags — leadership rosters
+                      // get shared with people who don't need that
+                      // detail. Adult / Kid is the only age signal.
                       return (
                         <tr
                           key={m.personId}
@@ -114,16 +114,19 @@ export async function ReferenceListPage({
                               </Link>
                             </div>
                           </td>
+                          <td className="px-5 py-3">
+                            <span
+                              className={`text-xs px-1.5 py-0.5 rounded ${
+                                m.isMinor
+                                  ? "bg-warn-soft-bg text-warn-soft-fg"
+                                  : "bg-bg-elev-2 text-muted"
+                              }`}
+                            >
+                              {m.isMinor ? "Kid" : "Adult"}
+                            </span>
+                          </td>
                           <td className="px-5 py-3 text-muted">
                             {m.membershipType ?? (
-                              <span className="text-subtle">—</span>
-                            )}
-                          </td>
-                          <td className="px-5 py-3 text-muted text-xs">
-                            {age != null ? <>age {age} · </> : null}
-                            {m.isMinor && <span>minor · </span>}
-                            {m.isParent && <span>parent</span>}
-                            {!m.isMinor && !m.isParent && age == null && (
                               <span className="text-subtle">—</span>
                             )}
                           </td>
