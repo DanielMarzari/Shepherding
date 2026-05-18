@@ -6,6 +6,7 @@ import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 import { refreshLastCheckIn, syncCheckinsAll } from "./pco-sync-checkins";
 import { refreshLastAttended, syncGroupsAll } from "./pco-sync-groups";
 import { refreshIsParent, syncHouseholdsAll } from "./pco-sync-households";
+import { syncListsAll } from "./pco-sync-lists";
 import { refreshLastServed, syncServicesAll } from "./pco-sync-services";
 
 // Forms the user explicitly asked to track (from the prompt).
@@ -24,6 +25,8 @@ export interface SyncDetails {
   people: { fetched: number; upserted: number };
   households: { fetched: number; upserted: number };
   householdMemberships: { fetched: number; upserted: number };
+  lists: { fetched: number; upserted: number };
+  listMemberships: { fetched: number; upserted: number };
   forms: { fetched: number; upserted: number };
   formFields: { fetched: number; upserted: number };
   formSubmissions: { fetched: number; upserted: number };
@@ -107,6 +110,8 @@ export async function runSync(
     people: { fetched: 0, upserted: 0 },
     households: { fetched: 0, upserted: 0 },
     householdMemberships: { fetched: 0, upserted: 0 },
+    lists: { fetched: 0, upserted: 0 },
+    listMemberships: { fetched: 0, upserted: 0 },
     forms: { fetched: 0, upserted: 0 },
     formFields: { fetched: 0, upserted: 0 },
     formSubmissions: { fetched: 0, upserted: 0 },
@@ -164,6 +169,20 @@ export async function runSync(
         warning = appendWarning(
           warning,
           `Households: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
+
+      // PCO Lists (REFERENCE-prefixed only). Lightweight — usually a few
+      // lists. Surfaces staff / deacons / elders / shepherd team for use
+      // elsewhere in the app.
+      try {
+        const l = await syncListsAll(client, orgId);
+        details.lists = l.lists;
+        details.listMemberships = l.listMemberships;
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Lists: ${e instanceof Error ? e.message : "failed"}`,
         );
       }
     }
@@ -271,6 +290,8 @@ export async function runSync(
       details.people.upserted +
       details.households.upserted +
       details.householdMemberships.upserted +
+      details.lists.upserted +
+      details.listMemberships.upserted +
       details.forms.upserted +
       details.formFields.upserted +
       details.formSubmissions.upserted +
@@ -369,6 +390,13 @@ async function syncPeople(
         address: addressStr,
       };
 
+      // Skip placeholder rows where someone typed a single punctuation
+      // mark instead of a real name. PCO doesn't enforce real names so
+      // there's a long tail of "-" / "_" / "." / "?" people.
+      if (isJunkName(pii.first_name) && isJunkName(pii.last_name)) {
+        continue;
+      }
+
       upsertPerson(orgId, {
         pcoId: p.id,
         encPii: encryptJson(pii),
@@ -385,6 +413,16 @@ async function syncPeople(
   }
 
   return { fetched, upserted, maxUpdatedAt };
+}
+
+/** True when a "name" field is empty or just punctuation/whitespace —
+ *  i.e. an admin typed "-" or "_" to skip the required field. We drop
+ *  these rows from sync so they don't show up across People / lanes /
+ *  charts. */
+function isJunkName(name: string | null): boolean {
+  if (!name) return true;
+  const stripped = name.replace(/[\s\-_.,:;!?'"`~+*/\\()[\]{}<>|@#$%^&=]/g, "");
+  return stripped.length === 0;
 }
 
 function formatAddress(a: unknown): string | null {
@@ -696,9 +734,10 @@ function refreshLastActivity(orgId: number) {
 
 /** Refresh the is_minor + birth_year denormalized columns by decrypting
  *  each person's birthdate from enc_pii. is_minor gates the kids-checked-
- *  in-to-shepherded-event rule; birth_year drives the demographic charts
- *  on /people, /groups, and /teams (so age buckets can be computed in
- *  SQL without a per-page decrypt pass). */
+ *  in-to-shepherded-event rule; birth_year drives the demographic charts.
+ *  Also opportunistically deletes pre-existing rows whose names are pure
+ *  punctuation — they were synced before isJunkName was added at sync
+ *  time and clutter every list. */
 function refreshIsMinor(orgId: number) {
   const db = getDb();
   const rows = db
@@ -710,20 +749,41 @@ function refreshIsMinor(orgId: number) {
   const update = db.prepare(
     `UPDATE pco_people SET is_minor = ?, birth_year = ? WHERE org_id = ? AND pco_id = ?`,
   );
+  const del = db.prepare(`DELETE FROM pco_people WHERE org_id = ? AND pco_id = ?`);
   const tx = db.transaction(
-    (items: Array<{ pcoId: string; minor: number; birthYear: number | null }>) => {
-      for (const it of items) update.run(it.minor, it.birthYear, orgId, it.pcoId);
+    (
+      items: Array<{
+        pcoId: string;
+        minor: number;
+        birthYear: number | null;
+        junk: boolean;
+      }>,
+    ) => {
+      for (const it of items) {
+        if (it.junk) {
+          del.run(orgId, it.pcoId);
+        } else {
+          update.run(it.minor, it.birthYear, orgId, it.pcoId);
+        }
+      }
     },
   );
   const batch: Array<{
     pcoId: string;
     minor: number;
     birthYear: number | null;
+    junk: boolean;
   }> = [];
   for (const r of rows) {
     const pii = r.enc_pii
-      ? decryptJson<{ birthdate?: string | null }>(r.enc_pii)
+      ? decryptJson<{
+          birthdate?: string | null;
+          first_name?: string | null;
+          last_name?: string | null;
+        }>(r.enc_pii)
       : null;
+    const junk =
+      isJunkName(pii?.first_name ?? null) && isJunkName(pii?.last_name ?? null);
     const b = pii?.birthdate ?? null;
     let birthYear: number | null = null;
     if (b) {
@@ -731,7 +791,7 @@ function refreshIsMinor(orgId: number) {
       if (!isNaN(d.getTime())) birthYear = d.getUTCFullYear();
     }
     const minor = b && isUnder18(b, now) ? 1 : 0;
-    batch.push({ pcoId: r.pco_id, minor, birthYear });
+    batch.push({ pcoId: r.pco_id, minor, birthYear, junk });
   }
   tx(batch);
 }
@@ -786,6 +846,8 @@ export interface SyncedDataCounts {
   people: number;
   households: number;
   householdMemberships: number;
+  lists: number;
+  listMemberships: number;
   forms: number;
   formFields: number;
   formSubmissions: number;
@@ -813,6 +875,10 @@ export function getSyncedCounts(orgId: number): SyncedDataCounts {
     households: one("SELECT COUNT(*) AS n FROM pco_households WHERE org_id = ?"),
     householdMemberships: one(
       "SELECT COUNT(*) AS n FROM pco_household_memberships WHERE org_id = ?",
+    ),
+    lists: one("SELECT COUNT(*) AS n FROM pco_lists WHERE org_id = ?"),
+    listMemberships: one(
+      "SELECT COUNT(*) AS n FROM pco_list_memberships WHERE org_id = ?",
     ),
     forms: one("SELECT COUNT(*) AS n FROM pco_forms WHERE org_id = ?"),
     formFields: one("SELECT COUNT(*) AS n FROM pco_form_fields WHERE org_id = ?"),

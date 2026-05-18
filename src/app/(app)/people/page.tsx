@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, CardHeader, Pill } from "@/components/ui";
-import { DemographicCharts } from "@/components/DemographicCharts";
+import { Suspense } from "react";
+import { AsyncDemographicCharts } from "@/components/AsyncChartSections";
+import { DemographicChartsSkeleton } from "@/components/ChartsLoading";
 import { requireOrg } from "@/lib/auth";
 import { getMembershipTypeStats, getSyncSettings } from "@/lib/pco";
 import {
@@ -220,11 +222,17 @@ export default async function PeoplePage({
         )}
 
         {counts.total > 0 && (
-          <DemographicCharts
-            orgId={session.orgId}
-            scope={{ kind: "all" }}
-            title="Demographics — all people"
-          />
+          <Suspense
+            fallback={
+              <DemographicChartsSkeleton title="Demographics — all people" />
+            }
+          >
+            <AsyncDemographicCharts
+              orgId={session.orgId}
+              scope={{ kind: "all" }}
+              title="Demographics — all people"
+            />
+          </Suspense>
         )}
       </div>
     </AppShell>

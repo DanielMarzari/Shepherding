@@ -41,37 +41,50 @@ export function ChartCard({ title, subtitle, children }: ChartCardProps) {
 
 // ─── Tooltip (shared) ──────────────────────────────────────────────────
 
+/** SVG tooltip that auto-flips below the point if it would clip off the
+ *  top of the chart, and clamps horizontally to stay inside `viewWidth`. */
 function Tooltip({
   x,
   y,
   text,
+  viewWidth,
+  topPad = 4,
 }: {
   x: number;
   y: number;
   text: string;
+  /** Total SVG viewBox width — used to clamp the tooltip so it never
+   *  hangs off the left/right edge. */
+  viewWidth: number;
+  /** Minimum Y at which the tooltip can sit. If `y - h - 6` would land
+   *  above this, the tooltip flips to BELOW the point instead. */
+  topPad?: number;
 }) {
-  // Estimate text width; SVG <text> doesn't auto-resize background. Aim
-  // small and centered above the hover point.
-  const w = Math.max(56, text.length * 6.5 + 14);
-  const h = 22;
+  const w = Math.max(40, text.length * 6.5 + 12);
+  const h = 20;
+  const wantAboveY = y - h - 6;
+  const flipBelow = wantAboveY < topPad;
+  const boxY = flipBelow ? y + 8 : wantAboveY;
+  // Clamp x so the box doesn't run off either side of the viewBox.
+  const boxX = Math.max(2, Math.min(viewWidth - w - 2, x - w / 2));
   return (
     <g pointerEvents="none">
       <rect
-        x={x - w / 2}
-        y={y - h - 6}
+        x={boxX}
+        y={boxY}
         width={w}
         height={h}
         rx={4}
-        fill="var(--fg)"
+        fill="#0f172a"
         fillOpacity="0.92"
       />
       <text
-        x={x}
-        y={y - h - 6 + 14}
+        x={boxX + w / 2}
+        y={boxY + 13}
         textAnchor="middle"
         fontSize="10"
         fontWeight="500"
-        fill="var(--bg)"
+        fill="#ffffff"
       >
         {text}
       </text>
@@ -198,6 +211,7 @@ export function PieChart({
             <Tooltip
               x={hovered.mid.x}
               y={hovered.mid.y}
+              viewWidth={size}
               text={`${hovered.label}: ${hovered.count.toLocaleString()} (${Math.round(hovered.pct * 100)}%)`}
             />
           )}
@@ -262,7 +276,10 @@ export function BarChart({ data }: { data: ChartDatum[] }) {
               onMouseLeave={() => setHoverIdx(null)}
             >
               {isHovered ? (
-                <div className="text-[10px] tnum font-medium text-fg bg-fg/90 text-bg px-1.5 py-0.5 rounded">
+                <div
+                  className="text-[10px] tnum font-medium px-1.5 py-0.5 rounded"
+                  style={{ background: "#0f172a", color: "#ffffff" }}
+                >
                   {d.count.toLocaleString()} · {Math.round(pct)}%
                 </div>
               ) : (
@@ -385,6 +402,7 @@ export function DistributionCurve({ data }: { data: ChartDatum[] }) {
           <Tooltip
             x={hovered.x}
             y={hovered.y}
+            viewWidth={width}
             text={`${hovered.d.label}: ${hovered.d.count.toLocaleString()}`}
           />
         )}
@@ -464,23 +482,61 @@ export function MultiLineChart({
 
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(yTop * f));
 
+  function xFor(j: number): number {
+    return padX + j * stepX;
+  }
+  function yFor(v: number): number {
+    return padTop + innerH - (v / yTop) * innerH;
+  }
   function pathFor(values: number[]): string {
     return values
-      .map((v, i) => {
-        const x = padX + i * stepX;
-        const y = padTop + innerH - (v / yTop) * innerH;
-        return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
-      })
+      .map((v, i) => `${i === 0 ? "M" : "L"} ${xFor(i).toFixed(1)} ${yFor(v).toFixed(1)}`)
       .join(" ");
   }
 
-  // Hovered point coordinates.
+  // Snap a mouse position to the nearest (series, point) so a hover on
+  // ANY visible line wins, including where lines cross. Hit tests in SVG
+  // viewBox units after converting from CSS pixels.
+  function handleMove(e: React.MouseEvent<SVGSVGElement>) {
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const vx = ((e.clientX - rect.left) / rect.width) * width;
+    const vy = ((e.clientY - rect.top) / rect.height) * height;
+    if (vx < padX - 4 || vx > width - padX + 4) {
+      setHover(null);
+      return;
+    }
+    // Column (point index) nearest to vx.
+    const pointIdx = Math.max(
+      0,
+      Math.min(
+        xLabels.length - 1,
+        Math.round((vx - padX) / stepX),
+      ),
+    );
+    // Among all series, the one whose y at this column is closest to vy.
+    let bestSeries = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < resolved.length; i++) {
+      const y = yFor(resolved[i].plotValues[pointIdx]);
+      const dist = Math.abs(y - vy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestSeries = i;
+      }
+    }
+    setHover({ seriesIdx: bestSeries, pointIdx });
+  }
+
   const hoveredPoint = (() => {
     if (!hover) return null;
     const s = resolved[hover.seriesIdx];
-    const x = padX + hover.pointIdx * stepX;
-    const y = padTop + innerH - (s.plotValues[hover.pointIdx] / yTop) * innerH;
-    return { x, y, s, idx: hover.pointIdx };
+    return {
+      x: xFor(hover.pointIdx),
+      y: yFor(s.plotValues[hover.pointIdx]),
+      s,
+      idx: hover.pointIdx,
+    };
   })();
 
   return (
@@ -492,6 +548,9 @@ export function MultiLineChart({
         preserveAspectRatio="none"
         role="img"
         aria-label="Trend over time"
+        onMouseMove={handleMove}
+        onMouseLeave={() => setHover(null)}
+        style={{ cursor: "crosshair" }}
       >
         {yTicks.map((tick, i) => {
           const y = padTop + innerH - (tick / yTop) * innerH;
@@ -535,7 +594,7 @@ export function MultiLineChart({
           );
         })}
         {resolved.map((s, i) => (
-          <g key={s.label}>
+          <g key={s.label} pointerEvents="none">
             <path
               d={pathFor(s.plotValues)}
               fill="none"
@@ -547,55 +606,31 @@ export function MultiLineChart({
                 transition: "opacity 120ms",
               }}
             />
-            {s.plotValues.map((v, j) => {
-              const x = padX + j * stepX;
-              const y = padTop + innerH - (v / yTop) * innerH;
-              return (
-                <circle
-                  key={j}
-                  cx={x}
-                  cy={y}
-                  r={hover?.seriesIdx === i && hover?.pointIdx === j ? 4 : 2}
-                  fill={PALETTE[i % PALETTE.length]}
-                  style={{
-                    opacity: hover == null || hover.seriesIdx === i ? 1 : 0.3,
-                    transition: "r 100ms",
-                  }}
-                />
-              );
-            })}
+            {s.plotValues.map((v, j) => (
+              <circle
+                key={j}
+                cx={xFor(j)}
+                cy={yFor(v)}
+                r={hover?.seriesIdx === i && hover?.pointIdx === j ? 4 : 2}
+                fill={PALETTE[i % PALETTE.length]}
+                style={{
+                  opacity: hover == null || hover.seriesIdx === i ? 1 : 0.3,
+                  transition: "r 100ms",
+                }}
+              />
+            ))}
           </g>
         ))}
-        {/* Invisible hit columns per (x, series) for hover. */}
-        {resolved.flatMap((s, i) =>
-          s.plotValues.map((v, j) => {
-            const x = padX + j * stepX;
-            return (
-              <rect
-                key={`${i}-${j}`}
-                x={x - stepX / 2}
-                y={padTop}
-                width={stepX}
-                height={innerH}
-                fill="transparent"
-                onMouseEnter={() => setHover({ seriesIdx: i, pointIdx: j })}
-                onMouseLeave={() => setHover(null)}
-              />
-            );
-          }),
-        )}
         {hoveredPoint && (
           <Tooltip
             x={hoveredPoint.x}
             y={hoveredPoint.y}
+            viewWidth={width}
+            topPad={padTop}
             text={
               yMode === "percent"
-                ? `${hoveredPoint.s.label} · ${xLabels[hoveredPoint.idx]}: ${Math.round(
-                    hoveredPoint.s.plotValues[hoveredPoint.idx],
-                  )}% (${hoveredPoint.s.values[hoveredPoint.idx].toLocaleString()} of ${
-                    hoveredPoint.s.denom[hoveredPoint.idx]?.toLocaleString() ?? "?"
-                  })`
-                : `${hoveredPoint.s.label} · ${xLabels[hoveredPoint.idx]}: ${hoveredPoint.s.values[hoveredPoint.idx].toLocaleString()}`
+                ? `${Math.round(hoveredPoint.s.plotValues[hoveredPoint.idx])}%`
+                : `${hoveredPoint.s.values[hoveredPoint.idx].toLocaleString()}`
             }
           />
         )}

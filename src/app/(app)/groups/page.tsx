@@ -1,7 +1,14 @@
+import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
-import { AttendanceTrendCard } from "@/components/AttendanceTrendCard";
+import {
+  AsyncAttendanceTrendCard,
+  AsyncDemographicCharts,
+} from "@/components/AsyncChartSections";
 import { ChartScopeFilter } from "@/components/ChartScopeFilter";
-import { DemographicCharts } from "@/components/DemographicCharts";
+import {
+  AttendanceTrendSkeleton,
+  DemographicChartsSkeleton,
+} from "@/components/ChartsLoading";
 import { requireOrg } from "@/lib/auth";
 import { listGroups } from "@/lib/community-lane";
 import { getGroupTypeStats, getSyncSettings } from "@/lib/pco";
@@ -55,18 +62,30 @@ export default async function GroupsPage({
           </div>
         )}
         {groups.length > 0 && (
-          <DemographicCharts
-            orgId={session.orgId}
-            scope={scope}
-            title={`Demographics — ${scopeLabel}`}
-          />
+          <Suspense
+            key={`demo-${params.chart ?? "all"}`}
+            fallback={
+              <DemographicChartsSkeleton title={`Demographics — ${scopeLabel}`} />
+            }
+          >
+            <AsyncDemographicCharts
+              orgId={session.orgId}
+              scope={scope}
+              title={`Demographics — ${scopeLabel}`}
+            />
+          </Suspense>
         )}
         {groups.length > 0 && (
-          <AttendanceTrendCard
-            orgId={session.orgId}
-            trendScope="groups"
-            filterScope={scope}
-          />
+          <Suspense
+            key={`trend-${params.chart ?? "all"}`}
+            fallback={<AttendanceTrendSkeleton scope="groups" />}
+          >
+            <AsyncAttendanceTrendCard
+              orgId={session.orgId}
+              trendScope="groups"
+              filterScope={scope}
+            />
+          </Suspense>
         )}
       </div>
     </AppShell>

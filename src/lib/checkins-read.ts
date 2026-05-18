@@ -117,10 +117,8 @@ export function listCheckinEvents(orgId: number): CheckinEventRow[] {
        FROM pco_checkin_events e
        LEFT JOIN event_stats s ON s.event_id = e.pco_id
        WHERE e.org_id = ?
-       ORDER BY
-         CASE WHEN e.archived_at IS NULL THEN 0 ELSE 1 END,
-         totalCheckins DESC,
-         e.name ASC`,
+         AND e.archived_at IS NULL
+       ORDER BY totalCheckins DESC, e.name ASC`,
     )
     .all(monthAgo, monthAgo, orgId, orgId) as Array<{
     eventId: string;
