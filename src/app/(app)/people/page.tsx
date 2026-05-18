@@ -284,8 +284,10 @@ function AdultKidNumber({
 }
 
 /** Compact age/role chip for the People table. Shows the actual age
- *  when birth_year is on file; otherwise just "Adult" / "Kid" / "—" so
- *  we can still distinguish the bucket. */
+ *  when birth_year is on file; otherwise defaults to "Adult" — kids
+ *  almost always have a birthdate on file (PCO requires it for
+ *  check-in / Sunday programs), while adults frequently don't, so
+ *  "unknown" is overwhelmingly an adult who never filled in the field. */
 function AgeBadge({
   isMinor,
   birthYear,
@@ -308,7 +310,6 @@ function AgeBadge({
       </span>
     );
   }
-  // No birthdate on file — fall back to the boolean flag alone.
   if (isMinor) {
     return (
       <span className="text-xs px-1.5 py-0.5 rounded bg-warn-soft-bg text-warn-soft-fg">
@@ -316,7 +317,14 @@ function AgeBadge({
       </span>
     );
   }
-  return <span className="text-xs text-subtle">—</span>;
+  return (
+    <span
+      className="text-xs px-1.5 py-0.5 rounded text-subtle"
+      title="No birthdate on file — defaulted to Adult"
+    >
+      Adult
+    </span>
+  );
 }
 
 function PeopleTable({

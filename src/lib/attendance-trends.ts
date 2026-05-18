@@ -186,8 +186,7 @@ function dimensionSql(dimension: TrendDimension): string {
       return `CASE
         WHEN p.is_minor = 1 THEN 'Minor'
         WHEN p.is_parent = 1 THEN 'Has kids'
-        WHEN p.birth_year IS NOT NULL THEN 'No kids'
-        ELSE 'Unknown'
+        ELSE 'No kids'
       END`;
     case "ageBand": {
       const thisYear = new Date().getUTCFullYear();
@@ -211,7 +210,7 @@ function canonicalOrder(dimension: TrendDimension): string[] {
     case "gender":
       return ["Male", "Female", "Unknown"];
     case "hasKids":
-      return ["Has kids", "No kids", "Minor", "Unknown"];
+      return ["Has kids", "No kids", "Minor"];
     case "ageBand":
       return [
         "0–5",

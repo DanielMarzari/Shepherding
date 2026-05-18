@@ -131,8 +131,21 @@ export interface CommunityPersonRow {
   fullName: string;
   initials: string;
   membershipType: string | null;
+  /** Distinct active groups they're a member of. */
   groupCount: number;
+  /** Earliest joined_at across their active memberships — proxy for
+   *  "how long they've been in community." */
   joinedFirstAt: string | null;
+  /** % of group events in the activity window they showed up to.
+   *  Computed across ALL their groups, weighted by event count. Null
+   *  when none of their groups recorded attendance in the window. */
+  attendancePct: number | null;
+  /** Distinct events they attended per month in the activity window.
+   *  Null when we have no attendance data on file at all. */
+  frequencyPerMonth: number | null;
+  /** Days since `joinedFirstAt` — "lifespan" in this lane. Null when
+   *  PCO didn't record any joined_at on their memberships. */
+  lifespanDays: number | null;
 }
 
 export interface CommunityLaneStats {
@@ -519,38 +532,103 @@ export function getGroupTotals(
 
 export function listCommunityPeople(
   orgId: number,
+  activityMonths: number,
   limit = 100,
 ): CommunityPersonRow[] {
   const db = getDb();
   const excludedGroupTypes = getExcludedGroupTypes(orgId);
   const { join, args: joinArgs } = nonExcludedJoin(excludedGroupTypes);
+  const trackingCutoff = new Date(
+    Date.now() - activityMonths * 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
-  // No person-level membership_type filter here — being in a group is what
-  // qualifies someone for the Community lane (member or leader).
+  // Per-person rollup. Three CTEs feed in:
+  //  - roster:    distinct active groups + earliest joined_at + leader flag
+  //  - eventsAvail: how many group events landed in the window, per person,
+  //                 across the groups they're in (denominator for attendance%)
+  //  - attended:  how many of those events they actually showed up to
+  //                 (numerator)
+  // The frequency metric is "distinct events attended ÷ tracking months".
   const rows = db
     .prepare(
-      `SELECT
+      `WITH roster AS (
+         SELECT
+           m.person_id,
+           COUNT(DISTINCT m.group_id) AS groupCount,
+           MIN(m.joined_at)           AS joinedFirstAt
+         FROM pco_group_memberships m
+         ${join}
+         WHERE m.org_id = ?
+           AND m.archived_at IS NULL
+         GROUP BY m.person_id
+       ),
+       events_avail AS (
+         -- One row per (person, event) covering events in the window for
+         -- groups they're a member of. Used as the denominator.
+         SELECT
+           m.person_id,
+           COUNT(*) AS n
+         FROM pco_group_memberships m
+         ${join}
+         JOIN pco_group_events e
+           ON e.org_id = m.org_id
+          AND e.group_id = m.group_id
+         WHERE m.org_id = ?
+           AND m.archived_at IS NULL
+           AND e.starts_at >= ?
+         GROUP BY m.person_id
+       ),
+       attended AS (
+         SELECT
+           a.person_id,
+           COUNT(DISTINCT a.event_id) AS n
+         FROM pco_event_attendances a
+         JOIN pco_group_memberships m
+           ON m.org_id = a.org_id
+          AND m.group_id = a.group_id
+          AND m.person_id = a.person_id
+          AND m.archived_at IS NULL
+         ${join}
+         WHERE a.org_id = ?
+           AND a.attended = 1
+           AND a.event_starts_at >= ?
+         GROUP BY a.person_id
+       )
+       SELECT
          p.pco_id AS pcoId,
          p.enc_pii AS encPii,
          p.membership_type AS membershipType,
-         COUNT(DISTINCT m.group_id) AS groupCount,
-         MIN(m.joined_at) AS joinedFirstAt
-       FROM pco_group_memberships m
-       ${join}
-       JOIN pco_people p ON p.org_id = m.org_id AND p.pco_id = m.person_id
-       WHERE m.org_id = ?
-         AND m.archived_at IS NULL
-       GROUP BY p.pco_id, p.enc_pii, p.membership_type
-       ORDER BY COUNT(DISTINCT m.group_id) DESC, MIN(m.joined_at) DESC NULLS LAST
+         r.groupCount     AS groupCount,
+         r.joinedFirstAt  AS joinedFirstAt,
+         COALESCE(ev.n, 0) AS eventsAvail,
+         COALESCE(att.n, 0) AS attendedEvents
+       FROM roster r
+       JOIN pco_people p ON p.org_id = ? AND p.pco_id = r.person_id
+       LEFT JOIN events_avail ev ON ev.person_id = r.person_id
+       LEFT JOIN attended att    ON att.person_id = r.person_id
+       ORDER BY r.groupCount DESC, r.joinedFirstAt DESC NULLS LAST
        LIMIT ?`,
     )
-    .all(...joinArgs, orgId, limit) as {
+    .all(
+      ...joinArgs, // roster CTE
+      orgId,
+      ...joinArgs, // events_avail CTE
+      orgId,
+      trackingCutoff,
+      ...joinArgs, // attended CTE
+      orgId,
+      trackingCutoff,
+      orgId,       // outer join to pco_people
+      limit,
+    ) as Array<{
     pcoId: string;
     encPii: string | null;
     membershipType: string | null;
     groupCount: number;
     joinedFirstAt: string | null;
-  }[];
+    eventsAvail: number;
+    attendedEvents: number;
+  }>;
 
   return rows.map((r) => {
     const pii = decryptJson<PIIBlob>(r.encPii) ?? {};
@@ -560,6 +638,18 @@ export function listCommunityPeople(
       [firstName, lastName].filter(Boolean).join(" ") || `(unknown #${r.pcoId})`;
     const initials =
       ((firstName?.[0] ?? "") + (lastName?.[0] ?? "")).toUpperCase() || "??";
+    const attendancePct =
+      r.eventsAvail > 0
+        ? Math.min(100, (r.attendedEvents / r.eventsAvail) * 100)
+        : null;
+    const frequencyPerMonth =
+      activityMonths > 0 ? r.attendedEvents / activityMonths : null;
+    const lifespanDays = r.joinedFirstAt
+      ? Math.floor(
+          (Date.now() - new Date(r.joinedFirstAt).getTime()) /
+            (24 * 60 * 60 * 1000),
+        )
+      : null;
     return {
       pcoId: r.pcoId,
       fullName,
@@ -567,6 +657,9 @@ export function listCommunityPeople(
       membershipType: r.membershipType,
       groupCount: r.groupCount,
       joinedFirstAt: r.joinedFirstAt,
+      attendancePct,
+      frequencyPerMonth,
+      lifespanDays,
     };
   });
 }

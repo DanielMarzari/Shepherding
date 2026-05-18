@@ -150,6 +150,23 @@ export interface ShepherdDetailTeam {
   recentlyServed: number;
 }
 
+export interface FlockMember {
+  personId: string;
+  fullName: string;
+  initials: string;
+  /** Which lanes the shepherd touches them through. */
+  lanes: Array<"comm" | "serv">;
+  /** "Tuesday Men's Group" / "Coffee Team" — the specific ministry context
+   *  they share with the shepherd. First one wins for display. */
+  context: string | null;
+  /** True iff someone other than this shepherd also leads at least one of
+   *  the rosters this person is on (rough "+1 co-shepherd" signal). */
+  hasCoShepherd: boolean;
+  /** True when the person is under 18 — flock cards dim those so the
+   *  pastoral list focuses on adults. */
+  isMinor: boolean;
+}
+
 export interface ShepherdDetail {
   personId: string;
   fullName: string;
@@ -163,6 +180,8 @@ export interface ShepherdDetail {
   /** Total distinct people this shepherd has direct oversight of via
    *  group / team membership rosters (de-duped across both). */
   flockSize: number;
+  /** Distinct people in the flock, with lane + ministry context. */
+  flock: FlockMember[];
 }
 
 export function getShepherdDetail(
@@ -264,8 +283,17 @@ export function getShepherdDetail(
     )
     .all(cutoff, orgId, personId) as ShepherdDetailTeam[];
 
-  // De-dup flock across groups + teams (one person can be in several).
-  const flockSet = new Set<string>();
+  // Build the flock: distinct people across all groups + teams this
+  // shepherd leads, with the ministry context they share + lane tags +
+  // a rough co-shepherd signal.
+  const flockMap = new Map<
+    string,
+    {
+      lanes: Set<"comm" | "serv">;
+      contexts: string[];
+      coShepherd: boolean;
+    }
+  >();
   for (const g of groupsLed) {
     const rows = db
       .prepare(
@@ -273,7 +301,20 @@ export function getShepherdDetail(
            WHERE org_id = ? AND group_id = ? AND archived_at IS NULL`,
       )
       .all(orgId, g.id) as Array<{ person_id: string }>;
-    for (const r of rows) if (r.person_id) flockSet.add(r.person_id);
+    // A "co-shepherd" exists if g has more than one leader.
+    const hasCo = g.leaders > 1;
+    for (const r of rows) {
+      if (!r.person_id) continue;
+      const e = flockMap.get(r.person_id) ?? {
+        lanes: new Set<"comm" | "serv">(),
+        contexts: [],
+        coShepherd: false,
+      };
+      e.lanes.add("comm");
+      if (g.name) e.contexts.push(g.name);
+      if (hasCo) e.coShepherd = true;
+      flockMap.set(r.person_id, e);
+    }
   }
   for (const t of teamsLed) {
     const rows = db
@@ -283,10 +324,65 @@ export function getShepherdDetail(
              AND person_id != ''`,
       )
       .all(orgId, t.id) as Array<{ person_id: string }>;
-    for (const r of rows) flockSet.add(r.person_id);
+    const hasCo = t.leaders > 1;
+    for (const r of rows) {
+      const e = flockMap.get(r.person_id) ?? {
+        lanes: new Set<"comm" | "serv">(),
+        contexts: [],
+        coShepherd: false,
+      };
+      e.lanes.add("serv");
+      if (t.name) e.contexts.push(t.name);
+      if (hasCo) e.coShepherd = true;
+      flockMap.set(r.person_id, e);
+    }
   }
   // Don't count the shepherd themselves.
-  flockSet.delete(personId);
+  flockMap.delete(personId);
+
+  // Decrypt names for every flock member in a single pass.
+  const flockIds = Array.from(flockMap.keys());
+  const flock: FlockMember[] = [];
+  if (flockIds.length > 0) {
+    const placeholders = flockIds.map(() => "?").join(",");
+    const peopleRows = db
+      .prepare(
+        `SELECT pco_id, enc_pii, is_minor FROM pco_people
+          WHERE org_id = ? AND pco_id IN (${placeholders})`,
+      )
+      .all(orgId, ...flockIds) as Array<{
+      pco_id: string;
+      enc_pii: string | null;
+      is_minor: number;
+    }>;
+    const piiById = new Map<string, PIIBlob>();
+    const minorById = new Map<string, boolean>();
+    for (const p of peopleRows) {
+      if (p.enc_pii) {
+        const pii = decryptJson<PIIBlob>(p.enc_pii);
+        if (pii) piiById.set(p.pco_id, pii);
+      }
+      minorById.set(p.pco_id, p.is_minor === 1);
+    }
+    for (const [pid, e] of flockMap.entries()) {
+      const pii = piiById.get(pid);
+      const f = pii?.first_name ?? null;
+      const l = pii?.last_name ?? null;
+      const name = [f, l].filter(Boolean).join(" ") || `(unknown #${pid})`;
+      const inits =
+        ((f?.[0] ?? "") + (l?.[0] ?? "")).toUpperCase() || "??";
+      flock.push({
+        personId: pid,
+        fullName: name,
+        initials: inits,
+        lanes: Array.from(e.lanes),
+        context: e.contexts[0] ?? null,
+        hasCoShepherd: e.coShepherd,
+        isMinor: minorById.get(pid) ?? false,
+      });
+    }
+    flock.sort((a, b) => a.fullName.localeCompare(b.fullName));
+  }
 
   return {
     personId,
@@ -298,6 +394,7 @@ export function getShepherdDetail(
     membershipType: personRow.membership_type,
     groupsLed,
     teamsLed,
-    flockSize: flockSet.size,
+    flockSize: flockMap.size,
+    flock,
   };
 }

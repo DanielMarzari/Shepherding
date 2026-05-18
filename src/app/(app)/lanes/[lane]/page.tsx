@@ -12,6 +12,7 @@ import {
   RECENT_LANE_TRANSITIONS,
 } from "@/lib/mock";
 import { getSyncSettings } from "@/lib/pco";
+import { getTeamTotals, listServingPeople, listTeams } from "@/lib/serve-lane";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -47,11 +48,39 @@ export default async function LanePage({
       session.orgId,
       settings.activityTrackingMonths,
     );
-    const people = listCommunityPeople(session.orgId, 100);
+    const people = listCommunityPeople(
+      session.orgId,
+      settings.activityTrackingMonths,
+      100,
+    );
     return (
       <CommunityLane
         laneStats={laneStats}
         stats={stats}
+        people={people}
+        trackingMonths={settings.activityTrackingMonths}
+      />
+    );
+  }
+
+  if (laneKey === "serv") {
+    const session = await requireOrg();
+    const settings = getSyncSettings(session.orgId);
+    const teams = listTeams(
+      session.orgId,
+      settings.activityTrackingMonths,
+      settings.lapsedFromTeamMonths,
+    );
+    const totals = getTeamTotals(teams);
+    const people = listServingPeople(
+      session.orgId,
+      settings.activityTrackingMonths,
+      100,
+    );
+    return (
+      <ServingLane
+        laneStats={laneStats}
+        totals={totals}
         people={people}
         trackingMonths={settings.activityTrackingMonths}
       />
@@ -226,6 +255,14 @@ export default async function LanePage({
   );
 }
 
+/** Pretty-print a lifespan in days as the largest sensible unit. */
+function formatLifespan(days: number): string {
+  if (days < 30) return `${days}d`;
+  if (days < 365) return `${Math.round(days / 30)}mo`;
+  const years = days / 365;
+  return years >= 10 ? `${Math.round(years)}y` : `${years.toFixed(1)}y`;
+}
+
 function coOccurrenceSummary(
   people: ReturnType<typeof peopleInLane>,
   laneKey: LaneKey,
@@ -341,54 +378,298 @@ function CommunityLane({
               No active group memberships synced yet. Run a sync from Settings › Sync.
             </div>
           ) : (
-            <table className="w-full text-sm table-fixed">
-              <colgroup>
-                <col className="w-[55%]" />
-                <col className="w-[20%]" />
-                <col className="w-[12%]" />
-                <col className="w-[13%]" />
-              </colgroup>
-              <thead className="text-xs text-muted">
-                <tr className="border-b border-border-soft">
-                  <th className="text-left font-medium px-5 py-2">Person</th>
-                  <th className="text-left font-medium px-5 py-2">Membership</th>
-                  <th className="text-right font-medium px-5 py-2">Groups</th>
-                  <th className="text-right font-medium px-5 py-2">First joined</th>
-                </tr>
-              </thead>
-              <tbody>
-                {people.map((p) => (
-                  <tr
-                    key={p.pcoId}
-                    className="border-b border-border-softer hover:bg-bg-elev-2/60"
-                  >
-                    <td className="px-5 py-2.5">
-                      <Link
-                        href={`/people/${p.pcoId}`}
-                        className="flex items-center gap-3 group"
-                      >
-                        <Avatar initials={p.initials} size="sm" />
-                        <div className="min-w-0">
-                          <div className="font-medium truncate group-hover:text-accent">
-                            {p.fullName}
-                          </div>
-                          <div className="text-xs text-muted">PCO #{p.pcoId}</div>
-                        </div>
-                      </Link>
-                    </td>
-                    <td className="px-5 py-2.5 text-muted truncate">
-                      {p.membershipType ?? <span className="text-subtle">—</span>}
-                    </td>
-                    <td className="px-5 py-2.5 text-right tnum">{p.groupCount}</td>
-                    <td className="px-5 py-2.5 text-right tnum text-muted">
-                      {p.joinedFirstAt
-                        ? new Date(p.joinedFirstAt).toLocaleDateString()
-                        : "—"}
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm table-fixed min-w-[900px]">
+                <colgroup>
+                  <col className="w-[28%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                </colgroup>
+                <thead className="text-xs text-muted">
+                  <tr className="border-b border-border-soft">
+                    <th className="text-left font-medium px-5 py-2">Person</th>
+                    <th className="text-left font-medium px-5 py-2">Membership</th>
+                    <th className="text-right font-medium px-5 py-2">Groups</th>
+                    <th
+                      className="text-right font-medium px-5 py-2"
+                      title="Attended events ÷ events available across all their groups in the window"
+                    >
+                      Attend %
+                    </th>
+                    <th
+                      className="text-right font-medium px-5 py-2"
+                      title="Distinct group events attended per month"
+                    >
+                      Per month
+                    </th>
+                    <th
+                      className="text-right font-medium px-5 py-2"
+                      title="Days since earliest joined_at across active memberships"
+                    >
+                      Lifespan
+                    </th>
+                    <th className="text-right font-medium px-5 py-2">
+                      First joined
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {people.map((p) => (
+                    <tr
+                      key={p.pcoId}
+                      className="border-b border-border-softer hover:bg-bg-elev-2/60"
+                    >
+                      <td className="px-5 py-2.5">
+                        <Link
+                          href={`/people/${p.pcoId}`}
+                          className="flex items-center gap-3 group"
+                        >
+                          <Avatar initials={p.initials} size="sm" />
+                          <div className="min-w-0">
+                            <div className="font-medium truncate group-hover:text-accent">
+                              {p.fullName}
+                            </div>
+                            <div className="text-xs text-muted">
+                              PCO #{p.pcoId}
+                            </div>
+                          </div>
+                        </Link>
+                      </td>
+                      <td className="px-5 py-2.5 text-muted truncate">
+                        {p.membershipType ?? <span className="text-subtle">—</span>}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum">
+                        {p.groupCount}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum">
+                        {p.attendancePct == null ? (
+                          <span className="text-subtle">—</span>
+                        ) : (
+                          `${Math.round(p.attendancePct)}%`
+                        )}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum text-muted">
+                        {p.frequencyPerMonth == null
+                          ? "—"
+                          : p.frequencyPerMonth.toFixed(1)}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum text-muted">
+                        {p.lifespanDays == null
+                          ? "—"
+                          : formatLifespan(p.lifespanDays)}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum text-muted">
+                        {p.joinedFirstAt
+                          ? new Date(p.joinedFirstAt).toLocaleDateString()
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
+    </AppShell>
+  );
+}
+
+// ─── Serving lane (real data from pco_team_memberships + plan_people) ─────
+
+function ServingLane({
+  laneStats,
+  totals,
+  people,
+  trackingMonths,
+}: {
+  laneStats: (typeof LANE_STATS)[number];
+  totals: ReturnType<typeof getTeamTotals>;
+  people: Awaited<ReturnType<typeof listServingPeople>>;
+  trackingMonths: number;
+}) {
+  return (
+    <AppShell active="lane:serv" breadcrumb={`Lanes › ${laneStats.label}`}>
+      <div className="px-5 md:px-7 py-7 space-y-6">
+        <div>
+          <Link href="/lanes" className="text-xs text-muted hover:text-fg">
+            ← All lanes
+          </Link>
+          <div className="flex items-center gap-3 mt-3">
+            <span
+              className="w-2.5 h-2.5 rounded-full"
+              style={{ background: "var(--lane-serv)" }}
+            />
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {laneStats.label}
+            </h1>
+            <Pill tone="muted">
+              {totals.totalMembers.toLocaleString()} on team rosters
+            </Pill>
+            <span className="text-xs text-muted">
+              real data from <code className="font-mono">pco_team_memberships</code>{" "}
+              + <code className="font-mono">pco_plan_people</code>
+            </span>
+          </div>
+          <p className="text-muted text-sm mt-2 max-w-2xl">
+            Anyone on the active roster of a non-archived service team counts as
+            Serve. Service types you&apos;ve excluded on{" "}
+            <Link href="/pco/filters?tab=teams" className="text-accent hover:underline">
+              /pco/filters
+            </Link>{" "}
+            don&apos;t count toward this lane.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">Roster</div>
+            <div className="tnum text-2xl font-semibold">
+              {totals.totalMembers.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">distinct people</div>
+          </Card>
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">Active teams</div>
+            <div className="tnum text-2xl font-semibold">
+              {totals.activeTeams.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">non-archived</div>
+          </Card>
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">Joined recently</div>
+            <div className="tnum text-2xl font-semibold text-good-soft-fg">
+              {totals.joinedRecently.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">
+              first serve in last {trackingMonths} months
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">Lapsed</div>
+            <div className="tnum text-2xl font-semibold text-warn-soft-fg">
+              {totals.totalLapsed.toLocaleString()}
+            </div>
+            <div className="text-xs text-muted mt-1">
+              haven&apos;t served in the threshold window
+            </div>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader
+            title="People in Serve"
+            right={
+              <span className="text-xs text-muted">
+                top {people.length} by team count
+              </span>
+            }
+          />
+          {people.length === 0 ? (
+            <div className="px-5 py-12 text-center text-sm text-muted">
+              No active team memberships synced yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm table-fixed min-w-[900px]">
+                <colgroup>
+                  <col className="w-[28%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                </colgroup>
+                <thead className="text-xs text-muted">
+                  <tr className="border-b border-border-soft">
+                    <th className="text-left font-medium px-5 py-2">Person</th>
+                    <th className="text-left font-medium px-5 py-2">Membership</th>
+                    <th className="text-right font-medium px-5 py-2">Teams</th>
+                    <th
+                      className="text-right font-medium px-5 py-2"
+                      title="Plans actually served ÷ plans they were scheduled on"
+                    >
+                      Serve %
+                    </th>
+                    <th
+                      className="text-right font-medium px-5 py-2"
+                      title="Distinct plans served per month in the window"
+                    >
+                      Per month
+                    </th>
+                    <th
+                      className="text-right font-medium px-5 py-2"
+                      title="Days since their first ever serve"
+                    >
+                      Lifespan
+                    </th>
+                    <th className="text-right font-medium px-5 py-2">
+                      First served
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {people.map((p) => (
+                    <tr
+                      key={p.pcoId}
+                      className="border-b border-border-softer hover:bg-bg-elev-2/60"
+                    >
+                      <td className="px-5 py-2.5">
+                        <Link
+                          href={`/people/${p.pcoId}`}
+                          className="flex items-center gap-3 group"
+                        >
+                          <Avatar initials={p.initials} size="sm" />
+                          <div className="min-w-0">
+                            <div className="font-medium truncate group-hover:text-accent">
+                              {p.fullName}
+                            </div>
+                            <div className="text-xs text-muted">
+                              PCO #{p.pcoId}
+                            </div>
+                          </div>
+                        </Link>
+                      </td>
+                      <td className="px-5 py-2.5 text-muted truncate">
+                        {p.membershipType ?? (
+                          <span className="text-subtle">—</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum">
+                        {p.teamCount}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum">
+                        {p.servePct == null ? (
+                          <span className="text-subtle">—</span>
+                        ) : (
+                          `${Math.round(p.servePct)}%`
+                        )}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum text-muted">
+                        {p.frequencyPerMonth == null
+                          ? "—"
+                          : p.frequencyPerMonth.toFixed(1)}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum text-muted">
+                        {p.lifespanDays == null
+                          ? "—"
+                          : formatLifespan(p.lifespanDays)}
+                      </td>
+                      <td className="px-5 py-2.5 text-right tnum text-muted">
+                        {p.firstServedAt
+                          ? new Date(p.firstServedAt).toLocaleDateString()
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
       </div>

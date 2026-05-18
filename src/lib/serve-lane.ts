@@ -1,6 +1,12 @@
 import "server-only";
 import { getDb } from "./db";
+import { decryptJson } from "./encryption";
 import { getExcludedTeamTypes } from "./pco";
+
+interface PIIBlob {
+  first_name?: string | null;
+  last_name?: string | null;
+}
 
 export interface SyncedTeamRow {
   pcoId: string;
@@ -254,4 +260,186 @@ export function getTeamTotals(rows: SyncedTeamRow[]): TeamTotals {
     t[r.state]++;
   }
   return t;
+}
+
+// ─── Per-person serving stats (for /lanes/serv) ────────────────────────
+
+export interface ServingPersonRow {
+  pcoId: string;
+  fullName: string;
+  initials: string;
+  membershipType: string | null;
+  /** Distinct active teams the person is on. */
+  teamCount: number;
+  /** Earliest plan they served on (any team) — proxy for "how long
+   *  they've been serving." */
+  firstServedAt: string | null;
+  /** % of plans they were SCHEDULED on within the window that they
+   *  actually served (status not declined). Null when they weren't
+   *  scheduled on any plans. */
+  servePct: number | null;
+  /** Distinct served plans ÷ activity months. */
+  frequencyPerMonth: number | null;
+  /** Days since `firstServedAt`. */
+  lifespanDays: number | null;
+}
+
+export function listServingPeople(
+  orgId: number,
+  activityMonths: number,
+  limit = 100,
+): ServingPersonRow[] {
+  const db = getDb();
+  const excludedTypes = getExcludedTeamTypes(orgId);
+  const exclWhere =
+    excludedTypes.length === 0
+      ? ""
+      : `AND (t.service_type_id IS NULL OR t.service_type_id NOT IN (${excludedTypes
+          .map(() => "?")
+          .join(",")}))`;
+  const trackingCutoff = new Date(
+    Date.now() - activityMonths * 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+
+  const rows = db
+    .prepare(
+      `WITH roster AS (
+         SELECT
+           m.person_id,
+           COUNT(DISTINCT m.team_id) AS teamCount
+         FROM pco_team_memberships m
+         JOIN pco_teams t
+           ON t.org_id = m.org_id AND t.pco_id = m.team_id
+         WHERE m.org_id = ?
+           AND m.archived_at IS NULL
+           AND m.person_id != ''
+           AND t.archived_at IS NULL
+           AND t.deleted_at IS NULL
+           ${exclWhere}
+         GROUP BY m.person_id
+       ),
+       scheduled AS (
+         -- Plans this person was put on (any status). Denominator for
+         -- the serve% metric.
+         SELECT
+           pp.person_id,
+           COUNT(DISTINCT pp.plan_id) AS n
+         FROM pco_plan_people pp
+         JOIN pco_plans pl
+           ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+         JOIN pco_teams t
+           ON t.org_id = pp.org_id AND t.pco_id = pp.team_id
+         WHERE pp.org_id = ?
+           AND pp.person_id != ''
+           AND pl.sort_date >= ?
+           AND t.archived_at IS NULL
+           AND t.deleted_at IS NULL
+           ${exclWhere}
+         GROUP BY pp.person_id
+       ),
+       served AS (
+         -- Plans they actually served (status not declined). Numerator
+         -- for serve%; also drives frequency-per-month.
+         SELECT
+           pp.person_id,
+           COUNT(DISTINCT pp.plan_id) AS n,
+           MIN(pl.sort_date)          AS firstServedAt
+         FROM pco_plan_people pp
+         JOIN pco_plans pl
+           ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+         JOIN pco_teams t
+           ON t.org_id = pp.org_id AND t.pco_id = pp.team_id
+         WHERE pp.org_id = ?
+           AND pp.person_id != ''
+           AND pl.sort_date >= ?
+           AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')
+           AND t.archived_at IS NULL
+           AND t.deleted_at IS NULL
+           ${exclWhere}
+         GROUP BY pp.person_id
+       ),
+       first_ever AS (
+         -- Earliest non-declined serve ever — drives "lifespan" since
+         -- it sits outside the window.
+         SELECT
+           pp.person_id,
+           MIN(pl.sort_date) AS firstEverAt
+         FROM pco_plan_people pp
+         JOIN pco_plans pl
+           ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+         JOIN pco_teams t
+           ON t.org_id = pp.org_id AND t.pco_id = pp.team_id
+         WHERE pp.org_id = ?
+           AND pp.person_id != ''
+           AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')
+           AND t.archived_at IS NULL
+           AND t.deleted_at IS NULL
+           ${exclWhere}
+         GROUP BY pp.person_id
+       )
+       SELECT
+         p.pco_id           AS pcoId,
+         p.enc_pii          AS encPii,
+         p.membership_type  AS membershipType,
+         r.teamCount        AS teamCount,
+         COALESCE(sch.n, 0)   AS scheduledPlans,
+         COALESCE(srv.n, 0)   AS servedPlans,
+         fe.firstEverAt       AS firstServedAt
+       FROM roster r
+       JOIN pco_people p ON p.org_id = ? AND p.pco_id = r.person_id
+       LEFT JOIN scheduled  sch ON sch.person_id = r.person_id
+       LEFT JOIN served     srv ON srv.person_id = r.person_id
+       LEFT JOIN first_ever fe  ON fe.person_id  = r.person_id
+       ORDER BY r.teamCount DESC, COALESCE(srv.n, 0) DESC
+       LIMIT ?`,
+    )
+    .all(
+      orgId, ...excludedTypes,                  // roster
+      orgId, trackingCutoff, ...excludedTypes,  // scheduled
+      orgId, trackingCutoff, ...excludedTypes,  // served
+      orgId, ...excludedTypes,                  // first_ever
+      orgId,                                    // outer person join
+      limit,
+    ) as Array<{
+    pcoId: string;
+    encPii: string | null;
+    membershipType: string | null;
+    teamCount: number;
+    scheduledPlans: number;
+    servedPlans: number;
+    firstServedAt: string | null;
+  }>;
+
+  return rows.map((r) => {
+    const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
+    const f = pii?.first_name ?? null;
+    const l = pii?.last_name ?? null;
+    const fullName =
+      [f, l].filter(Boolean).join(" ") || `(unknown #${r.pcoId})`;
+    const initials =
+      ((f?.[0] ?? "") + (l?.[0] ?? "")).toUpperCase() || "??";
+    const servePct =
+      r.scheduledPlans > 0
+        ? Math.min(100, (r.servedPlans / r.scheduledPlans) * 100)
+        : null;
+    const frequencyPerMonth =
+      activityMonths > 0 ? r.servedPlans / activityMonths : null;
+    const lifespanDays = r.firstServedAt
+      ? Math.floor(
+          (Date.now() - new Date(r.firstServedAt).getTime()) /
+            (24 * 60 * 60 * 1000),
+        )
+      : null;
+    return {
+      pcoId: r.pcoId,
+      fullName,
+      initials,
+      membershipType: r.membershipType,
+      teamCount: r.teamCount,
+      firstServedAt: r.firstServedAt,
+      servePct,
+      frequencyPerMonth,
+      lifespanDays,
+    };
+  });
 }

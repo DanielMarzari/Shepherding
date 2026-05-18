@@ -181,11 +181,14 @@ export function getDemographics(
     )
     .all(orgId) as Array<{ label: string; count: number }>;
 
+  // Parent / not-parent. Unknown-age people default to adult ("No kids")
+  // since kids almost always have a birthdate on file; an adult with no
+  // birthdate is much more common than an undetected minor.
   const kidsRows = db
     .prepare(
       `SELECT
          CASE
-           WHEN p.is_minor = 1 OR p.birth_year IS NULL THEN 'Unknown'
+           WHEN p.is_minor = 1 THEN 'Minor'
            WHEN p.is_parent = 1 THEN 'Has kids'
            ELSE 'No kids'
          END AS label,
@@ -216,7 +219,7 @@ export function getDemographics(
   }));
 
   const kidsByLabel = new Map(kidsRows.map((r) => [r.label, r.count]));
-  const orderedKids = ["Has kids", "No kids", "Unknown"].map((label) => ({
+  const orderedKids = ["Has kids", "No kids", "Minor"].map((label) => ({
     label,
     count: kidsByLabel.get(label) ?? 0,
   }));
