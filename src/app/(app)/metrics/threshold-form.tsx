@@ -10,6 +10,8 @@ export function ThresholdForm({
   initialLapsed,
   initialLapsedTeam,
   initialLapsedTeamEvents,
+  initialCheckinMin,
+  initialCheckinWindow,
   isAdmin,
 }: {
   initialActivity: number;
@@ -18,6 +20,8 @@ export function ThresholdForm({
   initialLapsed: number;
   initialLapsedTeam: number;
   initialLapsedTeamEvents: number;
+  initialCheckinMin: number;
+  initialCheckinWindow: number;
   isAdmin: boolean;
 }) {
   const [activity, setActivity] = useState(initialActivity);
@@ -26,6 +30,8 @@ export function ThresholdForm({
   const [lapsed, setLapsed] = useState(initialLapsed);
   const [lapsedTeam, setLapsedTeam] = useState(initialLapsedTeam);
   const [lapsedTeamEvents, setLapsedTeamEvents] = useState(initialLapsedTeamEvents);
+  const [checkinMin, setCheckinMin] = useState(initialCheckinMin);
+  const [checkinWindow, setCheckinWindow] = useState(initialCheckinWindow);
   const [state, action, pending] = useActionState<MetricsSaveState | null, FormData>(
     saveThresholdsAction,
     null,
@@ -221,6 +227,76 @@ export function ThresholdForm({
         <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
           <span>1 event</span>
           <span>20 events</span>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-baseline justify-between mb-1.5">
+          <label
+            className="text-sm font-medium"
+            htmlFor="shepherdedCheckinMinEvents"
+          >
+            Shepherded-via-check-ins: minimum events
+          </label>
+          <span className="tnum text-sm text-muted">
+            {checkinMin} event{checkinMin === 1 ? "" : "s"}
+          </span>
+        </div>
+        <p className="text-xs text-muted mb-2.5">
+          A minor needs at least this many check-ins to a flagged event
+          (set under <em>/pco/filters → Check-in events</em>) before they
+          count as <span className="text-accent font-medium">Shepherded</span>.
+          One-off visits land in <span className="text-good-soft-fg font-medium">Active</span>,
+          not Shepherded.
+        </p>
+        <input
+          id="shepherdedCheckinMinEvents"
+          name="shepherdedCheckinMinEvents"
+          type="range"
+          min="1"
+          max="20"
+          step="1"
+          value={checkinMin}
+          onChange={(e) => setCheckinMin(Number(e.target.value))}
+          disabled={!isAdmin}
+          className="w-full accent-[var(--accent)] disabled:opacity-50"
+        />
+        <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
+          <span>1 event</span>
+          <span>20 events</span>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-baseline justify-between mb-1.5">
+          <label
+            className="text-sm font-medium"
+            htmlFor="shepherdedCheckinWindowMonths"
+          >
+            Shepherded-via-check-ins: measurement window
+          </label>
+          <span className="tnum text-sm text-muted">{checkinWindow} months</span>
+        </div>
+        <p className="text-xs text-muted mb-2.5">
+          The check-ins above must land within this rolling window to count.
+          Default 12mo + ≥ 3 events means &ldquo;a kid showed up three times
+          in the last year.&rdquo;
+        </p>
+        <input
+          id="shepherdedCheckinWindowMonths"
+          name="shepherdedCheckinWindowMonths"
+          type="range"
+          min="1"
+          max="36"
+          step="1"
+          value={checkinWindow}
+          onChange={(e) => setCheckinWindow(Number(e.target.value))}
+          disabled={!isAdmin}
+          className="w-full accent-[var(--accent)] disabled:opacity-50"
+        />
+        <div className="flex justify-between text-[10px] text-subtle tnum mt-1">
+          <span>1 month</span>
+          <span>36 months</span>
         </div>
       </div>
 

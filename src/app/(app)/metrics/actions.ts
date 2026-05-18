@@ -23,6 +23,12 @@ export async function saveThresholdsAction(
   const lapsed = Number(formData.get("lapsedWeeks") ?? 10);
   const lapsedTeamMonths = Number(formData.get("lapsedFromTeamMonths") ?? 6);
   const lapsedTeamEvents = Number(formData.get("lapsedFromTeamEvents") ?? 3);
+  const checkinMin = Number(
+    formData.get("shepherdedCheckinMinEvents") ?? 3,
+  );
+  const checkinWindow = Number(
+    formData.get("shepherdedCheckinWindowMonths") ?? 12,
+  );
   saveMetricsSettings(
     s.orgId,
     activity,
@@ -31,6 +37,8 @@ export async function saveThresholdsAction(
     lapsed,
     lapsedTeamMonths,
     lapsedTeamEvents,
+    checkinMin,
+    checkinWindow,
   );
   revalidatePath("/teams");
   revalidatePath("/lanes/serv");

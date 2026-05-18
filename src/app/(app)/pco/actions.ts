@@ -123,6 +123,8 @@ export async function saveSyncSettingsAction(
     lapsedWeeks: current.lapsedWeeks,
     lapsedFromTeamMonths: current.lapsedFromTeamMonths,
     lapsedFromTeamEvents: current.lapsedFromTeamEvents,
+    shepherdedCheckinMinEvents: current.shepherdedCheckinMinEvents,
+    shepherdedCheckinWindowMonths: current.shepherdedCheckinWindowMonths,
   };
   saveSyncSettings(s.orgId, settings);
   revalidatePath("/pco");

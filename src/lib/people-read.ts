@@ -7,6 +7,7 @@ import {
   getExcludedTeamPositions,
   getExcludedTeamTypes,
   getShepherdedCheckinEvents,
+  getSyncSettings,
 } from "./pco";
 
 // Classification (priority: shepherded > active > present > inactive):
@@ -193,22 +194,36 @@ function populateShepherdedTempTable(orgId: number) {
   // Source 3: kids/student check-ins. The check-in's `person_id` is the
   // kid being checked in → they're being shepherded by whoever checked
   // them in. Only counts for events the admin has flagged as shepherded
-  // AND only for people currently under 18 (an adult checking in to a
-  // kids event is the parent/leader doing the check-in, not the one
-  // being shepherded).
+  // AND only for currently-under-18 people (an adult checking in is the
+  // parent/leader doing the check-in, not the one being shepherded) AND
+  // they must hit a frequency threshold — a one-off check-in lands in
+  // Active, not Shepherded.
   if (shepherdedCheckinEvents.length > 0) {
+    const settings = getSyncSettings(orgId);
+    const windowCutoff = new Date(
+      Date.now() -
+        settings.shepherdedCheckinWindowMonths * 30 * 24 * 60 * 60 * 1000,
+    ).toISOString();
     const placeholders = shepherdedCheckinEvents.map(() => "?").join(",");
     db.prepare(
       `INSERT OR IGNORE INTO temp.shep_set (person_id)
-        SELECT DISTINCT ci.person_id
+        SELECT ci.person_id
           FROM pco_check_ins ci
           JOIN pco_people p
             ON p.org_id = ci.org_id AND p.pco_id = ci.person_id
          WHERE ci.org_id = ?
            AND ci.person_id IS NOT NULL
            AND ci.event_id IN (${placeholders})
-           AND p.is_minor = 1`,
-    ).run(orgId, ...shepherdedCheckinEvents);
+           AND p.is_minor = 1
+           AND ci.pco_created_at >= ?
+         GROUP BY ci.person_id
+         HAVING COUNT(*) >= ?`,
+    ).run(
+      orgId,
+      ...shepherdedCheckinEvents,
+      windowCutoff,
+      settings.shepherdedCheckinMinEvents,
+    );
   }
 }
 

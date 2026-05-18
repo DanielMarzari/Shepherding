@@ -195,6 +195,13 @@ export interface SyncSettings {
    *  lapsed (default 3). Lets pastors distinguish "phased out" from
    *  "team just isn't being scheduled." */
   lapsedFromTeamEvents: number;
+  /** A minor needs at least this many check-ins to a flagged event
+   *  before they count as Shepherded via the check-in source (default
+   *  3). One-off check-ins land in Active instead. */
+  shepherdedCheckinMinEvents: number;
+  /** Window for the check-in-shepherded rule. Counted check-ins must
+   *  fall within the last N months (default 12). */
+  shepherdedCheckinWindowMonths: number;
 }
 
 export function getSyncSettings(orgId: number): SyncSettings {
@@ -204,7 +211,9 @@ export function getSyncSettings(orgId: number): SyncSettings {
               email_on_failure, auto_resolve_conflicts,
               activity_months, sync_threshold_months,
               activity_tracking_months, weekly_attendance, lapsed_weeks,
-              lapsed_from_team_months, lapsed_from_team_events
+              lapsed_from_team_months, lapsed_from_team_events,
+              shepherded_checkin_min_events,
+              shepherded_checkin_window_months
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -223,6 +232,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
         lapsed_weeks: number | null;
         lapsed_from_team_months: number | null;
         lapsed_from_team_events: number | null;
+        shepherded_checkin_min_events: number | null;
+        shepherded_checkin_window_months: number | null;
       }
     | undefined;
   if (!row) {
@@ -241,6 +252,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
       lapsedWeeks: 10,
       lapsedFromTeamMonths: 6,
       lapsedFromTeamEvents: 3,
+      shepherdedCheckinMinEvents: 3,
+      shepherdedCheckinWindowMonths: 12,
     };
   }
   const freq: SyncFrequency =
@@ -260,6 +273,8 @@ export function getSyncSettings(orgId: number): SyncSettings {
     lapsedWeeks: row.lapsed_weeks ?? 10,
     lapsedFromTeamMonths: row.lapsed_from_team_months ?? 6,
     lapsedFromTeamEvents: row.lapsed_from_team_events ?? 3,
+    shepherdedCheckinMinEvents: row.shepherded_checkin_min_events ?? 3,
+    shepherdedCheckinWindowMonths: row.shepherded_checkin_window_months ?? 12,
   };
 }
 
@@ -270,8 +285,10 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          (org_id, enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
           email_on_failure, auto_resolve_conflicts, activity_months,
           sync_threshold_months, activity_tracking_months, weekly_attendance,
-          lapsed_weeks, lapsed_from_team_months, lapsed_from_team_events, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+          lapsed_weeks, lapsed_from_team_months, lapsed_from_team_events,
+          shepherded_checkin_min_events, shepherded_checkin_window_months,
+          updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id) DO UPDATE SET
          enabled = excluded.enabled,
          frequency = excluded.frequency,
@@ -287,6 +304,8 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          lapsed_weeks = excluded.lapsed_weeks,
          lapsed_from_team_months = excluded.lapsed_from_team_months,
          lapsed_from_team_events = excluded.lapsed_from_team_events,
+         shepherded_checkin_min_events = excluded.shepherded_checkin_min_events,
+         shepherded_checkin_window_months = excluded.shepherded_checkin_window_months,
          updated_at = excluded.updated_at`,
     )
     .run(
@@ -307,6 +326,8 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
       Math.max(1, Math.min(52, Math.floor(s.lapsedWeeks))),
       Math.max(1, Math.min(24, Math.floor(s.lapsedFromTeamMonths))),
       Math.max(1, Math.min(20, Math.floor(s.lapsedFromTeamEvents))),
+      Math.max(1, Math.min(50, Math.floor(s.shepherdedCheckinMinEvents))),
+      Math.max(1, Math.min(36, Math.floor(s.shepherdedCheckinWindowMonths))),
     );
 }
 
@@ -319,6 +340,8 @@ export function saveMetricsSettings(
   lapsedWeeks: number,
   lapsedFromTeamMonths: number,
   lapsedFromTeamEvents: number,
+  shepherdedCheckinMinEvents: number,
+  shepherdedCheckinWindowMonths: number,
 ) {
   const current = getSyncSettings(orgId);
   saveSyncSettings(orgId, {
@@ -329,6 +352,8 @@ export function saveMetricsSettings(
     lapsedWeeks: Math.max(1, Math.min(52, Math.floor(lapsedWeeks))),
     lapsedFromTeamMonths: Math.max(1, Math.min(24, Math.floor(lapsedFromTeamMonths))),
     lapsedFromTeamEvents: Math.max(1, Math.min(20, Math.floor(lapsedFromTeamEvents))),
+    shepherdedCheckinMinEvents: Math.max(1, Math.min(50, Math.floor(shepherdedCheckinMinEvents))),
+    shepherdedCheckinWindowMonths: Math.max(1, Math.min(36, Math.floor(shepherdedCheckinWindowMonths))),
   });
 }
 

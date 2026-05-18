@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { BackLink } from "@/components/BackLink";
 import { Avatar, Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { explainClassification } from "@/lib/classify-explain";
@@ -43,9 +44,7 @@ export default async function PersonProfilePage({
     <AppShell active="People" breadcrumb={`People › ${person.fullName}`}>
       <div className="px-5 md:px-7 py-7 space-y-6 max-w-5xl">
         <div>
-          <Link href="/people" className="text-xs text-muted hover:text-fg">
-            ← All people
-          </Link>
+          <BackLink fallback="/people">← Back</BackLink>
         </div>
 
         {/* Header */}

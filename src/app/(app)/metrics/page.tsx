@@ -66,6 +66,8 @@ export default async function MetricsPage() {
                 initialLapsed={settings.lapsedWeeks}
                 initialLapsedTeam={settings.lapsedFromTeamMonths}
                 initialLapsedTeamEvents={settings.lapsedFromTeamEvents}
+                initialCheckinMin={settings.shepherdedCheckinMinEvents}
+                initialCheckinWindow={settings.shepherdedCheckinWindowMonths}
                 isAdmin={session.role === "admin"}
               />
             </div>

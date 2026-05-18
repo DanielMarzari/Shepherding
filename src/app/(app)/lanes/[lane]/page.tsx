@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, CardHeader, LaneTag, Pill } from "@/components/ui";
+import { BackLink } from "@/components/BackLink";
 import { requireOrg } from "@/lib/auth";
 import {
   getCommunityLaneStats,
@@ -98,9 +99,7 @@ export default async function LanePage({
       <div className="px-5 md:px-7 py-7 space-y-6">
         {/* Header */}
         <div>
-          <Link href="/lanes" className="text-xs text-muted hover:text-fg">
-            ← All lanes
-          </Link>
+          <BackLink fallback="/lanes">← Back</BackLink>
           <div className="flex items-center gap-3 mt-3">
             <span
               className="w-2.5 h-2.5 rounded-full"
@@ -309,9 +308,7 @@ function CommunityLane({
     <AppShell active="lane:comm" breadcrumb={`Lanes › ${laneStats.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
-          <Link href="/lanes" className="text-xs text-muted hover:text-fg">
-            ← All lanes
-          </Link>
+          <BackLink fallback="/lanes">← Back</BackLink>
           <div className="flex items-center gap-3 mt-3">
             <span
               className="w-2.5 h-2.5 rounded-full"
@@ -496,9 +493,7 @@ function ServingLane({
     <AppShell active="lane:serv" breadcrumb={`Lanes › ${laneStats.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
-          <Link href="/lanes" className="text-xs text-muted hover:text-fg">
-            ← All lanes
-          </Link>
+          <BackLink fallback="/lanes">← Back</BackLink>
           <div className="flex items-center gap-3 mt-3">
             <span
               className="w-2.5 h-2.5 rounded-full"

@@ -5,6 +5,7 @@ import {
   getExcludedTeamPositions,
   getExcludedTeamTypes,
   getShepherdedCheckinEvents,
+  getSyncSettings,
 } from "./pco";
 
 export interface ClassificationRationale {
@@ -195,26 +196,46 @@ export function explainClassification(
   const isMinor = personRow?.is_minor === 1;
 
   if (checkinRow.total > 0) {
-    // Did any check-in event land in a shepherded-flagged event?
     if (shepherdedEvents.size > 0) {
+      const settings = getSyncSettings(orgId);
+      const windowCutoff = new Date(
+        Date.now() -
+          settings.shepherdedCheckinWindowMonths * 30 * MS_PER_DAY,
+      ).toISOString();
       const placeholders = Array.from(shepherdedEvents)
         .map(() => "?")
         .join(",");
+      // How many check-ins to flagged events did they have, all-time AND
+      // inside the configured window. Different counts let us explain
+      // "we saw 4 historical hits but only 1 in the 12-month window."
       const flaggedRow = db
         .prepare(
-          `SELECT COUNT(*) AS n FROM pco_check_ins
-            WHERE org_id = ? AND person_id = ?
-              AND event_id IN (${placeholders})`,
+          `SELECT
+             COUNT(*) AS allTime,
+             SUM(CASE WHEN pco_created_at >= ? THEN 1 ELSE 0 END) AS inWindow
+           FROM pco_check_ins
+           WHERE org_id = ?
+             AND person_id = ?
+             AND event_id IN (${placeholders})`,
         )
-        .get(orgId, personId, ...shepherdedEvents) as { n: number };
-      if (flaggedRow.n > 0) {
-        if (isMinor) {
+        .get(windowCutoff, orgId, personId, ...shepherdedEvents) as {
+        allTime: number;
+        inWindow: number | null;
+      };
+      const inWindow = flaggedRow.inWindow ?? 0;
+      const min = settings.shepherdedCheckinMinEvents;
+      if (flaggedRow.allTime > 0) {
+        if (!isMinor) {
+          blockers.push(
+            `${flaggedRow.allTime} check-in${flaggedRow.allTime === 1 ? "" : "s"} to a flagged event, but the kids/student rule only counts minors.`,
+          );
+        } else if (inWindow >= min) {
           shepherdedReasons.push(
-            `${flaggedRow.n} check-in${flaggedRow.n === 1 ? "" : "s"} to an event flagged as shepherded (and they're a minor).`,
+            `${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the last ${settings.shepherdedCheckinWindowMonths}mo (threshold ≥ ${min}).`,
           );
         } else {
           blockers.push(
-            `${flaggedRow.n} check-in${flaggedRow.n === 1 ? "" : "s"} to a flagged event, but the kids/student rule only counts minors.`,
+            `Only ${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the last ${settings.shepherdedCheckinWindowMonths}mo — needs ≥ ${min} to count as Shepherded. ${flaggedRow.allTime - inWindow} earlier check-in${flaggedRow.allTime - inWindow === 1 ? "" : "s"} sit outside the window.`,
           );
         }
       }
