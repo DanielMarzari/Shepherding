@@ -67,10 +67,16 @@ export function DistributionChart({ distribution }: { distribution: Distribution
   const hoverPt = hover != null ? points[hover] : null;
 
   return (
+    // Constrain the SVG to its native pixel size. Without this the
+    // viewBox stretches with the container width and the fontSize 9-13
+    // text balloons to 20+px on wide screens.
     <div className="relative">
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full h-auto"
+        width={W}
+        height={H}
+        preserveAspectRatio="xMidYMid meet"
+        className="w-full max-w-[720px] h-auto"
         role="img"
         aria-label="Attendance frequency distribution"
         onMouseLeave={() => setHover(null)}

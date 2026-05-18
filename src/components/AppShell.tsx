@@ -9,16 +9,18 @@ import { SearchBar } from "./SearchBar";
 const NAV_ITEMS = [
   { href: "/", label: "Home" },
   { href: "/care-queue", label: "Care queue", badge: 17 },
+];
+
+const LEADERSHIP_NAV_ITEMS = [
+  { href: "/shepherd-team", label: "Shepherd team" },
+  { href: "/shepherds", label: "Shepherds" },
+];
+
+const PCO_DATA_NAV_ITEMS = [
   { href: "/people", label: "People" },
   { href: "/groups", label: "Groups" },
   { href: "/teams", label: "Teams" },
   { href: "/checkins", label: "Check-ins" },
-];
-
-const LEADERSHIP_NAV_ITEMS = [
-  { href: "/shepherds", label: "Shepherds" },
-  { href: "/staff", label: "Staff" },
-  { href: "/shepherd-team", label: "Shepherd team" },
 ];
 
 const SETTINGS_NAV_ITEMS = [
@@ -69,7 +71,7 @@ export async function AppShell({
             </div>
           </div>
         )}
-        <div className="text-xs text-muted uppercase tracking-wider mb-2 px-2">Workspace</div>
+        <div className="text-xs text-muted uppercase tracking-wider mb-2 px-2">Dashboard</div>
         <ul className="space-y-0.5">
           {NAV_ITEMS.map((item) => {
             const isActive = item.label === active;
@@ -98,6 +100,29 @@ export async function AppShell({
         </div>
         <ul className="space-y-0.5">
           {LEADERSHIP_NAV_ITEMS.map((item) => {
+            const isActive = item.label === active;
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
+                    isActive
+                      ? "bg-bg-elev-2 text-fg font-medium"
+                      : "text-fg hover:bg-bg-elev-2"
+                  }`}
+                >
+                  <span>{item.label}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">
+          PCO data
+        </div>
+        <ul className="space-y-0.5">
+          {PCO_DATA_NAV_ITEMS.map((item) => {
             const isActive = item.label === active;
             return (
               <li key={item.href}>
@@ -156,18 +181,6 @@ export async function AppShell({
               </li>
             );
           })}
-          <li>
-            <Link
-              href="/movement"
-              className={`px-2 py-1.5 rounded flex items-center transition-colors ${
-                active === "Movement"
-                  ? "bg-bg-elev-2 text-fg font-medium"
-                  : "text-fg hover:bg-bg-elev-2"
-              }`}
-            >
-              <span>Movement</span>
-            </Link>
-          </li>
         </ul>
 
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Settings</div>
