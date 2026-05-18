@@ -10,6 +10,9 @@ export interface SyncedTeamRow {
   /** Distinct people on the active roster (PersonTeamPositionAssignment can
    *  have one person × many positions; we want the headcount). */
   members: number;
+  /** Subset of `members` currently under 18. Shown as "(+N kids)" in
+   *  the stat cards / totals so the adult roster is the headline. */
+  membersKids: number;
   leaders: number;
   /** Distinct people who served in any plan during the activity window. */
   servedRecently: number;
@@ -28,6 +31,7 @@ export interface TeamTotals {
   totalTeams: number;
   activeTeams: number;
   totalMembers: number;
+  totalMembersKids: number;
   totalLeaders: number;
   totalLapsed: number;
   joinedRecently: number;
@@ -78,11 +82,14 @@ export function listTeams(
          SELECT
            m.team_id,
            COUNT(DISTINCT m.person_id) AS members,
+           COUNT(DISTINCT CASE WHEN p.is_minor = 1 THEN m.person_id END) AS membersKids,
            COUNT(DISTINCT CASE WHEN m.is_team_leader = 1 THEN m.person_id END) AS leaders,
            COUNT(DISTINCT CASE
              WHEN m.last_served_at IS NULL OR m.last_served_at < ?
              THEN m.person_id END) AS lapsedCandidates
          FROM pco_team_memberships m
+         LEFT JOIN pco_people p
+           ON p.org_id = m.org_id AND p.pco_id = m.person_id
          WHERE m.org_id = ?
            AND m.archived_at IS NULL
            AND m.person_id != ''
@@ -149,6 +156,7 @@ export function listTeams(
          st.name           AS serviceTypeName,
          t.archived_at     AS archivedAt,
          COALESCE(r.members, 0)  AS members,
+         COALESCE(r.membersKids, 0) AS membersKids,
          COALESCE(r.leaders, 0)  AS leaders,
          COALESCE(s.n, 0)        AS servedRecently,
          COALESCE(j.n, 0)        AS joinedRecently,
@@ -191,6 +199,7 @@ export function listTeams(
     serviceTypeName: string | null;
     archivedAt: string | null;
     members: number;
+    membersKids: number;
     leaders: number;
     servedRecently: number;
     joinedRecently: number;
@@ -224,6 +233,7 @@ export function getTeamTotals(rows: SyncedTeamRow[]): TeamTotals {
     totalTeams: rows.length,
     activeTeams: 0,
     totalMembers: 0,
+    totalMembersKids: 0,
     totalLeaders: 0,
     totalLapsed: 0,
     joinedRecently: 0,
@@ -236,6 +246,7 @@ export function getTeamTotals(rows: SyncedTeamRow[]): TeamTotals {
   for (const r of rows) {
     if (!r.archivedAt) t.activeTeams++;
     t.totalMembers += r.members;
+    t.totalMembersKids += r.membersKids;
     t.totalLeaders += r.leaders;
     t.totalLapsed += r.lapsed;
     t.joinedRecently += r.joinedRecently;

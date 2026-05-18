@@ -19,8 +19,17 @@ export async function syncHouseholdsAll(
     householdMemberships: { fetched: 0, upserted: 0 },
   };
 
-  // 1) Households — pull list (small) with primary_contact relationship.
-  const householdIds: string[] = [];
+  // 1) Households — pull list with primary_contact. Track previously-
+  //    stored updated_at so we can skip per-household membership re-pulls
+  //    when nothing changed. PCO bumps Household.updated_at when its
+  //    member set changes, so this is a safe equality check.
+  const previousUpdatedAt = new Map<string, string | null>();
+  const existingRows = getDb()
+    .prepare("SELECT pco_id, pco_updated_at FROM pco_households WHERE org_id = ?")
+    .all(orgId) as Array<{ pco_id: string; pco_updated_at: string | null }>;
+  for (const r of existingRows) previousUpdatedAt.set(r.pco_id, r.pco_updated_at);
+
+  const householdsToPullMemberships: string[] = [];
   for await (const { page } of client.paginate<PCOResource>(
     "/people/v2/households?per_page=100&include=primary_contact",
   )) {
@@ -31,16 +40,23 @@ export async function syncHouseholdsAll(
       const rels = h.relationships ?? {};
       const pc = rels.primary_contact?.data;
       const primaryId = !Array.isArray(pc) && pc ? pc.id : null;
+      const newUpdatedAt = (a.updated_at as string | undefined) ?? null;
       upsertHousehold(orgId, {
         pcoId: h.id,
         name: (a.name as string | undefined) ?? null,
         memberCount: (a.member_count as number | undefined) ?? null,
         primaryContactId: primaryId,
         pcoCreatedAt: (a.created_at as string | undefined) ?? null,
-        pcoUpdatedAt: (a.updated_at as string | undefined) ?? null,
+        pcoUpdatedAt: newUpdatedAt,
       });
       result.households.upserted++;
-      householdIds.push(h.id);
+      // Skip the per-household membership re-pull if nothing changed.
+      // First-time households are not in the map (undefined), so we
+      // always pull them.
+      const prev = previousUpdatedAt.get(h.id);
+      if (prev === undefined || prev !== newUpdatedAt) {
+        householdsToPullMemberships.push(h.id);
+      }
     }
   }
 
@@ -73,7 +89,7 @@ export async function syncHouseholdsAll(
     },
   );
 
-  for (const householdId of householdIds) {
+  for (const householdId of householdsToPullMemberships) {
     const rows: Array<{ pcoId: string; personId: string; pending: number }> = [];
     for await (const { page } of client.paginate<PCOResource>(
       `/people/v2/households/${householdId}/household_memberships?per_page=100`,

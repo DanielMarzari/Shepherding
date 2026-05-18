@@ -238,6 +238,10 @@ export interface SyncedGroupRow {
   groupTypeName: string | null;
   /** Active members + leaders (non-archived, non-lapsed). */
   members: number;
+  /** Subset of `members` who are currently under 18. Shown as
+   *  "(+N kids)" in the stat cards / totals so the adult roster is the
+   *  headline. */
+  membersKids: number;
   /** Subset of `members` whose role flags them as a leader. */
   leaders: number;
   joinedRecently: number;
@@ -313,6 +317,8 @@ export function listGroups(
        members_per_group AS (
          SELECT m.group_id,
                 SUM(CASE WHEN m.archived_at IS NULL THEN 1 ELSE 0 END) AS members,
+                SUM(CASE WHEN m.archived_at IS NULL AND p.is_minor = 1
+                         THEN 1 ELSE 0 END) AS membersKids,
                 SUM(CASE WHEN m.archived_at IS NULL
                           AND lower(coalesce(m.role, '')) LIKE '%leader%'
                          THEN 1 ELSE 0 END) AS leaders,
@@ -330,6 +336,8 @@ export function listGroups(
                     AND m.last_attended_at < ?
                   THEN m.person_id END) AS lapsedCandidates
            FROM pco_group_memberships m
+           LEFT JOIN pco_people p
+             ON p.org_id = m.org_id AND p.pco_id = m.person_id
           WHERE m.org_id = ?
           GROUP BY m.group_id
        ),
@@ -372,6 +380,7 @@ export function listGroups(
          g.pco_created_at    AS pcoCreatedAt,
          g.archived_at       AS archivedAt,
          COALESCE(mpg.members, 0)        AS members,
+         COALESCE(mpg.membersKids, 0)    AS membersKids,
          COALESCE(mpg.leaders, 0)        AS leaders,
          COALESCE(mpg.joinedRecently, 0) AS joinedRecently,
          COALESCE(mpg.archivedInWindow, 0)
@@ -413,6 +422,7 @@ export function listGroups(
     pcoCreatedAt: string | null;
     archivedAt: string | null;
     members: number;
+    membersKids: number;
     leaders: number;
     joinedRecently: number;
     leftRecently: number;
@@ -453,6 +463,7 @@ export function listGroups(
       pcoCreatedAt: r.pcoCreatedAt,
       archivedAt: r.archivedAt,
       members: r.members,
+      membersKids: r.membersKids,
       leaders: r.leaders,
       joinedRecently: r.joinedRecently,
       leftRecently: r.leftRecently,

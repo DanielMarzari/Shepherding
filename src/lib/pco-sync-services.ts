@@ -222,6 +222,17 @@ export async function syncServicesAll(
   const planSince = new Date(Date.now() - lookbackMs).toISOString();
   const recentPlans: Array<{ planId: string; serviceTypeId: string }> = [];
 
+  // Snapshot of pco_updated_at for every plan we already have, so we can
+  // skip the per-plan team_members re-fetch when the plan hasn't changed
+  // in PCO. team_members modifications (confirm/decline/reschedule) bump
+  // Plan.updated_at, so an equality check is safe here.
+  const previousPlanUpdatedAt = new Map<string, string | null>();
+  const existingPlanRows = getDb()
+    .prepare("SELECT pco_id, pco_updated_at FROM pco_plans WHERE org_id = ?")
+    .all(orgId) as Array<{ pco_id: string; pco_updated_at: string | null }>;
+  for (const r of existingPlanRows)
+    previousPlanUpdatedAt.set(r.pco_id, r.pco_updated_at);
+
   for (const stId of serviceTypeIds) {
     const params = new URLSearchParams({ per_page: "100", order: "-sort_date" });
     if (plansAlreadySynced) params.set("where[sort_date][gte]", planSince);
@@ -234,16 +245,22 @@ export async function syncServicesAll(
           result.plans.fetched++;
           const a = (p.attributes ?? {}) as Record<string, unknown>;
           const sortDate = (a.sort_date as string | undefined) ?? null;
+          const newUpdatedAt = (a.updated_at as string | undefined) ?? null;
           upsertPlan(orgId, {
             pcoId: p.id,
             serviceTypeId: stId,
             title: (a.title as string | undefined) ?? null,
             sortDate,
             pcoCreatedAt: (a.created_at as string | undefined) ?? null,
-            pcoUpdatedAt: (a.updated_at as string | undefined) ?? null,
+            pcoUpdatedAt: newUpdatedAt,
           });
           result.plans.upserted++;
-          recentPlans.push({ planId: p.id, serviceTypeId: stId });
+          const prev = previousPlanUpdatedAt.get(p.id);
+          // First-time plans (undefined) and edited plans (prev !== new)
+          // get queued for team_members re-pull; unchanged plans skip.
+          if (prev === undefined || prev !== newUpdatedAt) {
+            recentPlans.push({ planId: p.id, serviceTypeId: stId });
+          }
         }
       }
     } catch (e) {

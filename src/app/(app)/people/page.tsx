@@ -283,6 +283,42 @@ function AdultKidNumber({
   );
 }
 
+/** Compact age/role chip for the People table. Shows the actual age
+ *  when birth_year is on file; otherwise just "Adult" / "Kid" / "—" so
+ *  we can still distinguish the bucket. */
+function AgeBadge({
+  isMinor,
+  birthYear,
+}: {
+  isMinor: boolean;
+  birthYear: number | null;
+}) {
+  if (birthYear != null) {
+    const age = Math.max(0, new Date().getUTCFullYear() - birthYear);
+    return (
+      <span
+        className={`text-xs px-1.5 py-0.5 rounded ${
+          isMinor
+            ? "bg-warn-soft-bg text-warn-soft-fg"
+            : "bg-bg-elev-2 text-muted"
+        }`}
+        title={`born ${birthYear}`}
+      >
+        {age} {isMinor ? "(kid)" : ""}
+      </span>
+    );
+  }
+  // No birthdate on file — fall back to the boolean flag alone.
+  if (isMinor) {
+    return (
+      <span className="text-xs px-1.5 py-0.5 rounded bg-warn-soft-bg text-warn-soft-fg">
+        Kid
+      </span>
+    );
+  }
+  return <span className="text-xs text-subtle">—</span>;
+}
+
 function PeopleTable({
   people,
   total,
@@ -307,17 +343,19 @@ function PeopleTable({
         }
       />
       <div className="overflow-x-auto">
-        <table className="w-full text-sm table-fixed min-w-[760px]">
+        <table className="w-full text-sm table-fixed min-w-[860px]">
           <colgroup>
-            <col className="w-[40%]" />
-            <col className="w-[14%]" />
-            <col className="w-[18%]" />
+            <col className="w-[34%]" />
+            <col className="w-[10%]" />
+            <col className="w-[12%]" />
+            <col className="w-[16%]" />
             <col className="w-[14%]" />
             <col className="w-[14%]" />
           </colgroup>
           <thead className="text-xs text-muted">
             <tr className="border-b border-border-soft">
               <th className="text-left font-medium px-5 py-2">Name</th>
+              <th className="text-left font-medium px-5 py-2">Age</th>
               <SortableTh
                 label="Status"
                 column="status"
@@ -376,6 +414,9 @@ function PersonRow({ p }: { p: SyncedPersonRow }) {
             <div className="text-xs text-muted">PCO #{p.pcoId}</div>
           </div>
         </Link>
+      </td>
+      <td className="px-5 py-2.5">
+        <AgeBadge isMinor={p.isMinor} birthYear={p.birthYear} />
       </td>
       <td className="px-5 py-2.5">
         <Pill tone={pillTone(p.classification)}>{p.classification}</Pill>

@@ -24,6 +24,7 @@ const SETTINGS_NAV_ITEMS = [
   { href: "/pco/filters", label: "Filters" },
   { href: "/attendance", label: "Attendance" },
   { href: "/metrics", label: "Metrics" },
+  { href: "/examples", label: "Design references" },
 ];
 
 export async function AppShell({

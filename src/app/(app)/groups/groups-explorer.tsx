@@ -9,6 +9,7 @@ interface Totals {
   totalGroups: number;
   activeGroups: number;
   totalMembers: number;
+  totalMembersKids: number;
   totalLeaders: number;
   joinedRecently: number;
   leftRecently: number;
@@ -23,6 +24,7 @@ function computeTotals(groups: SyncedGroupRow[]): Totals {
     totalGroups: groups.length,
     activeGroups: 0,
     totalMembers: 0,
+    totalMembersKids: 0,
     totalLeaders: 0,
     joinedRecently: 0,
     leftRecently: 0,
@@ -37,6 +39,7 @@ function computeTotals(groups: SyncedGroupRow[]): Totals {
     if (g.archivedAt) continue;
     t.activeGroups += 1;
     t.totalMembers += g.members;
+    t.totalMembersKids += g.membersKids;
     t.totalLeaders += g.leaders;
     t[g.state] += 1;
   }
@@ -107,8 +110,17 @@ export function GroupsExplorer({
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Card className="p-4">
           <div className="text-xs text-muted mb-1.5">Active members</div>
-          <div className="tnum text-2xl font-semibold">{totals.totalMembers}</div>
-          <div className="text-xs text-muted mt-1">across active groups</div>
+          <div className="flex items-baseline gap-2">
+            <div className="tnum text-2xl font-semibold">
+              {(totals.totalMembers - totals.totalMembersKids).toLocaleString()}
+            </div>
+            {totals.totalMembersKids > 0 && (
+              <div className="tnum text-xs text-muted">
+                +{totals.totalMembersKids.toLocaleString()} kids
+              </div>
+            )}
+          </div>
+          <div className="text-xs text-muted mt-1">adults across active groups</div>
         </Card>
         <Card className="p-4">
           <div className="text-xs text-muted mb-1.5">Leaders</div>

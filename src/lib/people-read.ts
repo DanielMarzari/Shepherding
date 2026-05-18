@@ -34,6 +34,8 @@ export interface SyncedPersonRow {
   pcoUpdatedAt: string | null;
   lastFormSubmissionAt: string | null;
   classification: ActivityClassification;
+  isMinor: boolean;
+  birthYear: number | null;
 }
 
 interface PIIBlob {
@@ -54,6 +56,8 @@ interface RawRow {
   last_form_submission_at: string | null;
   last_check_in_at: string | null;
   is_shepherded: number;
+  is_minor: number;
+  birth_year: number | null;
 }
 
 function cutoffIso(activityMonths: number): string {
@@ -106,6 +110,8 @@ function toRow(r: RawRow, activityMonths: number): SyncedPersonRow {
       r.is_shepherded === 1,
       activityMonths,
     ),
+    isMinor: r.is_minor === 1,
+    birthYear: r.birth_year,
   };
 }
 
@@ -234,6 +240,7 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
     .prepare(
       `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
+              is_minor, birth_year,
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
@@ -487,6 +494,7 @@ export function getPersonByPcoId(
     .prepare(
       `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
+              is_minor, birth_year,
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
@@ -559,6 +567,7 @@ export function searchPeople(
     .prepare(
       `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
+              is_minor, birth_year,
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id

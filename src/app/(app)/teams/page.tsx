@@ -59,10 +59,17 @@ export default async function TeamsPage({
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <Card className="p-4">
               <div className="text-xs text-muted mb-1.5">Roster size</div>
-              <div className="tnum text-2xl font-semibold">
-                {totals.totalMembers}
+              <div className="flex items-baseline gap-2">
+                <div className="tnum text-2xl font-semibold">
+                  {(totals.totalMembers - totals.totalMembersKids).toLocaleString()}
+                </div>
+                {totals.totalMembersKids > 0 && (
+                  <div className="tnum text-xs text-muted">
+                    +{totals.totalMembersKids.toLocaleString()} kids
+                  </div>
+                )}
               </div>
-              <div className="text-xs text-muted mt-1">distinct people on teams</div>
+              <div className="text-xs text-muted mt-1">adults on team rosters</div>
             </Card>
             <Card className="p-4">
               <div className="text-xs text-muted mb-1.5">Leaders</div>

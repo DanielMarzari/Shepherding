@@ -55,7 +55,7 @@ export async function ReferenceListPage({
           </Card>
         ) : (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 gap-3 max-w-md">
               <Card className="p-4">
                 <div className="text-xs text-muted mb-1.5">Members</div>
                 <div className="tnum text-2xl font-semibold">
@@ -64,24 +64,6 @@ export async function ReferenceListPage({
                 <div className="text-xs text-muted mt-1">
                   matched to a PCO person row
                 </div>
-              </Card>
-              <Card className="p-4">
-                <div className="text-xs text-muted mb-1.5">PCO total</div>
-                <div className="tnum text-2xl font-semibold">
-                  {list.totalPeople.toLocaleString()}
-                </div>
-                <div className="text-xs text-muted mt-1">
-                  as reported by PCO at last refresh
-                </div>
-              </Card>
-              <Card className="p-4">
-                <div className="text-xs text-muted mb-1.5">Adults</div>
-                <div className="tnum text-2xl font-semibold">
-                  {list.members
-                    .filter((m) => !m.isMinor)
-                    .length.toLocaleString()}
-                </div>
-                <div className="text-xs text-muted mt-1">is_minor = 0</div>
               </Card>
               <Card className="p-4">
                 <div className="text-xs text-muted mb-1.5">Last refreshed</div>
