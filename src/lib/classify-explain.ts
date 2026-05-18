@@ -205,37 +205,57 @@ export function explainClassification(
       const placeholders = Array.from(shepherdedEvents)
         .map(() => "?")
         .join(",");
-      // How many check-ins to flagged events did they have, all-time AND
-      // inside the configured window. Different counts let us explain
-      // "we saw 4 historical hits but only 1 in the 12-month window."
+      // Pull all-time count, in-window count, AND in-window count where
+      // someone else did the check-in (the "dependent" signal).
       const flaggedRow = db
         .prepare(
           `SELECT
              COUNT(*) AS allTime,
-             SUM(CASE WHEN pco_created_at >= ? THEN 1 ELSE 0 END) AS inWindow
+             SUM(CASE WHEN pco_created_at >= ? THEN 1 ELSE 0 END) AS inWindow,
+             SUM(CASE
+                   WHEN pco_created_at >= ?
+                    AND checked_in_by_id IS NOT NULL
+                    AND checked_in_by_id != person_id
+                   THEN 1 ELSE 0 END) AS dependentInWindow
            FROM pco_check_ins
            WHERE org_id = ?
              AND person_id = ?
              AND event_id IN (${placeholders})`,
         )
-        .get(windowCutoff, orgId, personId, ...shepherdedEvents) as {
+        .get(
+          windowCutoff,
+          windowCutoff,
+          orgId,
+          personId,
+          ...shepherdedEvents,
+        ) as {
         allTime: number;
         inWindow: number | null;
+        dependentInWindow: number | null;
       };
       const inWindow = flaggedRow.inWindow ?? 0;
+      const dependentInWindow = flaggedRow.dependentInWindow ?? 0;
       const min = settings.shepherdedCheckinMinEvents;
       if (flaggedRow.allTime > 0) {
-        if (!isMinor) {
-          blockers.push(
-            `${flaggedRow.allTime} check-in${flaggedRow.allTime === 1 ? "" : "s"} to a flagged event, but the kids/student rule only counts minors.`,
-          );
-        } else if (inWindow >= min) {
+        const meetsCount = inWindow >= min;
+        const dependentSignal = isMinor || dependentInWindow > 0;
+        if (meetsCount && dependentSignal) {
+          const reason = isMinor
+            ? "they're a minor"
+            : `${dependentInWindow} of those check-ins were done by someone else (dependent signal)`;
           shepherdedReasons.push(
-            `${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the last ${settings.shepherdedCheckinWindowMonths}mo (threshold ≥ ${min}).`,
+            `${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the last ${settings.shepherdedCheckinWindowMonths}mo (≥ ${min}) — ${reason}.`,
+          );
+        } else if (!meetsCount) {
+          const outside = flaggedRow.allTime - inWindow;
+          blockers.push(
+            `Only ${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the last ${settings.shepherdedCheckinWindowMonths}mo — needs ≥ ${min} to count as Shepherded.${outside > 0 ? ` ${outside} earlier check-in${outside === 1 ? "" : "s"} sit outside the window.` : ""}`,
           );
         } else {
+          // Met count threshold but failed the dependent signal —
+          // they're a self-check-in adult.
           blockers.push(
-            `Only ${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the last ${settings.shepherdedCheckinWindowMonths}mo — needs ≥ ${min} to count as Shepherded. ${flaggedRow.allTime - inWindow} earlier check-in${flaggedRow.allTime - inWindow === 1 ? "" : "s"} sit outside the window.`,
+            `${inWindow} check-in${inWindow === 1 ? "" : "s"} to flagged events in the window, but they self-check-in (no parent / leader on record). The rule treats those as Active, not Shepherded.`,
           );
         }
       }

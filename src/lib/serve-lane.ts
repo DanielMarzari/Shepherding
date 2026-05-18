@@ -262,6 +262,105 @@ export function getTeamTotals(rows: SyncedTeamRow[]): TeamTotals {
   return t;
 }
 
+// ─── Per-person team-by-team breakdown (for /people/[slug]) ───────────
+
+export interface PersonTeamRow {
+  teamId: string;
+  teamName: string | null;
+  serviceTypeName: string | null;
+  isLeader: boolean;
+  /** Distinct plans they actually served in (status not declined),
+   *  inside the activity window. */
+  servedInWindow: number;
+  /** Total distinct plans they were scheduled on in the window
+   *  (denominator for "serve%"). */
+  scheduledInWindow: number;
+  /** Latest sort_date they served on this team. */
+  lastServedAt: string | null;
+}
+
+/** All teams a person is on, with serve activity in the activity
+ *  window. Powers the Team-attendance section of the person profile. */
+export function listTeamMembershipsByPerson(
+  orgId: number,
+  personId: string,
+  activityMonths: number,
+): PersonTeamRow[] {
+  const db = getDb();
+  const cutoff = new Date(
+    Date.now() - activityMonths * 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT
+         t.pco_id          AS teamId,
+         t.name            AS teamName,
+         st.name           AS serviceTypeName,
+         MAX(m.is_team_leader) AS isLeader,
+         (SELECT COUNT(DISTINCT pp.plan_id)
+            FROM pco_plan_people pp
+            JOIN pco_plans p
+              ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+           WHERE pp.org_id = t.org_id
+             AND pp.team_id = t.pco_id
+             AND pp.person_id = ?
+             AND p.sort_date >= ?
+             AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')) AS servedInWindow,
+         (SELECT COUNT(DISTINCT pp.plan_id)
+            FROM pco_plan_people pp
+            JOIN pco_plans p
+              ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+           WHERE pp.org_id = t.org_id
+             AND pp.team_id = t.pco_id
+             AND pp.person_id = ?
+             AND p.sort_date >= ?) AS scheduledInWindow,
+         (SELECT MAX(p.sort_date)
+            FROM pco_plan_people pp
+            JOIN pco_plans p
+              ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+           WHERE pp.org_id = t.org_id
+             AND pp.team_id = t.pco_id
+             AND pp.person_id = ?
+             AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')) AS lastServedAt
+       FROM pco_team_memberships m
+       JOIN pco_teams t
+         ON t.org_id = m.org_id AND t.pco_id = m.team_id
+       LEFT JOIN pco_service_types st
+         ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
+      WHERE m.org_id = ?
+        AND m.person_id = ?
+        AND m.archived_at IS NULL
+        AND t.archived_at IS NULL
+        AND t.deleted_at IS NULL
+      GROUP BY t.pco_id, t.name, st.name
+      ORDER BY servedInWindow DESC, t.name ASC`,
+    )
+    .all(
+      personId, cutoff,  // servedInWindow
+      personId, cutoff,  // scheduledInWindow
+      personId,          // lastServedAt
+      orgId, personId,   // outer where
+    ) as Array<{
+    teamId: string;
+    teamName: string | null;
+    serviceTypeName: string | null;
+    isLeader: number;
+    servedInWindow: number;
+    scheduledInWindow: number;
+    lastServedAt: string | null;
+  }>;
+
+  return rows.map((r) => ({
+    teamId: r.teamId,
+    teamName: r.teamName,
+    serviceTypeName: r.serviceTypeName,
+    isLeader: r.isLeader === 1,
+    servedInWindow: r.servedInWindow,
+    scheduledInWindow: r.scheduledInWindow,
+    lastServedAt: r.lastServedAt,
+  }));
+}
+
 // ─── Per-person serving stats (for /lanes/serv) ────────────────────────
 
 export interface ServingPersonRow {

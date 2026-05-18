@@ -191,13 +191,17 @@ function populateShepherdedTempTable(orgId: number) {
          ${posWhere}`,
   ).run(orgId, ...excludedTeams, ...excludedPositions);
 
-  // Source 3: kids/student check-ins. The check-in's `person_id` is the
-  // kid being checked in → they're being shepherded by whoever checked
-  // them in. Only counts for events the admin has flagged as shepherded
-  // AND only for currently-under-18 people (an adult checking in is the
-  // parent/leader doing the check-in, not the one being shepherded) AND
-  // they must hit a frequency threshold — a one-off check-in lands in
-  // Active, not Shepherded.
+  // Source 3: dependent check-ins to flagged events. A person counts as
+  // shepherded via check-ins when they meet TWO conditions:
+  //   (a) ≥ shepherdedCheckinMinEvents flagged check-ins in the window
+  //   (b) at least one of those check-ins was done BY someone else
+  //       (checked_in_by_id != person_id) OR they're recorded is_minor=1
+  // The "checked-in-by-someone-else" signal is the real giveaway for a
+  // dependent (kid, special-needs adult, etc.) regardless of whether
+  // PCO has their birthdate on file. Kids without birthdates were
+  // previously getting stuck in Active because we required is_minor=1;
+  // a parent doing the check-in is the more reliable signal. Adults
+  // who self-check-in (or volunteer) are not caught.
   if (shepherdedCheckinEvents.length > 0) {
     const settings = getSyncSettings(orgId);
     const windowCutoff = new Date(
@@ -214,10 +218,16 @@ function populateShepherdedTempTable(orgId: number) {
          WHERE ci.org_id = ?
            AND ci.person_id IS NOT NULL
            AND ci.event_id IN (${placeholders})
-           AND p.is_minor = 1
            AND ci.pco_created_at >= ?
          GROUP BY ci.person_id
-         HAVING COUNT(*) >= ?`,
+         HAVING COUNT(*) >= ?
+            AND (
+              MAX(p.is_minor) = 1
+              OR SUM(CASE
+                       WHEN ci.checked_in_by_id IS NOT NULL
+                        AND ci.checked_in_by_id != ci.person_id
+                       THEN 1 ELSE 0 END) > 0
+            )`,
     ).run(
       orgId,
       ...shepherdedCheckinEvents,

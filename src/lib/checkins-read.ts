@@ -1,6 +1,6 @@
 import "server-only";
 import { getDb } from "./db";
-import { getShepherdedCheckinEvents } from "./pco";
+import { getShepherdedCheckinEvents, getSyncSettings } from "./pco";
 
 export interface CheckinSummary {
   totalCheckins: number;
@@ -144,4 +144,106 @@ export function listCheckinEvents(orgId: number): CheckinEventRow[] {
     lastCheckinAt: r.lastCheckinAt,
     shepherded: shepherdedEvents.has(r.eventId),
   }));
+}
+
+// ─── Per-person check-in breakdown (for /people/[slug]) ───────────────
+
+export interface PersonCheckinRow {
+  eventId: string;
+  eventName: string | null;
+  eventArchived: boolean;
+  shepherdedEvent: boolean;
+  /** All-time check-ins for this person at this event. */
+  total: number;
+  /** Check-ins inside the configured shepherded-check-in window. */
+  inWindow: number;
+  /** Check-ins where someone else did the check-in — strong signal
+   *  the person is a dependent (kid / special-needs adult). */
+  byOther: number;
+  /** Last check-in to this event. */
+  lastAt: string | null;
+}
+
+export interface PersonCheckinSummary {
+  windowMonths: number;
+  rows: PersonCheckinRow[];
+  /** Total check-ins where they were CHECKED IN (regardless of event). */
+  totalAsCheckin: number;
+  /** Total check-ins where THEY did the checking-in for someone else. */
+  totalAsChecker: number;
+}
+
+export function listPersonCheckins(
+  orgId: number,
+  personId: string,
+): PersonCheckinSummary {
+  const db = getDb();
+  const settings = getSyncSettings(orgId);
+  const shepherdedEvents = new Set(getShepherdedCheckinEvents(orgId));
+  const windowMonths = settings.shepherdedCheckinWindowMonths;
+  const windowCutoff = new Date(
+    Date.now() - windowMonths * 30 * MS_PER_DAY,
+  ).toISOString();
+
+  const rows = db
+    .prepare(
+      `SELECT
+         e.pco_id        AS eventId,
+         e.name          AS eventName,
+         e.archived_at   AS archivedAt,
+         COUNT(*)        AS total,
+         SUM(CASE WHEN ci.pco_created_at >= ? THEN 1 ELSE 0 END) AS inWindow,
+         SUM(CASE
+               WHEN ci.checked_in_by_id IS NOT NULL
+                AND ci.checked_in_by_id != ci.person_id
+               THEN 1 ELSE 0 END) AS byOther,
+         MAX(ci.pco_created_at) AS lastAt
+       FROM pco_check_ins ci
+       JOIN pco_checkin_events e
+         ON e.org_id = ci.org_id AND e.pco_id = ci.event_id
+       WHERE ci.org_id = ?
+         AND ci.person_id = ?
+       GROUP BY e.pco_id, e.name, e.archived_at
+       ORDER BY total DESC, e.name ASC`,
+    )
+    .all(windowCutoff, orgId, personId) as Array<{
+    eventId: string;
+    eventName: string | null;
+    archivedAt: string | null;
+    total: number;
+    inWindow: number | null;
+    byOther: number | null;
+    lastAt: string | null;
+  }>;
+
+  const checkerRow = db
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM pco_check_ins
+            WHERE org_id = ? AND person_id = ?) AS asCheckin,
+         (SELECT COUNT(*) FROM pco_check_ins
+            WHERE org_id = ?
+              AND (checked_in_by_id = ? OR checked_out_by_id = ?)
+              AND (person_id IS NULL OR person_id != ?)) AS asChecker`,
+    )
+    .get(orgId, personId, orgId, personId, personId, personId) as {
+    asCheckin: number;
+    asChecker: number;
+  };
+
+  return {
+    windowMonths,
+    rows: rows.map((r) => ({
+      eventId: r.eventId,
+      eventName: r.eventName,
+      eventArchived: !!r.archivedAt,
+      shepherdedEvent: shepherdedEvents.has(r.eventId),
+      total: r.total,
+      inWindow: r.inWindow ?? 0,
+      byOther: r.byOther ?? 0,
+      lastAt: r.lastAt,
+    })),
+    totalAsCheckin: checkerRow.asCheckin,
+    totalAsChecker: checkerRow.asChecker,
+  };
 }

@@ -4,9 +4,11 @@ import { AppShell } from "@/components/AppShell";
 import { BackLink } from "@/components/BackLink";
 import { Avatar, Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
+import { listPersonCheckins } from "@/lib/checkins-read";
 import { explainClassification } from "@/lib/classify-explain";
 import { listGroupsAttendedByPerson } from "@/lib/community-lane";
 import { getSyncSettings } from "@/lib/pco";
+import { listTeamMembershipsByPerson } from "@/lib/serve-lane";
 import {
   type ActivityClassification,
   getPersonByPcoId,
@@ -37,6 +39,12 @@ export default async function PersonProfilePage({
     slug,
     settings.activityMonths,
   );
+  const teamRows = listTeamMembershipsByPerson(
+    session.orgId,
+    slug,
+    settings.activityTrackingMonths,
+  );
+  const checkins = listPersonCheckins(session.orgId, slug);
 
   const age = person.birthdate ? computeAge(person.birthdate) : null;
 
@@ -315,13 +323,154 @@ export default async function PersonProfilePage({
           )}
         </Card>
 
-        <Card className="p-5">
-          <h2 className="text-sm font-semibold mb-2">Coming next</h2>
-          <ul className="text-sm text-muted space-y-1.5 list-disc list-inside">
-            <li>Sunday check-in / attendance history.</li>
-            <li>Pastoral notes and touchpoints.</li>
-            <li>Lane journey and movement timeline.</li>
-          </ul>
+        <Card>
+          <CardHeader
+            title="Team attendance"
+            right={
+              <span className="text-xs text-muted">
+                {teamRows.length} team{teamRows.length === 1 ? "" : "s"} ·
+                window {settings.activityTrackingMonths}mo
+              </span>
+            }
+          />
+          {teamRows.length === 0 ? (
+            <div className="px-5 py-8 text-sm text-muted text-center">
+              No team rosters on file for this person.
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="text-xs text-muted">
+                <tr className="border-b border-border-soft">
+                  <th className="text-left font-medium px-5 py-2">Team</th>
+                  <th className="text-left font-medium px-5 py-2">Role</th>
+                  <th
+                    className="text-right font-medium px-5 py-2"
+                    title="Distinct plans they served in the window vs. plans they were scheduled on"
+                  >
+                    Served
+                  </th>
+                  <th className="text-right font-medium px-5 py-2">
+                    Last served
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {teamRows.map((t) => (
+                  <tr
+                    key={t.teamId}
+                    className="border-b border-border-softer hover:bg-bg-elev-2/60"
+                  >
+                    <td className="px-5 py-2.5">
+                      <div className="font-medium truncate">
+                        {t.teamName ?? `(unnamed #${t.teamId})`}
+                      </div>
+                      <div className="text-xs text-muted truncate">
+                        {t.serviceTypeName ?? "—"}
+                      </div>
+                    </td>
+                    <td className="px-5 py-2.5">
+                      <Pill tone={t.isLeader ? "accent" : "muted"}>
+                        {t.isLeader ? "leader" : "member"}
+                      </Pill>
+                    </td>
+                    <td className="px-5 py-2.5 text-right tnum">
+                      {t.scheduledInWindow > 0
+                        ? `${t.servedInWindow}/${t.scheduledInWindow}`
+                        : t.servedInWindow > 0
+                          ? `${t.servedInWindow}`
+                          : "—"}
+                    </td>
+                    <td className="px-5 py-2.5 text-right tnum text-muted">
+                      {t.lastServedAt
+                        ? new Date(t.lastServedAt).toLocaleDateString()
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Check-ins"
+            right={
+              <span className="text-xs text-muted">
+                {checkins.totalAsCheckin.toLocaleString()} as check-in ·
+                {" "}
+                {checkins.totalAsChecker.toLocaleString()} as the one
+                checking-in · window {checkins.windowMonths}mo
+              </span>
+            }
+          />
+          {checkins.rows.length === 0 ? (
+            <div className="px-5 py-8 text-sm text-muted text-center">
+              No check-in records for this person.
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="text-xs text-muted">
+                <tr className="border-b border-border-soft">
+                  <th className="text-left font-medium px-5 py-2">Event</th>
+                  <th className="text-right font-medium px-5 py-2">All-time</th>
+                  <th
+                    className="text-right font-medium px-5 py-2"
+                    title={`Check-ins in the last ${checkins.windowMonths} months`}
+                  >
+                    In window
+                  </th>
+                  <th
+                    className="text-right font-medium px-5 py-2"
+                    title="Check-ins where someone else (a parent / leader) did the check-in — the dependent signal."
+                  >
+                    By other
+                  </th>
+                  <th className="text-right font-medium px-5 py-2">Last</th>
+                </tr>
+              </thead>
+              <tbody>
+                {checkins.rows.map((r) => (
+                  <tr
+                    key={r.eventId}
+                    className={`border-b border-border-softer hover:bg-bg-elev-2/60 ${
+                      r.eventArchived ? "opacity-60" : ""
+                    }`}
+                  >
+                    <td className="px-5 py-2.5">
+                      <div className="font-medium truncate">
+                        {r.eventName ?? `(unnamed #${r.eventId})`}
+                        {r.shepherdedEvent && (
+                          <span className="ml-2 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent-soft-bg text-accent">
+                            shepherded
+                          </span>
+                        )}
+                        {r.eventArchived && (
+                          <span className="ml-2 text-xs text-muted font-normal">
+                            archived
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-5 py-2.5 text-right tnum">
+                      {r.total.toLocaleString()}
+                    </td>
+                    <td className="px-5 py-2.5 text-right tnum">
+                      {r.inWindow.toLocaleString()}
+                    </td>
+                    <td className="px-5 py-2.5 text-right tnum text-muted">
+                      {r.byOther.toLocaleString()}
+                    </td>
+                    <td className="px-5 py-2.5 text-right tnum text-muted">
+                      {r.lastAt
+                        ? new Date(r.lastAt).toLocaleDateString()
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </Card>
       </div>
     </AppShell>
