@@ -283,33 +283,11 @@ function AdultKidNumber({
   );
 }
 
-/** Compact age/role chip for the People table. Shows the actual age
- *  when birth_year is on file; otherwise defaults to "Adult" — kids
- *  almost always have a birthdate on file (PCO requires it for
- *  check-in / Sunday programs), while adults frequently don't, so
- *  "unknown" is overwhelmingly an adult who never filled in the field. */
-function AgeBadge({
-  isMinor,
-  birthYear,
-}: {
-  isMinor: boolean;
-  birthYear: number | null;
-}) {
-  if (birthYear != null) {
-    const age = Math.max(0, new Date().getUTCFullYear() - birthYear);
-    return (
-      <span
-        className={`text-xs px-1.5 py-0.5 rounded ${
-          isMinor
-            ? "bg-warn-soft-bg text-warn-soft-fg"
-            : "bg-bg-elev-2 text-muted"
-        }`}
-        title={`born ${birthYear}`}
-      >
-        {age} {isMinor ? "(kid)" : ""}
-      </span>
-    );
-  }
+/** Adult / Kid pill for the People table. We deliberately don't show
+ *  the actual age on a dashboard you might share — kids almost always
+ *  have a birthdate in PCO so "Adult" is the safe default when one is
+ *  missing. */
+function AgeBadge({ isMinor }: { isMinor: boolean }) {
   if (isMinor) {
     return (
       <span className="text-xs px-1.5 py-0.5 rounded bg-warn-soft-bg text-warn-soft-fg">
@@ -318,10 +296,7 @@ function AgeBadge({
     );
   }
   return (
-    <span
-      className="text-xs px-1.5 py-0.5 rounded text-subtle"
-      title="No birthdate on file — defaulted to Adult"
-    >
+    <span className="text-xs px-1.5 py-0.5 rounded bg-bg-elev-2 text-muted">
       Adult
     </span>
   );
@@ -424,7 +399,7 @@ function PersonRow({ p }: { p: SyncedPersonRow }) {
         </Link>
       </td>
       <td className="px-5 py-2.5">
-        <AgeBadge isMinor={p.isMinor} birthYear={p.birthYear} />
+        <AgeBadge isMinor={p.isMinor} />
       </td>
       <td className="px-5 py-2.5">
         <Pill tone={pillTone(p.classification)}>{p.classification}</Pill>

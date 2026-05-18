@@ -5,6 +5,7 @@ import { requireOrg } from "@/lib/auth";
 import {
   saveExcludedGroupTypes,
   saveExcludedMembershipTypes,
+  saveExcludedTeamPositions,
   saveExcludedTeamTypes,
   saveShepherdedCheckinEvents,
 } from "@/lib/pco";
@@ -49,16 +50,20 @@ export async function saveTeamTypeFiltersAction(
   const excluded = formData
     .getAll("exclude_team_type")
     .filter((v) => typeof v === "string") as string[];
+  const excludedPositions = formData
+    .getAll("exclude_team_position")
+    .filter((v) => typeof v === "string") as string[];
   saveExcludedTeamTypes(s.orgId, excluded);
+  saveExcludedTeamPositions(s.orgId, excludedPositions);
   revalidatePath("/pco/filters");
   revalidatePath("/teams");
   revalidatePath("/lanes/serv");
   return {
     status: "saved",
     message:
-      excluded.length === 0
-        ? "All service types now count for Serve."
-        : `Excluding ${excluded.length} service type${excluded.length === 1 ? "" : "s"} from Serve.`,
+      excluded.length === 0 && excludedPositions.length === 0
+        ? "All service types + positions now count for Serve."
+        : `Excluding ${excluded.length} service type${excluded.length === 1 ? "" : "s"} + ${excludedPositions.length} position${excludedPositions.length === 1 ? "" : "s"}.`,
   };
 }
 

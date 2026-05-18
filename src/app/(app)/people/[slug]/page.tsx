@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
+import { explainClassification } from "@/lib/classify-explain";
 import { listGroupsAttendedByPerson } from "@/lib/community-lane";
 import { getSyncSettings } from "@/lib/pco";
 import {
@@ -30,6 +31,11 @@ export default async function PersonProfilePage({
   if (!person) notFound();
   const submissions = listPersonFormSubmissions(session.orgId, slug);
   const groupAttendance = listGroupsAttendedByPerson(session.orgId, slug);
+  const rationale = explainClassification(
+    session.orgId,
+    slug,
+    settings.activityMonths,
+  );
 
   const age = person.birthdate ? computeAge(person.birthdate) : null;
 
@@ -111,6 +117,73 @@ export default async function PersonProfilePage({
             <div className="text-xs text-muted mt-1">across all tracked forms</div>
           </Card>
         </div>
+
+        {/* Classification rationale — explains why this person landed in
+            Shepherded / Active / Present / Inactive. */}
+        <Card className="p-5">
+          <div className="flex items-baseline justify-between mb-2">
+            <h2 className="text-sm font-semibold">
+              Why &ldquo;{person.classification}&rdquo;?
+            </h2>
+            <span className="text-xs text-muted">
+              from sync data · {settings.activityMonths}mo window
+            </span>
+          </div>
+          {rationale.shepherdedReasons.length === 0 &&
+          rationale.blockers.length === 0 &&
+          rationale.activitySignals.length === 0 ? (
+            <p className="text-xs text-muted italic">
+              No shepherding signals at all. Falls back to whatever
+              pco_updated_at says.
+            </p>
+          ) : (
+            <div className="space-y-3 text-sm">
+              {rationale.shepherdedReasons.length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-good-soft-fg mb-1">
+                    Pulls them into Shepherded
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 text-fg">
+                    {rationale.shepherdedReasons.map((r, i) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {rationale.blockers.length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-warn-soft-fg mb-1">
+                    Filtered out of Shepherded
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 text-muted">
+                    {rationale.blockers.map((r, i) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {rationale.activitySignals.length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-accent mb-1">
+                    Pulls them into Active / Present
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 text-fg">
+                    {rationale.activitySignals.map((r, i) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="text-[11px] text-subtle pt-2 border-t border-border-softer flex flex-wrap gap-x-4 gap-y-1">
+                {rationale.facts.map((f) => (
+                  <span key={f.label} className="tnum">
+                    <span className="text-muted">{f.label}:</span> {f.value}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
           <Card className="p-5 lg:col-span-2">

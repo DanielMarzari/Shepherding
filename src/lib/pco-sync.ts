@@ -390,10 +390,9 @@ async function syncPeople(
         address: addressStr,
       };
 
-      // Skip placeholder rows where someone typed a single punctuation
-      // mark instead of a real name. PCO doesn't enforce real names so
-      // there's a long tail of "-" / "_" / "." / "?" people.
-      if (isJunkName(pii.first_name) && isJunkName(pii.last_name)) {
+      // Skip non-person rows admins create for rooms, computers, "DO
+      // NOT USE" placeholders, etc. See looksLikeNonPerson docs.
+      if (looksLikeNonPerson(pii.first_name, pii.last_name)) {
         continue;
       }
 
@@ -415,14 +414,38 @@ async function syncPeople(
   return { fetched, upserted, maxUpdatedAt };
 }
 
-/** True when a "name" field is empty or just punctuation/whitespace —
- *  i.e. an admin typed "-" or "_" to skip the required field. We drop
- *  these rows from sync so they don't show up across People / lanes /
- *  charts. */
+/** True when a name field looks like a placeholder/system-entry, not a
+ *  real person. Returns false for empty/missing so an absent last name
+ *  doesn't drag a real person ("John", no last name) into the junk
+ *  bucket — empty is "no signal," it's the explicit junk patterns we
+ *  reject:
+ *    - only punctuation ("-", "_", "—", "...")
+ *    - starts with non-letter ("- TRACKS COMPUTER", "_ ROOM 101",
+ *      "* DO NOT USE") — admins use this convention to sort non-person
+ *      rows to the top of alphabetical lists. */
 function isJunkName(name: string | null): boolean {
-  if (!name) return true;
-  const stripped = name.replace(/[\s\-_.,:;!?'"`~+*/\\()[\]{}<>|@#$%^&=]/g, "");
-  return stripped.length === 0;
+  if (!name) return false;
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return false;
+  if (!/\p{L}/u.test(trimmed)) return true;
+  if (!/^\p{L}/u.test(trimmed)) return true;
+  return false;
+}
+
+/** True when a row's first AND last name combined indicate "not a real
+ *  person" — used at sync time and in the post-sync cleanup pass.
+ *  Skip if every name is empty (no signal) OR if either name carries a
+ *  junk pattern (catches admins who put "-" only in first AND a real
+ *  word in last). */
+function looksLikeNonPerson(
+  firstName: string | null,
+  lastName: string | null,
+): boolean {
+  const fTrim = firstName?.trim() ?? "";
+  const lTrim = lastName?.trim() ?? "";
+  if (!fTrim && !lTrim) return true;
+  if (isJunkName(firstName) || isJunkName(lastName)) return true;
+  return false;
 }
 
 function formatAddress(a: unknown): string | null {
@@ -782,8 +805,10 @@ function refreshIsMinor(orgId: number) {
           last_name?: string | null;
         }>(r.enc_pii)
       : null;
-    const junk =
-      isJunkName(pii?.first_name ?? null) && isJunkName(pii?.last_name ?? null);
+    const junk = looksLikeNonPerson(
+      pii?.first_name ?? null,
+      pii?.last_name ?? null,
+    );
     const b = pii?.birthdate ?? null;
     let birthYear: number | null = null;
     if (b) {

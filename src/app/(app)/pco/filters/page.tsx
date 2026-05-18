@@ -6,11 +6,13 @@ import {
   getCheckinEventStats,
   getExcludedGroupTypes,
   getExcludedMembershipTypes,
+  getExcludedTeamPositions,
   getExcludedTeamTypes,
   getGroupTypeStats,
   getMembershipTypeStats,
   getServiceTypeStats,
   getShepherdedCheckinEvents,
+  getTeamPositionStats,
 } from "@/lib/pco";
 import { CheckinEventsForm } from "./checkin-events-form";
 import { FiltersForm } from "./form";
@@ -50,6 +52,8 @@ export default async function FiltersPage({
 
   const teamStats = getServiceTypeStats(session.orgId);
   const teamExcluded = new Set(getExcludedTeamTypes(session.orgId));
+  const positionStats = getTeamPositionStats(session.orgId);
+  const positionExcluded = getExcludedTeamPositions(session.orgId);
 
   const checkinStats = getCheckinEventStats(session.orgId);
   const shepherdedCheckinSet = new Set(
@@ -181,6 +185,8 @@ export default async function FiltersPage({
                 stats={teamStats}
                 initialExcluded={Array.from(teamExcluded)}
                 isAdmin={session.role === "admin"}
+                positionStats={positionStats}
+                initialExcludedPositions={positionExcluded}
               />
             )}
           </Card>

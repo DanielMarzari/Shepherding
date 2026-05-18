@@ -4,6 +4,7 @@ import { decryptJson } from "./encryption";
 import {
   getExcludedGroupTypes,
   getExcludedMembershipTypes,
+  getExcludedTeamPositions,
   getExcludedTeamTypes,
   getShepherdedCheckinEvents,
 } from "./pco";
@@ -130,6 +131,7 @@ function populateShepherdedTempTable(orgId: number) {
   const db = getDb();
   const excludedGroups = getExcludedGroupTypes(orgId);
   const excludedTeams = getExcludedTeamTypes(orgId);
+  const excludedPositions = getExcludedTeamPositions(orgId);
   const shepherdedCheckinEvents = getShepherdedCheckinEvents(orgId);
   db.exec(
     "CREATE TEMP TABLE IF NOT EXISTS shep_set (person_id TEXT PRIMARY KEY)",
@@ -159,11 +161,18 @@ function populateShepherdedTempTable(orgId: number) {
   }
 
   // Source 2: anyone on the active roster of a non-archived team whose
-  // service_type isn't excluded. Archived teams don't count.
+  // service_type isn't excluded AND whose position isn't excluded.
+  // Archived teams don't count.
   const teamWhere =
     excludedTeams.length === 0
       ? ""
       : `AND (t.service_type_id IS NULL OR t.service_type_id NOT IN (${excludedTeams
+          .map(() => "?")
+          .join(",")}))`;
+  const posWhere =
+    excludedPositions.length === 0
+      ? ""
+      : `AND (m.position_id IS NULL OR m.position_id NOT IN (${excludedPositions
           .map(() => "?")
           .join(",")}))`;
   db.prepare(
@@ -177,8 +186,9 @@ function populateShepherdedTempTable(orgId: number) {
          AND m.person_id != ''
          AND t.archived_at IS NULL
          AND t.deleted_at IS NULL
-         ${teamWhere}`,
-  ).run(orgId, ...excludedTeams);
+         ${teamWhere}
+         ${posWhere}`,
+  ).run(orgId, ...excludedTeams, ...excludedPositions);
 
   // Source 3: kids/student check-ins. The check-in's `person_id` is the
   // kid being checked in → they're being shepherded by whoever checked

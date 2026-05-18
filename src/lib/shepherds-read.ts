@@ -251,9 +251,13 @@ export function getShepherdDetail(
     )
     .all(cutoff, orgId, personId) as ShepherdDetailGroup[];
 
+  // DISTINCT on the outer t.pco_id — PCO models one person across many
+  // positions on the same team, so without it a team gets listed once
+  // per leader-position the shepherd holds (e.g. Worship gets duplicated
+  // because they're both "Worship Lead" AND "Vocalist Lead").
   const teamsLed = db
     .prepare(
-      `SELECT
+      `SELECT DISTINCT
          t.pco_id AS id,
          t.name   AS name,
          (SELECT COUNT(DISTINCT mm.person_id) FROM pco_team_memberships mm

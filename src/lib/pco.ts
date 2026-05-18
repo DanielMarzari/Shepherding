@@ -514,6 +514,87 @@ export function getExcludedTeamTypes(orgId: number): string[] {
   }
 }
 
+/** Specific team positions to exclude from Serve / Shepherded. Filters
+ *  more narrowly than excluded_team_types (which kills the whole
+ *  service type). Stored as a JSON string array of pco_team_positions
+ *  pco_ids. */
+export function getExcludedTeamPositions(orgId: number): string[] {
+  const row = getDb()
+    .prepare(
+      "SELECT excluded_team_positions FROM pco_sync_settings WHERE org_id = ?",
+    )
+    .get(orgId) as { excluded_team_positions: string | null } | undefined;
+  if (!row?.excluded_team_positions) return [];
+  try {
+    const parsed = JSON.parse(row.excluded_team_positions);
+    return Array.isArray(parsed)
+      ? parsed.filter((s) => typeof s === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveExcludedTeamPositions(orgId: number, ids: string[]) {
+  const cleaned = Array.from(new Set(ids.filter(Boolean)));
+  const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) saveSyncSettings(orgId, getSyncSettings(orgId));
+  getDb()
+    .prepare(
+      "UPDATE pco_sync_settings SET excluded_team_positions = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
+    )
+    .run(json, orgId);
+}
+
+/** Stats per (service_type, position) grouped under their service type.
+ *  Powers the "expand" section under each service-type row on the
+ *  filters page so admins can flick off individual positions. */
+export function getTeamPositionStats(orgId: number): Array<{
+  serviceTypeId: string | null;
+  serviceTypeName: string | null;
+  positionId: string;
+  positionName: string | null;
+  teamName: string | null;
+  /** Distinct people on the active roster holding this position. */
+  members: number;
+}> {
+  return getDb()
+    .prepare(
+      `SELECT
+         t.service_type_id AS serviceTypeId,
+         st.name           AS serviceTypeName,
+         tp.pco_id         AS positionId,
+         tp.name           AS positionName,
+         t.name            AS teamName,
+         COUNT(DISTINCT CASE
+           WHEN m.archived_at IS NULL AND m.person_id != ''
+           THEN m.person_id END) AS members
+       FROM pco_team_positions tp
+       JOIN pco_teams t
+         ON t.org_id = tp.org_id AND t.pco_id = tp.team_id
+       LEFT JOIN pco_service_types st
+         ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
+       LEFT JOIN pco_team_memberships m
+         ON m.org_id = tp.org_id AND m.position_id = tp.pco_id
+       WHERE tp.org_id = ?
+         AND t.archived_at IS NULL
+         AND t.deleted_at IS NULL
+       GROUP BY tp.pco_id, tp.name, t.pco_id, t.name, t.service_type_id, st.name
+       ORDER BY st.name ASC, t.name ASC, tp.name ASC`,
+    )
+    .all(orgId) as Array<{
+    serviceTypeId: string | null;
+    serviceTypeName: string | null;
+    positionId: string;
+    positionName: string | null;
+    teamName: string | null;
+    members: number;
+  }>;
+}
+
 export function saveExcludedTeamTypes(orgId: number, ids: string[]) {
   const cleaned = Array.from(new Set(ids.filter(Boolean)));
   const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
