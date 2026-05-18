@@ -2,6 +2,7 @@ import "server-only";
 import { decryptJson, encryptJson } from "./encryption";
 import { getDb } from "./db";
 import {
+  getAdultCheckinEvents,
   getDecryptedCreds,
   getExcludedCheckinEvents,
   getSyncEntities,
@@ -825,12 +826,11 @@ function refreshIsMinor(orgId: number) {
   }
   tx(batch);
 
-  // Overlay pass: any person with no birthdate AND at least one check-in
-  // to a non-excluded event is flipped to is_minor=1. By default every
-  // check-in event is a kids/student event in this org's PCO setup; the
-  // excluded list pulls out the exceptions (Office Visitors, Volunteer
-  // sign-ups, etc.). The birth_year IS NULL guard keeps PCO-known
-  // adults safe from being mis-flipped.
+  // Overlay pass: any person with no birthdate AND a check-in to a
+  // non-excluded event is flipped to is_minor=1. Default every check-in
+  // event is a kids/student event in this org's PCO setup; the excluded
+  // list pulls out the exceptions. The birth_year IS NULL guard keeps
+  // PCO-known adults safe from being mis-flipped.
   const excludedEvents = getExcludedCheckinEvents(orgId);
   if (excludedEvents.length === 0) {
     db.prepare(
@@ -859,6 +859,28 @@ function refreshIsMinor(orgId: number) {
                AND event_id NOT IN (${placeholders})
           )`,
     ).run(orgId, orgId, ...excludedEvents);
+  }
+
+  // Second overlay: the ADULT-event list. Runs AFTER the kid-event
+  // overlay so the adult signal wins for ambiguous people (e.g. someone
+  // who's checked into both an Office Visitors station AND a kids event
+  // as a volunteer). Still gated on birth_year IS NULL.
+  const adultEvents = getAdultCheckinEvents(orgId);
+  if (adultEvents.length > 0) {
+    const placeholders = adultEvents.map(() => "?").join(",");
+    db.prepare(
+      `UPDATE pco_people
+          SET is_minor = 0
+        WHERE org_id = ?
+          AND birth_year IS NULL
+          AND pco_id IN (
+            SELECT DISTINCT person_id
+              FROM pco_check_ins
+             WHERE org_id = ?
+               AND person_id IS NOT NULL
+               AND event_id IN (${placeholders})
+          )`,
+    ).run(orgId, orgId, ...adultEvents);
   }
 }
 

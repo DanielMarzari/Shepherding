@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { decrypt, encrypt, last4 } from "./encryption";
 import { getDb } from "./db";
 
@@ -204,7 +205,13 @@ export interface SyncSettings {
   shepherdedCheckinWindowMonths: number;
 }
 
-export function getSyncSettings(orgId: number): SyncSettings {
+/** Cached for the lifetime of a single request — both /people and
+ *  /pco/filters end up calling this 5-10 times per render, and the
+ *  underlying SQL is the same every time. React.cache memoizes by
+ *  argument list so per-org isolation is preserved. */
+export const getSyncSettings = cache(getSyncSettingsImpl);
+
+function getSyncSettingsImpl(orgId: number): SyncSettings {
   const row = getDb()
     .prepare(
       `SELECT enabled, frequency, run_at_hour, run_at_dow, run_at_dom,
@@ -365,7 +372,8 @@ export function saveWeeklyAttendance(orgId: number, weekly: number | null) {
 // ─── Filters ──────────────────────────────────────────────────────────────
 
 /** Membership types currently excluded from /people, /metrics counts, etc. */
-export function getExcludedMembershipTypes(orgId: number): string[] {
+export const getExcludedMembershipTypes = cache(getExcludedMembershipTypesImpl);
+function getExcludedMembershipTypesImpl(orgId: number): string[] {
   const row = getDb()
     .prepare(
       "SELECT excluded_membership_types FROM pco_sync_settings WHERE org_id = ?",
@@ -417,7 +425,8 @@ export function getMembershipTypeStats(
 
 // ─── Group-type filters ─────────────────────────────────────────────────
 
-export function getExcludedGroupTypes(orgId: number): string[] {
+export const getExcludedGroupTypes = cache(getExcludedGroupTypesImpl);
+function getExcludedGroupTypesImpl(orgId: number): string[] {
   const row = getDb()
     .prepare(
       "SELECT excluded_group_types FROM pco_sync_settings WHERE org_id = ?",
@@ -457,7 +466,8 @@ export function saveExcludedGroupTypes(orgId: number, ids: string[]) {
  *
  *  Naming convention: callers ask "should this event count toward
  *  Shepherded?" → check if its id is NOT in this set. */
-export function getExcludedCheckinEvents(orgId: number): string[] {
+export const getExcludedCheckinEvents = cache(getExcludedCheckinEventsImpl);
+function getExcludedCheckinEventsImpl(orgId: number): string[] {
   const row = getDb()
     .prepare(
       "SELECT excluded_checkin_events FROM pco_sync_settings WHERE org_id = ?",
@@ -469,6 +479,71 @@ export function getExcludedCheckinEvents(orgId: number): string[] {
     return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
   } catch {
     return [];
+  }
+}
+
+/** Check-in events the admin has marked as ADULT events. Office
+ *  Visitors, adult Bible study sign-ups, etc. — events where the
+ *  check-in itself implies "this person is an adult." Effects:
+ *   - Excluded from the shepherded set (a kid wouldn't be visiting
+ *     an Office Visitors station).
+ *   - During refreshIsMinor, any person with no birthdate AND check-ins
+ *     to one of these events gets is_minor=0 (the default), overriding
+ *     any earlier kid-event flip. So a teenage volunteer who once
+ *     checked into a kids event but is now consistently in adult
+ *     events lands back as adult.
+ *  An event can be in BOTH the excluded list and the adult list — the
+ *  adult list is the implication signal, the excluded list is the
+ *  shepherded-set gate. (UI shows them as three mutually-exclusive
+ *  options: Kid / Adult / Ignore, and stores Adult in both arrays.) */
+export const getAdultCheckinEvents = cache(getAdultCheckinEventsImpl);
+function getAdultCheckinEventsImpl(orgId: number): string[] {
+  const row = getDb()
+    .prepare(
+      "SELECT adult_checkin_events FROM pco_sync_settings WHERE org_id = ?",
+    )
+    .get(orgId) as { adult_checkin_events: string | null } | undefined;
+  if (!row?.adult_checkin_events) return [];
+  try {
+    const parsed = JSON.parse(row.adult_checkin_events);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveAdultCheckinEvents(orgId: number, ids: string[]) {
+  const cleaned = Array.from(new Set(ids.filter(Boolean)));
+  const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) saveSyncSettings(orgId, getSyncSettings(orgId));
+  getDb()
+    .prepare(
+      "UPDATE pco_sync_settings SET adult_checkin_events = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
+    )
+    .run(json, orgId);
+  // Apply the implied-adult overlay immediately: anyone with no
+  // birthdate AND check-ins to one of these events gets is_minor=0.
+  // Runs AFTER the kid-event overlay (if any) so adult signal wins.
+  if (cleaned.length > 0) {
+    const placeholders = cleaned.map(() => "?").join(",");
+    getDb()
+      .prepare(
+        `UPDATE pco_people
+            SET is_minor = 0
+          WHERE org_id = ?
+            AND birth_year IS NULL
+            AND pco_id IN (
+              SELECT DISTINCT person_id
+                FROM pco_check_ins
+               WHERE org_id = ?
+                 AND person_id IS NOT NULL
+                 AND event_id IN (${placeholders})
+            )`,
+      )
+      .run(orgId, orgId, ...cleaned);
   }
 }
 
@@ -565,7 +640,8 @@ export function getCheckinEventStats(orgId: number): {
 
 // ─── Team-type filters ──────────────────────────────────────────────────
 
-export function getExcludedTeamTypes(orgId: number): string[] {
+export const getExcludedTeamTypes = cache(getExcludedTeamTypesImpl);
+function getExcludedTeamTypesImpl(orgId: number): string[] {
   const row = getDb()
     .prepare(
       "SELECT excluded_team_types FROM pco_sync_settings WHERE org_id = ?",
@@ -584,7 +660,8 @@ export function getExcludedTeamTypes(orgId: number): string[] {
  *  more narrowly than excluded_team_types (which kills the whole
  *  service type). Stored as a JSON string array of pco_team_positions
  *  pco_ids. */
-export function getExcludedTeamPositions(orgId: number): string[] {
+export const getExcludedTeamPositions = cache(getExcludedTeamPositionsImpl);
+function getExcludedTeamPositionsImpl(orgId: number): string[] {
   const row = getDb()
     .prepare(
       "SELECT excluded_team_positions FROM pco_sync_settings WHERE org_id = ?",

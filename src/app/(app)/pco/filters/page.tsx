@@ -11,6 +11,7 @@ import {
   getGroupTypeStats,
   getMembershipTypeStats,
   getServiceTypeStats,
+  getAdultCheckinEvents,
   getExcludedCheckinEvents,
   getTeamPositionStats,
 } from "@/lib/pco";
@@ -56,9 +57,8 @@ export default async function FiltersPage({
   const positionExcluded = getExcludedTeamPositions(session.orgId);
 
   const checkinStats = getCheckinEventStats(session.orgId);
-  const excludedCheckinSet = new Set(
-    getExcludedCheckinEvents(session.orgId),
-  );
+  const excludedCheckin = getExcludedCheckinEvents(session.orgId);
+  const adultCheckin = getAdultCheckinEvents(session.orgId);
 
   return (
     <AppShell active="Filters" breadcrumb="Settings › Filters">
@@ -158,7 +158,8 @@ export default async function FiltersPage({
             ) : (
               <CheckinEventsForm
                 stats={checkinStats}
-                initialExcluded={Array.from(excludedCheckinSet)}
+                initialExcluded={excludedCheckin}
+                initialAdult={adultCheckin}
                 isAdmin={session.role === "admin"}
               />
             )}

@@ -14,18 +14,32 @@ interface Stat {
   lastEventAt: string | null;
 }
 
+type Kind = "kid" | "adult" | "ignore";
+
 export function CheckinEventsForm({
   stats,
   initialExcluded,
+  initialAdult,
   isAdmin,
 }: {
   stats: Stat[];
   initialExcluded: string[];
+  initialAdult: string[];
   isAdmin: boolean;
 }) {
-  const [excluded, setExcluded] = useState<Set<string>>(
-    new Set(initialExcluded),
-  );
+  // Reconstruct the per-event kind. Default = kid; adult overrides
+  // ignore (we store adult ids in both lists, but adult is the more
+  // specific signal).
+  const initialKinds = useMemo(() => {
+    const m = new Map<string, Kind>();
+    const adultSet = new Set(initialAdult);
+    const excludedSet = new Set(initialExcluded);
+    for (const id of excludedSet) {
+      m.set(id, adultSet.has(id) ? "adult" : "ignore");
+    }
+    return m;
+  }, [initialAdult, initialExcluded]);
+  const [kinds, setKinds] = useState<Map<string, Kind>>(initialKinds);
   const [showArchived, setShowArchived] = useState(false);
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
     saveCheckinEventsAction,
@@ -40,12 +54,25 @@ export function CheckinEventsForm({
     () => (showArchived ? stats : stats.filter((s) => !s.archivedAt)),
     [stats, showArchived],
   );
+  const counts = useMemo(() => {
+    let kid = 0;
+    let adult = 0;
+    let ignore = 0;
+    for (const s of stats) {
+      if (s.archivedAt) continue;
+      const k = kinds.get(s.eventId) ?? "kid";
+      if (k === "kid") kid++;
+      else if (k === "adult") adult++;
+      else ignore++;
+    }
+    return { kid, adult, ignore };
+  }, [stats, kinds]);
 
-  function toggle(id: string) {
-    setExcluded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+  function setKind(id: string, kind: Kind) {
+    setKinds((prev) => {
+      const next = new Map(prev);
+      if (kind === "kid") next.delete(id);
+      else next.set(id, kind);
       return next;
     });
   }
@@ -54,12 +81,13 @@ export function CheckinEventsForm({
     <form action={action}>
       <div className="px-5 py-3 border-b border-border-soft flex items-center justify-between gap-4 flex-wrap">
         <p className="text-xs text-muted max-w-2xl">
-          <strong>Check the events to IGNORE.</strong> By default every check-in
-          event is treated as a kids / student event — checking in there counts
-          toward Shepherded once a person crosses the cadence threshold on
-          /metrics, and a person without a birthdate gets flipped to
-          &ldquo;minor&rdquo;. Use this list to pull out the non-kid events
-          (Office Visitors, Volunteer sign-ups, adult Bible studies, etc.).
+          Tag each check-in event so the kid/shepherded math runs on the
+          right ones. <span className="text-good-soft-fg">Kid</span> (default)
+          counts toward Shepherded + implies minor for unknown-birthdate
+          people. <span className="text-accent">Adult</span> excludes from
+          Shepherded + implies adult (Office Visitors, adult Bible studies).
+          <span className="text-warn-soft-fg"> Ignore</span> excludes
+          without any age implication.
         </p>
         {archivedCount > 0 && (
           <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer shrink-0">
@@ -75,37 +103,25 @@ export function CheckinEventsForm({
       </div>
       <ul className="divide-y divide-border-softer">
         {visible.map((s) => {
-          const label = s.name ?? `(unnamed #${s.eventId})`;
-          const isExcluded = excluded.has(s.eventId);
+          const kind = kinds.get(s.eventId) ?? "kid";
           const isArchived = !!s.archivedAt;
+          const rowTone =
+            kind === "adult"
+              ? "bg-accent-soft-bg/20"
+              : kind === "ignore"
+                ? "bg-warn-soft-bg/20"
+                : "";
           return (
             <li
               key={s.eventId}
               className={`px-5 py-3.5 flex items-center justify-between gap-4 transition-colors ${
-                isArchived
-                  ? "opacity-60"
-                  : isExcluded
-                    ? "bg-warn-soft-bg/20"
-                    : ""
+                isArchived ? "opacity-60" : rowTone
               }`}
             >
-              <label
-                className={`flex items-center gap-3 flex-1 min-w-0 ${
-                  isAdmin ? "cursor-pointer" : ""
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  name="excluded_checkin_event"
-                  value={s.eventId}
-                  checked={isExcluded}
-                  onChange={() => toggle(s.eventId)}
-                  disabled={!isAdmin}
-                  className="accent-[var(--accent)] w-4 h-4 shrink-0"
-                />
-                <div className="min-w-0">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="font-medium truncate">
-                    {label}
+                    {s.name ?? `(unnamed #${s.eventId})`}
                     {isArchived && (
                       <span className="ml-2 text-xs text-muted font-normal">
                         archived
@@ -118,18 +134,34 @@ export function CheckinEventsForm({
                     )}
                   </div>
                 </div>
-              </label>
+              </div>
               <div className="flex items-center gap-3 text-xs text-muted shrink-0 tnum">
                 <span title="Last check-in">
                   {formatLastEvent(s.lastEventAt)}
                 </span>
-                <span>{s.totalCheckins.toLocaleString()} check-ins</span>
-                <span>{s.distinctPeople.toLocaleString()} people</span>
-                {isExcluded ? (
-                  <span className="text-warn-soft-fg font-medium">ignored</span>
-                ) : (
-                  <span className="text-good-soft-fg font-medium">kid event</span>
-                )}
+                <span title="Total check-in records (every scan, including anonymous visitors with no linked PCO person)">
+                  {s.totalCheckins.toLocaleString()} scans
+                </span>
+                <span title="Distinct PCO people matched. Anonymous walk-ins (no linked person_id) aren't counted here.">
+                  {s.distinctPeople.toLocaleString()} known people
+                </span>
+                <select
+                  name={`checkin_event_kind[${s.eventId}]`}
+                  value={kind}
+                  onChange={(e) => setKind(s.eventId, e.target.value as Kind)}
+                  disabled={!isAdmin}
+                  className={`bg-bg-elev border border-border-soft rounded px-1.5 py-0.5 text-xs cursor-pointer focus:outline-none focus:border-accent ${
+                    kind === "kid"
+                      ? "text-good-soft-fg"
+                      : kind === "adult"
+                        ? "text-accent"
+                        : "text-warn-soft-fg"
+                  }`}
+                >
+                  <option value="kid">Kid event</option>
+                  <option value="adult">Adult event</option>
+                  <option value="ignore">Ignore</option>
+                </select>
               </div>
             </li>
           );
@@ -137,7 +169,7 @@ export function CheckinEventsForm({
       </ul>
 
       <div className="px-5 py-3 border-t border-border-soft flex items-center justify-between">
-        <div className="text-xs">
+        <div className="text-xs text-muted">
           {state?.status === "saved" && (
             <span className="text-good-soft-fg">{state.message}</span>
           )}
@@ -145,11 +177,13 @@ export function CheckinEventsForm({
             <span className="text-bad-soft-fg">{state.message}</span>
           )}
           {!state && (
-            <span className="text-muted">
-              {excluded.size === 0
-                ? "Every check-in event counts as a kid event."
-                : `Ignoring ${excluded.size} event${excluded.size === 1 ? "" : "s"} — the rest count as kid events.`}
-            </span>
+            <>
+              <span className="text-good-soft-fg">{counts.kid} kid</span>
+              <span className="mx-1.5">·</span>
+              <span className="text-accent">{counts.adult} adult</span>
+              <span className="mx-1.5">·</span>
+              <span className="text-warn-soft-fg">{counts.ignore} ignored</span>
+            </>
           )}
         </div>
         <button

@@ -38,9 +38,13 @@ export function getCheckinSummary(orgId: number): CheckinSummary {
   const monthAgo = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
   const excludedEvents = new Set(getExcludedCheckinEvents(orgId));
 
-  // Single scan with 4 conditional aggregates. The COUNT(DISTINCT person_id)
-  // is the costly piece on 265k rows; SQLite has to materialise the
-  // distinct set, but it's still one pass.
+  // Summary excludes ignored / adult events so the numbers match the
+  // event list below them. Same scan, same conditional aggregates,
+  // plus an event_id NOT IN guard when there's a list to filter on.
+  const hideClause =
+    excludedEvents.size === 0
+      ? ""
+      : `AND event_id NOT IN (${Array.from(excludedEvents).map(() => "?").join(",")})`;
   const overall = db
     .prepare(
       `SELECT
@@ -51,9 +55,10 @@ export function getCheckinSummary(orgId: number): CheckinSummary {
          COUNT(DISTINCT CASE WHEN pco_created_at >= ? THEN person_id END) AS peopleLastWeek,
          COUNT(DISTINCT CASE WHEN pco_created_at >= ? THEN person_id END) AS peopleLastMonth
        FROM pco_check_ins
-       WHERE org_id = ?`,
+       WHERE org_id = ?
+         ${hideClause}`,
     )
-    .get(weekAgo, monthAgo, weekAgo, monthAgo, orgId) as {
+    .get(weekAgo, monthAgo, weekAgo, monthAgo, orgId, ...excludedEvents) as {
     totalCheckins: number;
     totalPeopleEver: number;
     checkinsLastWeek: number | null;
@@ -88,6 +93,13 @@ export function listCheckinEvents(orgId: number): CheckinEventRow[] {
   const db = getDb();
   const monthAgo = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
   const excludedEvents = new Set(getExcludedCheckinEvents(orgId));
+  // /checkins is "kid-event activity" — explicitly excluded events (the
+  // ignored / adult ones) drop out of the table. Admins manage their
+  // tags on /pco/filters → Check-in events.
+  const hideClause =
+    excludedEvents.size === 0
+      ? ""
+      : `AND e.pco_id NOT IN (${Array.from(excludedEvents).map(() => "?").join(",")})`;
 
   // Pre-aggregate pco_check_ins per event in a CTE — one pass over the
   // big table — then LEFT JOIN that small per-event summary against
@@ -121,9 +133,10 @@ export function listCheckinEvents(orgId: number): CheckinEventRow[] {
        LEFT JOIN event_stats s ON s.event_id = e.pco_id
        WHERE e.org_id = ?
          AND e.archived_at IS NULL
+         ${hideClause}
        ORDER BY totalCheckins DESC, e.name ASC`,
     )
-    .all(monthAgo, monthAgo, orgId, orgId) as Array<{
+    .all(monthAgo, monthAgo, orgId, orgId, ...excludedEvents) as Array<{
     eventId: string;
     name: string | null;
     frequency: string | null;
