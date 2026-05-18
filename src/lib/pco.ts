@@ -480,6 +480,30 @@ export function saveShepherdedCheckinEvents(orgId: number, ids: string[]) {
       "UPDATE pco_sync_settings SET shepherded_checkin_events = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
     )
     .run(json, orgId);
+  // Apply the implied-minor overlay immediately so newly-flagged events
+  // take effect without waiting for the next sync. (We never UNSET
+  // is_minor here — once a kid, always a kid in our records; if an
+  // event was flagged in error the admin can fix the affected rows
+  // manually in PCO or wait for the next refreshIsMinor pass which
+  // re-evaluates from birthdates.)
+  if (cleaned.length > 0) {
+    const placeholders = cleaned.map(() => "?").join(",");
+    getDb()
+      .prepare(
+        `UPDATE pco_people
+            SET is_minor = 1
+          WHERE org_id = ?
+            AND birth_year IS NULL
+            AND pco_id IN (
+              SELECT DISTINCT person_id
+                FROM pco_check_ins
+               WHERE org_id = ?
+                 AND person_id IS NOT NULL
+                 AND event_id IN (${placeholders})
+            )`,
+      )
+      .run(orgId, orgId, ...cleaned);
+  }
 }
 
 export function getCheckinEventStats(orgId: number): {

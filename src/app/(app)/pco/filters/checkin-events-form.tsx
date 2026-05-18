@@ -54,9 +54,16 @@ export function CheckinEventsForm({
     <form action={action}>
       <div className="px-5 py-3 border-b border-border-soft flex items-center justify-between gap-4 flex-wrap">
         <p className="text-xs text-muted max-w-2xl">
-          Flag the kids / student / discipleship events where being checked-in means
-          the person is being shepherded by name. Whoever does the check-in or
-          check-out also bumps to Active automatically.
+          Flag the kids / student / discipleship events where being checked-in
+          means the person is being shepherded by name. Three effects:
+          <span className="text-fg"> (1)</span> the person counts as
+          <span className="text-accent"> Shepherded</span> once they cross the
+          check-in cadence threshold on /metrics,
+          <span className="text-fg"> (2)</span> anyone with a flagged check-in
+          and no birthdate on file is treated as a minor (kid-ness is implied
+          by the event), and
+          <span className="text-fg"> (3)</span> whoever does the check-in or
+          check-out bumps to Active automatically.
         </p>
         {archivedCount > 0 && (
           <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer shrink-0">

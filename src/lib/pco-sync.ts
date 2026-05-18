@@ -1,7 +1,12 @@
 import "server-only";
 import { decryptJson, encryptJson } from "./encryption";
 import { getDb } from "./db";
-import { getDecryptedCreds, getSyncEntities, getSyncSettings } from "./pco";
+import {
+  getDecryptedCreds,
+  getShepherdedCheckinEvents,
+  getSyncEntities,
+  getSyncSettings,
+} from "./pco";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 import { refreshLastCheckIn, syncCheckinsAll } from "./pco-sync-checkins";
 import { refreshLastAttended, syncGroupsAll } from "./pco-sync-groups";
@@ -819,6 +824,32 @@ function refreshIsMinor(orgId: number) {
     batch.push({ pcoId: r.pco_id, minor, birthYear, junk });
   }
   tx(batch);
+
+  // Overlay pass: anyone with at least one check-in to a flagged
+  // event AND no birthdate on file is treated as a minor. The user's
+  // convention is that flagged events ("Sunday AM Kids", "Wednesday PM
+  // Students", "Monday Care Kids", etc.) are kids-and-students events
+  // by definition, so a check-in there is itself proof of kid-ness.
+  // We require birth_year IS NULL so PCO-known adults who appear in
+  // those events (volunteers, parents who get scanned alongside their
+  // kids for security) don't get flipped to is_minor=1.
+  const shepherdedEvents = getShepherdedCheckinEvents(orgId);
+  if (shepherdedEvents.length > 0) {
+    const placeholders = shepherdedEvents.map(() => "?").join(",");
+    db.prepare(
+      `UPDATE pco_people
+          SET is_minor = 1
+        WHERE org_id = ?
+          AND birth_year IS NULL
+          AND pco_id IN (
+            SELECT DISTINCT person_id
+              FROM pco_check_ins
+             WHERE org_id = ?
+               AND person_id IS NOT NULL
+               AND event_id IN (${placeholders})
+          )`,
+    ).run(orgId, orgId, ...shepherdedEvents);
+  }
 }
 
 function isUnder18(birthdateIso: string, nowMs: number): boolean {
