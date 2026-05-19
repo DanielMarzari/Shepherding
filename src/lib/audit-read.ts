@@ -14,7 +14,6 @@ export type AuditFlag =
   | "inactive"
   | "junk-name"
   | "weird-name"
-  | "no-birthdate"
   | "possible-duplicate"
   | "stale-pco-record"
   | "no-activity-no-rosters";
@@ -54,7 +53,6 @@ export function auditMembershipType(
 ): AuditResult {
   const db = getDb();
   const sixMonthsAgo = new Date(Date.now() - 180 * MS_PER_DAY).toISOString();
-  const oneYearAgo = new Date(Date.now() - 365 * MS_PER_DAY).toISOString();
   const recentCheckinCutoff = new Date(
     Date.now() - 90 * MS_PER_DAY,
   ).toISOString();
@@ -144,7 +142,6 @@ export function auditMembershipType(
     inactive: 0,
     "junk-name": 0,
     "weird-name": 0,
-    "no-birthdate": 0,
     "possible-duplicate": 0,
     "stale-pco-record": 0,
     "no-activity-no-rosters": 0,
@@ -175,17 +172,11 @@ export function auditMembershipType(
       flags.push("deceased");
     }
 
-    // Inactive — explicit PCO inactive status, or an inactivated_at on
-    // the row, or no activity for 365+ days with no group/team/check-in.
-    if (
-      statusLower === "inactive" ||
-      r.inactivatedAt ||
-      (r.pcoUpdatedAt &&
-        r.pcoUpdatedAt < oneYearAgo &&
-        r.groupsCount === 0 &&
-        r.teamsCount === 0 &&
-        r.recentCheckins === 0)
-    ) {
+    // Inactive — PCO's literal status field. Distinct from "no
+    // activity" which is computed below; we want this flag to surface
+    // only the rows where someone went into PCO and explicitly marked
+    // the person inactive.
+    if (statusLower === "inactive" || r.inactivatedAt) {
       flags.push("inactive");
     }
 
@@ -207,15 +198,6 @@ export function auditMembershipType(
       ) {
         flags.push("weird-name");
       }
-    }
-
-    // No birthdate — info-only flag, useful for visibility.
-    // (is_minor is the denormalized flag; absent birth_year is the
-    // signal of an unknown DOB.)
-    if (!r.isMinor) {
-      // Check enc_pii for the birthdate field.
-      const piiFull = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
-      if (!piiFull?.birthdate) flags.push("no-birthdate");
     }
 
     // Possible duplicate — name collides with another person in this

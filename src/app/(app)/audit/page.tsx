@@ -16,10 +16,9 @@ interface SearchParams {
 
 const FLAG_LABELS: Record<AuditFlag, { label: string; tone: "warn" | "muted" | "accent" }> = {
   deceased: { label: "deceased", tone: "warn" },
-  inactive: { label: "inactive", tone: "warn" },
+  inactive: { label: "inactive (PCO status)", tone: "warn" },
   "junk-name": { label: "junk name", tone: "warn" },
   "weird-name": { label: "weird name", tone: "muted" },
-  "no-birthdate": { label: "no birthdate", tone: "muted" },
   "possible-duplicate": { label: "possible duplicate", tone: "warn" },
   "stale-pco-record": { label: "stale 6mo+", tone: "muted" },
   "no-activity-no-rosters": { label: "no activity", tone: "muted" },
@@ -188,18 +187,24 @@ function AuditTr({ r }: { r: AuditRow }) {
   return (
     <tr className="border-b border-border-softer hover:bg-bg-elev-2/60">
       <td className="px-5 py-3">
-        <Link
-          href={`/people/${r.pcoId}`}
+        <a
+          href={`https://people.planningcenteronline.com/people/${r.pcoId}`}
+          target="_blank"
+          rel="noopener noreferrer"
           className="flex items-center gap-3 group"
+          title="Open in PCO"
         >
           <Avatar initials={r.initials} size="sm" />
           <div className="min-w-0">
             <div className="font-medium truncate group-hover:text-accent">
-              {r.fullName}
+              {r.fullName}{" "}
+              <span className="text-[10px] text-subtle group-hover:text-accent">
+                ↗
+              </span>
             </div>
             <div className="text-xs text-muted">PCO #{r.pcoId}</div>
           </div>
-        </Link>
+        </a>
       </td>
       <td className="px-5 py-3">
         {r.flags.length === 0 ? (
