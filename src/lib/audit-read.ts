@@ -263,6 +263,155 @@ export function auditMembershipType(
   };
 }
 
+// ─── Cross-org audits (for /audit/duplicates and /audit/names) ────────
+
+export interface CrossAuditRow {
+  pcoId: string;
+  fullName: string;
+  initials: string;
+  membershipType: string | null;
+  status: string | null;
+  inactivatedAt: string | null;
+}
+
+export interface DuplicateGroup {
+  nameKey: string;
+  displayName: string;
+  rows: CrossAuditRow[];
+}
+
+/** Find every name that appears more than once across the whole org.
+ *  Key = lowercased "first last" — same heuristic the per-membership-
+ *  type audit uses, but here we widen the net to ALL synced people so
+ *  multi-account drift between staff / member / inactive shows up too. */
+export function findDuplicatesAcrossOrg(orgId: number): DuplicateGroup[] {
+  const rows = loadAllPeopleForAudit(orgId);
+  const byKey = new Map<string, CrossAuditRow[]>();
+  for (const r of rows) {
+    if (!r._first || !r._last) continue;
+    const key = `${r._first} ${r._last}`.toLowerCase().trim();
+    if (!key) continue;
+    const arr = byKey.get(key) ?? [];
+    arr.push(toCross(r));
+    byKey.set(key, arr);
+  }
+  const groups: DuplicateGroup[] = [];
+  for (const [key, arr] of byKey.entries()) {
+    if (arr.length < 2) continue;
+    groups.push({
+      nameKey: key,
+      displayName: arr[0].fullName,
+      rows: arr,
+    });
+  }
+  // Biggest dup cluster first, then alphabetical.
+  groups.sort((a, b) => {
+    if (a.rows.length !== b.rows.length) return b.rows.length - a.rows.length;
+    return a.displayName.localeCompare(b.displayName);
+  });
+  return groups;
+}
+
+export type NameFlag = "junk-name" | "weird-name";
+
+export interface NameIssueRow extends CrossAuditRow {
+  flags: NameFlag[];
+}
+
+/** Surface every row whose name looks suspicious — junk patterns
+ *  (leading non-letter, all punctuation) or weird shapes (digits,
+ *  single-letter, repeated chars). Cross-org, so we catch admin /
+ *  staff / inactive accounts with bad data too. */
+export function findNameIssuesAcrossOrg(orgId: number): NameIssueRow[] {
+  const rows = loadAllPeopleForAudit(orgId);
+  const out: NameIssueRow[] = [];
+  for (const r of rows) {
+    const flags = nameFlagsFor(r._first, r._last);
+    if (flags.length === 0) continue;
+    out.push({ ...toCross(r), flags });
+  }
+  out.sort((a, b) => a.fullName.localeCompare(b.fullName));
+  return out;
+}
+
+/** Compute name-only flags. Junk = empty/no letters/leading non-letter.
+ *  Weird = has digits, very short components, or 4+ repeated characters. */
+function nameFlagsFor(first: string | null, last: string | null): NameFlag[] {
+  const flags: NameFlag[] = [];
+  if (!first && !last) {
+    flags.push("junk-name");
+    return flags;
+  }
+  if (isJunkNameLocal(first) || isJunkNameLocal(last)) {
+    flags.push("junk-name");
+    return flags;
+  }
+  const combo = `${first ?? ""}${last ?? ""}`;
+  if (
+    /\d/.test(combo) ||
+    (first && first.length <= 1) ||
+    (last && last.length <= 1) ||
+    /(.)\1{3,}/i.test(combo)
+  ) {
+    flags.push("weird-name");
+  }
+  return flags;
+}
+
+interface AuditScanRow {
+  pcoId: string;
+  membershipType: string | null;
+  status: string | null;
+  inactivatedAt: string | null;
+  _first: string | null;
+  _last: string | null;
+}
+
+/** Single decrypt pass over the entire pco_people table. Used by both
+ *  cross-org audits so we never decrypt the same enc_pii twice. */
+function loadAllPeopleForAudit(orgId: number): AuditScanRow[] {
+  const db = getDb();
+  const rawRows = db
+    .prepare(
+      `SELECT pco_id, enc_pii, membership_type, status, inactivated_at
+         FROM pco_people
+        WHERE org_id = ?`,
+    )
+    .all(orgId) as Array<{
+    pco_id: string;
+    enc_pii: string | null;
+    membership_type: string | null;
+    status: string | null;
+    inactivated_at: string | null;
+  }>;
+  return rawRows.map((r) => {
+    const pii = r.enc_pii ? decryptJson<PIIBlob>(r.enc_pii) : null;
+    return {
+      pcoId: r.pco_id,
+      membershipType: r.membership_type,
+      status: r.status,
+      inactivatedAt: r.inactivated_at,
+      _first: pii?.first_name?.trim() ?? null,
+      _last: pii?.last_name?.trim() ?? null,
+    };
+  });
+}
+
+function toCross(r: AuditScanRow): CrossAuditRow {
+  const fullName =
+    [r._first, r._last].filter(Boolean).join(" ") || `(unknown #${r.pcoId})`;
+  const initials =
+    ((r._first?.[0] ?? "") + (r._last?.[0] ?? "")).toUpperCase() || "??";
+  return {
+    pcoId: r.pcoId,
+    fullName,
+    initials,
+    membershipType: r.membershipType,
+    status: r.status,
+    inactivatedAt: r.inactivatedAt,
+  };
+}
+
 function isJunkNameLocal(name: string | null): boolean {
   if (!name) return false;
   const trimmed = name.trim();

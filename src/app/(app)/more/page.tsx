@@ -15,6 +15,18 @@ const LINKS: MoreLink[] = [
     description:
       "One-off cleanup view. Flags member rows that look wrong — deceased, status=inactive, junk names, possible duplicates — and lets you download the result as a CSV with PCO profile links so you can fix them upstream.",
   },
+  {
+    href: "/audit/duplicates",
+    title: "Duplicate audit",
+    description:
+      "Cross-org scan for people who appear more than once under the same first + last name. Groups every matching record together so you can spot staff + member + inactive drift in one place.",
+  },
+  {
+    href: "/audit/names",
+    title: "Name audit",
+    description:
+      "Cross-org scan for records whose name looks wrong — empty, punctuation-only, digits, single-letter, or repeated characters. Catches placeholder rows and test accounts that never got cleaned up.",
+  },
 ];
 
 export default function MorePage() {

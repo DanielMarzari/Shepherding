@@ -1,9 +1,9 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { LANE_STATS } from "@/lib/mock";
 import { getSession, listOrgs } from "@/lib/auth";
 import { logoutAction } from "@/app/orgs/actions";
+import { CollapsibleNavGroup } from "./CollapsibleNavGroup";
 import { SearchBar } from "./SearchBar";
 
 const NAV_ITEMS = [
@@ -32,8 +32,12 @@ const SETTINGS_NAV_ITEMS = [
   { href: "/pco/filters", label: "Filters" },
   { href: "/attendance", label: "Attendance" },
   { href: "/metrics", label: "Metrics" },
-  { href: "/audit", label: "Membership audit" },
   { href: "/examples", label: "Design references" },
+];
+
+const NEXT_STEPS_NAV_ITEMS = [
+  { href: "/lanes", label: "Activity overview" },
+  { href: "/lanes/list", label: "Lanes" },
 ];
 
 export async function AppShell({
@@ -51,7 +55,10 @@ export async function AppShell({
 
   return (
     <div className="flex min-h-screen bg-bg text-fg">
-      <aside className="w-56 shrink-0 border-r border-border-soft px-4 py-5 text-sm hidden md:flex md:flex-col">
+      {/* Sticky sidebar — pinned to the viewport height with its own
+          scroll, so the main content can be arbitrarily tall without
+          stretching the nav. */}
+      <aside className="w-56 shrink-0 border-r border-border-soft px-4 py-5 text-sm hidden md:flex md:flex-col sticky top-0 h-screen overflow-y-auto">
         <Link href="/" className="flex items-center gap-2 mb-3 group">
           <Image
             src="/icon.svg"
@@ -123,12 +130,20 @@ export async function AppShell({
           })}
         </ul>
 
+        <CollapsibleNavGroup
+          label="PCO data"
+          items={PCO_DATA_NAV_ITEMS}
+          active={active}
+        />
+
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">
-          PCO data
+          Next Steps Pathway
         </div>
         <ul className="space-y-0.5">
-          {PCO_DATA_NAV_ITEMS.map((item) => {
-            const isActive = item.label === active;
+          {NEXT_STEPS_NAV_ITEMS.map((item) => {
+            const isActive =
+              item.label === active ||
+              (item.label === "Activity overview" && active === "Activity / Lanes");
             return (
               <li key={item.href}>
                 <Link
@@ -140,48 +155,6 @@ export async function AppShell({
                   }`}
                 >
                   <span>{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-
-        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">
-          Next Steps Pathway
-        </div>
-        <ul className="space-y-0.5 text-sm">
-          <li>
-            <Link
-              href="/lanes"
-              className={`px-2 py-1.5 rounded flex items-center transition-colors ${
-                active === "Activity / Lanes"
-                  ? "bg-bg-elev-2 text-fg font-medium"
-                  : "text-fg hover:bg-bg-elev-2"
-              }`}
-            >
-              <span>Activity overview</span>
-            </Link>
-          </li>
-          {LANE_STATS.map((lane) => {
-            const isActive = active === `lane:${lane.key}`;
-            return (
-              <li key={lane.key}>
-                <Link
-                  href={`/lanes/${lane.key}`}
-                  className={`px-2 py-1.5 rounded flex justify-between items-center transition-colors ${
-                    isActive
-                      ? "bg-bg-elev-2 text-fg font-medium"
-                      : "text-fg hover:bg-bg-elev-2"
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="w-1.5 h-1.5 rounded-full"
-                      style={{ background: `var(--lane-${lane.key})` }}
-                    />
-                    <span>{lane.label}</span>
-                  </span>
-                  <span className="text-muted tnum text-xs">{lane.count}</span>
                 </Link>
               </li>
             );
