@@ -28,6 +28,7 @@ const SETTINGS_NAV_ITEMS = [
   { href: "/pco/filters", label: "Filters" },
   { href: "/attendance", label: "Attendance" },
   { href: "/metrics", label: "Metrics" },
+  { href: "/audit", label: "Membership audit" },
   { href: "/examples", label: "Design references" },
 ];
 
