@@ -30,9 +30,8 @@ const OTHER_NAV_ITEMS = [
 const SETTINGS_NAV_ITEMS = [
   { href: "/pco", label: "Sync" },
   { href: "/pco/filters", label: "Filters" },
-  { href: "/attendance", label: "Attendance" },
   { href: "/metrics", label: "Metrics" },
-  { href: "/examples", label: "Design references" },
+  { href: "/shepherd-map", label: "Shepherd map" },
 ];
 
 const NEXT_STEPS_NAV_ITEMS = [

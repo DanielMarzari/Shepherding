@@ -27,6 +27,18 @@ const LINKS: MoreLink[] = [
     description:
       "Cross-org scan for records whose name looks wrong — empty, punctuation-only, digits, single-letter, or repeated characters. Catches placeholder rows and test accounts that never got cleaned up.",
   },
+  {
+    href: "/attendance",
+    title: "Attendance",
+    description:
+      "Manually log weekly Sunday attendance counts so the dashboard can compute attendance frequency rate and other engagement ratios against the active membership.",
+  },
+  {
+    href: "/examples",
+    title: "Design references",
+    description:
+      "Internal style guide. Shows the design tokens, component variants, and chart variants the rest of the app pulls from — handy when extending the UI.",
+  },
 ];
 
 export default function MorePage() {
