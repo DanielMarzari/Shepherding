@@ -23,6 +23,10 @@ const PCO_DATA_NAV_ITEMS = [
   { href: "/checkins", label: "Check-ins" },
 ];
 
+const OTHER_NAV_ITEMS = [
+  { href: "/more", label: "See more" },
+];
+
 const SETTINGS_NAV_ITEMS = [
   { href: "/pco", label: "Sync" },
   { href: "/pco/filters", label: "Filters" },
@@ -178,6 +182,27 @@ export async function AppShell({
                     <span>{lane.label}</span>
                   </span>
                   <span className="text-muted tnum text-xs">{lane.count}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Other</div>
+        <ul className="space-y-0.5">
+          {OTHER_NAV_ITEMS.map((item) => {
+            const isActive = item.label === active;
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
+                    isActive
+                      ? "bg-bg-elev-2 text-fg font-medium"
+                      : "text-fg hover:bg-bg-elev-2"
+                  }`}
+                >
+                  <span>{item.label}</span>
                 </Link>
               </li>
             );

@@ -8,6 +8,7 @@ import {
   auditMembershipType,
 } from "@/lib/audit-read";
 import { getMembershipTypeStats } from "@/lib/pco";
+import { DownloadCsvButton } from "./download-csv";
 
 interface SearchParams {
   type?: string;
@@ -88,6 +89,10 @@ export default async function AuditPage({
               {audit.membershipType}&rdquo;
             </span>
           </div>
+          <DownloadCsvButton
+            rows={visible.map((r) => ({ pcoId: r.pcoId, fullName: r.fullName }))}
+            filename={`audit-${validType.replace(/\s+/g, "-")}${flagFilter ? `-${flagFilter}` : ""}.csv`}
+          />
         </div>
 
         <div className="flex flex-wrap gap-2 text-xs">
