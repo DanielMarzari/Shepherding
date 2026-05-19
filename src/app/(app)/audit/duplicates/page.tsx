@@ -1,16 +1,36 @@
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import {
-  type CrossAuditRow,
   type DuplicateGroup,
+  type DuplicateRow,
   findDuplicatesAcrossOrg,
 } from "@/lib/audit-read";
 import { DownloadCsvButton } from "../download-csv";
 
-export default async function DuplicateAuditPage() {
+interface SearchParams {
+  confidence?: string;
+}
+
+export default async function DuplicateAuditPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
   const session = await requireOrg();
-  const groups = findDuplicatesAcrossOrg(session.orgId);
+  const params = await searchParams;
+  const allGroups = findDuplicatesAcrossOrg(session.orgId);
+
+  const highCount = allGroups.filter((g) => g.confidence === "high").length;
+  const lowCount = allGroups.filter((g) => g.confidence === "low").length;
+
+  const conf = params.confidence === "high" || params.confidence === "low"
+    ? params.confidence
+    : null;
+  const groups = conf
+    ? allGroups.filter((g) => g.confidence === conf)
+    : allGroups;
   const totalRows = groups.reduce((n, g) => n + g.rows.length, 0);
 
   const csvRows = groups.flatMap((g) =>
@@ -26,19 +46,46 @@ export default async function DuplicateAuditPage() {
           </h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
             Cross-org scan for people who appear more than once under the same
-            first + last name. Multi-account drift (staff + member + inactive
-            record for the same person) shows up here. Fix in PCO directly.
+            first + last name. Generational suffixes (Jr, Sr, II/III/IV) are
+            stripped before matching, so &ldquo;Bob Smith&rdquo; and &ldquo;Bob
+            Smith Jr&rdquo; cluster together — but the suffix split downgrades
+            the confidence so you can spot parent / child pairs at a glance.
           </p>
         </div>
 
         <div className="flex items-end justify-between gap-3 flex-wrap text-xs">
           <span className="text-muted">
             {groups.length.toLocaleString()} duplicate groups ·{" "}
-            {totalRows.toLocaleString()} rows total
+            {totalRows.toLocaleString()} rows
+            {conf ? ` (filtered to ${conf} confidence)` : ""}
           </span>
           <DownloadCsvButton
             rows={csvRows}
-            filename="audit-duplicates.csv"
+            filename={`audit-duplicates${conf ? `-${conf}` : ""}.csv`}
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-2 text-xs">
+          <FilterChip
+            label="All"
+            count={allGroups.length}
+            href="/audit/duplicates"
+            active={!conf}
+            tone="muted"
+          />
+          <FilterChip
+            label="High confidence"
+            count={highCount}
+            href="/audit/duplicates?confidence=high"
+            active={conf === "high"}
+            tone="warn"
+          />
+          <FilterChip
+            label="Low (suffix split)"
+            count={lowCount}
+            href="/audit/duplicates?confidence=low"
+            active={conf === "low"}
+            tone="muted"
           />
         </div>
 
@@ -61,7 +108,8 @@ export default async function DuplicateAuditPage() {
                       colSpan={3}
                       className="px-5 py-10 text-center text-sm text-muted"
                     >
-                      No duplicate names found.
+                      No duplicate groups
+                      {conf ? ` at ${conf} confidence` : ""}.
                     </td>
                   </tr>
                 ) : (
@@ -76,6 +124,34 @@ export default async function DuplicateAuditPage() {
   );
 }
 
+function FilterChip({
+  label,
+  count,
+  href,
+  active,
+  tone,
+}: {
+  label: string;
+  count: number;
+  href: string;
+  active: boolean;
+  tone: "warn" | "muted";
+}) {
+  const baseTone = tone === "warn" ? "text-warn-soft-fg" : "text-muted";
+  return (
+    <Link
+      href={href}
+      className={`px-2.5 py-1 rounded-full border transition-colors ${
+        active
+          ? "bg-bg-elev-2 border-accent text-fg"
+          : `border-border-soft ${baseTone} hover:border-accent hover:text-fg`
+      }`}
+    >
+      {label} <span className="tnum">{count.toLocaleString()}</span>
+    </Link>
+  );
+}
+
 function DupGroupRows({ g }: { g: DuplicateGroup }) {
   return (
     <>
@@ -85,6 +161,14 @@ function DupGroupRows({ g }: { g: DuplicateGroup }) {
           <span className="ml-2">
             · {g.rows.length} record{g.rows.length === 1 ? "" : "s"}
           </span>
+          <Pill
+            tone={g.confidence === "high" ? "warn" : "muted"}
+            className="ml-2"
+          >
+            {g.confidence === "high"
+              ? "high confidence"
+              : "low — suffix split"}
+          </Pill>
         </td>
       </tr>
       {g.rows.map((r) => (
@@ -94,7 +178,7 @@ function DupGroupRows({ g }: { g: DuplicateGroup }) {
   );
 }
 
-function DupTr({ r }: { r: CrossAuditRow }) {
+function DupTr({ r }: { r: DuplicateRow }) {
   return (
     <tr className="border-b border-border-softer hover:bg-bg-elev-2/60">
       <td className="px-5 py-3">
@@ -109,7 +193,13 @@ function DupTr({ r }: { r: CrossAuditRow }) {
           <div className="min-w-0">
             <div className="font-medium truncate group-hover:text-accent">
               {r.fullName}{" "}
+              {r.suffix && (
+                <span className="text-[10px] text-warn-soft-fg uppercase ml-1">
+                  {r.suffix}
+                </span>
+              )}
               <span className="text-[10px] text-subtle group-hover:text-accent">
+                {" "}
                 ↗
               </span>
             </div>

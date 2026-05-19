@@ -274,38 +274,81 @@ export interface CrossAuditRow {
   inactivatedAt: string | null;
 }
 
+export type DuplicateConfidence = "high" | "low";
+
+export interface DuplicateRow extends CrossAuditRow {
+  /** Generational suffix detected on this row ("jr", "sr", "ii", "iii",
+   *  "iv", "v") or null. Drives the confidence score of the group. */
+  suffix: string | null;
+}
+
 export interface DuplicateGroup {
   nameKey: string;
   displayName: string;
-  rows: CrossAuditRow[];
+  rows: DuplicateRow[];
+  /** "high" when every row shares the same suffix (or none have one).
+   *  "low" when suffixes differ — usually a parent / child pair the
+   *  cluster wrongly captures (e.g. "Bob Smith" + "Bob Smith Jr"). */
+  confidence: DuplicateConfidence;
+}
+
+const SUFFIX_RE = /[,\s]+(jr|sr|ii|iii|iv|v)\.?\s*$/i;
+
+/** Strip a trailing generational suffix from a full name. Returns the
+ *  cleaned name + the suffix (lowercased, no period) so the caller can
+ *  use the cleaned form for keying and the suffix for scoring. */
+function splitGenerationalSuffix(fullName: string): {
+  core: string;
+  suffix: string | null;
+} {
+  const m = fullName.match(SUFFIX_RE);
+  if (m && m.index !== undefined) {
+    const suffix = m[1].toLowerCase();
+    const core = fullName.slice(0, m.index).replace(/[,\s]+$/, "").trim();
+    return { core: core || fullName, suffix };
+  }
+  return { core: fullName, suffix: null };
 }
 
 /** Find every name that appears more than once across the whole org.
- *  Key = lowercased "first last" — same heuristic the per-membership-
- *  type audit uses, but here we widen the net to ALL synced people so
- *  multi-account drift between staff / member / inactive shows up too. */
+ *  Key = lowercased "first last" with generational suffixes stripped,
+ *  so "Bob Smith" and "Bob Smith Jr" cluster together. The suffix
+ *  mismatch then downgrades the cluster's confidence so the audit can
+ *  highlight parent/child false positives. */
 export function findDuplicatesAcrossOrg(orgId: number): DuplicateGroup[] {
   const rows = loadAllPeopleForAudit(orgId);
-  const byKey = new Map<string, CrossAuditRow[]>();
+  const byKey = new Map<
+    string,
+    { displayName: string; rows: DuplicateRow[] }
+  >();
   for (const r of rows) {
     if (!r._first || !r._last) continue;
-    const key = `${r._first} ${r._last}`.toLowerCase().trim();
+    const full = `${r._first} ${r._last}`.trim();
+    const { core, suffix } = splitGenerationalSuffix(full);
+    const key = core.toLowerCase();
     if (!key) continue;
-    const arr = byKey.get(key) ?? [];
-    arr.push(toCross(r));
-    byKey.set(key, arr);
+    const entry = byKey.get(key) ?? { displayName: core, rows: [] };
+    entry.rows.push({ ...toCross(r), suffix });
+    byKey.set(key, entry);
   }
   const groups: DuplicateGroup[] = [];
-  for (const [key, arr] of byKey.entries()) {
-    if (arr.length < 2) continue;
+  for (const [key, entry] of byKey.entries()) {
+    if (entry.rows.length < 2) continue;
+    const suffixes = new Set(entry.rows.map((r) => r.suffix));
+    const confidence: DuplicateConfidence = suffixes.size > 1 ? "low" : "high";
     groups.push({
       nameKey: key,
-      displayName: arr[0].fullName,
-      rows: arr,
+      displayName: entry.displayName,
+      rows: entry.rows,
+      confidence,
     });
   }
-  // Biggest dup cluster first, then alphabetical.
+  // High-confidence clusters first; bigger clusters within each band.
+  // Within a band: biggest first, then alphabetical.
   groups.sort((a, b) => {
+    if (a.confidence !== b.confidence) {
+      return a.confidence === "high" ? -1 : 1;
+    }
     if (a.rows.length !== b.rows.length) return b.rows.length - a.rows.length;
     return a.displayName.localeCompare(b.displayName);
   });
