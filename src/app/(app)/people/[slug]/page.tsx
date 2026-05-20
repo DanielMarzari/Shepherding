@@ -246,7 +246,7 @@ export default async function PersonProfilePage({
                     <span className="tnum">{g.people.length}</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
-                    {g.people.map((p) => (
+                    {g.people.slice(0, 60).map((p) => (
                       <Link
                         key={p.personId}
                         href={`/people/${p.personId}`}
@@ -255,6 +255,11 @@ export default async function PersonProfilePage({
                         {p.fullName}
                       </Link>
                     ))}
+                    {g.people.length > 60 && (
+                      <span className="px-2 py-1 text-xs text-muted">
+                        + {(g.people.length - 60).toLocaleString()} more
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}

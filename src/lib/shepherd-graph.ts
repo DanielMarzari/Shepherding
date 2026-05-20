@@ -1,7 +1,11 @@
 import "server-only";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
-import { type TargetKind, listTargetOptions } from "./assignments-read";
+import {
+  SHEPHERD_TEAM_LIST_NAME,
+  type TargetKind,
+  listTargetOptions,
+} from "./assignments-read";
 
 interface PIIBlob {
   first_name?: string | null;
@@ -146,6 +150,39 @@ function resolveAssignmentToPersonIds(
           )
           .all(orgId, targetId) as Array<{ id: string }>
       ).map((r) => r.id);
+    case "membership_type":
+      return (
+        db
+          .prepare(
+            `SELECT pco_id AS id FROM pco_people
+              WHERE org_id = ? AND membership_type = ?`,
+          )
+          .all(orgId, targetId) as Array<{ id: string }>
+      ).map((r) => r.id);
+    case "shepherd_team":
+      // targetId is the "*" sentinel — resolve to the whole team.
+      return (
+        db
+          .prepare(
+            `SELECT DISTINCT p.pco_id AS id
+               FROM pco_list_memberships m
+               JOIN pco_lists l
+                 ON l.org_id = m.org_id AND l.pco_id = m.list_id
+               JOIN pco_people p
+                 ON p.org_id = m.org_id AND p.pco_id = m.person_id
+              WHERE m.org_id = ? AND l.name = ?`,
+          )
+          .all(orgId, SHEPHERD_TEAM_LIST_NAME) as Array<{ id: string }>
+      ).map((r) => r.id);
+    case "reference_list":
+      return (
+        db
+          .prepare(
+            `SELECT DISTINCT person_id AS id FROM pco_list_memberships
+              WHERE org_id = ? AND list_id = ?`,
+          )
+          .all(orgId, targetId) as Array<{ id: string }>
+      ).map((r) => r.id);
     case "person":
       return [targetId];
   }
@@ -158,6 +195,9 @@ const VIA_SUFFIX: Record<TargetKind, string> = {
   service_type: "team leaders",
   team_position: "in this position",
   person: "peer (direct)",
+  membership_type: "membership type",
+  shepherd_team: "the shepherd team",
+  reference_list: "list members",
 };
 
 /** People a shepherd reaches — through the shepherd map and through
@@ -189,14 +229,69 @@ export function getShepherdees(
   }
 
   const raw: Array<{ via: string; viaKind: ViaKind; ids: string[] }> = [];
+  const explicitGroupIds = new Set<string>();
+  const explicitTeamIds = new Set<string>();
   for (const a of assignments) {
+    if (a.kind === "group") explicitGroupIds.add(a.targetId);
+    if (a.kind === "team") explicitTeamIds.add(a.targetId);
     const ids = resolveAssignmentToPersonIds(orgId, a.kind, a.targetId).filter(
       (id) => id !== personId,
     );
     raw.push({
-      via: `${targetName(a.kind, a.targetId)} · ${VIA_SUFFIX[a.kind]}`,
+      via:
+        a.kind === "shepherd_team"
+          ? "Shepherd team · everyone else"
+          : `${targetName(a.kind, a.targetId)} · ${VIA_SUFFIX[a.kind]}`,
       viaKind: a.kind,
       ids,
+    });
+  }
+
+  // Direct leadership — a group or team this person leads in PCO is a
+  // shepherding relationship in its own right, no map entry required.
+  // Units already covered by an explicit map assignment are skipped so
+  // the same group doesn't show twice.
+  const ledGroups = db
+    .prepare(
+      `SELECT DISTINCT g.pco_id AS id, g.name AS name
+         FROM pco_group_memberships m
+         JOIN pco_groups g
+           ON g.org_id = m.org_id AND g.pco_id = m.group_id
+        WHERE m.org_id = ? AND m.person_id = ?
+          AND m.archived_at IS NULL AND g.archived_at IS NULL
+          AND lower(coalesce(m.role, '')) LIKE '%leader%'`,
+    )
+    .all(orgId, personId) as Array<{ id: string; name: string | null }>;
+  for (const g of ledGroups) {
+    if (explicitGroupIds.has(g.id)) continue;
+    raw.push({
+      via: `Leads ${g.name ?? "a group"} · group members`,
+      viaKind: "group",
+      ids: resolveAssignmentToPersonIds(orgId, "group", g.id).filter(
+        (id) => id !== personId,
+      ),
+    });
+  }
+  const ledTeams = db
+    .prepare(
+      `SELECT DISTINCT t.pco_id AS id, t.name AS name
+         FROM pco_team_memberships m
+         JOIN pco_teams t
+           ON t.org_id = m.org_id AND t.pco_id = m.team_id
+        WHERE m.org_id = ? AND m.person_id = ?
+          AND m.archived_at IS NULL AND m.person_id != ''
+          AND t.archived_at IS NULL AND t.deleted_at IS NULL
+          AND m.is_team_leader = 1`,
+    )
+    .all(orgId, personId) as Array<{ id: string; name: string | null }>;
+  for (const t of ledTeams) {
+    if (explicitTeamIds.has(t.id)) continue;
+    raw.push({
+      via: `Leads ${t.name ?? "a team"} · team roster`,
+      viaKind: "team",
+      ids: resolveAssignmentToPersonIds(orgId, "team", t.id).filter(
+        (id) => id !== personId,
+      ),
     });
   }
 
@@ -400,6 +495,76 @@ export function getShepherds(
         "team_position",
       );
     }
+  }
+
+  // membership_type -> anyone overseeing this person's membership type.
+  const personRow = db
+    .prepare(
+      `SELECT membership_type AS membershipType
+         FROM pco_people WHERE org_id = ? AND pco_id = ?`,
+    )
+    .get(orgId, personId) as { membershipType: string | null } | undefined;
+  if (personRow?.membershipType) {
+    for (const r of db
+      .prepare(
+        `SELECT shepherd_person_id AS shepherdId
+           FROM shepherd_assignments
+          WHERE org_id = ? AND target_kind = 'membership_type'
+            AND target_id = ?`,
+      )
+      .all(orgId, personRow.membershipType) as Array<{ shepherdId: string }>) {
+      add(
+        r.shepherdId,
+        `Membership type: ${personRow.membershipType}`,
+        "membership_type",
+      );
+    }
+  }
+
+  // shepherd_team -> if this person is on the shepherd team, anyone
+  // with the shepherd-team-leader assignment oversees them.
+  const onShepherdTeam = db
+    .prepare(
+      `SELECT 1 FROM pco_list_memberships m
+         JOIN pco_lists l
+           ON l.org_id = m.org_id AND l.pco_id = m.list_id
+        WHERE m.org_id = ? AND m.person_id = ? AND l.name = ?
+        LIMIT 1`,
+    )
+    .get(orgId, personId, SHEPHERD_TEAM_LIST_NAME);
+  if (onShepherdTeam) {
+    for (const r of db
+      .prepare(
+        `SELECT shepherd_person_id AS shepherdId
+           FROM shepherd_assignments
+          WHERE org_id = ? AND target_kind = 'shepherd_team'`,
+      )
+      .all(orgId) as Array<{ shepherdId: string }>) {
+      add(r.shepherdId, "Shepherd-team oversight", "shepherd_team");
+    }
+  }
+
+  // reference_list -> anyone overseeing a REFERENCE list this person
+  // belongs to (staff, elders, deacons, etc.).
+  const listRows = db
+    .prepare(
+      `SELECT m.list_id AS listId, l.name AS listName
+         FROM pco_list_memberships m
+         JOIN pco_lists l
+           ON l.org_id = m.org_id AND l.pco_id = m.list_id
+        WHERE m.org_id = ? AND m.person_id = ?`,
+    )
+    .all(orgId, personId) as Array<{ listId: string; listName: string | null }>;
+  const listNameById = new Map(listRows.map((l) => [l.listId, l.listName]));
+  for (const r of assignmentsFor(
+    "reference_list",
+    listRows.map((l) => l.listId),
+  )) {
+    add(
+      r.shepherdId,
+      `On list "${listNameById.get(r.targetId) ?? "a list"}"`,
+      "reference_list",
+    );
   }
 
   // Direct peer assignment — a shepherd assigned this person directly.

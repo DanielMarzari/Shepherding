@@ -1,6 +1,7 @@
 import "server-only";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
+import { getMembershipTypeStats } from "./pco";
 import type { TargetKind, TargetOption } from "./assignments-types";
 
 export type { TargetKind, TargetOption } from "./assignments-types";
@@ -11,7 +12,12 @@ interface PIIBlob {
   last_name?: string | null;
 }
 
-const SHEPHERD_TEAM_LIST_NAME = "REFERENCE - Shepherd Team";
+/** Name of the PCO People list that defines the shepherd team. */
+export const SHEPHERD_TEAM_LIST_NAME = "REFERENCE - Shepherd Team";
+
+/** Synthetic target id for a `shepherd_team` assignment — there is only
+ *  ever one shepherd team, so the assignment needs no real target. */
+export const SHEPHERD_TEAM_TARGET_ID = "*";
 
 export interface ShepherdPerson {
   personId: string;
@@ -178,6 +184,47 @@ export function listTargetOptions(
       });
       out.sort((a, b) => a.name.localeCompare(b.name));
       return out;
+    }
+    case "membership_type": {
+      // Real, non-null membership types only — "oversee everyone with
+      // no membership type" isn't a useful assignment.
+      return getMembershipTypeStats(orgId)
+        .filter((t): t is { membershipType: string; count: number } =>
+          Boolean(t.membershipType),
+        )
+        .map((t) => ({
+          id: t.membershipType,
+          name: `${t.membershipType} · ${t.count.toLocaleString()} people`,
+        }));
+    }
+    case "shepherd_team": {
+      // Singleton — there is only one shepherd team.
+      return [
+        {
+          id: SHEPHERD_TEAM_TARGET_ID,
+          name: "Everyone else on the shepherd team",
+        },
+      ];
+    }
+    case "reference_list": {
+      const rows = db
+        .prepare(
+          `SELECT pco_id AS id, name, total_people AS total
+             FROM pco_lists
+            WHERE org_id = ?
+            ORDER BY name COLLATE NOCASE`,
+        )
+        .all(orgId) as Array<{
+        id: string;
+        name: string | null;
+        total: number | null;
+      }>;
+      return rows.map((r) => ({
+        id: r.id,
+        name: r.total
+          ? `${r.name ?? "(unnamed list)"} · ${r.total.toLocaleString()} people`
+          : r.name ?? "(unnamed list)",
+      }));
     }
   }
 }

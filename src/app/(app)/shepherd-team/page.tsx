@@ -19,6 +19,9 @@ const KIND_TONES: Record<TargetKind, "muted" | "accent" | "warn" | "good"> = {
   service_type: "muted",
   team_position: "good",
   person: "warn",
+  membership_type: "accent",
+  shepherd_team: "warn",
+  reference_list: "muted",
 };
 
 export default async function ShepherdTeamPage() {

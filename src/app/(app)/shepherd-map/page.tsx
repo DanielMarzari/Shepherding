@@ -21,6 +21,9 @@ const KIND_TONES: Record<TargetKind, "muted" | "accent" | "warn" | "good"> = {
   service_type: "muted",
   team_position: "good",
   person: "warn",
+  membership_type: "accent",
+  shepherd_team: "warn",
+  reference_list: "muted",
 };
 
 export default async function ShepherdMapPage() {
@@ -28,14 +31,12 @@ export default async function ShepherdMapPage() {
   const shepherds = listShepherds(session.orgId);
   const assignments = listAssignments(session.orgId);
 
-  const targetsByKind: Record<TargetKind, TargetOption[]> = {
-    group: listTargetOptions(session.orgId, "group"),
-    group_type: listTargetOptions(session.orgId, "group_type"),
-    team: listTargetOptions(session.orgId, "team"),
-    service_type: listTargetOptions(session.orgId, "service_type"),
-    team_position: listTargetOptions(session.orgId, "team_position"),
-    person: listTargetOptions(session.orgId, "person"),
-  };
+  const targetsByKind = Object.fromEntries(
+    (Object.keys(TARGET_KIND_LABELS) as TargetKind[]).map((k) => [
+      k,
+      listTargetOptions(session.orgId, k),
+    ]),
+  ) as Record<TargetKind, TargetOption[]>;
 
   const byShepherd = new Map<string, Assignment[]>();
   for (const a of assignments) {
