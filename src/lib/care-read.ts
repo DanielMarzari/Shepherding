@@ -221,3 +221,33 @@ export function getCareCoverage(
     includesPresent: includePresent,
   };
 }
+
+/** Total Active (not shepherded) people in the org — assigned or not.
+ *  Used to estimate how many people each shepherd-team member would
+ *  carry if the whole active category were split evenly. */
+export function countActiveNotShepherded(orgId: number): number {
+  const db = getDb();
+  populateShepherdedTempTable(orgId);
+  const cutoff = activityCutoff(orgId);
+  const excluded = getExcludedMembershipTypes(orgId);
+  const args: (string | number)[] = [orgId, cutoff, cutoff];
+  let excludeSql = "";
+  if (excluded.length > 0) {
+    const ph = excluded.map(() => "?").join(",");
+    excludeSql = `AND (p.membership_type IS NULL OR p.membership_type NOT IN (${ph}))`;
+    args.push(...excluded);
+  }
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+         FROM pco_people p
+         LEFT JOIN temp.shep_set s ON s.person_id = p.pco_id
+        WHERE p.org_id = ?
+          AND s.person_id IS NULL
+          AND ((p.last_form_submission_at IS NOT NULL AND p.last_form_submission_at >= ?)
+            OR (p.last_check_in_at IS NOT NULL AND p.last_check_in_at >= ?))
+          ${excludeSql}`,
+    )
+    .get(...args) as { n: number };
+  return row.n;
+}

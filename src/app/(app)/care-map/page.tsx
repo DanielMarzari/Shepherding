@@ -5,6 +5,7 @@ import { requireOrg } from "@/lib/auth";
 import { listShepherds } from "@/lib/assignments-read";
 import {
   type CareRosterPerson,
+  countActiveNotShepherded,
   listCareAssignments,
   listCareCandidates,
 } from "@/lib/care-read";
@@ -34,6 +35,12 @@ export default async function CareMapPage({
     0,
   );
 
+  // Even-split estimate: if the whole Active category were divided
+  // across the shepherd team, how many people would each carry?
+  const activeTotal = countActiveNotShepherded(session.orgId);
+  const perShepherd =
+    shepherds.length > 0 ? Math.ceil(activeTotal / shepherds.length) : null;
+
   return (
     <AppShell active="Care map" breadcrumb="Care map">
       <div className="px-5 md:px-7 py-7 space-y-6 max-w-5xl">
@@ -48,7 +55,7 @@ export default async function CareMapPage({
           </p>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Stat
             label={`Unassigned (${includePresent ? "active + present" : "active"})`}
             value={candidates.length.toLocaleString()}
@@ -56,6 +63,16 @@ export default async function CareMapPage({
           />
           <Stat label="On a care roster" value={assignedCount.toLocaleString()} />
           <Stat label="Shepherd team" value={shepherds.length.toLocaleString()} />
+          <Stat
+            label="Even split per shepherd"
+            value={perShepherd === null ? "—" : `≈ ${perShepherd.toLocaleString()}`}
+            delta={
+              perShepherd === null
+                ? "no one on the shepherd team yet"
+                : `to cover all ${activeTotal.toLocaleString()} active people`
+            }
+            highlight
+          />
         </div>
 
         <div className="flex items-center gap-2 text-xs">

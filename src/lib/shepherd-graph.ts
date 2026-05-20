@@ -18,6 +18,7 @@ export interface PersonRef {
   personId: string;
   fullName: string;
   initials: string;
+  isMinor: boolean;
 }
 
 /** One context through which a shepherd reaches a set of people. */
@@ -49,12 +50,13 @@ function namesFor(
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT pco_id, enc_pii FROM pco_people
+      `SELECT pco_id, enc_pii, is_minor FROM pco_people
         WHERE org_id = ? AND pco_id IN (${inPlaceholders(unique.length)})`,
     )
     .all(orgId, ...unique) as Array<{
     pco_id: string;
     enc_pii: string | null;
+    is_minor: number;
   }>;
   for (const r of rows) {
     const pii = r.enc_pii ? decryptJson<PIIBlob>(r.enc_pii) : null;
@@ -66,6 +68,7 @@ function namesFor(
         [first, last].filter(Boolean).join(" ") || `(unknown #${r.pco_id})`,
       initials:
         ((first?.[0] ?? "") + (last?.[0] ?? "")).toUpperCase() || "??",
+      isMinor: r.is_minor === 1,
     });
   }
   // People with no pco_people row still get a placeholder ref.
@@ -75,6 +78,7 @@ function namesFor(
         personId: id,
         fullName: `(unknown #${id})`,
         initials: "??",
+        isMinor: false,
       });
     }
   }
