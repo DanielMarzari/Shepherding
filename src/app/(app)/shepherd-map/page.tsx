@@ -147,6 +147,7 @@ function ShepherdCard({
       {isAdmin && (
         <AddAssignmentForm
           shepherdPersonId={shepherd.personId}
+          shepherdName={shepherd.fullName}
           targetsByKind={targetsByKind}
           excludePersonIds={[shepherd.personId]}
         />

@@ -128,7 +128,7 @@ function toRow(r: RawRow, activityMonths: number): SyncedPersonRow {
  * better-sqlite3 is synchronous on a single connection, so requests can't
  * race to clobber this table.
  */
-function populateShepherdedTempTable(orgId: number) {
+export function populateShepherdedTempTable(orgId: number) {
   const db = getDb();
   const excludedGroups = getExcludedGroupTypes(orgId);
   const excludedTeams = getExcludedTeamTypes(orgId);

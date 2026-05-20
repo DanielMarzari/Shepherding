@@ -32,6 +32,7 @@ const SETTINGS_NAV_ITEMS = [
   { href: "/pco/filters", label: "Filters" },
   { href: "/metrics", label: "Metrics" },
   { href: "/shepherd-map", label: "Shepherd map" },
+  { href: "/care-map", label: "Care map" },
 ];
 
 const NEXT_STEPS_NAV_ITEMS = [
