@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, Pill, Stat } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
+import { listLeadPastorIds } from "@/lib/assignments-read";
 import { getShepherds } from "@/lib/shepherd-graph";
 import { listShepherds } from "@/lib/shepherds-read";
 
@@ -19,9 +20,10 @@ export default async function ShepherdsPage() {
               Everyone leading a group or team. Each should be overseen by a
               member of the shepherd team — the rows flagged{" "}
               <span className="text-warn-soft-fg">needs mapping</span> aren&apos;t
-              yet, so they still need a connection on the Shepherd map. The one
-              person legitimately at the top with no overseer is the lead
-              pastor.
+              yet, so they still need a connection on the Shepherd map. The lead
+              pastor sits at the top — identified by the &ldquo;Everyone else on
+              the shepherd team&rdquo; assignment — and is expected to have no
+              overseer.
             </p>
           </div>
           <Link
@@ -73,6 +75,9 @@ interface OverseerRef {
  *  boundary so the page header paints immediately. */
 async function ShepherdsOverview({ orgId }: { orgId: number }) {
   const shepherds = listShepherds(orgId);
+  // The lead pastor is whoever holds the "Everyone else on the shepherd
+  // team" assignment — they're the apex, so no overseer is expected.
+  const leadPastorIds = new Set(listLeadPastorIds(orgId));
 
   // For each shepherd, who oversees them (via the Shepherd map / care
   // roster). getShepherds only ever returns shepherd-team members, so
@@ -87,18 +92,31 @@ async function ShepherdsOverview({ orgId }: { orgId: number }) {
         });
       }
     }
-    return { shepherd: s, overseers: [...seen.values()] };
+    const overseers = [...seen.values()];
+    const isLeadPastor = leadPastorIds.has(s.personId);
+    return {
+      shepherd: s,
+      overseers,
+      isLeadPastor,
+      needsMapping: overseers.length === 0 && !isLeadPastor,
+    };
   });
 
-  // Unmapped first — those are the action items — then alphabetical.
+  // Tier order: needs-mapping first (action items), then the lead
+  // pastor (apex), then everyone properly overseen — alphabetical
+  // within each tier.
+  function tier(r: (typeof rows)[number]): number {
+    if (r.needsMapping) return 0;
+    if (r.isLeadPastor) return 1;
+    return 2;
+  }
   rows.sort((a, b) => {
-    const au = a.overseers.length === 0 ? 0 : 1;
-    const bu = b.overseers.length === 0 ? 0 : 1;
-    if (au !== bu) return au - bu;
+    if (tier(a) !== tier(b)) return tier(a) - tier(b);
     return a.shepherd.fullName.localeCompare(b.shepherd.fullName);
   });
 
-  const unmappedCount = rows.filter((r) => r.overseers.length === 0).length;
+  const unmappedCount = rows.filter((r) => r.needsMapping).length;
+  const overseenCount = rows.filter((r) => r.overseers.length > 0).length;
 
   if (shepherds.length === 0) {
     return (
@@ -115,7 +133,7 @@ async function ShepherdsOverview({ orgId }: { orgId: number }) {
         <Stat label="Shepherds" value={shepherds.length.toLocaleString()} />
         <Stat
           label="Overseen"
-          value={(shepherds.length - unmappedCount).toLocaleString()}
+          value={overseenCount.toLocaleString()}
           valueTone="good"
         />
         <Stat
@@ -138,7 +156,7 @@ async function ShepherdsOverview({ orgId }: { orgId: number }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map(({ shepherd: s, overseers }) => (
+              {rows.map(({ shepherd: s, overseers, isLeadPastor, needsMapping }) => (
                 <tr
                   key={s.personId}
                   className="border-b border-border-softer hover:bg-bg-elev-2/60"
@@ -152,11 +170,19 @@ async function ShepherdsOverview({ orgId }: { orgId: number }) {
                       >
                         {s.fullName}
                       </Link>
+                      {isLeadPastor && <Pill tone="accent">lead pastor</Pill>}
                     </div>
                   </td>
                   <td className="px-5 py-3">
-                    {overseers.length === 0 ? (
-                      <Link href="/shepherd-map" title="Set this up on the Shepherd map">
+                    {isLeadPastor ? (
+                      <span className="text-xs text-muted">
+                        Top of the structure — no overseer
+                      </span>
+                    ) : needsMapping ? (
+                      <Link
+                        href="/shepherd-map"
+                        title="Set this up on the Shepherd map"
+                      >
                         <Pill tone="warn">needs mapping</Pill>
                       </Link>
                     ) : (
