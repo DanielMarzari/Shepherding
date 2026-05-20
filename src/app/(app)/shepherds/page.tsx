@@ -54,7 +54,7 @@ export default async function ShepherdsPage() {
                           <Avatar initials={s.initials} />
                           <div>
                             <Link
-                              href={`/shepherds/${s.personId}`}
+                              href={`/people/${s.personId}`}
                               className="font-medium hover:text-accent"
                             >
                               {s.fullName}

@@ -52,6 +52,12 @@ export default async function PersonProfilePage({
   const age = person.birthdate ? computeAge(person.birthdate) : null;
   const firstName = person.firstName ?? person.fullName;
 
+  // Distinct people across every context this person helps shepherd —
+  // their effective flock size.
+  const flockSize = new Set(
+    shepherdees.flatMap((g) => g.people.map((p) => p.personId)),
+  ).size;
+
   // Group "who shepherds them" links by shepherd so the same person
   // overseeing via two contexts shows once with both reasons.
   const shepherdsByPerson = new Map<
@@ -225,7 +231,11 @@ export default async function PersonProfilePage({
           <Card className="p-5">
             <div className="flex items-baseline justify-between mb-1">
               <h2 className="text-sm font-semibold">
-                People {firstName} shepherds
+                People {firstName} co-shepherds
+                <span className="text-muted font-normal">
+                  {" "}
+                  · {flockSize.toLocaleString()}
+                </span>
               </h2>
               <Link
                 href="/shepherd-map"
@@ -235,8 +245,10 @@ export default async function PersonProfilePage({
               </Link>
             </div>
             <p className="text-xs text-muted mb-4">
-              Resolved from the Shepherd map and care roster. Overseeing a
-              group type covers the leaders of those groups.
+              Resolved from the Shepherd map, direct group/team leadership, and
+              the care roster. Overseeing a group type covers the leaders of
+              those groups. People can have more than one shepherd — this is
+              everyone {firstName} helps shepherd.
             </p>
             <div className="space-y-4">
               {shepherdees.map((g, i) => (
