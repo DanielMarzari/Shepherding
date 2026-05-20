@@ -9,6 +9,7 @@ import { explainClassification } from "@/lib/classify-explain";
 import { listGroupsAttendedByPerson } from "@/lib/community-lane";
 import { getSyncSettings } from "@/lib/pco";
 import { listTeamMembershipsByPerson } from "@/lib/serve-lane";
+import { getShepherdees, getShepherds } from "@/lib/shepherd-graph";
 import {
   type ActivityClassification,
   getPersonByPcoId,
@@ -45,8 +46,27 @@ export default async function PersonProfilePage({
     settings.activityTrackingMonths,
   );
   const checkins = listPersonCheckins(session.orgId, slug);
+  const shepherdees = getShepherdees(session.orgId, slug);
+  const shepherds = getShepherds(session.orgId, slug);
 
   const age = person.birthdate ? computeAge(person.birthdate) : null;
+  const firstName = person.firstName ?? person.fullName;
+
+  // Group "who shepherds them" links by shepherd so the same person
+  // overseeing via two contexts shows once with both reasons.
+  const shepherdsByPerson = new Map<
+    string,
+    { name: string; initials: string; vias: string[] }
+  >();
+  for (const link of shepherds) {
+    const entry = shepherdsByPerson.get(link.shepherd.personId) ?? {
+      name: link.shepherd.fullName,
+      initials: link.shepherd.initials,
+      vias: [],
+    };
+    entry.vias.push(link.via);
+    shepherdsByPerson.set(link.shepherd.personId, entry);
+  }
 
   return (
     <AppShell active="People" breadcrumb={`People › ${person.fullName}`}>
@@ -171,8 +191,14 @@ export default async function PersonProfilePage({
               )}
               {rationale.activitySignals.length > 0 && (
                 <div>
-                  <div className="text-xs font-medium text-accent mb-1">
-                    Pulls them into Active / Present
+                  <div
+                    className={`text-xs font-medium mb-1 ${
+                      rationale.isShepherded ? "text-muted" : "text-accent"
+                    }`}
+                  >
+                    {rationale.isShepherded
+                      ? "Other activity on record — Shepherded already takes priority"
+                      : "Pulls them into Active / Present"}
                   </div>
                   <ul className="list-disc list-inside space-y-0.5 text-fg">
                     {rationale.activitySignals.map((r, i) => (
@@ -189,6 +215,88 @@ export default async function PersonProfilePage({
                 ))}
               </div>
             </div>
+          )}
+        </Card>
+
+        {/* Shepherding relationships — resolved from the Shepherd map
+            and care roster. Overseeing a group/service type covers the
+            leaders of those groups/teams. */}
+        {shepherdees.length > 0 && (
+          <Card className="p-5">
+            <div className="flex items-baseline justify-between mb-1">
+              <h2 className="text-sm font-semibold">
+                People {firstName} shepherds
+              </h2>
+              <Link
+                href="/shepherd-map"
+                className="text-xs text-accent hover:underline"
+              >
+                Shepherd map →
+              </Link>
+            </div>
+            <p className="text-xs text-muted mb-4">
+              Resolved from the Shepherd map and care roster. Overseeing a
+              group type covers the leaders of those groups.
+            </p>
+            <div className="space-y-4">
+              {shepherdees.map((g, i) => (
+                <div key={i}>
+                  <div className="text-xs font-medium text-muted mb-1.5">
+                    {g.via} ·{" "}
+                    <span className="tnum">{g.people.length}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {g.people.map((p) => (
+                      <Link
+                        key={p.personId}
+                        href={`/people/${p.personId}`}
+                        className="px-2 py-1 rounded border border-border-soft text-xs hover:border-accent hover:text-accent transition-colors"
+                      >
+                        {p.fullName}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        <Card className="p-5">
+          <h2 className="text-sm font-semibold mb-1">
+            Who shepherds {firstName}
+          </h2>
+          {shepherdsByPerson.size === 0 ? (
+            <p className="text-xs text-muted">
+              No shepherd is connected to {firstName} yet — not through the{" "}
+              <Link href="/shepherd-map" className="text-accent hover:underline">
+                Shepherd map
+              </Link>{" "}
+              and not on a{" "}
+              <Link href="/care-map" className="text-accent hover:underline">
+                care roster
+              </Link>
+              .
+            </p>
+          ) : (
+            <ul className="space-y-2.5 mt-3">
+              {[...shepherdsByPerson.entries()].map(([id, s]) => (
+                <li key={id} className="flex items-center gap-3">
+                  <Avatar initials={s.initials} size="sm" />
+                  <div className="min-w-0">
+                    <Link
+                      href={`/people/${id}`}
+                      className="font-medium text-sm hover:text-accent"
+                    >
+                      {s.name}
+                    </Link>
+                    <div className="text-xs text-muted">
+                      {s.vias.join(" · ")}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </Card>
 

@@ -9,6 +9,10 @@ import {
 } from "./pco";
 
 export interface ClassificationRationale {
+  /** True when at least one un-blocked shepherding signal exists — i.e.
+   *  the person is Shepherded and the activity signals below are just
+   *  context (Shepherded already wins the priority order). */
+  isShepherded: boolean;
   /** Things that ARE pushing the person toward Shepherded. */
   shepherdedReasons: string[];
   /** Things that could have shepherded them but were filtered out
@@ -279,10 +283,14 @@ export function explainClassification(
       `Last check-in role ${formatAgo(personRow.last_check_in_at)} (within ${activityMonths}mo).`,
     );
   }
+  // The pco_updated_at fallback only decides Present vs Inactive among
+  // people who AREN'T shepherded. For a shepherded person it's noise —
+  // Shepherded already wins — so don't claim it "drives Present".
   if (
     personRow?.pco_updated_at &&
     personRow.pco_updated_at >= cutoff &&
-    activitySignals.length === 0
+    activitySignals.length === 0 &&
+    shepherdedReasons.length === 0
   ) {
     activitySignals.push(
       `PCO record edited ${formatAgo(personRow.pco_updated_at)} — drives "Present", not "Active".`,
@@ -307,7 +315,13 @@ export function explainClassification(
     value: String(teamMap.size),
   });
 
-  return { shepherdedReasons, blockers, activitySignals, facts };
+  return {
+    isShepherded: shepherdedReasons.length > 0,
+    shepherdedReasons,
+    blockers,
+    activitySignals,
+    facts,
+  };
 }
 
 function formatAgo(iso: string): string {
