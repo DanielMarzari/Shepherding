@@ -32,7 +32,11 @@ const ALPHA_MIN = 0.02;
 
 /** Obsidian-style force-directed graph of the whole church. Custom
  *  canvas renderer + grid-approximated force simulation so ~8k nodes
- *  stay interactive without a charting dependency. */
+ *  stay interactive without a charting dependency.
+ *
+ *  Every piece of mutable simulation / view state is declared at the
+ *  top of the effect, before any closure that reads it — so nothing
+ *  can be touched inside its temporal dead zone. */
 export function RelationshipGraph({ data }: { data: GraphData }) {
   const router = useRouter();
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -46,10 +50,11 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const n = data.nodes.length;
+    const nodes = data.nodes;
     const edges = data.edges;
+    const n = nodes.length;
 
-    // ── Simulation state ──────────────────────────────────────────
+    // ── Simulation buffers ────────────────────────────────────────
     const px = new Float32Array(n);
     const py = new Float32Array(n);
     const vx = new Float32Array(n);
@@ -59,21 +64,33 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       px[i] = (Math.random() - 0.5) * spread;
       py[i] = (Math.random() - 0.5) * spread;
     }
-    // Degree drives node radius + the neighbour-highlight on hover.
     const degree = new Int32Array(n);
     const neighbors: number[][] = Array.from({ length: n }, () => []);
-    for (const [s, t] of edges) {
-      degree[s]++;
-      degree[t]++;
-      neighbors[s].push(t);
-      neighbors[t].push(s);
+    for (const e of edges) {
+      degree[e[0]]++;
+      degree[e[1]]++;
+      neighbors[e[0]].push(e[1]);
+      neighbors[e[1]].push(e[0]);
     }
-    let alpha = 1;
-    // Declared up here: tick() reads it, and tick() runs in the warm-up
-    // loop below — a `let` declared lower would be in the temporal dead
-    // zone and throw once there are nodes to integrate.
-    let dragNode = -1;
 
+    // ── All mutable state — declared before any closure below ─────
+    let alpha = 1;
+    let dragNode = -1;
+    let dragMoved = false;
+    let panning = false;
+    let hover = -1;
+    let scale = 1;
+    let offX = 0;
+    let offY = 0;
+    let dpr = Math.min(2, window.devicePixelRatio || 1);
+    let W = 0;
+    let H = 0;
+    let centered = false;
+    let lastX = 0;
+    let lastY = 0;
+    let raf = 0;
+
+    // ── Functions ─────────────────────────────────────────────────
     function tick() {
       const cs = REP_RADIUS;
       const grid = new Map<number, number[]>();
@@ -152,23 +169,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       alpha *= ALPHA_DECAY;
     }
 
-    // Warm up a little before the first paint so it isn't pure noise.
-    for (let i = 0; i < 40; i++) tick();
-
-    // ── View + interaction state ──────────────────────────────────
-    let scale = 1;
-    let offX = 0;
-    let offY = 0;
-    let dpr = Math.min(2, window.devicePixelRatio || 1);
-    let W = 0;
-    let H = 0;
-    let centered = false;
-    let hover = -1;
-    let dragMoved = false;
-    let panning = false;
-    let lastX = 0;
-    let lastY = 0;
-
     function resize() {
       const r = wrap!.getBoundingClientRect();
       W = r.width;
@@ -185,9 +185,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
         centered = true;
       }
     }
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(wrap);
 
     function nodeRadius(i: number): number {
       return 2 + Math.min(7, Math.sqrt(degree[i]));
@@ -219,7 +216,7 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
 
       const hl = hover >= 0 ? new Set(neighbors[hover]) : null;
 
-      // Edges — three passes, faint first so prominent links sit on top.
+      // Edges — faint first so prominent links sit on top.
       for (let kind = 2; kind >= 0; kind--) {
         ctx!.strokeStyle = EDGE_COLOR[kind];
         ctx!.lineWidth = EDGE_WIDTH[kind];
@@ -232,7 +229,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
         }
         ctx!.stroke();
       }
-      // When hovering, draw the rest of the edges very dim underneath.
       if (hl) {
         ctx!.strokeStyle = "rgba(80,90,110,0.06)";
         ctx!.lineWidth = 0.5;
@@ -250,9 +246,8 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
         ctx!.fillStyle = NODE_COLOR[cls];
         ctx!.beginPath();
         for (let i = 0; i < n; i++) {
-          if (data.nodes[i].cls !== cls) continue;
-          const dim = hl && i !== hover && !hl.has(i);
-          if (dim) continue;
+          if (nodes[i].cls !== cls) continue;
+          if (hl && i !== hover && !hl.has(i)) continue;
           const sx = px[i] * scale + offX;
           const sy = py[i] * scale + offY;
           const r = nodeRadius(i);
@@ -261,7 +256,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
         }
         ctx!.fill();
       }
-      // Dimmed nodes when hovering.
       if (hl) {
         ctx!.fillStyle = "rgba(120,130,150,0.18)";
         ctx!.beginPath();
@@ -283,10 +277,10 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
         const r = nodeRadius(hover);
         ctx!.beginPath();
         ctx!.arc(sx, sy, r + 4, 0, Math.PI * 2);
-        ctx!.strokeStyle = NODE_COLOR[data.nodes[hover].cls];
+        ctx!.strokeStyle = NODE_COLOR[nodes[hover].cls];
         ctx!.lineWidth = 1.5;
         ctx!.stroke();
-        const label = data.nodes[hover].name;
+        const label = nodes[hover].name;
         ctx!.font =
           "12px ui-sans-serif, system-ui, -apple-system, sans-serif";
         const tw = ctx!.measureText(label).width;
@@ -297,15 +291,12 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       }
     }
 
-    let raf = 0;
     function frame() {
       if (alpha > ALPHA_MIN || dragNode >= 0) tick();
       render();
       raf = requestAnimationFrame(frame);
     }
-    frame();
 
-    // ── Pointer interaction ───────────────────────────────────────
     function localXY(e: PointerEvent): [number, number] {
       const r = canvas!.getBoundingClientRect();
       return [e.clientX - r.left, e.clientY - r.top];
@@ -338,7 +329,7 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
         const h = hitTest(mx, my);
         if (h !== hover) {
           hover = h;
-          setHoverName(h >= 0 ? data.nodes[h].name : null);
+          setHoverName(h >= 0 ? nodes[h].name : null);
           canvas!.style.cursor = h >= 0 ? "pointer" : "grab";
         }
       }
@@ -347,7 +338,7 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     }
     function onUp(e: PointerEvent) {
       if (dragNode >= 0 && !dragMoved) {
-        router.push(`/people/${data.nodes[dragNode].id}`);
+        router.push(`/people/${nodes[dragNode].id}`);
       }
       dragNode = -1;
       panning = false;
@@ -357,17 +348,22 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     }
     function onWheel(e: WheelEvent) {
       e.preventDefault();
-      const [mx, my] = [
-        e.clientX - canvas!.getBoundingClientRect().left,
-        e.clientY - canvas!.getBoundingClientRect().top,
-      ];
+      const r = canvas!.getBoundingClientRect();
+      const mx = e.clientX - r.left;
+      const my = e.clientY - r.top;
       const factor = Math.exp(-e.deltaY * 0.0012);
       const next = Math.max(0.02, Math.min(8, scale * factor));
-      // Zoom toward the cursor.
       offX = mx - ((mx - offX) * next) / scale;
       offY = my - ((my - offY) * next) / scale;
       scale = next;
     }
+
+    // ── Run ───────────────────────────────────────────────────────
+    for (let i = 0; i < 40; i++) tick();
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(wrap);
+    frame();
 
     canvas.addEventListener("pointerdown", onDown);
     canvas.addEventListener("pointermove", onMove);
