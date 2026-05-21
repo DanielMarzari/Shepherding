@@ -39,6 +39,12 @@ const LINKS: MoreLink[] = [
     description:
       "Internal style guide. Shows the design tokens, component variants, and chart variants the rest of the app pulls from — handy when extending the UI.",
   },
+  {
+    href: "/graph",
+    title: "Relationship graph",
+    description:
+      "An interactive node-web of everyone in the church. Lines connect people who shepherd one another — through group / team leadership or a care roster. Drag, zoom, and click a node to open a profile.",
+  },
 ];
 
 export default function MorePage() {
