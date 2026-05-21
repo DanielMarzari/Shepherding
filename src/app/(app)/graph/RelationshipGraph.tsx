@@ -23,15 +23,19 @@ const EDGE_WIDTH = [1.15, 0.85, 0.6];
 // Barnes-Hut n-body force: that long range is what lets densely linked
 // groups settle into their own clusters instead of one hairball.
 const REPULSION = 80;
-const MAX_FORCE = 120;
+const MAX_FORCE = 60; // cap on any single Barnes-Hut cell's push.
+// Hard cap on how far a node can move in one tick. All-pairs repulsion
+// has unbounded total force, so without this a spike flings nodes to
+// infinity and the auto-fit zooms the graph down to nothing.
+const MAX_SPEED = 45;
 const THETA2 = 0.7; // Barnes-Hut accuracy: (cellSize/dist)^2 threshold.
 const MAX_DEPTH = 22;
 const SPRING = 0.06;
 const SPRING_LEN = 22;
 // Connected nodes are pulled to the centre; isolated nodes only weakly,
 // so the linked web sits in the middle and the rest forms a halo.
-const GRAVITY_CONNECTED = 0.04;
-const GRAVITY_ISOLATED = 0.008;
+const GRAVITY_CONNECTED = 0.022;
+const GRAVITY_ISOLATED = 0.006;
 const DAMP = 0.86;
 const ALPHA_DECAY = 0.99;
 const ALPHA_MIN = 0.02;
@@ -76,7 +80,7 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     const py = new Float32Array(n);
     const vx = new Float32Array(n);
     const vy = new Float32Array(n);
-    const spread = 26 * Math.sqrt(Math.max(1, n));
+    const spread = 14 * Math.sqrt(Math.max(1, n));
     for (let i = 0; i < n; i++) {
       px[i] = (Math.random() - 0.5) * spread;
       py[i] = (Math.random() - 0.5) * spread;
@@ -221,8 +225,21 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
         vy[i] -= py[i] * g * alpha;
         vx[i] *= DAMP;
         vy[i] *= DAMP;
+        // Clamp speed so a force spike can never fling a node off-screen.
+        const sp = Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+        if (sp > MAX_SPEED) {
+          vx[i] *= MAX_SPEED / sp;
+          vy[i] *= MAX_SPEED / sp;
+        }
         px[i] += vx[i];
         py[i] += vy[i];
+        // Self-heal if anything ever goes non-finite.
+        if (!Number.isFinite(px[i]) || !Number.isFinite(py[i])) {
+          px[i] = (Math.random() - 0.5) * 200;
+          py[i] = (Math.random() - 0.5) * 200;
+          vx[i] = 0;
+          vy[i] = 0;
+        }
       }
       alpha *= ALPHA_DECAY;
     }
@@ -241,9 +258,12 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       }
       const gw = Math.max(maxX - minX, 1);
       const gh = Math.max(maxY - minY, 1);
-      scale = Math.max(0.02, Math.min(6, Math.min(W / gw, H / gh) * 0.9));
+      scale = Math.max(0.05, Math.min(6, Math.min(W / gw, H / gh) * 0.9));
+      if (!Number.isFinite(scale) || scale <= 0) scale = 1;
       offX = W / 2 - ((minX + maxX) / 2) * scale;
       offY = H / 2 - ((minY + maxY) / 2) * scale;
+      if (!Number.isFinite(offX)) offX = W / 2;
+      if (!Number.isFinite(offY)) offY = H / 2;
     }
 
     function resize() {
