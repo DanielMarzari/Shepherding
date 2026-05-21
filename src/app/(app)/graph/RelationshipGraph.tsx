@@ -25,7 +25,11 @@ const REPULSION = 2400;
 const MAX_FORCE = 240;
 const SPRING = 0.02;
 const SPRING_LEN = 40;
-const GRAVITY = 0.011;
+// Connected nodes are pulled hard to the centre; isolated nodes feel
+// only a weak tug, so the linked web sits in the middle and unconnected
+// people drift out to a loose halo.
+const GRAVITY_CONNECTED = 0.02;
+const GRAVITY_ISOLATED = 0.0016;
 const DAMP = 0.82;
 const ALPHA_DECAY = 0.985;
 const ALPHA_MIN = 0.02;
@@ -159,8 +163,9 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
           vy[i] = 0;
           continue;
         }
-        vx[i] -= px[i] * GRAVITY * alpha;
-        vy[i] -= py[i] * GRAVITY * alpha;
+        const g = degree[i] > 0 ? GRAVITY_CONNECTED : GRAVITY_ISOLATED;
+        vx[i] -= px[i] * g * alpha;
+        vy[i] -= py[i] * g * alpha;
         vx[i] *= DAMP;
         vy[i] *= DAMP;
         px[i] += vx[i];
@@ -241,26 +246,29 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
         ctx!.stroke();
       }
 
-      // Nodes — one fill pass per classification.
+      // Nodes — one fill pass per classification. When hovering, the
+      // un-connected nodes keep their own colour, just lightly faded.
       for (const cls of ["present", "active", "shepherded"] as const) {
         ctx!.fillStyle = NODE_COLOR[cls];
+        if (hl) {
+          ctx!.globalAlpha = 0.62;
+          ctx!.beginPath();
+          for (let i = 0; i < n; i++) {
+            if (nodes[i].cls !== cls) continue;
+            if (i === hover || hl.has(i)) continue;
+            const sx = px[i] * scale + offX;
+            const sy = py[i] * scale + offY;
+            const r = nodeRadius(i);
+            ctx!.moveTo(sx + r, sy);
+            ctx!.arc(sx, sy, r, 0, Math.PI * 2);
+          }
+          ctx!.fill();
+          ctx!.globalAlpha = 1;
+        }
         ctx!.beginPath();
         for (let i = 0; i < n; i++) {
           if (nodes[i].cls !== cls) continue;
           if (hl && i !== hover && !hl.has(i)) continue;
-          const sx = px[i] * scale + offX;
-          const sy = py[i] * scale + offY;
-          const r = nodeRadius(i);
-          ctx!.moveTo(sx + r, sy);
-          ctx!.arc(sx, sy, r, 0, Math.PI * 2);
-        }
-        ctx!.fill();
-      }
-      if (hl) {
-        ctx!.fillStyle = "rgba(120,130,150,0.18)";
-        ctx!.beginPath();
-        for (let i = 0; i < n; i++) {
-          if (i === hover || hl.has(i)) continue;
           const sx = px[i] * scale + offX;
           const sy = py[i] * scale + offY;
           const r = nodeRadius(i);
