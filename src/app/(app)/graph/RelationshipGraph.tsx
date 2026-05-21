@@ -69,6 +69,10 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       neighbors[t].push(s);
     }
     let alpha = 1;
+    // Declared up here: tick() reads it, and tick() runs in the warm-up
+    // loop below — a `let` declared lower would be in the temporal dead
+    // zone and throw once there are nodes to integrate.
+    let dragNode = -1;
 
     function tick() {
       const cs = REP_RADIUS;
@@ -160,7 +164,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     let H = 0;
     let centered = false;
     let hover = -1;
-    let dragNode = -1;
     let dragMoved = false;
     let panning = false;
     let lastX = 0;
