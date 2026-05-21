@@ -19,6 +19,23 @@ export const SHEPHERD_TEAM_LIST_NAME = "REFERENCE - Shepherd Team";
  *  ever one shepherd team, so the assignment needs no real target. */
 export const SHEPHERD_TEAM_TARGET_ID = "*";
 
+/** Person ids of everyone on the REFERENCE - Shepherd Team list. */
+export function listShepherdTeamIds(orgId: number): string[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT DISTINCT p.pco_id AS id
+           FROM pco_list_memberships m
+           JOIN pco_lists l
+             ON l.org_id = m.org_id AND l.pco_id = m.list_id
+           JOIN pco_people p
+             ON p.org_id = m.org_id AND p.pco_id = m.person_id
+          WHERE m.org_id = ? AND l.name = ?`,
+      )
+      .all(orgId, SHEPHERD_TEAM_LIST_NAME) as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
 /** Person ids holding a `shepherd_team` assignment — they oversee
  *  everyone else on the shepherd team, i.e. the lead pastor at the
  *  apex of the shepherding hierarchy. Normally exactly one. */

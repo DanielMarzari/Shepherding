@@ -61,24 +61,53 @@ export function ShepherdingOverviewSkeleton() {
 
 // ─── Shepherding overview ─────────────────────────────────────────────
 
-function FlockCard({ person }: { person: PersonRef }) {
+function FlockCard({ person, sub }: { person: PersonRef; sub?: string }) {
   return (
     <Link
       href={`/people/${person.personId}`}
       className="flex items-center gap-2.5 rounded-lg border border-border-soft p-2.5 hover:border-accent transition-colors"
     >
       <Avatar initials={person.initials} size="sm" />
-      <span className="text-sm font-medium truncate flex-1">
-        {person.fullName}
-      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium truncate">{person.fullName}</div>
+        {sub && <div className="text-xs text-muted truncate">{sub}</div>}
+      </div>
       {person.isMinor && <Pill tone="muted">kid</Pill>}
     </Link>
   );
 }
 
-/** The shepherd-profile-style overview: a stat strip, the downward
- *  flock as a card grid grouped by context, and the upward "who
- *  shepherds them" list. Streams in after the page shell. */
+function FlockGrid({
+  cards,
+}: {
+  cards: Array<{ person: PersonRef; sub?: string }>;
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {cards.slice(0, 60).map((c) => (
+          <FlockCard key={c.person.personId} person={c.person} sub={c.sub} />
+        ))}
+      </div>
+      {cards.length > 60 && (
+        <div className="text-xs text-muted mt-2">
+          + {(cards.length - 60).toLocaleString()} more
+        </div>
+      )}
+    </>
+  );
+}
+
+/** "with Sarah Chen, Marcus Johnson +2" — the other shepherds on a
+ *  co-shepherded person. */
+function withLabel(names: string[]): string {
+  if (names.length <= 2) return `with ${names.join(", ")}`;
+  return `with ${names.slice(0, 2).join(", ")} +${names.length - 2}`;
+}
+
+/** Three ordered sections: who shepherds this person, then the people
+ *  they shepherd exclusively, then the people they co-shepherd with
+ *  others. Streams in after the page shell. */
 export async function ShepherdingOverview({
   orgId,
   slug,
@@ -91,10 +120,7 @@ export async function ShepherdingOverview({
   const shepherdees = getShepherdees(orgId, slug);
   const shepherds = getShepherds(orgId, slug);
 
-  const flockSize = new Set(
-    shepherdees.flatMap((g) => g.people.map((p) => p.personId)),
-  ).size;
-
+  // Upward — who shepherds this person, grouped by shepherd.
   const shepherdsByPerson = new Map<
     string,
     { name: string; initials: string; vias: string[] }
@@ -109,77 +135,68 @@ export async function ShepherdingOverview({
     shepherdsByPerson.set(link.shepherd.personId, entry);
   }
 
+  // Downward — flatten the flock to distinct people, tracking the
+  // context(s) through which this person reaches them.
+  const flock = new Map<string, { ref: PersonRef; vias: Set<string> }>();
+  for (const g of shepherdees) {
+    for (const p of g.people) {
+      const e = flock.get(p.personId) ?? { ref: p, vias: new Set<string>() };
+      e.vias.add(g.via);
+      flock.set(p.personId, e);
+    }
+  }
+
+  // Split: exclusive (no other shepherd reaches them) vs co-shepherded.
+  const exclusive: Array<{ person: PersonRef; sub?: string }> = [];
+  const coShepherded: Array<{ person: PersonRef; sub?: string }> = [];
+  for (const [pid, e] of flock) {
+    const others = new Map<string, string>();
+    for (const link of getShepherds(orgId, pid)) {
+      if (link.shepherd.personId === slug) continue;
+      others.set(link.shepherd.personId, link.shepherd.fullName);
+    }
+    if (others.size === 0) {
+      exclusive.push({ person: e.ref, sub: [...e.vias].join(" · ") });
+    } else {
+      coShepherded.push({
+        person: e.ref,
+        sub: withLabel([...others.values()]),
+      });
+    }
+  }
+  exclusive.sort((a, b) => a.person.fullName.localeCompare(b.person.fullName));
+  coShepherded.sort((a, b) =>
+    a.person.fullName.localeCompare(b.person.fullName),
+  );
+
+  const hasFlock = flock.size > 0;
+
   return (
     <div className="space-y-4">
-      {shepherdees.length > 0 && (
-        <>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Stat label="Co-shepherds" value={flockSize} valueTone="accent" />
-            <Stat label="Through contexts" value={shepherdees.length} />
-            <Stat
-              label="Shepherded by"
-              value={shepherdsByPerson.size}
-              valueTone={shepherdsByPerson.size === 0 ? "warn" : "default"}
-            />
-          </div>
-
-          <Card className="p-5">
-            <div className="flex items-baseline justify-between mb-1">
-              <h2 className="text-sm font-semibold">
-                ↓ Who {firstName} co-shepherds
-                <span className="text-muted font-normal">
-                  {" "}
-                  · {flockSize.toLocaleString()}
-                </span>
-              </h2>
-              <Link
-                href="/shepherd-map"
-                className="text-xs text-accent hover:underline"
-              >
-                Shepherd map →
-              </Link>
-            </div>
-            <p className="text-xs text-muted mb-4">
-              Resolved from the Shepherd map, direct group/team leadership, and
-              the care roster. Overseeing a group type covers the leaders of
-              those groups. People can have more than one shepherd — this is
-              everyone {firstName} helps shepherd.
-            </p>
-            <div className="space-y-4">
-              {shepherdees.map((g, i) => (
-                <div key={i}>
-                  <div className="text-xs font-medium text-muted mb-2">
-                    {g.via} ·{" "}
-                    <span className="tnum">{g.people.length}</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {g.people.slice(0, 60).map((p) => (
-                      <FlockCard key={p.personId} person={p} />
-                    ))}
-                  </div>
-                  {g.people.length > 60 && (
-                    <div className="text-xs text-muted mt-2">
-                      + {(g.people.length - 60).toLocaleString()} more
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card>
-        </>
+      {hasFlock && (
+        <div className="grid grid-cols-3 gap-3">
+          <Stat
+            label="Shepherded by"
+            value={shepherdsByPerson.size}
+            valueTone={shepherdsByPerson.size === 0 ? "warn" : "default"}
+          />
+          <Stat label="Shepherds" value={exclusive.length} valueTone="accent" />
+          <Stat label="Co-shepherds" value={coShepherded.length} />
+        </div>
       )}
 
+      {/* 1 — Who shepherds this person. */}
       <Card className="p-5">
         <h2 className="text-sm font-semibold mb-1">
-          ↑ Who shepherds {firstName}
+          ↑ {firstName} is shepherded by
         </h2>
         {shepherdsByPerson.size === 0 ? (
           <p className="text-xs text-muted">
             No shepherd is connected to {firstName} yet — not through the{" "}
             <Link href="/shepherd-map" className="text-accent hover:underline">
               Shepherd map
-            </Link>{" "}
-            and not on a{" "}
+            </Link>
+            , a group / team leader, or a{" "}
             <Link href="/care-map" className="text-accent hover:underline">
               care roster
             </Link>
@@ -204,6 +221,50 @@ export async function ShepherdingOverview({
           </ul>
         )}
       </Card>
+
+      {/* 2 — People shepherded exclusively by this person. */}
+      {exclusive.length > 0 && (
+        <Card className="p-5">
+          <div className="flex items-baseline justify-between mb-1">
+            <h2 className="text-sm font-semibold">
+              ↓ People {firstName} shepherds
+              <span className="text-muted font-normal">
+                {" "}
+                · {exclusive.length.toLocaleString()}
+              </span>
+            </h2>
+            <Link
+              href="/shepherd-map"
+              className="text-xs text-accent hover:underline"
+            >
+              Shepherd map →
+            </Link>
+          </div>
+          <p className="text-xs text-muted mb-4">
+            Exclusively {firstName}&apos;s — no other shepherd is connected to
+            these people.
+          </p>
+          <FlockGrid cards={exclusive} />
+        </Card>
+      )}
+
+      {/* 3 — People co-shepherded with other shepherds. */}
+      {coShepherded.length > 0 && (
+        <Card className="p-5">
+          <h2 className="text-sm font-semibold mb-1">
+            ↓ People {firstName} co-shepherds
+            <span className="text-muted font-normal">
+              {" "}
+              · {coShepherded.length.toLocaleString()}
+            </span>
+          </h2>
+          <p className="text-xs text-muted mb-4">
+            Shared with other shepherds — {firstName} is one of several people
+            connected to each.
+          </p>
+          <FlockGrid cards={coShepherded} />
+        </Card>
+      )}
     </div>
   );
 }

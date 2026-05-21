@@ -501,6 +501,40 @@ export function getShepherds(
     }
   }
 
+  // Direct leadership — whoever LEADS a group or team this person is in
+  // shepherds them, even with no map assignment. This keeps getShepherds
+  // the true inverse of getShepherdees (which already counts leadership).
+  if (groupRows.length > 0) {
+    const gids = [...new Set(groupRows.map((g) => g.groupId))];
+    for (const r of db
+      .prepare(
+        `SELECT DISTINCT person_id AS shepherdId, group_id AS groupId
+           FROM pco_group_memberships
+          WHERE org_id = ? AND archived_at IS NULL
+            AND lower(coalesce(role, '')) LIKE '%leader%'
+            AND group_id IN (${inPlaceholders(gids.length)})`,
+      )
+      .all(orgId, ...gids) as Array<{ shepherdId: string; groupId: string }>) {
+      const g = groupById.get(r.groupId);
+      add(r.shepherdId, `Leads ${g?.groupName ?? "your group"}`, "group");
+    }
+  }
+  if (teamRows.length > 0) {
+    const tids = [...new Set(teamRows.map((t) => t.teamId))];
+    for (const r of db
+      .prepare(
+        `SELECT DISTINCT person_id AS shepherdId, team_id AS teamId
+           FROM pco_team_memberships
+          WHERE org_id = ? AND archived_at IS NULL AND person_id != ''
+            AND is_team_leader = 1
+            AND team_id IN (${inPlaceholders(tids.length)})`,
+      )
+      .all(orgId, ...tids) as Array<{ shepherdId: string; teamId: string }>) {
+      const t = teamById.get(r.teamId);
+      add(r.shepherdId, `Leads ${t?.teamName ?? "your team"}`, "team");
+    }
+  }
+
   // membership_type -> anyone overseeing this person's membership type.
   const personRow = db
     .prepare(

@@ -826,11 +826,12 @@ function refreshIsMinor(orgId: number) {
   }
   tx(batch);
 
-  // Overlay pass: any person with no birthdate AND a check-in to a
-  // non-excluded event is flipped to is_minor=1. Default every check-in
-  // event is a kids/student event in this org's PCO setup; the excluded
-  // list pulls out the exceptions. The birth_year IS NULL guard keeps
-  // PCO-known adults safe from being mis-flipped.
+  // Overlay pass: flip a no-birthday person to is_minor=1 ONLY when a
+  // check-in carries the dependent signal — it was done BY SOMEONE ELSE
+  // (a parent / guardian checked them in). The default for an unknown
+  // birthday is ADULT; a bare check-in is not enough to override that,
+  // because adults self-check-in to plenty of non-excluded events. The
+  // birth_year IS NULL guard keeps PCO-known ages safe.
   const excludedEvents = getExcludedCheckinEvents(orgId);
   if (excludedEvents.length === 0) {
     db.prepare(
@@ -842,6 +843,8 @@ function refreshIsMinor(orgId: number) {
             SELECT DISTINCT person_id
               FROM pco_check_ins
              WHERE org_id = ? AND person_id IS NOT NULL
+               AND checked_in_by_id IS NOT NULL
+               AND checked_in_by_id != person_id
           )`,
     ).run(orgId, orgId);
   } else {
@@ -856,6 +859,8 @@ function refreshIsMinor(orgId: number) {
               FROM pco_check_ins
              WHERE org_id = ?
                AND person_id IS NOT NULL
+               AND checked_in_by_id IS NOT NULL
+               AND checked_in_by_id != person_id
                AND event_id NOT IN (${placeholders})
           )`,
     ).run(orgId, orgId, ...excludedEvents);

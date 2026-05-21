@@ -106,7 +106,6 @@ export default async function ShepherdTeamPage() {
                   personId={m.personId}
                   fullName={m.fullName}
                   initials={m.initials}
-                  isMinor={m.isMinor}
                   membershipType={m.membershipType}
                   assignments={byShepherd.get(m.personId) ?? []}
                 />
@@ -123,14 +122,12 @@ function ShepherdCard({
   personId,
   fullName,
   initials,
-  isMinor,
   membershipType,
   assignments,
 }: {
   personId: string;
   fullName: string;
   initials: string;
-  isMinor: boolean;
   membershipType: string | null;
   assignments: Assignment[];
 }) {
@@ -146,9 +143,7 @@ function ShepherdCard({
             {fullName}
           </Link>
           <div className="text-xs text-muted">
-            {isMinor ? "Kid" : "Adult"}
-            {membershipType ? ` · ${membershipType}` : ""}
-            {" · "}
+            {membershipType ? `${membershipType} · ` : ""}
             {assignments.length === 0
               ? "no assignments"
               : `${assignments.length} assignment${assignments.length === 1 ? "" : "s"}`}

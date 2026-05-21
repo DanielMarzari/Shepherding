@@ -3,7 +3,10 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, Pill, Stat } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { listLeadPastorIds } from "@/lib/assignments-read";
+import {
+  listLeadPastorIds,
+  listShepherdTeamIds,
+} from "@/lib/assignments-read";
 import { getShepherds } from "@/lib/shepherd-graph";
 import { listShepherds } from "@/lib/shepherds-read";
 
@@ -78,13 +81,17 @@ async function ShepherdsOverview({ orgId }: { orgId: number }) {
   // The lead pastor is whoever holds the "Everyone else on the shepherd
   // team" assignment — they're the apex, so no overseer is expected.
   const leadPastorIds = new Set(listLeadPastorIds(orgId));
+  // This page only counts oversight FROM the shepherd team — getShepherds
+  // also surfaces a person's own group/team leaders, which aren't the
+  // hierarchy we're auditing here.
+  const teamIds = new Set(listShepherdTeamIds(orgId));
 
-  // For each shepherd, who oversees them (via the Shepherd map / care
-  // roster). getShepherds only ever returns shepherd-team members, so
-  // an empty result means "not overseen by the shepherd team yet".
+  // For each shepherd, who on the shepherd team oversees them. An empty
+  // result means "not overseen by the shepherd team yet".
   const rows = shepherds.map((s) => {
     const seen = new Map<string, OverseerRef>();
     for (const link of getShepherds(orgId, s.personId)) {
+      if (!teamIds.has(link.shepherd.personId)) continue;
       if (!seen.has(link.shepherd.personId)) {
         seen.set(link.shepherd.personId, {
           personId: link.shepherd.personId,
