@@ -19,28 +19,41 @@ const EDGE_COLOR = [
 ];
 const EDGE_WIDTH = [1.15, 0.85, 0.6];
 
-// Force-sim constants (world units).
-const REP_RADIUS = 90;
-const REPULSION = 2400;
-const MAX_FORCE = 240;
-const SPRING = 0.02;
-const SPRING_LEN = 40;
-// Connected nodes are pulled hard to the centre; isolated nodes feel
-// only a weak tug, so the linked web sits in the middle and unconnected
-// people drift out to a loose halo.
-const GRAVITY_CONNECTED = 0.02;
-const GRAVITY_ISOLATED = 0.0016;
-const DAMP = 0.82;
-const ALPHA_DECAY = 0.985;
+// Force-sim constants (world units). Repulsion is an all-pairs
+// Barnes-Hut n-body force: that long range is what lets densely linked
+// groups settle into their own clusters instead of one hairball.
+const REPULSION = 80;
+const MAX_FORCE = 120;
+const THETA2 = 0.7; // Barnes-Hut accuracy: (cellSize/dist)^2 threshold.
+const MAX_DEPTH = 22;
+const SPRING = 0.06;
+const SPRING_LEN = 22;
+// Connected nodes are pulled to the centre; isolated nodes only weakly,
+// so the linked web sits in the middle and the rest forms a halo.
+const GRAVITY_CONNECTED = 0.04;
+const GRAVITY_ISOLATED = 0.008;
+const DAMP = 0.86;
+const ALPHA_DECAY = 0.99;
 const ALPHA_MIN = 0.02;
+const FIT_LOCK = 0.12; // stop auto-fitting the view below this alpha.
+const WARMUP = 60;
+
+interface QNode {
+  x: number;
+  y: number;
+  w: number;
+  mass: number;
+  sumX: number;
+  sumY: number;
+  body: number;
+  kids: (QNode | null)[] | null;
+}
 
 /** Obsidian-style force-directed graph of the whole church. Custom
- *  canvas renderer + grid-approximated force simulation so ~8k nodes
- *  stay interactive without a charting dependency.
- *
- *  Every piece of mutable simulation / view state is declared at the
- *  top of the effect, before any closure that reads it — so nothing
- *  can be touched inside its temporal dead zone. */
+ *  canvas renderer + a Barnes-Hut force simulation so ~8k nodes stay
+ *  interactive and cluster by connection density — no charting
+ *  dependency. Every mutable variable is declared before any closure
+ *  that reads it, so nothing can be touched in its temporal dead zone. */
 export function RelationshipGraph({ data }: { data: GraphData }) {
   const router = useRouter();
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -63,7 +76,7 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     const py = new Float32Array(n);
     const vx = new Float32Array(n);
     const vy = new Float32Array(n);
-    const spread = 22 * Math.sqrt(Math.max(1, n));
+    const spread = 26 * Math.sqrt(Math.max(1, n));
     for (let i = 0; i < n; i++) {
       px[i] = (Math.random() - 0.5) * spread;
       py[i] = (Math.random() - 0.5) * spread;
@@ -89,58 +102,98 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     let dpr = Math.min(2, window.devicePixelRatio || 1);
     let W = 0;
     let H = 0;
-    let centered = false;
+    let autoFit = true;
     let lastX = 0;
     let lastY = 0;
     let raf = 0;
 
-    // ── Functions ─────────────────────────────────────────────────
-    function tick() {
-      const cs = REP_RADIUS;
-      const grid = new Map<number, number[]>();
-      for (let i = 0; i < n; i++) {
-        const key =
-          (Math.floor(px[i] / cs) + 5000) * 100000 +
-          (Math.floor(py[i] / cs) + 5000);
-        const arr = grid.get(key);
-        if (arr) arr.push(i);
-        else grid.set(key, [i]);
+    // ── Barnes-Hut quadtree ───────────────────────────────────────
+    function qnode(x: number, y: number, w: number): QNode {
+      return { x, y, w, mass: 0, sumX: 0, sumY: 0, body: -1, kids: null };
+    }
+    function qput(node: QNode, i: number, depth: number) {
+      const hw = node.w / 2;
+      const right = px[i] >= node.x + hw ? 1 : 0;
+      const bottom = py[i] >= node.y + hw ? 1 : 0;
+      const q = bottom * 2 + right;
+      let kid = node.kids![q];
+      if (!kid) {
+        kid = qnode(node.x + right * hw, node.y + bottom * hw, hw);
+        node.kids![q] = kid;
       }
-      // Repulsion — only against nodes in the 3×3 neighbouring cells.
-      for (let i = 0; i < n; i++) {
-        const cx = Math.floor(px[i] / cs);
-        const cy = Math.floor(py[i] / cs);
-        for (let gx = -1; gx <= 1; gx++) {
-          for (let gy = -1; gy <= 1; gy++) {
-            const arr = grid.get(
-              (cx + gx + 5000) * 100000 + (cy + gy + 5000),
-            );
-            if (!arr) continue;
-            for (const j of arr) {
-              if (j <= i) continue;
-              let dx = px[i] - px[j];
-              let dy = py[i] - py[j];
-              let d2 = dx * dx + dy * dy;
-              if (d2 === 0) {
-                dx = Math.random() - 0.5;
-                dy = Math.random() - 0.5;
-                d2 = 0.01;
-              } else if (d2 > cs * cs) {
-                continue;
-              }
-              const d = Math.sqrt(d2);
-              let f = (REPULSION / d2) * alpha;
-              if (f > MAX_FORCE) f = MAX_FORCE;
-              const fx = (dx / d) * f;
-              const fy = (dy / d) * f;
-              vx[i] += fx;
-              vy[i] += fy;
-              vx[j] -= fx;
-              vy[j] -= fy;
-            }
-          }
+      qinsert(kid, i, depth + 1);
+    }
+    function qinsert(node: QNode, i: number, depth: number) {
+      node.mass++;
+      node.sumX += px[i];
+      node.sumY += py[i];
+      if (node.mass === 1) {
+        node.body = i;
+        return;
+      }
+      if (node.kids !== null) {
+        qput(node, i, depth);
+        return;
+      }
+      // Leaf with kids === null and mass >= 2.
+      if (node.body < 0) return; // fat leaf (coincident points) — absorb.
+      if (depth >= MAX_DEPTH) {
+        node.body = -1; // becomes a fat leaf.
+        return;
+      }
+      const existing = node.body;
+      node.body = -1;
+      node.kids = [null, null, null, null];
+      qput(node, existing, depth);
+      qput(node, i, depth);
+    }
+    function applyBH(node: QNode, i: number) {
+      if (node.mass === 0) return;
+      if (node.kids === null && node.body === i && node.mass === 1) return;
+      const invM = 1 / node.mass;
+      let dx = px[i] - node.sumX * invM;
+      let dy = py[i] - node.sumY * invM;
+      let d2 = dx * dx + dy * dy;
+      if (node.kids === null || node.w * node.w < THETA2 * d2) {
+        if (d2 < 1) {
+          dx = Math.random() - 0.5;
+          dy = Math.random() - 0.5;
+          d2 = 1;
         }
+        const d = Math.sqrt(d2);
+        let f = ((REPULSION * node.mass) / d2) * alpha;
+        if (f > MAX_FORCE) f = MAX_FORCE;
+        vx[i] += (dx / d) * f;
+        vy[i] += (dy / d) * f;
+        return;
       }
+      const k = node.kids;
+      if (k[0]) applyBH(k[0], i);
+      if (k[1]) applyBH(k[1], i);
+      if (k[2]) applyBH(k[2], i);
+      if (k[3]) applyBH(k[3], i);
+    }
+
+    function tick() {
+      if (n === 0) return;
+      // Build the quadtree over a square that covers every node.
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (let i = 0; i < n; i++) {
+        if (px[i] < minX) minX = px[i];
+        if (px[i] > maxX) maxX = px[i];
+        if (py[i] < minY) minY = py[i];
+        if (py[i] > maxY) maxY = py[i];
+      }
+      const size = Math.max(maxX - minX, maxY - minY, 1) * 1.05;
+      const root = qnode(minX - 1, minY - 1, size);
+      for (let i = 0; i < n; i++) qinsert(root, i, 0);
+
+      // Repulsion — every node against the whole tree.
+      for (let i = 0; i < n; i++) applyBH(root, i);
+
       // Springs along edges.
       for (const e of edges) {
         const s = e[0];
@@ -174,6 +227,25 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       alpha *= ALPHA_DECAY;
     }
 
+    function fitView() {
+      if (n === 0) return;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (let i = 0; i < n; i++) {
+        if (px[i] < minX) minX = px[i];
+        if (px[i] > maxX) maxX = px[i];
+        if (py[i] < minY) minY = py[i];
+        if (py[i] > maxY) maxY = py[i];
+      }
+      const gw = Math.max(maxX - minX, 1);
+      const gh = Math.max(maxY - minY, 1);
+      scale = Math.max(0.02, Math.min(6, Math.min(W / gw, H / gh) * 0.9));
+      offX = W / 2 - ((minX + maxX) / 2) * scale;
+      offY = H / 2 - ((minY + maxY) / 2) * scale;
+    }
+
     function resize() {
       const r = wrap!.getBoundingClientRect();
       W = r.width;
@@ -183,12 +255,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       canvas!.height = Math.round(H * dpr);
       canvas!.style.width = `${W}px`;
       canvas!.style.height = `${H}px`;
-      if (!centered) {
-        scale = Math.max(0.05, Math.min(1.4, (Math.min(W, H) * 0.9) / spread));
-        offX = W / 2;
-        offY = H / 2;
-        centered = true;
-      }
     }
 
     function nodeRadius(i: number): number {
@@ -301,6 +367,10 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
 
     function frame() {
       if (alpha > ALPHA_MIN || dragNode >= 0) tick();
+      if (autoFit) {
+        if (alpha < FIT_LOCK) autoFit = false;
+        else fitView();
+      }
       render();
       raf = requestAnimationFrame(frame);
     }
@@ -313,6 +383,7 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       const [mx, my] = localXY(e);
       const hit = hitTest(mx, my);
       canvas!.setPointerCapture(e.pointerId);
+      autoFit = false;
       if (hit >= 0) {
         dragNode = hit;
         dragMoved = false;
@@ -356,6 +427,7 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     }
     function onWheel(e: WheelEvent) {
       e.preventDefault();
+      autoFit = false;
       const r = canvas!.getBoundingClientRect();
       const mx = e.clientX - r.left;
       const my = e.clientY - r.top;
@@ -367,8 +439,9 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     }
 
     // ── Run ───────────────────────────────────────────────────────
-    for (let i = 0; i < 40; i++) tick();
+    for (let i = 0; i < WARMUP; i++) tick();
     resize();
+    fitView();
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
     frame();
