@@ -110,6 +110,7 @@ export function listCareCandidates(
          LEFT JOIN temp.shep_set s ON s.person_id = p.pco_id
         WHERE p.org_id = ?
           AND s.person_id IS NULL
+          AND p.is_minor = 0
           AND p.pco_id NOT IN (
             SELECT person_id FROM care_assignments WHERE org_id = ?
           )
@@ -157,6 +158,7 @@ export function listCareAssignments(
          LEFT JOIN temp.shep_set s ON s.person_id = ca.person_id
         WHERE ca.org_id = ?
           AND s.person_id IS NULL
+          AND p.is_minor = 0
         ORDER BY ca.created_at DESC`,
     )
     .all(orgId) as Array<{
@@ -244,6 +246,7 @@ export function countActiveNotShepherded(orgId: number): number {
          LEFT JOIN temp.shep_set s ON s.person_id = p.pco_id
         WHERE p.org_id = ?
           AND s.person_id IS NULL
+          AND p.is_minor = 0
           AND ((p.last_form_submission_at IS NOT NULL AND p.last_form_submission_at >= ?)
             OR (p.last_check_in_at IS NOT NULL AND p.last_check_in_at >= ?))
           ${excludeSql}`,

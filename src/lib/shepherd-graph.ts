@@ -97,11 +97,14 @@ function resolveAssignmentToPersonIds(
   const db = getDb();
   switch (kind) {
     case "group":
+      // Members only — a group's leaders are the shepherds of that
+      // group, not its sheep, so they aren't shepherded "via" it.
       return (
         db
           .prepare(
             `SELECT DISTINCT person_id AS id FROM pco_group_memberships
-              WHERE org_id = ? AND group_id = ? AND archived_at IS NULL`,
+              WHERE org_id = ? AND group_id = ? AND archived_at IS NULL
+                AND lower(coalesce(role, '')) NOT LIKE '%leader%'`,
           )
           .all(orgId, targetId) as Array<{ id: string }>
       ).map((r) => r.id);
@@ -120,12 +123,15 @@ function resolveAssignmentToPersonIds(
           .all(orgId, targetId) as Array<{ id: string }>
       ).map((r) => r.id);
     case "team":
+      // Non-leaders only — team leaders shepherd the team, they aren't
+      // shepherded via it.
       return (
         db
           .prepare(
             `SELECT DISTINCT person_id AS id FROM pco_team_memberships
               WHERE org_id = ? AND team_id = ?
-                AND archived_at IS NULL AND person_id != ''`,
+                AND archived_at IS NULL AND person_id != ''
+                AND is_team_leader = 0`,
           )
           .all(orgId, targetId) as Array<{ id: string }>
       ).map((r) => r.id);
@@ -417,12 +423,19 @@ export function getShepherds(
     );
   }
 
+  // Groups this person is a NON-leader member of. A leader isn't
+  // shepherded "in" the group they lead, so those groups are excluded
+  // from the member-level paths below.
+  const memberGroupIds = groupRows
+    .filter((g) => g.isLeader === 0)
+    .map((g) => g.groupId);
+  const memberTeamIds = teamRows
+    .filter((t) => t.isLeader === 0)
+    .map((t) => t.teamId);
+
   // group -> anyone overseeing that exact group.
   const groupById = new Map(groupRows.map((g) => [g.groupId, g]));
-  for (const r of assignmentsFor(
-    "group",
-    groupRows.map((g) => g.groupId),
-  )) {
+  for (const r of assignmentsFor("group", memberGroupIds)) {
     const g = groupById.get(r.targetId);
     if (g) {
       add(r.shepherdId, `Member of ${g.groupName ?? "a group"}`, "group");
@@ -452,10 +465,7 @@ export function getShepherds(
 
   // team -> anyone overseeing that exact team.
   const teamById = new Map(teamRows.map((t) => [t.teamId, t]));
-  for (const r of assignmentsFor(
-    "team",
-    teamRows.map((t) => t.teamId),
-  )) {
+  for (const r of assignmentsFor("team", memberTeamIds)) {
     const t = teamById.get(r.targetId);
     if (t) {
       add(r.shepherdId, `On team ${t.teamName ?? "a team"}`, "team");
@@ -502,10 +512,12 @@ export function getShepherds(
   }
 
   // Direct leadership — whoever LEADS a group or team this person is in
-  // shepherds them, even with no map assignment. This keeps getShepherds
-  // the true inverse of getShepherdees (which already counts leadership).
-  if (groupRows.length > 0) {
-    const gids = [...new Set(groupRows.map((g) => g.groupId))];
+  // shepherds them, even with no map assignment. Only groups/teams this
+  // person is a NON-leader member of count: co-leaders don't shepherd
+  // one another. This keeps getShepherds the true inverse of
+  // getShepherdees (which already counts leadership the same way).
+  if (memberGroupIds.length > 0) {
+    const gids = [...new Set(memberGroupIds)];
     for (const r of db
       .prepare(
         `SELECT DISTINCT person_id AS shepherdId, group_id AS groupId
@@ -519,8 +531,8 @@ export function getShepherds(
       add(r.shepherdId, `Leads ${g?.groupName ?? "your group"}`, "group");
     }
   }
-  if (teamRows.length > 0) {
-    const tids = [...new Set(teamRows.map((t) => t.teamId))];
+  if (memberTeamIds.length > 0) {
+    const tids = [...new Set(memberTeamIds)];
     for (const r of db
       .prepare(
         `SELECT DISTINCT person_id AS shepherdId, team_id AS teamId
