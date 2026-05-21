@@ -6,6 +6,8 @@ import type { GraphData, GraphNode } from "@/lib/graph-read";
 
 const BG = "#0b0d13";
 const NODE_COLOR: Record<GraphNode["cls"], string> = {
+  lead_pastor: "#f472b6",
+  shepherd_team: "#60a5fa",
   shepherded: "#34d399",
   active: "#fbbf24",
   present: "#5b6577",
@@ -32,8 +34,11 @@ const THETA2 = 0.7; // Barnes-Hut accuracy: (cellSize/dist)^2 threshold.
 const MAX_DEPTH = 22;
 const SPRING = 0.06;
 const SPRING_LEN = 22;
-// Connected nodes are pulled to the centre; isolated nodes only weakly,
-// so the linked web sits in the middle and the rest forms a halo.
+// Centre gravity per node. Leadership is pulled hard to the middle so
+// the web reads as a hierarchy radiating out from the lead pastor;
+// connected people sit in the web; isolated people drift to a halo.
+const GRAVITY_LEAD = 0.13;
+const GRAVITY_TEAM = 0.07;
 const GRAVITY_CONNECTED = 0.022;
 const GRAVITY_ISOLATED = 0.006;
 const DAMP = 0.86;
@@ -92,6 +97,23 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       degree[e[1]]++;
       neighbors[e[0]].push(e[1]);
       neighbors[e[1]].push(e[0]);
+    }
+    // Per-node centre gravity + draw radius. Leadership gravitates to
+    // the centre and renders a touch larger.
+    const gravity = new Float32Array(n);
+    const radii = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const c = nodes[i].cls;
+      gravity[i] =
+        c === "lead_pastor"
+          ? GRAVITY_LEAD
+          : c === "shepherd_team"
+            ? GRAVITY_TEAM
+            : degree[i] > 0
+              ? GRAVITY_CONNECTED
+              : GRAVITY_ISOLATED;
+      const bonus = c === "lead_pastor" ? 4 : c === "shepherd_team" ? 2 : 0;
+      radii[i] = 2 + Math.min(7, Math.sqrt(degree[i])) + bonus;
     }
 
     // ── All mutable state — declared before any closure below ─────
@@ -220,9 +242,8 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
           vy[i] = 0;
           continue;
         }
-        const g = degree[i] > 0 ? GRAVITY_CONNECTED : GRAVITY_ISOLATED;
-        vx[i] -= px[i] * g * alpha;
-        vy[i] -= py[i] * g * alpha;
+        vx[i] -= px[i] * gravity[i] * alpha;
+        vy[i] -= py[i] * gravity[i] * alpha;
         vx[i] *= DAMP;
         vy[i] *= DAMP;
         // Clamp speed so a force spike can never fling a node off-screen.
@@ -278,7 +299,7 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     }
 
     function nodeRadius(i: number): number {
-      return 2 + Math.min(7, Math.sqrt(degree[i]));
+      return radii[i];
     }
 
     function hitTest(mx: number, my: number): number {
@@ -334,7 +355,13 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
 
       // Nodes — one fill pass per classification. When hovering, the
       // un-connected nodes keep their own colour, just lightly faded.
-      for (const cls of ["present", "active", "shepherded"] as const) {
+      for (const cls of [
+        "present",
+        "active",
+        "shepherded",
+        "shepherd_team",
+        "lead_pastor",
+      ] as const) {
         ctx!.fillStyle = NODE_COLOR[cls];
         if (hl) {
           ctx!.globalAlpha = 0.62;
@@ -489,6 +516,8 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     >
       <canvas ref={canvasRef} className="block" style={{ cursor: "grab" }} />
       <div className="absolute top-3 left-3 text-xs space-y-1.5 pointer-events-none select-none">
+        <LegendDot color={NODE_COLOR.lead_pastor} label="Lead pastor" />
+        <LegendDot color={NODE_COLOR.shepherd_team} label="Shepherd team" />
         <LegendDot color={NODE_COLOR.shepherded} label="Shepherded" />
         <LegendDot color={NODE_COLOR.active} label="Active" />
         <LegendDot color={NODE_COLOR.present} label="Present" />

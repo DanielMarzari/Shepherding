@@ -1,4 +1,5 @@
 import "server-only";
+import { listLeadPastorIds, listShepherdTeamIds } from "./assignments-read";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 import { getSyncSettings } from "./pco";
@@ -9,7 +10,12 @@ interface PIIBlob {
   last_name?: string | null;
 }
 
-export type GraphClass = "shepherded" | "active" | "present";
+export type GraphClass =
+  | "lead_pastor"
+  | "shepherd_team"
+  | "shepherded"
+  | "active"
+  | "present";
 
 export interface GraphNode {
   id: string;
@@ -70,12 +76,25 @@ export function buildRelationshipGraph(orgId: number): GraphData {
     cls: string;
   }>;
 
+  // Leadership overlay — these take precedence over the activity
+  // classification when colouring a node.
+  const leadPastors = new Set(listLeadPastorIds(orgId));
+  const teamMembers = new Set(listShepherdTeamIds(orgId));
+
   const idx = new Map<string, number>();
   const clsOf = new Map<string, GraphClass>();
   const nodes: GraphNode[] = [];
   for (const r of rows) {
-    if (r.cls === "inactive") continue;
-    const cls = r.cls as GraphClass;
+    const isLead = leadPastors.has(r.id);
+    const isTeam = teamMembers.has(r.id);
+    // Inactive people are dropped — unless they're leadership, who
+    // always belong on the graph.
+    if (r.cls === "inactive" && !isLead && !isTeam) continue;
+    const cls: GraphClass = isLead
+      ? "lead_pastor"
+      : isTeam
+        ? "shepherd_team"
+        : (r.cls as GraphClass);
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
     const name =
       [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") ||
@@ -94,9 +113,10 @@ export function buildRelationshipGraph(orgId: number): GraphData {
     const key = si < ti ? `${si}.${ti}` : `${ti}.${si}`;
     if (seen.has(key)) return;
     seen.add(key);
+    // Leadership + shepherded targets get the prominent edge; active
+    // gets grey, present gets faint.
     const c = clsOf.get(tgtId);
-    const kind: 0 | 1 | 2 =
-      c === "shepherded" ? 0 : c === "active" ? 1 : 2;
+    const kind: 0 | 1 | 2 = c === "active" ? 1 : c === "present" ? 2 : 0;
     edges.push([si, ti, kind]);
   }
 
