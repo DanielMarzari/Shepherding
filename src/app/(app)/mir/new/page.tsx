@@ -2,12 +2,14 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { BackLink } from "@/components/BackLink";
 import { Card } from "@/components/ui";
+import { listStaffOptions } from "@/lib/assignments-read";
 import { requireOrg } from "@/lib/auth";
 import { MirForm } from "../MirForm";
 
 export default async function NewMirPage() {
   const session = await requireOrg();
   if (session.role !== "admin") redirect("/mir");
+  const staffOptions = listStaffOptions(session.orgId);
   return (
     <AppShell
       active="See more"
@@ -19,7 +21,7 @@ export default async function NewMirPage() {
           New Ministry Impact Report
         </h1>
         <Card className="p-6">
-          <MirForm mode="create" />
+          <MirForm mode="create" staffOptions={staffOptions} />
         </Card>
       </div>
     </AppShell>

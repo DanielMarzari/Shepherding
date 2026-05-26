@@ -15,9 +15,41 @@ interface PIIBlob {
 /** Name of the PCO People list that defines the shepherd team. */
 export const SHEPHERD_TEAM_LIST_NAME = "REFERENCE - Shepherd Team";
 
+/** Name of the PCO People list that defines the church staff. */
+export const STAFF_LIST_NAME = "REFERENCE - Church Staff";
+
 /** Synthetic target id for a `shepherd_team` assignment — there is only
  *  ever one shepherd team, so the assignment needs no real target. */
 export const SHEPHERD_TEAM_TARGET_ID = "*";
+
+/** Pickable {id, name} list of REFERENCE - Church Staff members for
+ *  dropdowns (MIR lead / sponsor, etc.). */
+export function listStaffOptions(orgId: number): TargetOption[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT p.pco_id AS id, p.enc_pii AS encPii
+         FROM pco_list_memberships m
+         JOIN pco_lists l
+           ON l.org_id = m.org_id AND l.pco_id = m.list_id
+         JOIN pco_people p
+           ON p.org_id = m.org_id AND p.pco_id = m.person_id
+        WHERE m.org_id = ? AND l.name = ?`,
+    )
+    .all(orgId, STAFF_LIST_NAME) as Array<{
+    id: string;
+    encPii: string | null;
+  }>;
+  const out = rows.map((r) => {
+    const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
+    const name =
+      [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") ||
+      `(unknown #${r.id})`;
+    return { id: r.id, name };
+  });
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
 
 /** Person ids of everyone on the REFERENCE - Shepherd Team list. */
 export function listShepherdTeamIds(orgId: number): string[] {

@@ -1,17 +1,21 @@
+import type { TargetOption } from "@/lib/assignments-types";
 import type { MirDoc } from "@/lib/mir-read";
 import { createMirAction, updateMirAction } from "./actions";
 import { DeleteMirButton } from "./DeleteMirButton";
 
 /** One form used for both create and edit, with the same five
  *  logic-model sections in order. For non-admin viewers every field
- *  renders read-only so the report stays a reference, not editable. */
+ *  renders read-only so the report stays a reference, not editable.
+ *  `staffOptions` populates the Lead / Sponsor pickers. */
 export function MirForm({
   mode,
   mir,
+  staffOptions,
   isAdmin = true,
 }: {
   mode: "create" | "edit";
   mir?: MirDoc;
+  staffOptions: TargetOption[];
   isAdmin?: boolean;
 }) {
   const action = mode === "create" ? createMirAction : updateMirAction;
@@ -29,20 +33,29 @@ export function MirForm({
           readOnly={readOnly}
           placeholder="e.g. Small Groups"
         />
+        <Field
+          label="Target audience"
+          name="targetAudience"
+          defaultValue={mir?.targetAudience ?? ""}
+          readOnly={readOnly}
+          placeholder="Who is this ministry for?"
+        />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field
-            label="Target audience"
-            name="targetAudience"
-            defaultValue={mir?.targetAudience ?? ""}
+          <StaffPicker
+            label="Lead"
+            name="leadPersonId"
+            options={staffOptions}
+            selectedId={mir?.lead?.personId ?? null}
             readOnly={readOnly}
-            placeholder="Who is this ministry for?"
+            hint="Owns the day-to-day of this report."
           />
-          <Field
-            label="Team"
-            name="team"
-            defaultValue={mir?.team ?? ""}
+          <StaffPicker
+            label="Sponsor"
+            name="sponsorPersonId"
+            options={staffOptions}
+            selectedId={mir?.sponsor?.personId ?? null}
             readOnly={readOnly}
-            placeholder="People who wrote or lead this report"
+            hint="Staff member accountable for the ministry's outcomes."
           />
         </div>
 
@@ -136,6 +149,62 @@ function Field({
         placeholder={placeholder}
         className="w-full bg-bg-elev-2 border border-border-soft rounded px-2.5 py-1.5 text-sm text-fg placeholder:text-subtle read-only:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       />
+    </label>
+  );
+}
+
+function StaffPicker({
+  label,
+  name,
+  options,
+  selectedId,
+  readOnly,
+  hint,
+}: {
+  label: string;
+  name: string;
+  options: TargetOption[];
+  selectedId: string | null;
+  readOnly?: boolean;
+  hint?: string;
+}) {
+  // If the saved id isn't on the current staff list (departed staff,
+  // unsynced list), keep it in the menu so it can still display.
+  const has = selectedId
+    ? options.some((o) => o.id === selectedId)
+    : true;
+  return (
+    <label className="block space-y-1">
+      <span className="text-xs font-semibold text-muted uppercase tracking-wider">
+        {label}
+      </span>
+      {hint && <span className="block text-[11px] text-subtle">{hint}</span>}
+      <select
+        name={name}
+        defaultValue={selectedId ?? ""}
+        required
+        disabled={readOnly}
+        className="w-full bg-bg-elev-2 border border-border-soft rounded px-2.5 py-1.5 text-sm text-fg disabled:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent cursor-pointer"
+      >
+        <option value="" disabled>
+          — pick a staff member —
+        </option>
+        {!has && selectedId && (
+          <option value={selectedId}>
+            (no longer on staff list · keep)
+          </option>
+        )}
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.name}
+          </option>
+        ))}
+      </select>
+      {options.length === 0 && (
+        <span className="block text-[11px] text-warn-soft-fg">
+          The REFERENCE - Church Staff list is empty or not synced.
+        </span>
+      )}
     </label>
   );
 }
