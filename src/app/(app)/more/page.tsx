@@ -45,6 +45,12 @@ const LINKS: MoreLink[] = [
     description:
       "An interactive node-web of everyone in the church. Lines connect people who shepherd one another — through group / team leadership or a care roster. Drag, zoom, and click a node to open a profile.",
   },
+  {
+    href: "/mir",
+    title: "Ministry Impact Reports",
+    description:
+      "Standard nonprofit logic-model docs — Resources, Activities, Outputs, Outcomes, Impact — describing what each ministry is accomplishing and for whom. Hand-edited today; PCO data will fill more of it in over time.",
+  },
 ];
 
 export default function MorePage() {
