@@ -208,16 +208,29 @@ function matchPerson(
   return sub?.id ?? null;
 }
 
-export async function uploadMirPdfAction(formData: FormData) {
+/** State returned by uploadMirPdfAction. On success the action redirects
+ *  (never returns), so the only state worth keeping is the error case. */
+export type MirUploadState =
+  | { status: "idle" }
+  | { status: "error"; message: string };
+
+function err(message: string): MirUploadState {
+  return { status: "error", message };
+}
+
+export async function uploadMirPdfAction(
+  _prev: MirUploadState | null,
+  formData: FormData,
+): Promise<MirUploadState> {
   const session = await requireOrg();
-  if (session.role !== "admin") throw new Error("Admin only");
+  if (session.role !== "admin") return err("Admin only");
 
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) {
-    throw new Error("Pick a PDF file to upload");
+    return err("Pick a PDF file to upload.");
   }
   if (file.size > 10 * 1024 * 1024) {
-    throw new Error("PDF is over 10 MB");
+    return err("PDF is over 10 MB.");
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -227,12 +240,12 @@ export async function uploadMirPdfAction(formData: FormData) {
   } catch (e) {
     // parseMirPdf throws a clear, actionable message for
     // outlined-text / scanned PDFs — preserve it.
-    throw e instanceof Error ? e : new Error("Couldn't read that PDF");
+    return err(e instanceof Error ? e.message : "Couldn't read that PDF.");
   }
   if (parsedList.length === 0) {
-    throw new Error(
-      "PDF parsed OK but no MIR pages were found in it (no page had " +
-        "a Target Audience or Team marker).",
+    return err(
+      "PDF parsed OK but no MIR pages were found in it (no page had a " +
+        "Target Audience or Team marker).",
     );
   }
 
@@ -324,6 +337,9 @@ export async function uploadMirPdfAction(formData: FormData) {
   revalidatePath("/mir");
   // Single MIR → land on its detail. Many MIRs in one PDF → back to
   // the list so the admin can see everything that was imported.
+  // redirect() throws NEXT_REDIRECT internally, so control never
+  // returns past it — TypeScript needs the explicit `never` return,
+  // hence the unreachable error state at the bottom.
   if (ids.length === 1) {
     revalidatePath(`/mir/${ids[0]}`);
     redirect(`/mir/${ids[0]}`);
