@@ -221,64 +221,77 @@ export async function uploadMirPdfAction(formData: FormData) {
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
-  let parsed;
+  let parsedList;
   try {
-    parsed = await parseMirPdf(bytes);
-  } catch {
-    throw new Error("Couldn't read that PDF");
+    parsedList = await parseMirPdf(bytes);
+  } catch (e) {
+    // parseMirPdf throws a clear, actionable message for
+    // outlined-text / scanned PDFs — preserve it.
+    throw e instanceof Error ? e : new Error("Couldn't read that PDF");
+  }
+  if (parsedList.length === 0) {
+    throw new Error(
+      "PDF parsed OK but no MIR pages were found in it (no page had " +
+        "a Target Audience or Team marker).",
+    );
   }
 
   const staff = listStaffOptions(session.orgId);
   const staffIds = new Set(staff.map((s) => s.id));
-  const leadPersonId = matchPerson(parsed.leadName, staff);
-  const sponsorPersonId = matchPerson(parsed.sponsorName, staff);
-  const memberPersonIds = parsed.memberNames
-    .map((n) => matchPerson(n, staff))
-    .filter((id): id is string => id !== null);
 
   const db = getDb();
-  const existing = db
-    .prepare(
-      `SELECT id FROM mir_docs
-        WHERE org_id = ? AND lower(title) = lower(?) LIMIT 1`,
-    )
-    .get(session.orgId, parsed.title) as { id: number } | undefined;
+  const insert = db.prepare(
+    `INSERT INTO mir_docs
+       (org_id, title, target_audience,
+        lead_person_id, sponsor_person_id,
+        resources, activities, outputs, outcomes, impact,
+        author_user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const update = db.prepare(
+    `UPDATE mir_docs SET
+       title = ?, target_audience = ?,
+       lead_person_id = ?, sponsor_person_id = ?,
+       resources = ?, activities = ?, outputs = ?,
+       outcomes = ?, impact = ?,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ? AND org_id = ?`,
+  );
+  const findExisting = db.prepare(
+    `SELECT id FROM mir_docs
+      WHERE org_id = ? AND lower(title) = lower(?) LIMIT 1`,
+  );
 
-  let id: number;
-  if (existing) {
-    db.prepare(
-      `UPDATE mir_docs SET
-         title = ?, target_audience = ?,
-         lead_person_id = ?, sponsor_person_id = ?,
-         resources = ?, activities = ?, outputs = ?,
-         outcomes = ?, impact = ?,
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ? AND org_id = ?`,
-    ).run(
-      parsed.title,
-      parsed.targetAudience,
-      leadPersonId,
-      sponsorPersonId,
-      parsed.resources,
-      parsed.activities,
-      parsed.outputs,
-      parsed.outcomes,
-      parsed.impact,
-      existing.id,
-      session.orgId,
-    );
-    id = existing.id;
-  } else {
-    const r = db
-      .prepare(
-        `INSERT INTO mir_docs
-           (org_id, title, target_audience,
-            lead_person_id, sponsor_person_id,
-            resources, activities, outputs, outcomes, impact,
-            author_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+  const ids: number[] = [];
+  for (const parsed of parsedList) {
+    const leadPersonId = matchPerson(parsed.leadName, staff);
+    const sponsorPersonId = matchPerson(parsed.sponsorName, staff);
+    const memberPersonIds = parsed.memberNames
+      .map((n) => matchPerson(n, staff))
+      .filter((id): id is string => id !== null);
+
+    const existing = findExisting.get(session.orgId, parsed.title) as
+      | { id: number }
+      | undefined;
+
+    let id: number;
+    if (existing) {
+      update.run(
+        parsed.title,
+        parsed.targetAudience,
+        leadPersonId,
+        sponsorPersonId,
+        parsed.resources,
+        parsed.activities,
+        parsed.outputs,
+        parsed.outcomes,
+        parsed.impact,
+        existing.id,
+        session.orgId,
+      );
+      id = existing.id;
+    } else {
+      const r = insert.run(
         session.orgId,
         parsed.title,
         parsed.targetAudience,
@@ -291,22 +304,29 @@ export async function uploadMirPdfAction(formData: FormData) {
         parsed.impact,
         session.user.id,
       );
-    id = Number(r.lastInsertRowid);
-  }
+      id = Number(r.lastInsertRowid);
+    }
+    ids.push(id);
 
-  if (leadPersonId && sponsorPersonId) {
-    saveTeamMembers(
-      db,
-      session.orgId,
-      id,
-      leadPersonId,
-      sponsorPersonId,
-      memberPersonIds,
-      staffIds,
-    );
+    if (leadPersonId && sponsorPersonId) {
+      saveTeamMembers(
+        db,
+        session.orgId,
+        id,
+        leadPersonId,
+        sponsorPersonId,
+        memberPersonIds,
+        staffIds,
+      );
+    }
   }
 
   revalidatePath("/mir");
-  revalidatePath(`/mir/${id}`);
-  redirect(`/mir/${id}`);
+  // Single MIR → land on its detail. Many MIRs in one PDF → back to
+  // the list so the admin can see everything that was imported.
+  if (ids.length === 1) {
+    revalidatePath(`/mir/${ids[0]}`);
+    redirect(`/mir/${ids[0]}`);
+  }
+  redirect("/mir");
 }
