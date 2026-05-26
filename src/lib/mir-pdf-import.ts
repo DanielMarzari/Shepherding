@@ -26,6 +26,8 @@ export interface ParsedMir {
   leadName: string | null;
   /** Best-effort extraction of "Sponsor: …" from the team block. */
   sponsorName: string | null;
+  /** Other names found in the Team block (excluding lead + sponsor). */
+  memberNames: string[];
   resources: string | null;
   activities: string | null;
   outputs: string | null;
@@ -54,6 +56,30 @@ function findRole(text: string, role: "lead" | "sponsor"): string | null {
   const m2 = text.match(parenthesised);
   if (m2) return m2[1].trim();
   return null;
+}
+
+/** Other names in the team block — anything that isn't already a Lead
+ *  or Sponsor line. Best-effort: strips bullets, splits on commas, and
+ *  drops obvious non-name fragments. */
+function findOtherMembers(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split("\n")) {
+    const t = raw.trim();
+    if (!t) continue;
+    if (/^(lead|sponsor)\b\s*[-—:]/i.test(t)) continue;
+    if (/\((lead|sponsor)\)/i.test(t)) continue;
+    if (/^team\b/i.test(t)) continue;
+    // Split on commas / semicolons so "Alice, Bob; Carol" → 3 names.
+    for (const piece of t.split(/[,;]/)) {
+      const cleaned = piece.replace(/^[-•*\d.)\s]+/, "").trim();
+      if (cleaned.length < 2 || cleaned.length > 100) continue;
+      // Drop role tails like "Alice (notes)".
+      const stripped = cleaned.replace(/\s*\([^)]*\)\s*$/, "").trim();
+      if (stripped.length < 2) continue;
+      out.push(stripped);
+    }
+  }
+  return out;
 }
 
 /** Pull the structured MIR sections out of a PDF. Returns null fields
@@ -124,13 +150,23 @@ export async function parseMirPdf(data: Uint8Array): Promise<ParsedMir> {
   };
 
   const team = joined("team");
+  const leadName = team ? findRole(team, "lead") : null;
+  const sponsorName = team ? findRole(team, "sponsor") : null;
+  const allOther = team ? findOtherMembers(team) : [];
+  // Drop entries that look like the lead / sponsor we already extracted.
+  const memberNames = allOther.filter(
+    (n) =>
+      n.toLowerCase() !== (leadName ?? "").toLowerCase() &&
+      n.toLowerCase() !== (sponsorName ?? "").toLowerCase(),
+  );
 
   return {
     title,
     targetAudience: joined("target audience"),
     team,
-    leadName: team ? findRole(team, "lead") : null,
-    sponsorName: team ? findRole(team, "sponsor") : null,
+    leadName,
+    sponsorName,
+    memberNames,
     resources: joined("resources"),
     activities: joined("activities"),
     outputs: joined("outputs"),

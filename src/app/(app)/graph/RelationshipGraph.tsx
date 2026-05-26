@@ -12,14 +12,15 @@ const NODE_COLOR: Record<GraphNode["cls"], string> = {
   active: "#fbbf24",
   present: "#5b6577",
 };
-// Edge colour by kind: 0 shepherded (prominent), 1 active (grey),
-// 2 present (faint). On a dark canvas the "prominent" edge is light.
+// Edge colour by kind: shepherded targets get a slightly more visible
+// line; active and present targets share a single subtle grey. Two
+// tiers max — fewer visual layers reads cleaner.
 const EDGE_COLOR = [
-  "rgba(228,233,242,0.42)",
-  "rgba(150,162,184,0.22)",
-  "rgba(92,103,124,0.12)",
+  "rgba(210,218,232,0.30)",
+  "rgba(140,150,170,0.16)",
+  "rgba(140,150,170,0.16)",
 ];
-const EDGE_WIDTH = [1.15, 0.85, 0.6];
+const EDGE_WIDTH = [0.85, 0.7, 0.7];
 
 // Force-sim constants (world units). Repulsion is an all-pairs
 // Barnes-Hut n-body force: that long range is what lets densely linked
@@ -45,8 +46,10 @@ const GRAVITY_TEAM = 0.085;
 const DAMP = 0.86;
 const ALPHA_DECAY = 0.99;
 const ALPHA_MIN = 0.02;
-const FIT_LOCK = 0.12; // stop auto-fitting the view below this alpha.
-const WARMUP = 60;
+// Bigger warm-up so the graph paints already mostly settled; we then
+// fit the view ONCE and leave it alone. (No per-frame auto-fit, because
+// that made the camera chase the still-settling sim.)
+const WARMUP = 150;
 
 interface QNode {
   x: number;
@@ -130,7 +133,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     let dpr = Math.min(2, window.devicePixelRatio || 1);
     let W = 0;
     let H = 0;
-    let autoFit = true;
     let lastX = 0;
     let lastY = 0;
     let raf = 0;
@@ -416,10 +418,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
 
     function frame() {
       if (alpha > ALPHA_MIN || dragNode >= 0) tick();
-      if (autoFit) {
-        if (alpha < FIT_LOCK) autoFit = false;
-        else fitView();
-      }
       render();
       raf = requestAnimationFrame(frame);
     }
@@ -432,11 +430,11 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       const [mx, my] = localXY(e);
       const hit = hitTest(mx, my);
       canvas!.setPointerCapture(e.pointerId);
-      autoFit = false;
       if (hit >= 0) {
+        // No alpha reheat — pulling a node should move that node, not
+        // wake the entire web up.
         dragNode = hit;
         dragMoved = false;
-        alpha = Math.max(alpha, 0.3);
       } else {
         panning = true;
       }
@@ -448,7 +446,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
       if (dragNode >= 0) {
         px[dragNode] = (mx - offX) / scale;
         py[dragNode] = (my - offY) / scale;
-        alpha = Math.max(alpha, 0.3);
         if (Math.abs(mx - lastX) + Math.abs(my - lastY) > 3) dragMoved = true;
       } else if (panning) {
         offX += mx - lastX;
@@ -476,7 +473,6 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     }
     function onWheel(e: WheelEvent) {
       e.preventDefault();
-      autoFit = false;
       const r = canvas!.getBoundingClientRect();
       const mx = e.clientX - r.left;
       const my = e.clientY - r.top;

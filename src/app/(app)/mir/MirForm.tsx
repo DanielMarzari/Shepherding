@@ -59,6 +59,12 @@ export function MirForm({
           />
         </div>
 
+        <MembersPicker
+          options={staffOptions}
+          selectedIds={new Set(mir?.members?.map((m) => m.personId) ?? [])}
+          readOnly={readOnly}
+        />
+
         <Block
           label="Resources"
           hint="What's being invested — staff time, volunteers, dollars, space, materials."
@@ -206,6 +212,72 @@ function StaffPicker({
         </span>
       )}
     </label>
+  );
+}
+
+function MembersPicker({
+  options,
+  selectedIds,
+  readOnly,
+}: {
+  options: TargetOption[];
+  selectedIds: Set<string>;
+  readOnly?: boolean;
+}) {
+  return (
+    <fieldset className="block space-y-1">
+      <legend className="text-xs font-semibold text-muted uppercase tracking-wider">
+        Additional team members
+      </legend>
+      <span className="block text-[11px] text-subtle">
+        Other staff working on this report. Lead and Sponsor above don&apos;t
+        need to be repeated — duplicates are filtered out on save.
+      </span>
+      {readOnly ? (
+        selectedIds.size === 0 ? (
+          <p className="text-xs text-subtle italic pt-1">
+            None recorded.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {options
+              .filter((o) => selectedIds.has(o.id))
+              .map((o) => (
+                <span
+                  key={o.id}
+                  className="text-xs px-2 py-1 rounded border border-border-soft"
+                >
+                  {o.name}
+                </span>
+              ))}
+          </div>
+        )
+      ) : (
+        <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 max-h-56 overflow-y-auto rounded-lg border border-border-soft p-3">
+          {options.length === 0 ? (
+            <p className="text-xs text-muted col-span-full">
+              No staff on the REFERENCE - Church Staff list yet.
+            </p>
+          ) : (
+            options.map((p) => (
+              <label
+                key={p.id}
+                className="flex items-center gap-2 text-sm cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  name="memberId"
+                  value={p.id}
+                  defaultChecked={selectedIds.has(p.id)}
+                  className="cursor-pointer shrink-0"
+                />
+                <span className="truncate">{p.name}</span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+    </fieldset>
   );
 }
 

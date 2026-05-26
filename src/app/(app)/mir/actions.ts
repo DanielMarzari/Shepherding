@@ -7,6 +7,7 @@ import type { TargetOption } from "@/lib/assignments-types";
 import { requireOrg } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { parseMirPdf } from "@/lib/mir-pdf-import";
+import type Database from "better-sqlite3";
 
 function clean(v: FormDataEntryValue | null, max = 12000): string | null {
   const s = String(v ?? "").trim();
@@ -27,6 +28,39 @@ function pickStaffId(
   return s;
 }
 
+/** Replace this MIR's additional-team-members rows with the supplied
+ *  ids. Lead and sponsor are excluded automatically — they're stored
+ *  on mir_docs and surfaced separately. */
+function saveTeamMembers(
+  db: Database.Database,
+  orgId: number,
+  mirId: number,
+  leadId: string,
+  sponsorId: string,
+  memberIds: string[],
+  staffIds: Set<string>,
+) {
+  const filtered = [
+    ...new Set(
+      memberIds.filter(
+        (id) => id && id !== leadId && id !== sponsorId && staffIds.has(id),
+      ),
+    ),
+  ];
+  db.prepare(`DELETE FROM mir_team_members WHERE org_id = ? AND mir_id = ?`).run(
+    orgId,
+    mirId,
+  );
+  if (filtered.length === 0) return;
+  const insert = db.prepare(
+    `INSERT INTO mir_team_members (org_id, mir_id, person_id) VALUES (?, ?, ?)`,
+  );
+  const tx = db.transaction((ids: string[]) => {
+    for (const pid of ids) insert.run(orgId, mirId, pid);
+  });
+  tx(filtered);
+}
+
 export async function createMirAction(formData: FormData) {
   const session = await requireOrg();
   if (session.role !== "admin") throw new Error("Admin only");
@@ -42,8 +76,10 @@ export async function createMirAction(formData: FormData) {
     staffIds,
     "Sponsor",
   );
+  const memberIds = formData.getAll("memberId").map((v) => String(v));
 
-  const result = getDb()
+  const db = getDb();
+  const result = db
     .prepare(
       `INSERT INTO mir_docs
          (org_id, title, target_audience,
@@ -66,6 +102,15 @@ export async function createMirAction(formData: FormData) {
       session.user.id,
     );
   const id = Number(result.lastInsertRowid);
+  saveTeamMembers(
+    db,
+    session.orgId,
+    id,
+    leadPersonId,
+    sponsorPersonId,
+    memberIds,
+    staffIds,
+  );
 
   revalidatePath("/mir");
   redirect(`/mir/${id}`);
@@ -88,30 +133,39 @@ export async function updateMirAction(formData: FormData) {
     staffIds,
     "Sponsor",
   );
+  const memberIds = formData.getAll("memberId").map((v) => String(v));
 
-  getDb()
-    .prepare(
-      `UPDATE mir_docs SET
-         title = ?, target_audience = ?,
-         lead_person_id = ?, sponsor_person_id = ?,
-         resources = ?, activities = ?, outputs = ?,
-         outcomes = ?, impact = ?,
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ? AND org_id = ?`,
-    )
-    .run(
-      title,
-      clean(formData.get("targetAudience"), 500),
-      leadPersonId,
-      sponsorPersonId,
-      clean(formData.get("resources")),
-      clean(formData.get("activities")),
-      clean(formData.get("outputs")),
-      clean(formData.get("outcomes")),
-      clean(formData.get("impact")),
-      id,
-      session.orgId,
-    );
+  const db = getDb();
+  db.prepare(
+    `UPDATE mir_docs SET
+       title = ?, target_audience = ?,
+       lead_person_id = ?, sponsor_person_id = ?,
+       resources = ?, activities = ?, outputs = ?,
+       outcomes = ?, impact = ?,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ? AND org_id = ?`,
+  ).run(
+    title,
+    clean(formData.get("targetAudience"), 500),
+    leadPersonId,
+    sponsorPersonId,
+    clean(formData.get("resources")),
+    clean(formData.get("activities")),
+    clean(formData.get("outputs")),
+    clean(formData.get("outcomes")),
+    clean(formData.get("impact")),
+    id,
+    session.orgId,
+  );
+  saveTeamMembers(
+    db,
+    session.orgId,
+    id,
+    leadPersonId,
+    sponsorPersonId,
+    memberIds,
+    staffIds,
+  );
 
   revalidatePath("/mir");
   revalidatePath(`/mir/${id}`);
@@ -154,11 +208,6 @@ function matchPerson(
   return sub?.id ?? null;
 }
 
-/** Upload a MIR PDF: parse it, find or create the doc by title (case-
- *  insensitive), and overwrite its sections with what came out of the
- *  PDF. Lead / sponsor names are fuzzy-matched against the staff list;
- *  if either can't be found the admin will need to set it in the form
- *  before the next save can succeed. */
 export async function uploadMirPdfAction(formData: FormData) {
   const session = await requireOrg();
   if (session.role !== "admin") throw new Error("Admin only");
@@ -180,11 +229,14 @@ export async function uploadMirPdfAction(formData: FormData) {
   }
 
   const staff = listStaffOptions(session.orgId);
+  const staffIds = new Set(staff.map((s) => s.id));
   const leadPersonId = matchPerson(parsed.leadName, staff);
   const sponsorPersonId = matchPerson(parsed.sponsorName, staff);
+  const memberPersonIds = parsed.memberNames
+    .map((n) => matchPerson(n, staff))
+    .filter((id): id is string => id !== null);
 
   const db = getDb();
-  // Upsert by case-insensitive title within the org.
   const existing = db
     .prepare(
       `SELECT id FROM mir_docs
@@ -240,6 +292,18 @@ export async function uploadMirPdfAction(formData: FormData) {
         session.user.id,
       );
     id = Number(r.lastInsertRowid);
+  }
+
+  if (leadPersonId && sponsorPersonId) {
+    saveTeamMembers(
+      db,
+      session.orgId,
+      id,
+      leadPersonId,
+      sponsorPersonId,
+      memberPersonIds,
+      staffIds,
+    );
   }
 
   revalidatePath("/mir");

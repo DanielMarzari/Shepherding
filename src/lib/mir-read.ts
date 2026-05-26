@@ -18,6 +18,8 @@ export interface MirSummary {
   targetAudience: string | null;
   lead: MirPersonRef | null;
   sponsor: MirPersonRef | null;
+  /** Count of additional team members (excludes lead + sponsor). */
+  memberCount: number;
   updatedAt: string;
 }
 
@@ -27,6 +29,8 @@ export interface MirDoc extends MirSummary {
   outputs: string | null;
   outcomes: string | null;
   impact: string | null;
+  /** Additional team members; lead + sponsor are NOT included here. */
+  members: MirPersonRef[];
   authorUserId: number | null;
   createdAt: string;
 }
@@ -39,6 +43,7 @@ interface RawSummary {
   leadEncPii: string | null;
   sponsorPersonId: string | null;
   sponsorEncPii: string | null;
+  memberCount: number;
   updatedAt: string;
 }
 
@@ -60,6 +65,11 @@ export function listMirs(orgId: number): MirSummary[] {
               lp.enc_pii AS leadEncPii,
               m.sponsor_person_id AS sponsorPersonId,
               sp.enc_pii AS sponsorEncPii,
+              (SELECT COUNT(*) FROM mir_team_members tm
+                WHERE tm.org_id = m.org_id AND tm.mir_id = m.id
+                  AND tm.person_id != coalesce(m.lead_person_id, '')
+                  AND tm.person_id != coalesce(m.sponsor_person_id, '')
+              ) AS memberCount,
               m.updated_at AS updatedAt
          FROM mir_docs m
     LEFT JOIN pco_people lp
@@ -76,6 +86,7 @@ export function listMirs(orgId: number): MirSummary[] {
     targetAudience: r.targetAudience,
     lead: refFor(r.leadPersonId, r.leadEncPii),
     sponsor: refFor(r.sponsorPersonId, r.sponsorEncPii),
+    memberCount: r.memberCount ?? 0,
     updatedAt: r.updatedAt,
   }));
 }
@@ -111,17 +122,43 @@ export function getMir(orgId: number, id: number): MirDoc | null {
       })
     | undefined;
   if (!row) return null;
+
+  // Additional team members — anyone linked via mir_team_members EXCEPT
+  // the lead and sponsor (those are surfaced separately).
+  const memberRows = getDb()
+    .prepare(
+      `SELECT tm.person_id AS personId, p.enc_pii AS encPii
+         FROM mir_team_members tm
+    LEFT JOIN pco_people p
+           ON p.org_id = tm.org_id AND p.pco_id = tm.person_id
+        WHERE tm.org_id = ? AND tm.mir_id = ?
+          AND tm.person_id != coalesce(?, '')
+          AND tm.person_id != coalesce(?, '')`,
+    )
+    .all(
+      orgId,
+      id,
+      row.leadPersonId ?? "",
+      row.sponsorPersonId ?? "",
+    ) as Array<{ personId: string; encPii: string | null }>;
+  const members = memberRows
+    .map((m) => refFor(m.personId, m.encPii))
+    .filter((m): m is MirPersonRef => m !== null);
+  members.sort((a, b) => a.name.localeCompare(b.name));
+
   return {
     id: row.id,
     title: row.title,
     targetAudience: row.targetAudience,
     lead: refFor(row.leadPersonId, row.leadEncPii),
     sponsor: refFor(row.sponsorPersonId, row.sponsorEncPii),
+    memberCount: members.length,
     resources: row.resources,
     activities: row.activities,
     outputs: row.outputs,
     outcomes: row.outcomes,
     impact: row.impact,
+    members,
     authorUserId: row.authorUserId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
