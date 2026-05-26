@@ -24,23 +24,24 @@ const EDGE_WIDTH = [1.15, 0.85, 0.6];
 // Force-sim constants (world units). Repulsion is an all-pairs
 // Barnes-Hut n-body force: that long range is what lets densely linked
 // groups settle into their own clusters instead of one hairball.
-const REPULSION = 80;
-const MAX_FORCE = 60; // cap on any single Barnes-Hut cell's push.
+const REPULSION = 140;
+const MAX_FORCE = 80; // cap on any single Barnes-Hut cell's push.
 // Hard cap on how far a node can move in one tick. All-pairs repulsion
 // has unbounded total force, so without this a spike flings nodes to
 // infinity and the auto-fit zooms the graph down to nothing.
-const MAX_SPEED = 45;
+const MAX_SPEED = 50;
 const THETA2 = 0.7; // Barnes-Hut accuracy: (cellSize/dist)^2 threshold.
 const MAX_DEPTH = 22;
-const SPRING = 0.06;
-const SPRING_LEN = 22;
-// Centre gravity per node. Leadership is pulled hard to the middle so
-// the web reads as a hierarchy radiating out from the lead pastor;
-// connected people sit in the web; isolated people drift to a halo.
-const GRAVITY_LEAD = 0.13;
-const GRAVITY_TEAM = 0.07;
-const GRAVITY_CONNECTED = 0.022;
-const GRAVITY_ISOLATED = 0.006;
+const SPRING = 0.09;
+const SPRING_LEN = 32;
+// Centre gravity per node. It scales with the SQUARE ROOT of degree so
+// the most-connected hubs are pulled hardest to the middle and loosely
+// connected people sit on the outside. Leadership has a floor — they
+// sit at the core even if their personal degree happens to be low.
+const DEGREE_GRAV_BASE = 0.008;
+const DEGREE_GRAV_MULT = 0.014;
+const GRAVITY_LEAD = 0.15;
+const GRAVITY_TEAM = 0.085;
 const DAMP = 0.86;
 const ALPHA_DECAY = 0.99;
 const ALPHA_MIN = 0.02;
@@ -85,7 +86,7 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     const py = new Float32Array(n);
     const vx = new Float32Array(n);
     const vy = new Float32Array(n);
-    const spread = 14 * Math.sqrt(Math.max(1, n));
+    const spread = 18 * Math.sqrt(Math.max(1, n));
     for (let i = 0; i < n; i++) {
       px[i] = (Math.random() - 0.5) * spread;
       py[i] = (Math.random() - 0.5) * spread;
@@ -104,14 +105,15 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
     const radii = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       const c = nodes[i].cls;
-      gravity[i] =
+      const fromDegree =
+        DEGREE_GRAV_BASE + DEGREE_GRAV_MULT * Math.sqrt(degree[i]);
+      const fromCategory =
         c === "lead_pastor"
           ? GRAVITY_LEAD
           : c === "shepherd_team"
             ? GRAVITY_TEAM
-            : degree[i] > 0
-              ? GRAVITY_CONNECTED
-              : GRAVITY_ISOLATED;
+            : 0;
+      gravity[i] = Math.max(fromDegree, fromCategory);
       const bonus = c === "lead_pastor" ? 4 : c === "shepherd_team" ? 2 : 0;
       radii[i] = 2 + Math.min(7, Math.sqrt(degree[i])) + bonus;
     }
