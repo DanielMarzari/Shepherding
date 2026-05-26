@@ -1,5 +1,8 @@
 import "server-only";
-import { PDFParse } from "pdf-parse";
+
+// Loaded lazily inside parseMirPdf — pdf-parse drags pdfjs-dist with
+// it, and we don't want to evaluate either at module load (it would
+// crash plain /mir page renders if either dep had a runtime issue).
 
 /** Standard MIR section headers we look for, in lowercase. The parser
  *  matches case-insensitively and tolerates a trailing colon. */
@@ -57,6 +60,7 @@ function findRole(text: string, role: "lead" | "sponsor"): string | null {
  *  for any section that didn't match a header; the caller can fill in
  *  the gaps after. */
 export async function parseMirPdf(data: Uint8Array): Promise<ParsedMir> {
+  const { PDFParse } = await import("pdf-parse");
   const parser = new PDFParse({ data });
   let text: string;
   try {
