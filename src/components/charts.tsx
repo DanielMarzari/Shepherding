@@ -951,7 +951,11 @@ export function ScatterChart({
   }
 
   const xMax = Math.max(1, ...points.map((p) => p.x));
-  const yMax = Math.max(1, ...points.map((p) => p.y));
+  // Hard-cap a percentage axis at 100 so a stray > 100 value doesn't
+  // silently inflate the scale (and so the y-axis ticks always read
+  // 0/25/50/75/100 — what the eye expects from a "%" suffix).
+  const rawYMax = Math.max(1, ...points.map((p) => p.y));
+  const yMax = ySuffix === "%" ? 100 : rawYMax;
   const sizes = points.map((p) => p.size ?? 0);
   const sizeMax = Math.max(0, ...sizes);
 

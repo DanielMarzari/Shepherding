@@ -108,10 +108,10 @@ export interface PipelineStages {
 }
 
 export interface ServingPipelineStages {
-  /** Form submission → first time scheduled on a plan. */
-  formToSchedule: ConversionStats;
-  /** First scheduled → first actually served (status not declined). */
-  scheduleToServe: ConversionStats;
+  /** Form submission → first added to a team (PCO assignment created). */
+  formToAdded: ConversionStats;
+  /** Added to a team → first actually served (non-declined plan). */
+  addedToServe: ConversionStats;
 }
 
 // ─── Aggregation helpers ──────────────────────────────────────────
@@ -491,12 +491,13 @@ function getGroupPipelineStages(orgId: number): PipelineStages {
 }
 
 /** Two-stage timeline for the serving pipeline:
- *    form_sub  → first_scheduled  → first_actually_served
- *  Stage 1 ends when the person first appears on ANY plan_people
- *  record (any team). Stage 2 ends when the FIRST non-declined plan
- *  serve completes. Both stages are gated by the configured form id
- *  when one is set; otherwise the trigger falls back to "any form
- *  submission" same as the rollup. */
+ *    form_sub  → first_added_to_team  → first_actually_served
+ *  Stage 1 ends when the person is first added to ANY team in PCO
+ *  (pco_team_memberships.pco_created_at — sourced from PCO's
+ *  person_team_position_assignments.created_at). Stage 2 ends when
+ *  they first serve on a non-declined plan. Both stages are gated by
+ *  the configured form id when one is set; otherwise the trigger
+ *  falls back to "any form submission". */
 function getServingPipelineStages(
   orgId: number,
   servingInterestFormId: string | null,
@@ -517,41 +518,36 @@ function getServingPipelineStages(
           AND sub.pco_created_at IS NOT NULL
           AND sub.pco_created_at < base.first_at`;
 
-  // Stage 1: form sub → first scheduled (any status, including
-  // declined — being scheduled IS the "added to the rotation" event).
-  const stmtSchedule = db.prepare(
+  // Stage 1: form sub → first added to any team.
+  const stmtAdded = db.prepare(
     `WITH base AS (
-       SELECT pp.person_id, MIN(p.sort_date) AS first_at
-         FROM pco_plan_people pp
-         JOIN pco_plans p
-           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-        WHERE pp.org_id = ?
-          AND pp.person_id != ''
-          AND p.sort_date IS NOT NULL
-        GROUP BY pp.person_id
+       SELECT person_id, MIN(pco_created_at) AS first_at
+         FROM pco_team_memberships
+        WHERE org_id = ?
+          AND person_id != ''
+          AND pco_created_at IS NOT NULL
+        GROUP BY person_id
      )
      SELECT (${triggerSelect}) AS startAt, base.first_at AS endAt
        FROM base`,
   );
-  const scheduleRows = (formId
-    ? stmtSchedule.all(orgId, orgId, formId)
-    : stmtSchedule.all(orgId, orgId)) as Array<{
+  const addedRows = (formId
+    ? stmtAdded.all(orgId, orgId, formId)
+    : stmtAdded.all(orgId, orgId)) as Array<{
     startAt: string | null;
     endAt: string;
   }>;
 
-  // Stage 2: first scheduled → first actually served.
+  // Stage 2: first added to team → first actually served.
   const servedRows = db
     .prepare(
-      `WITH first_sched AS (
-         SELECT pp.person_id, MIN(p.sort_date) AS first_sched_at
-           FROM pco_plan_people pp
-           JOIN pco_plans p
-             ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-          WHERE pp.org_id = ?
-            AND pp.person_id != ''
-            AND p.sort_date IS NOT NULL
-          GROUP BY pp.person_id
+      `WITH first_added AS (
+         SELECT person_id, MIN(pco_created_at) AS first_added_at
+           FROM pco_team_memberships
+          WHERE org_id = ?
+            AND person_id != ''
+            AND pco_created_at IS NOT NULL
+          GROUP BY person_id
        ), first_served AS (
          SELECT pp.person_id, MIN(p.sort_date) AS first_served_at
            FROM pco_plan_people pp
@@ -563,17 +559,16 @@ function getServingPipelineStages(
             AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')
           GROUP BY pp.person_id
        )
-       SELECT fs.first_sched_at AS startAt,
+       SELECT fa.first_added_at AS startAt,
               srv.first_served_at AS endAt
-         FROM first_sched fs
-         JOIN first_served srv
-           ON srv.person_id = fs.person_id`,
+         FROM first_added fa
+         JOIN first_served srv ON srv.person_id = fa.person_id`,
     )
     .all(orgId, orgId) as Array<{ startAt: string; endAt: string }>;
 
   return {
-    formToSchedule: statsFor(daysBetween(scheduleRows)),
-    scheduleToServe: statsFor(daysBetween(servedRows)),
+    formToAdded: statsFor(daysBetween(addedRows)),
+    addedToServe: statsFor(daysBetween(servedRows)),
   };
 }
 
@@ -770,10 +765,11 @@ export function getGroupStagePoints(orgId: number): StagePoint[] {
   })));
 }
 
-/** Serving analog. Stage 1 = form sub → first scheduled (any status).
- *  Stage 2 = first scheduled → first non-declined plan. We bind to a
- *  configured form id when one is set; otherwise we fall back to "any
- *  form submission" so the chart isn't empty pre-config. */
+/** Serving analog. Stage 1 = form sub → first added to a team
+ *  (pco_team_memberships.pco_created_at). Stage 2 = added → first
+ *  non-declined plan they served. One row per (person, team) so per-
+ *  team patterns surface in the scatter shape — a person added to 3
+ *  teams gives 3 dots. */
 export function getServingStagePoints(
   orgId: number,
   servingInterestFormId: string | null,
@@ -785,44 +781,44 @@ export function getServingStagePoints(
          FROM pco_form_submissions sub
         WHERE sub.org_id = ? AND sub.person_id = milestones.person_id
           AND sub.pco_created_at IS NOT NULL
-          AND sub.pco_created_at < milestones.first_sched_at
+          AND sub.pco_created_at < milestones.added_at
           AND sub.form_id = ?`
     : `SELECT MAX(sub.pco_created_at)
          FROM pco_form_submissions sub
         WHERE sub.org_id = ? AND sub.person_id = milestones.person_id
           AND sub.pco_created_at IS NOT NULL
-          AND sub.pco_created_at < milestones.first_sched_at`;
+          AND sub.pco_created_at < milestones.added_at`;
 
   const stmt = db.prepare(
-    `WITH first_sched AS (
-       SELECT pp.person_id, MIN(p.sort_date) AS first_sched_at,
-              MIN(pp.team_id) AS team_id
+    `WITH first_added AS (
+       SELECT person_id, team_id, MIN(pco_created_at) AS added_at
+         FROM pco_team_memberships
+        WHERE org_id = ?
+          AND person_id != ''
+          AND pco_created_at IS NOT NULL
+        GROUP BY person_id, team_id
+     ), first_served_team AS (
+       SELECT pp.person_id, pp.team_id, MIN(p.sort_date) AS first_served_at
          FROM pco_plan_people pp
          JOIN pco_plans p
            ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
         WHERE pp.org_id = ?
           AND pp.person_id != ''
-          AND p.sort_date IS NOT NULL
-        GROUP BY pp.person_id
-     ), first_served AS (
-       SELECT pp.person_id, MIN(p.sort_date) AS first_served_at
-         FROM pco_plan_people pp
-         JOIN pco_plans p
-           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-        WHERE pp.org_id = ?
-          AND pp.person_id != ''
+          AND pp.team_id IS NOT NULL
           AND p.sort_date IS NOT NULL
           AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
-        GROUP BY pp.person_id
+        GROUP BY pp.person_id, pp.team_id
      ), milestones AS (
-       SELECT fs.person_id, fs.first_sched_at, fs.team_id,
-              srv.first_served_at
-         FROM first_sched fs
-         JOIN first_served srv ON srv.person_id = fs.person_id
+       SELECT fa.person_id, fa.team_id, fa.added_at,
+              srv.first_served_at AS served_at
+         FROM first_added fa
+         JOIN first_served_team srv
+           ON srv.person_id = fa.person_id
+          AND srv.team_id = fa.team_id
      )
      SELECT (${triggerSelect}) AS appliedAt,
-            milestones.first_sched_at AS scheduledAt,
-            milestones.first_served_at AS servedAt,
+            milestones.added_at AS addedAt,
+            milestones.served_at AS servedAt,
             t.name AS teamName
        FROM milestones
        LEFT JOIN pco_teams t
@@ -832,13 +828,13 @@ export function getServingStagePoints(
     ? stmt.all(orgId, orgId, orgId, formId, orgId)
     : stmt.all(orgId, orgId, orgId, orgId)) as Array<{
     appliedAt: string | null;
-    scheduledAt: string;
+    addedAt: string;
     servedAt: string;
     teamName: string | null;
   }>;
   return buildStagePoints(rows.map((r) => ({
     startAt: r.appliedAt,
-    midAt: r.scheduledAt,
+    midAt: r.addedAt,
     endAt: r.servedAt,
     label: r.teamName ?? "(unknown team)",
   })));
@@ -907,12 +903,18 @@ export interface EngagementSummary {
 
 const ENGAGEMENT_MIN_EVENTS = 3;
 
-/** For each person who completed the group pipeline (applied →
- *  attended in the same group), compute their post-join attendance
- *  rate within that group: events attended / events that happened in
- *  that group from their join date onward. Returns one row per
- *  (person, group) so a heavy joiner gets multiple data points if
- *  they're in multiple groups. */
+/** For each person who completed the group pipeline, compute their
+ *  post-first-attendance attendance rate within that group: the same
+ *  pco_event_attendances table provides BOTH the numerator (rows with
+ *  attended=1) and the denominator (rows total, attended or not) —
+ *  using it as both sides guarantees denom ≥ numer, so the percentage
+ *  is mathematically bounded ≤ 100% by construction.
+ *
+ *  The earlier version used pco_group_events for the denominator and
+ *  pco_event_attendances for the numerator; if PCO had recorded
+ *  attendance for an event we hadn't synced into pco_group_events,
+ *  attendedN could exceed eventsAvailable and the calculation went
+ *  above 100% (this is what produced the "112%" cases). */
 export function getGroupConverterEngagement(
   orgId: number,
 ): EngagementSummary {
@@ -929,9 +931,7 @@ export function getGroupConverterEngagement(
           GROUP BY person_id, group_id
        ), first_att AS (
          SELECT person_id, group_id,
-                MIN(event_starts_at) AS first_att_at,
-                MAX(event_starts_at) AS last_att_at,
-                SUM(CASE WHEN attended = 1 THEN 1 ELSE 0 END) AS attended_n
+                MIN(event_starts_at) AS first_att_at
            FROM pco_event_attendances
           WHERE org_id = ?
             AND group_id IS NOT NULL
@@ -942,26 +942,40 @@ export function getGroupConverterEngagement(
        SELECT fa.person_id, fa.group_id,
               fa.first_app_at AS appliedAt,
               fatt.first_att_at AS firstAttAt,
-              fatt.last_att_at AS lastAttAt,
-              fatt.attended_n AS attendedN,
-              (SELECT COUNT(*) FROM pco_group_events ge
-                 WHERE ge.org_id = ?
-                   AND ge.group_id = fa.group_id
-                   AND ge.starts_at IS NOT NULL
-                   AND ge.starts_at >= fatt.first_att_at) AS eventsAvailable
+              -- Numerator: how many of this person's attendance rows
+              --   in this group, from their first attendance onward,
+              --   actually recorded attended=1.
+              (SELECT COUNT(*) FROM pco_event_attendances a
+                 WHERE a.org_id = ? AND a.person_id = fa.person_id
+                   AND a.group_id = fa.group_id
+                   AND a.attended = 1
+                   AND a.event_starts_at IS NOT NULL
+                   AND a.event_starts_at >= fatt.first_att_at) AS attendedN,
+              -- Denominator: total attendance rows in the same window
+              --   (attended or not). Always ≥ attendedN by construction.
+              (SELECT COUNT(*) FROM pco_event_attendances a
+                 WHERE a.org_id = ? AND a.person_id = fa.person_id
+                   AND a.group_id = fa.group_id
+                   AND a.event_starts_at IS NOT NULL
+                   AND a.event_starts_at >= fatt.first_att_at) AS recordedN,
+              -- Lifespan: their last attended event in this group.
+              (SELECT MAX(a.event_starts_at) FROM pco_event_attendances a
+                 WHERE a.org_id = ? AND a.person_id = fa.person_id
+                   AND a.group_id = fa.group_id
+                   AND a.attended = 1) AS lastAttAt
          FROM first_app fa
          JOIN first_att fatt
            ON fatt.person_id = fa.person_id
           AND fatt.group_id = fa.group_id`,
     )
-    .all(orgId, orgId, orgId) as Array<{
+    .all(orgId, orgId, orgId, orgId, orgId) as Array<{
     person_id: string;
     group_id: string;
     appliedAt: string;
     firstAttAt: string;
     lastAttAt: string;
     attendedN: number;
-    eventsAvailable: number;
+    recordedN: number;
   }>;
 
   const points: ConverterEngagement[] = [];
@@ -972,16 +986,19 @@ export function getGroupConverterEngagement(
     if (!Number.isFinite(days) || days < 0 || days > PIPELINE_WINDOW_DAYS) {
       continue;
     }
-    const denom = Math.max(r.eventsAvailable, r.attendedN);
-    if (denom < ENGAGEMENT_MIN_EVENTS) continue;
+    // recordedN is guaranteed ≥ attendedN since attendedN is a strict
+    // subset of the same query universe. Min event floor stays so we
+    // don't render meaningless dots from a single data point.
+    if (r.recordedN < ENGAGEMENT_MIN_EVENTS) continue;
+    const ratio = r.attendedN / r.recordedN;
     const lifespan =
       (new Date(r.lastAttAt).getTime() - new Date(r.firstAttAt).getTime()) /
       MS_PER_DAY;
     points.push({
       daysToConvert: days,
-      attendancePct: Math.min(100, Math.round((r.attendedN / denom) * 100)),
+      attendancePct: Math.min(100, Math.max(0, Math.round(ratio * 100))),
       lifespanDays: Math.max(0, Math.round(lifespan)),
-      eventsAvailable: denom,
+      eventsAvailable: r.recordedN,
     });
   }
   return { points, correlation: pearson(points) };

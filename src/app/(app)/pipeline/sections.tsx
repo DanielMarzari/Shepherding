@@ -624,15 +624,15 @@ export async function ServingPipelineSection({
 
       <StagesBoxChart
         title="Serving pipeline · stage spread"
-        subtitle="Where the time actually goes: form-to-scheduled (admin lag, getting them on a plan) vs. scheduled-to-first-served (show-up gap, declined plans, etc.). Each stage's full distribution side-by-side."
-        stageLabels={["Form → Scheduled", "Scheduled → First served"]}
-        stages={[data.stages.formToSchedule, data.stages.scheduleToServe]}
+        subtitle="Where the time actually goes: form → added to a team (admin lag — getting them onto the team roster in PCO) vs. added → first served (show-up gap, declined plans). Each stage's full distribution side-by-side."
+        stageLabels={["Form → Added to team", "Added to team → First served"]}
+        stages={[data.stages.formToAdded, data.stages.addedToServe]}
       />
       <StagesScatterCard
         title="Serving pipeline · per-person stages"
-        subtitle="All three milestones (form, first scheduled, first served) plotted together."
-        xLabel="Form → Scheduled (days)"
-        yLabel="Scheduled → First served (days)"
+        subtitle="All three milestones (form, added to team, first served) plotted together."
+        xLabel="Form → Added to team (days)"
+        yLabel="Added to team → First served (days)"
         points={stagePoints}
       />
       <BreakdownTable

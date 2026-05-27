@@ -19,6 +19,7 @@ import {
   ShepherdingOverviewSkeleton,
   TeamAttendanceSection,
 } from "./sections";
+import { PersonTimeline, PersonTimelineSkeleton } from "./timeline";
 
 const TONE: Record<ActivityClassification, "good" | "accent" | "warn" | "muted"> = {
   active: "good",
@@ -48,7 +49,7 @@ export default async function PersonProfilePage({
 
   return (
     <AppShell active="People" breadcrumb={`People › ${person.fullName}`}>
-      <div className="px-5 md:px-7 py-7 space-y-6 max-w-5xl">
+      <div className="px-5 md:px-7 py-7 max-w-7xl space-y-6">
         <div>
           <BackLink fallback="/people">← Back</BackLink>
         </div>
@@ -95,69 +96,81 @@ export default async function PersonProfilePage({
           </a>
         </div>
 
-        {/* Shepherding overview — flock, stat strip, who-shepherds. */}
-        <Suspense fallback={<ShepherdingOverviewSkeleton />}>
-          <ShepherdingOverview orgId={orgId} slug={slug} firstName={firstName} />
-        </Suspense>
+        {/* Main content + right-side activity timeline. On narrow
+            screens the timeline drops below the main content. */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
+          <div className="space-y-6 min-w-0">
+            {/* Shepherding overview — flock, stat strip, who-shepherds. */}
+            <Suspense fallback={<ShepherdingOverviewSkeleton />}>
+              <ShepherdingOverview orgId={orgId} slug={slug} firstName={firstName} />
+            </Suspense>
 
-        {/* Why this classification? */}
-        <Suspense fallback={<SectionSkeleton title="classification" lines={4} />}>
-          <ClassificationSection
-            orgId={orgId}
-            slug={slug}
-            classification={person.classification}
-            months={settings.activityMonths}
-          />
-        </Suspense>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-          <Card className="p-5 lg:col-span-2">
-            <h2 className="text-sm font-semibold mb-3">Personal details</h2>
-            <dl>
-              <Row label="Full name" value={person.fullName} />
-              <Row label="PCO ID" value={person.pcoId} />
-              <Row label="Membership" value={person.membershipType} />
-              <Row label="Status (computed)" value={person.classification} />
-              <Row label="Gender" value={person.gender} />
-              <Row label="Birthdate" value={person.birthdate} />
-              <Row label="Marital status" value={person.maritalStatus} />
-              <Row label="Address" value={person.address} />
-              <Row label="In PCO since" value={fmtDate(person.pcoCreatedAt)} />
-              <Row
-                label="PCO record updated"
-                value={fmtDate(person.pcoUpdatedAt)}
+            {/* Why this classification? */}
+            <Suspense fallback={<SectionSkeleton title="classification" lines={4} />}>
+              <ClassificationSection
+                orgId={orgId}
+                slug={slug}
+                classification={person.classification}
+                months={settings.activityMonths}
               />
-              <Row
-                label="Last form submission"
-                value={fmtDate(person.lastFormSubmissionAt)}
-              />
-            </dl>
-            <p className="mt-5 pt-4 border-t border-border-soft text-xs text-muted">
-              Name, birthdate, and address are stored encrypted at rest.
-              Decrypted only to render this page.
-            </p>
-          </Card>
+            </Suspense>
 
-          <Suspense fallback={<SectionSkeleton title="form activity" />}>
-            <FormActivitySection orgId={orgId} slug={slug} />
-          </Suspense>
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+              <Card className="p-5 xl:col-span-2">
+                <h2 className="text-sm font-semibold mb-3">Personal details</h2>
+                <dl>
+                  <Row label="Full name" value={person.fullName} />
+                  <Row label="PCO ID" value={person.pcoId} />
+                  <Row label="Membership" value={person.membershipType} />
+                  <Row label="Status (computed)" value={person.classification} />
+                  <Row label="Gender" value={person.gender} />
+                  <Row label="Birthdate" value={person.birthdate} />
+                  <Row label="Marital status" value={person.maritalStatus} />
+                  <Row label="Address" value={person.address} />
+                  <Row label="In PCO since" value={fmtDate(person.pcoCreatedAt)} />
+                  <Row
+                    label="PCO record updated"
+                    value={fmtDate(person.pcoUpdatedAt)}
+                  />
+                  <Row
+                    label="Last form submission"
+                    value={fmtDate(person.lastFormSubmissionAt)}
+                  />
+                </dl>
+                <p className="mt-5 pt-4 border-t border-border-soft text-xs text-muted">
+                  Name, birthdate, and address are stored encrypted at rest.
+                  Decrypted only to render this page.
+                </p>
+              </Card>
+
+              <Suspense fallback={<SectionSkeleton title="form activity" />}>
+                <FormActivitySection orgId={orgId} slug={slug} />
+              </Suspense>
+            </div>
+
+            <Suspense fallback={<SectionSkeleton title="group attendance" />}>
+              <GroupAttendanceSection orgId={orgId} slug={slug} />
+            </Suspense>
+
+            <Suspense fallback={<SectionSkeleton title="team attendance" />}>
+              <TeamAttendanceSection
+                orgId={orgId}
+                slug={slug}
+                months={settings.activityTrackingMonths}
+              />
+            </Suspense>
+
+            <Suspense fallback={<SectionSkeleton title="check-ins" />}>
+              <CheckinsSection orgId={orgId} slug={slug} />
+            </Suspense>
+          </div>
+
+          <aside className="lg:sticky lg:top-4">
+            <Suspense fallback={<PersonTimelineSkeleton />}>
+              <PersonTimeline orgId={orgId} slug={slug} />
+            </Suspense>
+          </aside>
         </div>
-
-        <Suspense fallback={<SectionSkeleton title="group attendance" />}>
-          <GroupAttendanceSection orgId={orgId} slug={slug} />
-        </Suspense>
-
-        <Suspense fallback={<SectionSkeleton title="team attendance" />}>
-          <TeamAttendanceSection
-            orgId={orgId}
-            slug={slug}
-            months={settings.activityTrackingMonths}
-          />
-        </Suspense>
-
-        <Suspense fallback={<SectionSkeleton title="check-ins" />}>
-          <CheckinsSection orgId={orgId} slug={slug} />
-        </Suspense>
       </div>
     </AppShell>
   );

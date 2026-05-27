@@ -100,8 +100,8 @@ export async function syncServicesAll(
       const stmt = getDb().prepare(
         `INSERT INTO pco_team_memberships
           (org_id, pco_id, team_id, person_id, position_id, position_name,
-           is_team_leader, archived_at, synced_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+           is_team_leader, archived_at, pco_created_at, synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
          ON CONFLICT(org_id, pco_id) DO UPDATE SET
            team_id = excluded.team_id,
            person_id = excluded.person_id,
@@ -109,6 +109,7 @@ export async function syncServicesAll(
            position_name = excluded.position_name,
            is_team_leader = excluded.is_team_leader,
            archived_at = excluded.archived_at,
+           pco_created_at = excluded.pco_created_at,
            synced_at = excluded.synced_at`,
       );
       for (const r of rows) {
@@ -121,6 +122,7 @@ export async function syncServicesAll(
           r.positionName,
           r.isTeamLeader,
           r.archivedAt,
+          r.pcoCreatedAt,
         );
       }
     },
@@ -344,6 +346,7 @@ function toTeamMembershipRow(teamId: string, m: PCOResource) {
     positionName: (a.position_name as string | undefined) ?? null,
     isTeamLeader: 0 as 0 | 1,
     archivedAt: (a.archived_at as string | undefined) ?? null,
+    pcoCreatedAt: (a.created_at as string | undefined) ?? null,
   };
 }
 
