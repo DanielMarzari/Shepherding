@@ -3,6 +3,21 @@ import "server-only";
 // Loaded lazily inside the parser — pdf-parse drags pdfjs-dist with
 // it, and we don't want to evaluate either at module load.
 
+/** pdfjs-dist (the engine under pdf-parse) needs DOMMatrix / DOMPoint /
+ *  DOMRect, which Node doesn't provide. Shim them with the tiny
+ *  `geometry-polyfill` package, which writes to `window`. We alias
+ *  window to globalThis first so those assignments stick. */
+async function ensurePdfPolyfills(): Promise<void> {
+  const g = globalThis as unknown as {
+    DOMMatrix?: unknown;
+    window?: unknown;
+  };
+  if (typeof g.DOMMatrix !== "undefined") return;
+  if (typeof g.window === "undefined") g.window = globalThis;
+  // @ts-expect-error — geometry-polyfill ships no type declarations.
+  await import("geometry-polyfill");
+}
+
 /** Standard MIR section headers we look for, in lowercase. The parser
  *  matches case-insensitively and tolerates a trailing colon. Real-world
  *  templates use "IMPACT" or "IMPACT STATEMENT"; both end up here. */
@@ -205,6 +220,7 @@ function parseOnePage(pageText: string): ParsedMir | null {
  *  skipped. Throws a clear error when the PDF carries no extractable
  *  text at all (Canva-style outlined export, scanned image, etc.). */
 export async function parseMirPdf(data: Uint8Array): Promise<ParsedMir[]> {
+  await ensurePdfPolyfills();
   const { PDFParse } = await import("pdf-parse");
   const parser = new PDFParse({ data });
   let pages: Array<{ num: number; text: string }>;
