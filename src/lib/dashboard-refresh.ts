@@ -5,35 +5,195 @@ import { getSyncSettings } from "./pco";
 const MS_PER_DAY = 86_400_000;
 const MS_PER_MONTH = 30 * MS_PER_DAY;
 
+/** Progress callback invoked between each refresh phase. Called with
+ *  the 1-indexed step number, total step count, and a human-readable
+ *  label for the step that JUST finished (so a value of step=2 means
+ *  steps 1 and 2 are done). */
+export type RefreshProgressCallback = (
+  step: number,
+  total: number,
+  label: string,
+) => void;
+
+const REFRESH_PHASES: Array<{
+  label: string;
+  run: (
+    orgId: number,
+    ctx: { cutoffActivity: string; cutoff30: string; activityMonths: number },
+  ) => void;
+}> = [
+  {
+    label: "Computing per-person activity rollup",
+    run: (orgId, ctx) => rebuildPersonActivity(orgId, ctx.cutoffActivity),
+  },
+  {
+    label: "Classifying people",
+    run: (orgId, ctx) => classifyPersonActivity(orgId, ctx.cutoffActivity),
+  },
+  {
+    label: "Summarizing groups",
+    run: (orgId, ctx) =>
+      rebuildGroupSummary(orgId, ctx.activityMonths, ctx.cutoff30),
+  },
+  {
+    label: "Aggregating org totals",
+    run: (orgId, ctx) => rebuildOrgSnapshot(orgId, ctx.activityMonths),
+  },
+];
+
+export const REFRESH_TOTAL_STEPS = REFRESH_PHASES.length;
+
 /** Rebuild every dashboard / lanes / home summary table for an org
- *  from scratch. Runs in a single transaction so readers never see a
- *  half-rebuilt set of snapshots. Cheap to call (single-digit seconds
- *  even on multi-thousand-person orgs) — designed to run after every
- *  PCO sync, and on demand from the admin "refresh stats" button.
+ *  from scratch. Each phase commits independently so a progress
+ *  callback between phases can write status that other DB readers
+ *  can actually see (a single wrapping transaction would hide all
+ *  progress writes until the very end).
  *
- *  The whole thing is one transaction because the snapshots are
- *  derived data; if any step fails we'd rather show yesterday's
- *  numbers than a Frankenstein of half-old half-new rows. */
-export function refreshDashboardSnapshots(orgId: number): void {
+ *  This sacrifices cross-phase atomicity — a crash mid-refresh
+ *  leaves the snapshot half-old half-new — in exchange for a
+ *  usable progress bar. Acceptable because the data is derived;
+ *  re-running fixes it. */
+export function refreshDashboardSnapshots(
+  orgId: number,
+  onProgress?: RefreshProgressCallback,
+): void {
   const db = getDb();
   const settings = getSyncSettings(orgId);
   const activityMonths = settings.activityMonths;
-  const cutoffActivity = new Date(
-    Date.now() - activityMonths * MS_PER_MONTH,
-  ).toISOString();
-  const cutoff30 = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
+  const ctx = {
+    cutoffActivity: new Date(
+      Date.now() - activityMonths * MS_PER_MONTH,
+    ).toISOString(),
+    cutoff30: new Date(Date.now() - 30 * MS_PER_DAY).toISOString(),
+    activityMonths,
+  };
+  for (let i = 0; i < REFRESH_PHASES.length; i++) {
+    const phase = REFRESH_PHASES[i];
+    db.transaction(() => phase.run(orgId, ctx))();
+    onProgress?.(i + 1, REFRESH_PHASES.length, phase.label);
+  }
+}
 
-  db.transaction(() => {
-    rebuildPersonActivity(orgId, cutoffActivity, activityMonths);
-    rebuildGroupSummary(orgId, activityMonths, cutoff30);
-    rebuildOrgSnapshot(orgId, activityMonths);
+// ─── Background-run tracking (for the progress-bar UI) ───────────
+
+export interface RefreshRunStatus {
+  id: number;
+  startedAt: string;
+  finishedAt: string | null;
+  status: "running" | "ok" | "error";
+  currentStep: number;
+  totalSteps: number;
+  stepLabel: string | null;
+  error: string | null;
+  /** Wall-clock ms elapsed so far. Useful for the "1.4s" tail label. */
+  elapsedMs: number;
+}
+
+/** Module-level promise set: keeps the in-flight refresh promise
+ *  alive across server-action ticks so V8 doesn't GC it. The DB row
+ *  is the source of truth for clients polling status. */
+const inFlightRefreshes = new Set<Promise<unknown>>();
+
+export function createRefreshRun(orgId: number): number {
+  const result = getDb()
+    .prepare(
+      `INSERT INTO dashboard_refresh_runs
+         (org_id, status, current_step, total_steps, step_label)
+       VALUES (?, 'running', 0, ?, ?)`,
+    )
+    .run(orgId, REFRESH_TOTAL_STEPS, "Starting…");
+  return Number(result.lastInsertRowid);
+}
+
+function updateRefreshProgress(
+  runId: number,
+  step: number,
+  label: string,
+): void {
+  getDb()
+    .prepare(
+      `UPDATE dashboard_refresh_runs
+          SET current_step = ?, step_label = ?
+        WHERE id = ?`,
+    )
+    .run(step, label, runId);
+}
+
+function finishRefreshRun(
+  runId: number,
+  status: "ok" | "error",
+  error: string | null,
+): void {
+  getDb()
+    .prepare(
+      `UPDATE dashboard_refresh_runs
+          SET status = ?, error = ?,
+              finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?`,
+    )
+    .run(status, error, runId);
+}
+
+/** Fire-and-forget a refresh, return the run id immediately. The
+ *  client polls status via getRefreshRunStatus. */
+export function startRefreshInBackground(orgId: number): number {
+  const runId = createRefreshRun(orgId);
+  const promise = (async () => {
+    try {
+      refreshDashboardSnapshots(orgId, (step, _total, label) => {
+        updateRefreshProgress(runId, step, label);
+      });
+      finishRefreshRun(runId, "ok", null);
+    } catch (e) {
+      finishRefreshRun(runId, "error", e instanceof Error ? e.message : String(e));
+    }
   })();
+  inFlightRefreshes.add(promise);
+  promise.finally(() => inFlightRefreshes.delete(promise));
+  return runId;
+}
+
+export function getRefreshRunStatus(runId: number): RefreshRunStatus | null {
+  const row = getDb()
+    .prepare(
+      `SELECT id, started_at, finished_at, status, current_step,
+              total_steps, step_label, error
+         FROM dashboard_refresh_runs
+        WHERE id = ?`,
+    )
+    .get(runId) as
+    | {
+        id: number;
+        started_at: string;
+        finished_at: string | null;
+        status: "running" | "ok" | "error";
+        current_step: number;
+        total_steps: number;
+        step_label: string | null;
+        error: string | null;
+      }
+    | undefined;
+  if (!row) return null;
+  const startedMs = new Date(row.started_at).getTime();
+  const endMs = row.finished_at
+    ? new Date(row.finished_at).getTime()
+    : Date.now();
+  return {
+    id: row.id,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    status: row.status,
+    currentStep: row.current_step,
+    totalSteps: row.total_steps,
+    stepLabel: row.step_label,
+    error: row.error,
+    elapsedMs: Math.max(0, endMs - startedMs),
+  };
 }
 
 function rebuildPersonActivity(
   orgId: number,
   cutoffActivity: string,
-  activityMonths: number,
 ): void {
   const db = getDb();
   // Wipe + repopulate. Cheaper than a per-row UPSERT pass when the
@@ -146,12 +306,14 @@ function rebuildPersonActivity(
     orgId,
   );
 
-  // Second pass: derive classification using the same priority rule
-  // as people-read.ts (shepherded > active > present > inactive).
-  // "Active" only looks at form submission + check-in, NOT plan-served
-  // or group-attendance — kept that way so the headline numbers match
-  // the Metrics page exactly. (Attendance / serving still appear in
-  // last_activity_at for the "Falling through the cracks" sort.)
+}
+
+/** Second pass on person_activity that fills in the classification
+ *  using the same priority rule as people-read.ts (shepherded >
+ *  active > present > inactive). Kept separate from the insert so
+ *  the refresh progress bar can report it as its own step. */
+function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
+  const db = getDb();
   db.prepare(
     `UPDATE person_activity
         SET classification = CASE
@@ -166,14 +328,7 @@ function rebuildPersonActivity(
             END,
             refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE org_id = ?`,
-  ).run(
-    cutoffActivity,
-    cutoffActivity,
-    cutoffActivity,
-    orgId,
-  );
-
-  void activityMonths;
+  ).run(cutoffActivity, cutoffActivity, cutoffActivity, orgId);
 }
 
 function rebuildGroupSummary(
