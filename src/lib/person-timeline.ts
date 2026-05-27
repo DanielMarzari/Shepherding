@@ -24,14 +24,17 @@ export interface TimelineEvent {
  *  milestones from PCO record creation onward. Returns NEWEST first
  *  so the UI shows the latest activity above the fold without paging.
  *
- *  Per-event attendance rows would dominate the list (hundreds of
- *  Sundays) — we instead collapse them into a "first attended" /
- *  "last attended" pair per group, with an N-times count between. */
+ *  Every individual attendance and plan-served row gets its own entry
+ *  (no first/last collapsing) so the user can see the actual cadence.
+ *  Future-dated rows are filtered out — PCO sometimes carries plans
+ *  scheduled out a year or more, which would otherwise show as 2030
+ *  events on a 2026 timeline. */
 export function getPersonTimeline(
   orgId: number,
   personId: string,
 ): TimelineEvent[] {
   const db = getDb();
+  const nowIso = new Date().toISOString();
   const events: TimelineEvent[] = [];
 
   // ─── Personal: record creation ──────────────────────────────────
@@ -110,14 +113,10 @@ export function getPersonTimeline(
     }
   }
 
-  // ─── Community: attendance clusters (one summary row per group) ─
+  // ─── Community: every attended group event ──────────────────────
   for (const r of db
     .prepare(
-      `SELECT a.group_id AS groupId,
-              g.name AS groupName,
-              MIN(a.event_starts_at) AS firstAt,
-              MAX(a.event_starts_at) AS lastAt,
-              COUNT(*) AS attendedN
+      `SELECT a.event_starts_at AS at, g.name AS groupName
          FROM pco_event_attendances a
          LEFT JOIN pco_groups g
            ON g.org_id = a.org_id AND g.pco_id = a.group_id
@@ -125,32 +124,18 @@ export function getPersonTimeline(
           AND a.attended = 1
           AND a.event_starts_at IS NOT NULL
           AND a.group_id IS NOT NULL
-        GROUP BY a.group_id`,
+          AND a.event_starts_at <= ?`,
     )
-    .all(orgId, personId) as Array<{
-    groupId: string;
+    .all(orgId, personId, nowIso) as Array<{
+    at: string;
     groupName: string | null;
-    firstAt: string;
-    lastAt: string;
-    attendedN: number;
   }>) {
     events.push({
-      at: r.firstAt,
+      at: r.at,
       category: "community",
-      title: "First attended a group event",
+      title: "Attended a group event",
       detail: r.groupName ?? "(unknown group)",
     });
-    if (r.attendedN > 1 && r.lastAt !== r.firstAt) {
-      events.push({
-        at: r.lastAt,
-        category: "community",
-        title:
-          r.attendedN > 2
-            ? `Most recent of ${r.attendedN} events attended`
-            : "Most recent event attended",
-        detail: r.groupName ?? "(unknown group)",
-      });
-    }
   }
 
   // ─── Serving: team memberships (added / archived) ───────────────
@@ -187,14 +172,10 @@ export function getPersonTimeline(
     }
   }
 
-  // ─── Serving: plan service clusters (first / last / count per team)
+  // ─── Serving: every non-declined plan they were on (one per plan) ─
   for (const r of db
     .prepare(
-      `SELECT pp.team_id AS teamId,
-              t.name AS teamName,
-              MIN(p.sort_date) AS firstAt,
-              MAX(p.sort_date) AS lastAt,
-              COUNT(*) AS servedN
+      `SELECT p.sort_date AS at, t.name AS teamName
          FROM pco_plan_people pp
          JOIN pco_plans p
            ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
@@ -204,32 +185,18 @@ export function getPersonTimeline(
           AND p.sort_date IS NOT NULL
           AND pp.team_id IS NOT NULL
           AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
-        GROUP BY pp.team_id`,
+          AND p.sort_date <= ?`,
     )
-    .all(orgId, personId) as Array<{
-    teamId: string;
+    .all(orgId, personId, nowIso) as Array<{
+    at: string;
     teamName: string | null;
-    firstAt: string;
-    lastAt: string;
-    servedN: number;
   }>) {
     events.push({
-      at: r.firstAt,
+      at: r.at,
       category: "serving",
-      title: "First served on a plan",
+      title: "Served on a plan",
       detail: r.teamName ?? "(unknown team)",
     });
-    if (r.servedN > 1 && r.lastAt !== r.firstAt) {
-      events.push({
-        at: r.lastAt,
-        category: "serving",
-        title:
-          r.servedN > 2
-            ? `Most recent of ${r.servedN} plans served`
-            : "Most recent plan served",
-        detail: r.teamName ?? "(unknown team)",
-      });
-    }
   }
 
   // ─── Forms: submissions ─────────────────────────────────────────
@@ -254,6 +221,11 @@ export function getPersonTimeline(
     });
   }
 
-  events.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
-  return events;
+  // Final safety: drop any event whose timestamp is after "now". The
+  // per-query WHERE clauses above already gate the noisy ones (group
+  // attendances, plan serves), but a stray future joined_at or form
+  // sub from a bad PCO record would still slip through without this.
+  const filtered = events.filter((e) => e.at <= nowIso);
+  filtered.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  return filtered;
 }
