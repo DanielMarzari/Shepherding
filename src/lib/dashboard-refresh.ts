@@ -74,37 +74,47 @@ export function refreshDashboardSnapshots(
   }
 }
 
-/** Same work as refreshDashboardSnapshots but yields to the event loop
- *  AFTER each phase commits. That release is critical for the
- *  background-refresh + progress-polling pattern: better-sqlite3 is
- *  synchronous, so without an `await` between phases the entire
- *  rebuild blocks the Node worker — meaning polling requests queue
- *  up behind the work and the client only sees status updates after
- *  EVERYTHING has finished, defeating the progress bar. */
+const yieldTick = () =>
+  new Promise<void>((resolve) => setImmediate(resolve));
+
+/** Same work as refreshDashboardSnapshots but yields to the event
+ *  loop between phases AND inside the slow phases. Critical because
+ *  better-sqlite3 is synchronous + we only have one DB connection +
+ *  Node is single-threaded: any sync work blocks every other HTTP
+ *  request to this worker, including page renders for the home page.
+ *
+ *  The async-aware versions of each phase (rebuildPersonActivityAsync,
+ *  rebuildGroupSummaryAsync) yield after every individual statement
+ *  rather than wrapping the phase in one big transaction, so other
+ *  requests interleave between statements and the server stays
+ *  responsive throughout the refresh. Inconsistent intermediate
+ *  states (e.g. between DELETE and INSERT on person_activity) are
+ *  bounded — see the staging-table dance inside each phase. */
 export async function refreshDashboardSnapshotsAsync(
   orgId: number,
   onProgress?: RefreshProgressCallback,
 ): Promise<void> {
-  const db = getDb();
   const settings = getSyncSettings(orgId);
   const activityMonths = settings.activityMonths;
-  const ctx = {
-    cutoffActivity: new Date(
-      Date.now() - activityMonths * MS_PER_MONTH,
-    ).toISOString(),
-    cutoff30: new Date(Date.now() - 30 * MS_PER_DAY).toISOString(),
-    activityMonths,
-  };
-  for (let i = 0; i < REFRESH_PHASES.length; i++) {
-    const phase = REFRESH_PHASES[i];
-    db.transaction(() => phase.run(orgId, ctx))();
-    onProgress?.(i + 1, REFRESH_PHASES.length, phase.label);
-    // Yield. setImmediate clears the queue of pending I/O including
-    // polling requests, so the freshly-committed progress row gets
-    // a chance to be read before we hog the worker for the next
-    // phase.
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
+  const cutoffActivity = new Date(
+    Date.now() - activityMonths * MS_PER_MONTH,
+  ).toISOString();
+  const cutoff30 = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
+
+  await rebuildPersonActivityAsync(orgId, cutoffActivity);
+  onProgress?.(1, REFRESH_TOTAL_STEPS, REFRESH_PHASES[0].label);
+  await yieldTick();
+
+  classifyPersonActivity(orgId, cutoffActivity);
+  onProgress?.(2, REFRESH_TOTAL_STEPS, REFRESH_PHASES[1].label);
+  await yieldTick();
+
+  await rebuildGroupSummaryAsync(orgId, activityMonths, cutoff30);
+  onProgress?.(3, REFRESH_TOTAL_STEPS, REFRESH_PHASES[2].label);
+  await yieldTick();
+
+  rebuildOrgSnapshot(orgId, activityMonths);
+  onProgress?.(4, REFRESH_TOTAL_STEPS, REFRESH_PHASES[3].label);
 }
 
 // ─── Background-run tracking (for the progress-bar UI) ───────────
@@ -320,6 +330,287 @@ export function getRefreshRunStatus(runId: number): RefreshRunStatus | null {
     error: row.error,
     elapsedMs: Math.max(0, endMs - startedMs),
   };
+}
+
+/** Async variant of rebuildPersonActivity that yields the Node event
+ *  loop after every individual statement, so this rebuild — which
+ *  used to take long enough to wedge the entire server — interleaves
+ *  with normal page-render requests. The actual SQL is the same as
+ *  the sync version below; only the choreography differs. */
+async function rebuildPersonActivityAsync(
+  orgId: number,
+  cutoffActivity: string,
+): Promise<void> {
+  const db = getDb();
+  const nowIso = new Date().toISOString();
+
+  const drop = () =>
+    db.exec(`
+      DROP TABLE IF EXISTS _pa_max_att;
+      DROP TABLE IF EXISTS _pa_max_serve;
+      DROP TABLE IF EXISTS _pa_grp_count;
+      DROP TABLE IF EXISTS _pa_team_count;
+      DROP TABLE IF EXISTS _pa_first_comm;
+      DROP TABLE IF EXISTS _pa_first_serv;
+      DROP TABLE IF EXISTS _pa_wors_grp;
+      DROP TABLE IF EXISTS _pa_wors_plan;
+      DROP TABLE IF EXISTS _pa_new;
+    `);
+  drop();
+  await yieldTick();
+
+  db.prepare(
+    `CREATE TEMP TABLE _pa_max_att AS
+       SELECT person_id, MAX(event_starts_at) AS last_at
+         FROM pco_event_attendances
+        WHERE org_id = ? AND attended = 1
+          AND event_starts_at IS NOT NULL AND event_starts_at <= ?
+        GROUP BY person_id`,
+  ).run(orgId, nowIso);
+  db.exec(`CREATE INDEX _pa_max_att_pid ON _pa_max_att(person_id);`);
+  await yieldTick();
+
+  db.prepare(
+    `CREATE TEMP TABLE _pa_max_serve AS
+       SELECT pp.person_id, MAX(pl.sort_date) AS last_at
+         FROM pco_plan_people pp
+         JOIN pco_plans pl
+           ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+        WHERE pp.org_id = ?
+          AND pp.person_id != ''
+          AND pl.sort_date IS NOT NULL AND pl.sort_date <= ?
+          AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
+        GROUP BY pp.person_id`,
+  ).run(orgId, nowIso);
+  db.exec(`CREATE INDEX _pa_max_serve_pid ON _pa_max_serve(person_id);`);
+  await yieldTick();
+
+  db.prepare(
+    `CREATE TEMP TABLE _pa_grp_count AS
+       SELECT person_id, COUNT(*) AS n
+         FROM pco_group_memberships
+        WHERE org_id = ? AND archived_at IS NULL
+        GROUP BY person_id`,
+  ).run(orgId);
+  db.exec(`CREATE INDEX _pa_grp_count_pid ON _pa_grp_count(person_id);`);
+  await yieldTick();
+
+  db.prepare(
+    `CREATE TEMP TABLE _pa_team_count AS
+       SELECT person_id, COUNT(*) AS n
+         FROM pco_team_memberships
+        WHERE org_id = ? AND archived_at IS NULL AND person_id != ''
+        GROUP BY person_id`,
+  ).run(orgId);
+  db.exec(`CREATE INDEX _pa_team_count_pid ON _pa_team_count(person_id);`);
+  await yieldTick();
+
+  db.prepare(
+    `CREATE TEMP TABLE _pa_first_comm AS
+       SELECT person_id, MIN(joined_at) AS at
+         FROM pco_group_memberships
+        WHERE org_id = ? AND joined_at IS NOT NULL AND joined_at <= ?
+        GROUP BY person_id`,
+  ).run(orgId, nowIso);
+  db.exec(`CREATE INDEX _pa_first_comm_pid ON _pa_first_comm(person_id);`);
+  await yieldTick();
+
+  db.prepare(
+    `CREATE TEMP TABLE _pa_first_serv AS
+       SELECT person_id, MIN(pco_created_at) AS at
+         FROM pco_team_memberships
+        WHERE org_id = ?
+          AND person_id != ''
+          AND pco_created_at IS NOT NULL AND pco_created_at <= ?
+        GROUP BY person_id`,
+  ).run(orgId, nowIso);
+  db.exec(`CREATE INDEX _pa_first_serv_pid ON _pa_first_serv(person_id);`);
+  await yieldTick();
+
+  db.prepare(
+    `CREATE TEMP TABLE _pa_wors_grp AS
+       SELECT DISTINCT person_id FROM pco_event_attendances
+        WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?`,
+  ).run(orgId, cutoffActivity);
+  db.exec(`CREATE UNIQUE INDEX _pa_wors_grp_pid ON _pa_wors_grp(person_id);`);
+  await yieldTick();
+
+  db.prepare(
+    `CREATE TEMP TABLE _pa_wors_plan AS
+       SELECT DISTINCT pp.person_id FROM pco_plan_people pp
+         JOIN pco_plans pl
+           ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+        WHERE pp.org_id = ?
+          AND pp.person_id != ''
+          AND pl.sort_date >= ?
+          AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')`,
+  ).run(orgId, cutoffActivity);
+  db.exec(`CREATE UNIQUE INDEX _pa_wors_plan_pid ON _pa_wors_plan(person_id);`);
+  await yieldTick();
+
+  // Build the whole rebuilt snapshot into a TEMP staging table first
+  // — readers querying person_activity see the OLD state the whole
+  // time, until the fast DELETE+INSERT swap at the very end.
+  db.prepare(
+    `CREATE TEMP TABLE _pa_new AS
+     SELECT
+       p.org_id,
+       p.pco_id AS person_id,
+       p.last_form_submission_at AS last_form_at,
+       p.last_check_in_at,
+       ma.last_at AS last_attended_at,
+       ms.last_at AS last_served_at,
+       p.pco_updated_at AS last_pco_updated_at,
+       NULLIF(MAX(
+         coalesce(CASE WHEN p.last_form_submission_at <= ?
+                       THEN p.last_form_submission_at END, ''),
+         coalesce(CASE WHEN p.last_check_in_at <= ?
+                       THEN p.last_check_in_at END, ''),
+         coalesce(CASE WHEN p.pco_updated_at <= ?
+                       THEN p.pco_updated_at END, ''),
+         coalesce(ma.last_at, ''),
+         coalesce(ms.last_at, '')
+       ), '') AS last_activity_at,
+       coalesce(gc.n, 0) AS active_group_count,
+       coalesce(tc.n, 0) AS active_team_count,
+       CASE WHEN wg.person_id IS NOT NULL OR wp.person_id IS NOT NULL
+            THEN 1 ELSE 0 END AS in_lane_wors,
+       CASE WHEN coalesce(gc.n, 0) > 0 THEN 1 ELSE 0 END AS in_lane_comm,
+       CASE WHEN coalesce(tc.n, 0) > 0 THEN 1 ELSE 0 END AS in_lane_serv,
+       fc.at AS first_comm_at,
+       fs.at AS first_serv_at
+     FROM pco_people p
+     LEFT JOIN _pa_max_att     ma ON ma.person_id = p.pco_id
+     LEFT JOIN _pa_max_serve   ms ON ms.person_id = p.pco_id
+     LEFT JOIN _pa_grp_count   gc ON gc.person_id = p.pco_id
+     LEFT JOIN _pa_team_count  tc ON tc.person_id = p.pco_id
+     LEFT JOIN _pa_first_comm  fc ON fc.person_id = p.pco_id
+     LEFT JOIN _pa_first_serv  fs ON fs.person_id = p.pco_id
+     LEFT JOIN _pa_wors_grp    wg ON wg.person_id = p.pco_id
+     LEFT JOIN _pa_wors_plan   wp ON wp.person_id = p.pco_id
+     WHERE p.org_id = ?`,
+  ).run(nowIso, nowIso, nowIso, orgId);
+  await yieldTick();
+
+  // Atomic swap: tiny transaction, just data movement from the temp
+  // staging table into the canonical one. Other readers either see
+  // the fully-old or fully-new state — never a half-rebuilt one.
+  db.transaction(() => {
+    db.prepare(`DELETE FROM person_activity WHERE org_id = ?`).run(orgId);
+    db.prepare(
+      `INSERT INTO person_activity
+         (org_id, person_id,
+          last_form_at, last_check_in_at, last_attended_at, last_served_at,
+          last_pco_updated_at, last_activity_at,
+          active_group_count, active_team_count,
+          in_lane_wors, in_lane_comm, in_lane_serv,
+          first_comm_at, first_serv_at, classification)
+       SELECT org_id, person_id,
+              last_form_at, last_check_in_at, last_attended_at, last_served_at,
+              last_pco_updated_at, last_activity_at,
+              active_group_count, active_team_count,
+              in_lane_wors, in_lane_comm, in_lane_serv,
+              first_comm_at, first_serv_at, NULL
+         FROM _pa_new`,
+    ).run();
+  })();
+
+  drop();
+}
+
+/** Group-summary rebuild with a similar staging-table pattern + yield
+ *  between the build and the swap. Smaller and faster than person_-
+ *  activity but still worth keeping off the main thread for as long
+ *  as possible. */
+async function rebuildGroupSummaryAsync(
+  orgId: number,
+  activityMonths: number,
+  cutoff30: string,
+): Promise<void> {
+  const db = getDb();
+  const trackingCutoff = new Date(
+    Date.now() - activityMonths * MS_PER_MONTH,
+  ).toISOString();
+  db.exec(`DROP TABLE IF EXISTS _gs_new;`);
+  await yieldTick();
+
+  db.prepare(
+    `CREATE TEMP TABLE _gs_new AS
+     SELECT
+       g.org_id,
+       g.pco_id AS group_id,
+       coalesce(mpg.members, 0) AS members,
+       coalesce(mpg.leaders, 0) AS leaders,
+       coalesce(mpg.joined_30d, 0) AS joined_30d,
+       coalesce(mpg.left_30d, 0) AS left_30d,
+       coalesce(apg.attended_distinct_window, 0) AS attended_distinct_window,
+       coalesce(epg.events_window, 0) AS events_window,
+       CASE
+         WHEN coalesce(mpg.members, 0) = 0
+           OR coalesce(apg.attended_distinct_window, 0) = 0
+              THEN NULL
+         ELSE MIN(100, (apg.attended_distinct_window * 100.0) / mpg.members)
+       END AS attendance_pct,
+       CASE
+         WHEN g.archived_at IS NOT NULL                          THEN 'paused'
+         WHEN coalesce(epg.events_window, 0) = 0
+          AND coalesce(mpg.members, 0) > 0                       THEN 'paused'
+         WHEN coalesce(mpg.joined_30d, 0)
+            - coalesce(mpg.left_30d, 0) >= 2                     THEN 'growing'
+         WHEN coalesce(mpg.joined_30d, 0)
+            - coalesce(mpg.left_30d, 0) <= -2                    THEN 'shrinking'
+         ELSE 'steady'
+       END AS state
+     FROM pco_groups g
+     LEFT JOIN (
+       SELECT group_id,
+              SUM(CASE WHEN archived_at IS NULL THEN 1 ELSE 0 END) AS members,
+              SUM(CASE WHEN archived_at IS NULL
+                        AND lower(coalesce(role,'')) LIKE '%leader%'
+                       THEN 1 ELSE 0 END) AS leaders,
+              SUM(CASE WHEN archived_at IS NULL
+                        AND joined_at IS NOT NULL AND joined_at >= ?
+                       THEN 1 ELSE 0 END) AS joined_30d,
+              SUM(CASE WHEN archived_at IS NOT NULL AND archived_at >= ?
+                       THEN 1 ELSE 0 END) AS left_30d
+         FROM pco_group_memberships
+        WHERE org_id = ?
+        GROUP BY group_id
+     ) mpg ON mpg.group_id = g.pco_id
+     LEFT JOIN (
+       SELECT group_id,
+              COUNT(DISTINCT person_id) AS attended_distinct_window
+         FROM pco_event_attendances
+        WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?
+        GROUP BY group_id
+     ) apg ON apg.group_id = g.pco_id
+     LEFT JOIN (
+       SELECT group_id, COUNT(*) AS events_window
+         FROM pco_group_events
+        WHERE org_id = ? AND starts_at IS NOT NULL AND starts_at >= ?
+        GROUP BY group_id
+     ) epg ON epg.group_id = g.pco_id
+     WHERE g.org_id = ?`,
+  ).run(
+    cutoff30, cutoff30, orgId,
+    orgId, trackingCutoff,
+    orgId, trackingCutoff,
+    orgId,
+  );
+  await yieldTick();
+
+  db.transaction(() => {
+    db.prepare(`DELETE FROM group_summary WHERE org_id = ?`).run(orgId);
+    db.prepare(
+      `INSERT INTO group_summary
+         (org_id, group_id, members, leaders, joined_30d, left_30d,
+          attended_distinct_window, events_window, attendance_pct, state)
+       SELECT org_id, group_id, members, leaders, joined_30d, left_30d,
+              attended_distinct_window, events_window, attendance_pct, state
+         FROM _gs_new`,
+    ).run();
+  })();
+  db.exec(`DROP TABLE IF EXISTS _gs_new;`);
 }
 
 function rebuildPersonActivity(
