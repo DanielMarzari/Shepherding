@@ -167,14 +167,60 @@ function finishRefreshRun(
     .run(status, error, runId);
 }
 
+/** A run that's been "running" longer than this is considered stuck
+ *  (process crash, killed worker) — the next refresh attempt marks it
+ *  as error and starts fresh instead of waiting forever. Generous
+ *  enough that a real slow refresh on a big org has plenty of room. */
+const STALE_RUN_MS = 5 * 60 * 1000;
+
+/** Mark any "running" row for this org as error if it's been silent
+ *  longer than STALE_RUN_MS. Run before starting a new refresh so a
+ *  previous crash doesn't leave the UI thinking something's still in
+ *  flight forever. */
+function reapStaleRuns(orgId: number): void {
+  const cutoff = new Date(Date.now() - STALE_RUN_MS).toISOString();
+  getDb()
+    .prepare(
+      `UPDATE dashboard_refresh_runs
+          SET status = 'error',
+              error = 'Marked stale — no progress for >5 min (process crashed?)',
+              finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE org_id = ? AND status = 'running' AND started_at < ?`,
+    )
+    .run(orgId, cutoff);
+}
+
+/** Returns the run id of any in-flight refresh for this org, or NULL.
+ *  Used to dedupe rapid clicks of the refresh button so a user can't
+ *  trigger five overlapping rebuilds at once. */
+function findInFlightRun(orgId: number): number | null {
+  const cutoff = new Date(Date.now() - STALE_RUN_MS).toISOString();
+  const row = getDb()
+    .prepare(
+      `SELECT id FROM dashboard_refresh_runs
+        WHERE org_id = ? AND status = 'running' AND started_at >= ?
+        ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(orgId, cutoff) as { id: number } | undefined;
+  return row ? row.id : null;
+}
+
 /** Fire-and-forget a refresh, return the run id immediately. The
  *  client polls status via getRefreshRunStatus. Critical detail: we
  *  defer the actual work via setImmediate AND use the async refresh
  *  variant — without both, the synchronous better-sqlite3 work would
  *  block the same Node worker that handles the caller's response,
  *  and the action would only return AFTER the rebuild finished
- *  (defeating the whole "background" idea + the progress bar). */
+ *  (defeating the whole "background" idea + the progress bar).
+ *
+ *  Reuses an in-flight run id if one exists for the org so the UI
+ *  doesn't end up polling a different runId than the work it
+ *  actually triggered. */
 export function startRefreshInBackground(orgId: number): number {
+  reapStaleRuns(orgId);
+  const existing = findInFlightRun(orgId);
+  if (existing != null) return existing;
+
   const runId = createRefreshRun(orgId);
   const promise = new Promise<void>((resolve) => {
     setImmediate(async () => {
@@ -245,10 +291,108 @@ function rebuildPersonActivity(
   cutoffActivity: string,
 ): void {
   const db = getDb();
-  // Wipe + repopulate. Cheaper than a per-row UPSERT pass when the
-  // whole table is being rewritten anyway.
-  db.prepare(`DELETE FROM person_activity WHERE org_id = ?`).run(orgId);
   const nowIso = new Date().toISOString();
+
+  // Previous version did ~10 correlated subqueries PER person row in
+  // a single INSERT-SELECT — O(people × subqueries) which on real
+  // data was tens of seconds and felt like a hang. The rewrite below
+  // builds eight connection-local TEMP tables in one indexed scan
+  // each, then JOINs them into the INSERT — one indexed lookup per
+  // JOIN per row instead of a fresh subquery execution per row.
+
+  db.exec(`
+    DROP TABLE IF EXISTS _pa_max_att;
+    DROP TABLE IF EXISTS _pa_max_serve;
+    DROP TABLE IF EXISTS _pa_grp_count;
+    DROP TABLE IF EXISTS _pa_team_count;
+    DROP TABLE IF EXISTS _pa_first_comm;
+    DROP TABLE IF EXISTS _pa_first_serv;
+    DROP TABLE IF EXISTS _pa_wors_grp;
+    DROP TABLE IF EXISTS _pa_wors_plan;
+  `);
+  db.prepare(
+    `CREATE TEMP TABLE _pa_max_att AS
+       SELECT person_id, MAX(event_starts_at) AS last_at
+         FROM pco_event_attendances
+        WHERE org_id = ? AND attended = 1
+          AND event_starts_at IS NOT NULL AND event_starts_at <= ?
+        GROUP BY person_id`,
+  ).run(orgId, nowIso);
+  db.exec(`CREATE INDEX _pa_max_att_pid ON _pa_max_att(person_id);`);
+  db.prepare(
+    `CREATE TEMP TABLE _pa_max_serve AS
+       SELECT pp.person_id, MAX(pl.sort_date) AS last_at
+         FROM pco_plan_people pp
+         JOIN pco_plans pl
+           ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+        WHERE pp.org_id = ?
+          AND pp.person_id != ''
+          AND pl.sort_date IS NOT NULL AND pl.sort_date <= ?
+          AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
+        GROUP BY pp.person_id`,
+  ).run(orgId, nowIso);
+  db.exec(`CREATE INDEX _pa_max_serve_pid ON _pa_max_serve(person_id);`);
+  db.prepare(
+    `CREATE TEMP TABLE _pa_grp_count AS
+       SELECT person_id, COUNT(*) AS n
+         FROM pco_group_memberships
+        WHERE org_id = ? AND archived_at IS NULL
+        GROUP BY person_id`,
+  ).run(orgId);
+  db.exec(`CREATE INDEX _pa_grp_count_pid ON _pa_grp_count(person_id);`);
+  db.prepare(
+    `CREATE TEMP TABLE _pa_team_count AS
+       SELECT person_id, COUNT(*) AS n
+         FROM pco_team_memberships
+        WHERE org_id = ? AND archived_at IS NULL AND person_id != ''
+        GROUP BY person_id`,
+  ).run(orgId);
+  db.exec(`CREATE INDEX _pa_team_count_pid ON _pa_team_count(person_id);`);
+  db.prepare(
+    `CREATE TEMP TABLE _pa_first_comm AS
+       SELECT person_id, MIN(joined_at) AS at
+         FROM pco_group_memberships
+        WHERE org_id = ? AND joined_at IS NOT NULL AND joined_at <= ?
+        GROUP BY person_id`,
+  ).run(orgId, nowIso);
+  db.exec(`CREATE INDEX _pa_first_comm_pid ON _pa_first_comm(person_id);`);
+  db.prepare(
+    `CREATE TEMP TABLE _pa_first_serv AS
+       SELECT person_id, MIN(pco_created_at) AS at
+         FROM pco_team_memberships
+        WHERE org_id = ?
+          AND person_id != ''
+          AND pco_created_at IS NOT NULL AND pco_created_at <= ?
+        GROUP BY person_id`,
+  ).run(orgId, nowIso);
+  db.exec(`CREATE INDEX _pa_first_serv_pid ON _pa_first_serv(person_id);`);
+  // For in_lane_wors we need "any group event attendance in window"
+  // OR "any non-declined plan serve in window" — two single-pass
+  // sets that the INSERT probes via O(1) indexed lookups per row.
+  db.prepare(
+    `CREATE TEMP TABLE _pa_wors_grp AS
+       SELECT DISTINCT person_id FROM pco_event_attendances
+        WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?`,
+  ).run(orgId, cutoffActivity);
+  db.exec(`CREATE UNIQUE INDEX _pa_wors_grp_pid ON _pa_wors_grp(person_id);`);
+  db.prepare(
+    `CREATE TEMP TABLE _pa_wors_plan AS
+       SELECT DISTINCT pp.person_id FROM pco_plan_people pp
+         JOIN pco_plans pl
+           ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+        WHERE pp.org_id = ?
+          AND pp.person_id != ''
+          AND pl.sort_date >= ?
+          AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')`,
+  ).run(orgId, cutoffActivity);
+  db.exec(`CREATE UNIQUE INDEX _pa_wors_plan_pid ON _pa_wors_plan(person_id);`);
+
+  // Single INSERT — every per-person value comes from a LEFT JOIN
+  // against one of the temp tables above. last_activity_at is the
+  // MAX of five scalar columns (coalesce empty string for NULLs so
+  // MAX still picks the largest real timestamp), normalized back to
+  // NULL afterward.
+  db.prepare(`DELETE FROM person_activity WHERE org_id = ?`).run(orgId);
   db.prepare(
     `INSERT INTO person_activity
        (org_id, person_id,
@@ -259,102 +403,64 @@ function rebuildPersonActivity(
         first_comm_at, first_serv_at,
         classification)
      SELECT
-       ?,
+       p.org_id,
        p.pco_id,
        p.last_form_submission_at,
        p.last_check_in_at,
-       (SELECT MAX(event_starts_at) FROM pco_event_attendances a
-         WHERE a.org_id = p.org_id AND a.person_id = p.pco_id
-           AND a.attended = 1 AND a.event_starts_at IS NOT NULL
-           AND a.event_starts_at <= ?),
-       (SELECT MAX(pl.sort_date) FROM pco_plan_people pp
-         JOIN pco_plans pl
-           ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
-        WHERE pp.org_id = p.org_id AND pp.person_id = p.pco_id
-          AND pl.sort_date IS NOT NULL
-          AND pl.sort_date <= ?
-          AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')),
+       ma.last_at,
+       ms.last_at,
        p.pco_updated_at,
-       -- last_activity_at = max across all sources (no futures)
-       (SELECT MAX(d) FROM (
-          SELECT p.last_form_submission_at AS d
-           WHERE p.last_form_submission_at IS NOT NULL
-             AND p.last_form_submission_at <= ?
-          UNION ALL
-          SELECT p.last_check_in_at
-           WHERE p.last_check_in_at IS NOT NULL
-             AND p.last_check_in_at <= ?
-          UNION ALL
-          SELECT p.pco_updated_at
-           WHERE p.pco_updated_at IS NOT NULL
-             AND p.pco_updated_at <= ?
-          UNION ALL
-          SELECT MAX(a.event_starts_at) FROM pco_event_attendances a
-           WHERE a.org_id = p.org_id AND a.person_id = p.pco_id
-             AND a.attended = 1 AND a.event_starts_at <= ?
-          UNION ALL
-          SELECT MAX(pl.sort_date) FROM pco_plan_people pp
-            JOIN pco_plans pl
-              ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
-           WHERE pp.org_id = p.org_id AND pp.person_id = p.pco_id
-             AND pl.sort_date <= ?
-             AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
-        )),
-       (SELECT COUNT(*) FROM pco_group_memberships gm
-         WHERE gm.org_id = p.org_id AND gm.person_id = p.pco_id
-           AND gm.archived_at IS NULL),
-       (SELECT COUNT(*) FROM pco_team_memberships tm
-         WHERE tm.org_id = p.org_id AND tm.person_id = p.pco_id
-           AND tm.archived_at IS NULL),
-       -- in_lane_wors: attended a group event OR served on a plan in the window
-       CASE WHEN EXISTS (
-         SELECT 1 FROM pco_event_attendances a
-          WHERE a.org_id = p.org_id AND a.person_id = p.pco_id
-            AND a.attended = 1 AND a.event_starts_at >= ?
-       ) OR EXISTS (
-         SELECT 1 FROM pco_plan_people pp
-           JOIN pco_plans pl
-             ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
-          WHERE pp.org_id = p.org_id AND pp.person_id = p.pco_id
-            AND pl.sort_date >= ?
-            AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
-       ) THEN 1 ELSE 0 END,
-       -- in_lane_comm: any active group membership
-       CASE WHEN EXISTS (
-         SELECT 1 FROM pco_group_memberships gm
-          WHERE gm.org_id = p.org_id AND gm.person_id = p.pco_id
-            AND gm.archived_at IS NULL
-       ) THEN 1 ELSE 0 END,
-       -- in_lane_serv: any active team membership
-       CASE WHEN EXISTS (
-         SELECT 1 FROM pco_team_memberships tm
-          WHERE tm.org_id = p.org_id AND tm.person_id = p.pco_id
-            AND tm.archived_at IS NULL
-       ) THEN 1 ELSE 0 END,
-       -- first_comm_at: earliest joined-a-group date (ever, including
-       -- archived memberships — we want to know when they first
-       -- entered the lane, not whether they're still in it).
-       (SELECT MIN(joined_at) FROM pco_group_memberships gm
-         WHERE gm.org_id = p.org_id AND gm.person_id = p.pco_id
-           AND gm.joined_at IS NOT NULL AND gm.joined_at <= ?),
-       -- first_serv_at: earliest team-add date (PCO created_at on
-       -- person_team_position_assignments — captured into
-       -- pco_team_memberships.pco_created_at by the services sync).
-       (SELECT MIN(pco_created_at) FROM pco_team_memberships tm
-         WHERE tm.org_id = p.org_id AND tm.person_id = p.pco_id
-           AND tm.pco_created_at IS NOT NULL AND tm.pco_created_at <= ?),
-       NULL  -- classification filled in by a second pass below
+       MAX(
+         coalesce(CASE WHEN p.last_form_submission_at <= ?
+                       THEN p.last_form_submission_at END, ''),
+         coalesce(CASE WHEN p.last_check_in_at <= ?
+                       THEN p.last_check_in_at END, ''),
+         coalesce(CASE WHEN p.pco_updated_at <= ?
+                       THEN p.pco_updated_at END, ''),
+         coalesce(ma.last_at, ''),
+         coalesce(ms.last_at, '')
+       ),
+       coalesce(gc.n, 0),
+       coalesce(tc.n, 0),
+       CASE WHEN wg.person_id IS NOT NULL OR wp.person_id IS NOT NULL
+            THEN 1 ELSE 0 END,
+       CASE WHEN coalesce(gc.n, 0) > 0 THEN 1 ELSE 0 END,
+       CASE WHEN coalesce(tc.n, 0) > 0 THEN 1 ELSE 0 END,
+       fc.at,
+       fs.at,
+       NULL
      FROM pco_people p
+     LEFT JOIN _pa_max_att     ma ON ma.person_id = p.pco_id
+     LEFT JOIN _pa_max_serve   ms ON ms.person_id = p.pco_id
+     LEFT JOIN _pa_grp_count   gc ON gc.person_id = p.pco_id
+     LEFT JOIN _pa_team_count  tc ON tc.person_id = p.pco_id
+     LEFT JOIN _pa_first_comm  fc ON fc.person_id = p.pco_id
+     LEFT JOIN _pa_first_serv  fs ON fs.person_id = p.pco_id
+     LEFT JOIN _pa_wors_grp    wg ON wg.person_id = p.pco_id
+     LEFT JOIN _pa_wors_plan   wp ON wp.person_id = p.pco_id
      WHERE p.org_id = ?`,
-  ).run(
-    orgId,
-    nowIso, nowIso, // attended / served upper bounds
-    nowIso, nowIso, nowIso, nowIso, nowIso, // last_activity max sub-queries
-    cutoffActivity, cutoffActivity, // in_lane_wors cutoffs
-    nowIso, nowIso, // first_comm_at / first_serv_at upper bounds
-    orgId,
-  );
+  ).run(nowIso, nowIso, nowIso, orgId);
 
+  // Normalize the empty-string sentinel back to NULL for people who
+  // had no signals at all — the read paths sort NULLS FIRST.
+  db.prepare(
+    `UPDATE person_activity
+        SET last_activity_at = NULL
+      WHERE org_id = ? AND last_activity_at = ''`,
+  ).run(orgId);
+
+  // Free the temp tables — connection-local, would otherwise stay
+  // around until the connection closes (memory cost on a hot worker).
+  db.exec(`
+    DROP TABLE IF EXISTS _pa_max_att;
+    DROP TABLE IF EXISTS _pa_max_serve;
+    DROP TABLE IF EXISTS _pa_grp_count;
+    DROP TABLE IF EXISTS _pa_team_count;
+    DROP TABLE IF EXISTS _pa_first_comm;
+    DROP TABLE IF EXISTS _pa_first_serv;
+    DROP TABLE IF EXISTS _pa_wors_grp;
+    DROP TABLE IF EXISTS _pa_wors_plan;
+  `);
 }
 
 /** Second pass on person_activity that fills in the classification

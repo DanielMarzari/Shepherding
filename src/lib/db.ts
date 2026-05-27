@@ -20,6 +20,11 @@ export function getDb(): Database.Database {
   const db = new Database(file);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  // Wait up to 10s on write-lock contention instead of erroring out
+  // immediately. Otherwise a sync running concurrently with a
+  // dashboard refresh would SQLITE_BUSY one of them on the first
+  // statement of any conflicting transaction.
+  db.pragma("busy_timeout = 10000");
   ensureMigrationsApplied(db);
   _db = db;
   return db;
