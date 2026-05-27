@@ -97,16 +97,24 @@ function Tooltip({
 export function PieChart({
   data,
   maxSlices = 6,
+  preserveOrder = false,
 }: {
   data: ChartDatum[];
   maxSlices?: number;
+  /** When true the slices render in the order the caller provided
+   *  them. Default behavior sorts by count desc so the largest slice
+   *  starts at 12-o'clock — but for ordered categories (Shepherded →
+   *  Active → Present), the caller's order is what the user expects. */
+  preserveOrder?: boolean;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const total = data.reduce((s, d) => s + d.count, 0);
   if (total === 0) {
     return <div className="text-xs text-muted py-6 text-center">No data</div>;
   }
-  const sorted = [...data].sort((a, b) => b.count - a.count);
+  const sorted = preserveOrder
+    ? [...data]
+    : [...data].sort((a, b) => b.count - a.count);
   const visible = sorted.slice(0, maxSlices - 1);
   const restCount = sorted
     .slice(maxSlices - 1)

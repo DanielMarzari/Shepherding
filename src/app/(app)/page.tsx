@@ -121,7 +121,7 @@ async function PeopleMixPie({ orgId }: { orgId: number }) {
   }
   return (
     <div className="p-5">
-      <PieChart data={data} />
+      <PieChart data={data} preserveOrder />
       <p className="text-[11px] text-subtle mt-3 leading-snug">
         Excludes <span className="text-fg">{counts.inactive.toLocaleString()}</span>{" "}
         inactive (no measurable activity in {settings.activityMonths} mo) —

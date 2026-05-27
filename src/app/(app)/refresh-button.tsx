@@ -18,16 +18,11 @@ interface RunState {
 
 const POLL_INTERVAL_MS = 500;
 
-/** Admin-only button that rebuilds the dashboard snapshot tables. Fires
- *  a background refresh and polls its status every 500ms so the user
- *  gets a labeled progress bar instead of an opaque "Refreshing…" with
- *  no indication of how far along it is.
- *
- *  Steps:
- *    1/4 Computing per-person activity rollup
- *    2/4 Classifying people
- *    3/4 Summarizing groups
- *    4/4 Aggregating org totals */
+/** Admin-only refresh control. The button sits in the page header;
+ *  while a refresh is in flight a full-width progress banner mounts
+ *  below the header (via a portal-style fixed element rendered in the
+ *  same component) so the bar always has room to display regardless
+ *  of the header's flex / wrap behaviour. */
 export function RefreshSnapshotsButton({
   isAdmin,
   refreshedAt,
@@ -37,7 +32,6 @@ export function RefreshSnapshotsButton({
 }) {
   const [run, setRun] = useState<RunState | null>(null);
   const [errMessage, setErrMessage] = useState<string | null>(null);
-  // Poll interval id so we can cancel cleanly on unmount.
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -49,31 +43,31 @@ export function RefreshSnapshotsButton({
   async function pollUntilDone(runId: number) {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = setInterval(async () => {
-      const status = await getRefreshStatusAction(runId);
-      if (!status) {
-        setErrMessage("Refresh status not found.");
-        if (pollRef.current) clearInterval(pollRef.current);
-        return;
-      }
-      setRun({
-        step: status.currentStep,
-        total: status.totalSteps,
-        label: status.stepLabel ?? "",
-        status: status.status,
-        error: status.error,
-        elapsedMs: status.elapsedMs,
-      });
-      if (status.status !== "running") {
-        if (pollRef.current) clearInterval(pollRef.current);
-        if (status.status === "ok") {
-          // Revalidate so the page re-reads the new snapshot. The
-          // parent server component re-renders with a fresh
-          // `refreshedAt` prop, then we clear the inline run-state
-          // a moment later so the new stamp ("Snapshot updated …")
-          // takes over from the green "Done" pill.
-          await revalidateDashboardAction();
-          setTimeout(() => setRun(null), 2500);
+      try {
+        const status = await getRefreshStatusAction(runId);
+        if (!status) {
+          setErrMessage("Refresh status not found.");
+          if (pollRef.current) clearInterval(pollRef.current);
+          return;
         }
+        setRun({
+          step: status.currentStep,
+          total: status.totalSteps,
+          label: status.stepLabel ?? "",
+          status: status.status,
+          error: status.error,
+          elapsedMs: status.elapsedMs,
+        });
+        if (status.status !== "running") {
+          if (pollRef.current) clearInterval(pollRef.current);
+          if (status.status === "ok") {
+            await revalidateDashboardAction();
+            setTimeout(() => setRun(null), 2500);
+          }
+        }
+      } catch (e) {
+        setErrMessage(e instanceof Error ? e.message : "Poll failed.");
+        if (pollRef.current) clearInterval(pollRef.current);
       }
     }, POLL_INTERVAL_MS);
   }
@@ -88,89 +82,103 @@ export function RefreshSnapshotsButton({
       error: null,
       elapsedMs: 0,
     });
-    const result = await startRefreshAction();
-    if (!result.ok) {
-      setErrMessage(result.message);
+    try {
+      const result = await startRefreshAction();
+      if (!result.ok) {
+        setErrMessage(result.message);
+        setRun(null);
+        return;
+      }
+      pollUntilDone(result.runId);
+    } catch (e) {
+      setErrMessage(e instanceof Error ? e.message : "Failed to start.");
       setRun(null);
-      return;
     }
-    pollUntilDone(result.runId);
   }
 
   const isRunning = run?.status === "running";
   const isDone = run?.status === "ok";
   const isError = run?.status === "error";
-  const pct = run ? Math.round((run.step / run.total) * 100) : 0;
-
-  // Stamp from the latest committed snapshot, NOT the in-flight run.
-  // Once a fresh run completes the parent server component
-  // re-fetches and re-passes a newer refreshedAt prop.
-  const stamp = refreshedAt
-    ? `Snapshot updated ${new Date(refreshedAt).toLocaleString()}`
-    : "Snapshot not built yet — click refresh.";
+  // 0% with no work yet would look stuck — start the bar at a visible
+  // 5% so the user sees motion as soon as they click.
+  const pct = run
+    ? run.step === 0
+      ? 5
+      : Math.round((run.step / run.total) * 100)
+    : 0;
 
   return (
-    <div className="flex items-center gap-3 text-xs flex-wrap justify-end">
-      {!run && (
-        <span className="text-subtle hidden xl:inline">{stamp}</span>
-      )}
+    <>
+      <div className="flex items-center gap-3 text-xs flex-wrap justify-end">
+        {!run && (
+          <span className="text-subtle hidden xl:inline">
+            {refreshedAt
+              ? `Snapshot updated ${new Date(refreshedAt).toLocaleString()}`
+              : "Snapshot not built yet — click refresh."}
+          </span>
+        )}
+        {errMessage && (
+          <span className="text-warn-soft-fg text-[11px]">{errMessage}</span>
+        )}
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={handleClick}
+            disabled={isRunning}
+            className="px-2.5 py-1.5 rounded border border-border-soft text-muted hover:text-fg transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+          >
+            {isRunning ? "Refreshing…" : "↻ Refresh"}
+          </button>
+        )}
+      </div>
 
-      {/* Inline progress bar — only while running or just-finished */}
+      {/* Fixed-position status banner — top-right of viewport, above
+          everything else. Can't be squeezed by parent flex layouts.
+          Slides in while a refresh is in flight and stays visible
+          through completion (then auto-dismisses 2.5s after ok). */}
       {run && (
-        <div className="flex items-center gap-2 min-w-[260px]">
-          <div className="flex-1 min-w-[160px]">
-            <div className="h-1.5 rounded-full overflow-hidden bg-bg-elev-2 border border-border-soft">
-              <div
-                className={`h-full transition-[width] duration-300 ${
-                  isError
-                    ? "bg-warn-soft-fg"
-                    : isDone
-                      ? "bg-good-soft-fg"
-                      : "bg-accent"
-                }`}
-                style={{ width: `${isDone ? 100 : pct}%` }}
-              />
-            </div>
-            <div className="flex justify-between mt-1 text-[10px]">
-              <span
-                className={
-                  isError
-                    ? "text-warn-soft-fg"
-                    : isDone
-                      ? "text-good-soft-fg"
-                      : "text-muted"
-                }
-              >
-                {isError
-                  ? `Error: ${run.error ?? "unknown"}`
+        <div
+          className="fixed top-4 right-4 z-50 w-[340px] max-w-[calc(100vw-2rem)] rounded-lg border border-border-soft bg-bg-elev shadow-lg p-3"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-baseline justify-between gap-3 text-xs mb-2">
+            <span
+              className={
+                isError
+                  ? "text-warn-soft-fg font-medium"
                   : isDone
-                    ? `Done · ${(run.elapsedMs / 1000).toFixed(1)}s`
-                    : `${run.step}/${run.total} · ${run.label}`}
-              </span>
-              {!isError && (
-                <span className="text-subtle tnum">
-                  {isDone ? "100%" : `${pct}%`}
-                </span>
-              )}
-            </div>
+                    ? "text-good-soft-fg font-medium"
+                    : "text-fg font-medium"
+              }
+            >
+              {isError
+                ? `Refresh failed`
+                : isDone
+                  ? `Refresh complete in ${(run.elapsedMs / 1000).toFixed(1)}s`
+                  : `Refreshing snapshot · step ${run.step}/${run.total}`}
+            </span>
+            <span className="tnum text-subtle">
+              {isDone ? "100%" : `${pct}%`}
+            </span>
+          </div>
+          <div className="h-2 rounded-full overflow-hidden bg-bg-elev-2 border border-border-soft">
+            <div
+              className={`h-full transition-[width] duration-300 ${
+                isError
+                  ? "bg-warn-soft-fg"
+                  : isDone
+                    ? "bg-good-soft-fg"
+                    : "bg-accent"
+              }`}
+              style={{ width: `${isDone ? 100 : pct}%` }}
+            />
+          </div>
+          <div className="mt-2 text-[11px] text-muted break-words">
+            {isError ? (run.error ?? "unknown error") : run.label || "Starting…"}
           </div>
         </div>
       )}
-
-      {errMessage && (
-        <span className="text-warn-soft-fg text-[11px]">{errMessage}</span>
-      )}
-
-      {isAdmin && (
-        <button
-          type="button"
-          onClick={handleClick}
-          disabled={isRunning}
-          className="px-2.5 py-1.5 rounded border border-border-soft text-muted hover:text-fg transition-colors disabled:opacity-50 cursor-pointer shrink-0"
-        >
-          {isRunning ? "Refreshing…" : "↻ Refresh"}
-        </button>
-      )}
-    </div>
+    </>
   );
 }
