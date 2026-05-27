@@ -11,10 +11,13 @@ import {
   type EngagementSummary,
   type PipelineBucket,
   type PipelineDim,
+  type StagePoint,
   getGroupConverterEngagement,
   getGroupPipeline,
+  getGroupStagePoints,
   getServingConverterEngagement,
   getServingPipeline,
+  getServingStagePoints,
 } from "@/lib/pipeline-read";
 
 const MONTH_LABELS = [
@@ -221,6 +224,119 @@ function BreakdownTable({
             + {(rows.length - cap).toLocaleString()} more not shown
           </div>
         )}
+      </div>
+    </Card>
+  );
+}
+
+/** Per-person scatter of the two waits side-by-side. Answers "for any
+ *  given person, were BOTH waits long, or was one dominant?" — which
+ *  the two independent box plots can't show because they treat the
+ *  stages as separate populations. Each dot is one (person, group) or
+ *  (person, team). Dot size encodes total elapsed time so worst-cases
+ *  pop visually. Median crosshairs cut the plot into four quadrants
+ *  with labels so the reader sees the pattern without doing inference. */
+function StagesScatterCard({
+  title,
+  subtitle,
+  xLabel,
+  yLabel,
+  points,
+}: {
+  title: string;
+  subtitle: string;
+  xLabel: string;
+  yLabel: string;
+  points: StagePoint[];
+}) {
+  if (points.length === 0) {
+    return (
+      <Card>
+        <CardHeader title={title} />
+        <p className="px-5 py-6 text-sm text-muted text-center">
+          Need someone who&apos;s completed all three milestones for at
+          least one (person, group/team) pair before this chart fills
+          in.
+        </p>
+      </Card>
+    );
+  }
+  // Median split on each axis — anyone in the top-right quadrant is
+  // "slow on both fronts" (real bottleneck); bottom-left is "fast on
+  // both fronts" (a clean pipeline).
+  const xs = points.map((p) => p.stage1).sort((a, b) => a - b);
+  const ys = points.map((p) => p.stage2).sort((a, b) => a - b);
+  const xMed = xs[Math.floor(xs.length / 2)];
+  const yMed = ys[Math.floor(ys.length / 2)];
+  const slowSlow = points.filter(
+    (p) => p.stage1 >= xMed && p.stage2 >= yMed,
+  ).length;
+  const fastFast = points.filter(
+    (p) => p.stage1 < xMed && p.stage2 < yMed,
+  ).length;
+  const adminLag = points.filter(
+    (p) => p.stage1 >= xMed && p.stage2 < yMed,
+  ).length;
+  const showUpLag = points.filter(
+    (p) => p.stage1 < xMed && p.stage2 >= yMed,
+  ).length;
+
+  return (
+    <Card>
+      <CardHeader
+        title={title}
+        right={
+          <span className="text-xs text-muted">
+            {points.length.toLocaleString()} converters · median split
+            at {Math.round(xMed)}d × {Math.round(yMed)}d
+          </span>
+        }
+      />
+      <div className="p-5 space-y-3">
+        <p className="text-xs text-muted">
+          {subtitle} Each dot is one person who completed all three
+          milestones; dot size = total time end-to-end (bigger = longer
+          journey). The dashed median crosshairs divide the plot into
+          four quadrants — see the counts below.
+        </p>
+        <ScatterChart
+          points={points.map((p) => ({
+            x: p.stage1,
+            y: p.stage2,
+            size: p.total,
+            label: `${p.label} · total ${p.total}d`,
+          }))}
+          xLabel={xLabel}
+          yLabel={yLabel}
+          xSuffix="d"
+          ySuffix="d"
+        />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
+          <Stat
+            label="Fast → Fast"
+            value={fastFast.toLocaleString()}
+            valueTone="good"
+            delta="clean pipeline: both waits short"
+          />
+          <Stat
+            label="Slow → Fast"
+            value={adminLag.toLocaleString()}
+            valueTone={adminLag > points.length * 0.25 ? "warn" : "default"}
+            delta="admin lag — once added, they show up"
+          />
+          <Stat
+            label="Fast → Slow"
+            value={showUpLag.toLocaleString()}
+            valueTone={showUpLag > points.length * 0.25 ? "warn" : "default"}
+            delta="show-up lag — added quickly, then drift"
+          />
+          <Stat
+            label="Slow → Slow"
+            value={slowSlow.toLocaleString()}
+            valueTone={slowSlow > points.length * 0.25 ? "warn" : "default"}
+            delta="real bottleneck on both ends"
+          />
+        </div>
       </div>
     </Card>
   );
@@ -461,6 +577,7 @@ export async function ServingPipelineSection({
 }) {
   const data = getServingPipeline(orgId, formId);
   const engagement = getServingConverterEngagement(orgId, formId);
+  const stagePoints = getServingStagePoints(orgId, formId);
   return (
     <Card className="p-5 space-y-5">
       <div>
@@ -506,10 +623,17 @@ export async function ServingPipelineSection({
       )}
 
       <StagesBoxChart
-        title="Serving pipeline · stages"
-        subtitle="Where the time actually goes: form-to-scheduled (admin lag, getting them on a plan) vs. scheduled-to-first-served (show-up gap, declined plans, etc.)."
+        title="Serving pipeline · stage spread"
+        subtitle="Where the time actually goes: form-to-scheduled (admin lag, getting them on a plan) vs. scheduled-to-first-served (show-up gap, declined plans, etc.). Each stage's full distribution side-by-side."
         stageLabels={["Form → Scheduled", "Scheduled → First served"]}
         stages={[data.stages.formToSchedule, data.stages.scheduleToServe]}
+      />
+      <StagesScatterCard
+        title="Serving pipeline · per-person stages"
+        subtitle="All three milestones (form, first scheduled, first served) plotted together."
+        xLabel="Form → Scheduled (days)"
+        yLabel="Scheduled → First served (days)"
+        points={stagePoints}
       />
       <BreakdownTable
         title="By service type"
@@ -571,6 +695,7 @@ function UntriggeredCard({
 export async function GroupPipelineSection({ orgId }: { orgId: number }) {
   const data = getGroupPipeline(orgId);
   const engagement = getGroupConverterEngagement(orgId);
+  const stagePoints = getGroupStagePoints(orgId);
   return (
     <Card className="p-5 space-y-5">
       <div>
@@ -582,10 +707,17 @@ export async function GroupPipelineSection({ orgId }: { orgId: number }) {
       </div>
       <StatStrip stats={data.overall} />
       <StagesBoxChart
-        title="Group pipeline · stages"
-        subtitle="Where the time actually goes: apply-to-join (waiting for the leader to add them) vs. join-to-first-attended (showing up the first Sunday after joining)."
+        title="Group pipeline · stage spread"
+        subtitle="Where the time actually goes: apply-to-join (waiting for the leader to add them) vs. join-to-first-attended (showing up the first time after joining). Each stage's full distribution side-by-side."
         stageLabels={["Apply → Join", "Join → First attended"]}
         stages={[data.stages.applyToJoin, data.stages.joinToAttend]}
+      />
+      <StagesScatterCard
+        title="Group pipeline · per-person stages"
+        subtitle="All three milestones (applied, joined, first attended) plotted together."
+        xLabel="Apply → Join (days)"
+        yLabel="Join → First attended (days)"
+        points={stagePoints}
       />
       <BreakdownTable title="By group type" rows={data.byGroupType} />
       <CategoricalBoxChart

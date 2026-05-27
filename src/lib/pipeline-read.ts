@@ -700,6 +700,186 @@ export function getServingPipelineDetail(
   };
 }
 
+// ─── Per-person 3-milestone view (apply, added, attended) ────────
+
+export interface StagePoint {
+  /** Stage 1 days: apply → join (groups) or form → scheduled (serving). */
+  stage1: number;
+  /** Stage 2 days: join → attend (groups) or scheduled → first served (serving). */
+  stage2: number;
+  /** Sum — used to render dot size so the eye sees worst-cases pop. */
+  total: number;
+  /** Short label for the hover tooltip (group / team name). */
+  label: string;
+}
+
+/** Per-person points showing BOTH waits for everyone who completed
+ *  the full group pipeline. Each row is one (person, group) — a heavy
+ *  joiner in 3 groups gives 3 points so per-group patterns surface. */
+export function getGroupStagePoints(orgId: number): StagePoint[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `WITH first_app AS (
+         SELECT person_id, group_id, MIN(applied_at) AS first_app_at
+           FROM pco_group_applications
+          WHERE org_id = ?
+            AND person_id IS NOT NULL
+            AND group_id IS NOT NULL
+            AND applied_at IS NOT NULL
+          GROUP BY person_id, group_id
+       ), first_join AS (
+         SELECT person_id, group_id, MIN(joined_at) AS first_join_at
+           FROM pco_group_memberships
+          WHERE org_id = ?
+            AND joined_at IS NOT NULL
+          GROUP BY person_id, group_id
+       ), first_att AS (
+         SELECT person_id, group_id, MIN(event_starts_at) AS first_att_at
+           FROM pco_event_attendances
+          WHERE org_id = ?
+            AND attended = 1
+            AND group_id IS NOT NULL
+            AND event_starts_at IS NOT NULL
+          GROUP BY person_id, group_id
+       )
+       SELECT fa.first_app_at AS appliedAt,
+              fj.first_join_at AS joinedAt,
+              fatt.first_att_at AS attendedAt,
+              g.name AS groupName
+         FROM first_app fa
+         JOIN first_join fj
+           ON fj.person_id = fa.person_id AND fj.group_id = fa.group_id
+         JOIN first_att fatt
+           ON fatt.person_id = fa.person_id
+          AND fatt.group_id = fa.group_id
+         LEFT JOIN pco_groups g
+           ON g.org_id = ? AND g.pco_id = fa.group_id`,
+    )
+    .all(orgId, orgId, orgId, orgId) as Array<{
+    appliedAt: string;
+    joinedAt: string;
+    attendedAt: string;
+    groupName: string | null;
+  }>;
+  return buildStagePoints(rows.map((r) => ({
+    startAt: r.appliedAt,
+    midAt: r.joinedAt,
+    endAt: r.attendedAt,
+    label: r.groupName ?? "(unnamed group)",
+  })));
+}
+
+/** Serving analog. Stage 1 = form sub → first scheduled (any status).
+ *  Stage 2 = first scheduled → first non-declined plan. We bind to a
+ *  configured form id when one is set; otherwise we fall back to "any
+ *  form submission" so the chart isn't empty pre-config. */
+export function getServingStagePoints(
+  orgId: number,
+  servingInterestFormId: string | null,
+): StagePoint[] {
+  const db = getDb();
+  const formId = servingInterestFormId ?? null;
+  const triggerSelect = formId
+    ? `SELECT MAX(sub.pco_created_at)
+         FROM pco_form_submissions sub
+        WHERE sub.org_id = ? AND sub.person_id = milestones.person_id
+          AND sub.pco_created_at IS NOT NULL
+          AND sub.pco_created_at < milestones.first_sched_at
+          AND sub.form_id = ?`
+    : `SELECT MAX(sub.pco_created_at)
+         FROM pco_form_submissions sub
+        WHERE sub.org_id = ? AND sub.person_id = milestones.person_id
+          AND sub.pco_created_at IS NOT NULL
+          AND sub.pco_created_at < milestones.first_sched_at`;
+
+  const stmt = db.prepare(
+    `WITH first_sched AS (
+       SELECT pp.person_id, MIN(p.sort_date) AS first_sched_at,
+              MIN(pp.team_id) AS team_id
+         FROM pco_plan_people pp
+         JOIN pco_plans p
+           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+        WHERE pp.org_id = ?
+          AND pp.person_id != ''
+          AND p.sort_date IS NOT NULL
+        GROUP BY pp.person_id
+     ), first_served AS (
+       SELECT pp.person_id, MIN(p.sort_date) AS first_served_at
+         FROM pco_plan_people pp
+         JOIN pco_plans p
+           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+        WHERE pp.org_id = ?
+          AND pp.person_id != ''
+          AND p.sort_date IS NOT NULL
+          AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
+        GROUP BY pp.person_id
+     ), milestones AS (
+       SELECT fs.person_id, fs.first_sched_at, fs.team_id,
+              srv.first_served_at
+         FROM first_sched fs
+         JOIN first_served srv ON srv.person_id = fs.person_id
+     )
+     SELECT (${triggerSelect}) AS appliedAt,
+            milestones.first_sched_at AS scheduledAt,
+            milestones.first_served_at AS servedAt,
+            t.name AS teamName
+       FROM milestones
+       LEFT JOIN pco_teams t
+         ON t.org_id = ? AND t.pco_id = milestones.team_id`,
+  );
+  const rows = (formId
+    ? stmt.all(orgId, orgId, orgId, formId, orgId)
+    : stmt.all(orgId, orgId, orgId, orgId)) as Array<{
+    appliedAt: string | null;
+    scheduledAt: string;
+    servedAt: string;
+    teamName: string | null;
+  }>;
+  return buildStagePoints(rows.map((r) => ({
+    startAt: r.appliedAt,
+    midAt: r.scheduledAt,
+    endAt: r.servedAt,
+    label: r.teamName ?? "(unknown team)",
+  })));
+}
+
+function buildStagePoints(
+  rows: Array<{
+    startAt: string | null;
+    midAt: string | null;
+    endAt: string | null;
+    label: string;
+  }>,
+): StagePoint[] {
+  const out: StagePoint[] = [];
+  for (const r of rows) {
+    if (!r.startAt || !r.midAt || !r.endAt) continue;
+    const t1 = new Date(r.startAt).getTime();
+    const t2 = new Date(r.midAt).getTime();
+    const t3 = new Date(r.endAt).getTime();
+    const s1 = (t2 - t1) / MS_PER_DAY;
+    const s2 = (t3 - t2) / MS_PER_DAY;
+    if (
+      !Number.isFinite(s1) ||
+      !Number.isFinite(s2) ||
+      s1 < 0 ||
+      s2 < 0 ||
+      s1 > PIPELINE_WINDOW_DAYS ||
+      s2 > PIPELINE_WINDOW_DAYS
+    ) {
+      continue;
+    }
+    out.push({
+      stage1: Math.round(s1 * 10) / 10,
+      stage2: Math.round(s2 * 10) / 10,
+      total: Math.round(s1 + s2),
+      label: r.label,
+    });
+  }
+  return out;
+}
+
 // ─── Engagement scatter (do fast converters engage more deeply?) ──
 
 export interface ConverterEngagement {
