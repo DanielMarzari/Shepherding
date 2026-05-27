@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import {
   type ServingFormState,
   saveServingInterestFormAction,
@@ -10,7 +10,12 @@ const INITIAL: ServingFormState = { status: "idle" };
 
 /** Dropdown for picking which PCO form counts as the "serving interest"
  *  trigger on /pipeline. Admin-only writes — non-admins see the same
- *  selector disabled so they can still tell what's configured. */
+ *  selector disabled so they can still tell what's configured.
+ *
+ *  Controlled <select> with a useEffect that syncs to the `current`
+ *  prop — otherwise the React reconciler keeps the old uncontrolled
+ *  DOM value across revalidation and the picker LOOKS reverted even
+ *  though the save succeeded. */
 export function ServingFormPicker({
   forms,
   current,
@@ -24,11 +29,17 @@ export function ServingFormPicker({
     saveServingInterestFormAction,
     INITIAL,
   );
+  const [value, setValue] = useState<string>(current ?? "");
+  useEffect(() => {
+    setValue(current ?? "");
+  }, [current]);
+
   return (
     <form action={action} className="space-y-2">
       <select
         name="formId"
-        defaultValue={current ?? ""}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
         disabled={!isAdmin || pending}
         className="w-full bg-bg-elev-2 border border-border-soft rounded px-2.5 py-1.5 text-sm text-fg disabled:opacity-70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent cursor-pointer"
       >

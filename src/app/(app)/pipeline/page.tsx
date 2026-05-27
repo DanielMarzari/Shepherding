@@ -13,7 +13,7 @@ export default async function PipelinePage() {
   const settings = getSyncSettings(session.orgId);
   return (
     <AppShell active="See more" breadcrumb="See more › Pipeline">
-      <div className="px-5 md:px-7 py-7 space-y-6 max-w-5xl">
+      <div className="px-5 md:px-7 py-7 space-y-6 max-w-7xl">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Pipeline</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">

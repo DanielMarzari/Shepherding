@@ -113,10 +113,14 @@ function BreakdownTable({
   title,
   rows,
   cap = 20,
+  /** When set, each row links to `${rowHref}/${row.key}` — used to drill
+   *  into the per-group / per-service-type person list. */
+  rowHref,
 }: {
   title: string;
   rows: PipelineDim[];
   cap?: number;
+  rowHref?: string;
 }) {
   if (rows.length === 0) {
     return (
@@ -159,19 +163,35 @@ function BreakdownTable({
           <tbody>
             {shown.map((r) => {
               const box = statsToBox(r.stats);
+              const href = rowHref
+                ? `${rowHref}/${encodeURIComponent(r.key)}`
+                : null;
+              const NameCell = href ? (
+                <Link
+                  href={href}
+                  className="font-medium truncate block max-w-[260px] hover:text-accent"
+                  title={r.name}
+                >
+                  {r.name}
+                </Link>
+              ) : (
+                <span
+                  className="font-medium truncate block max-w-[260px]"
+                  title={r.name}
+                >
+                  {r.name}
+                </span>
+              );
               return (
                 <tr
                   key={r.key}
-                  className="border-b border-border-softer hover:bg-bg-elev-2/60"
+                  className={`border-b border-border-softer ${
+                    href
+                      ? "hover:bg-bg-elev-2/60 cursor-pointer"
+                      : "hover:bg-bg-elev-2/60"
+                  }`}
                 >
-                  <td className="px-5 py-2.5">
-                    <span
-                      className="font-medium truncate block max-w-[260px]"
-                      title={r.name}
-                    >
-                      {r.name}
-                    </span>
-                  </td>
+                  <td className="px-5 py-2.5">{NameCell}</td>
                   <td className="px-5 py-2.5 text-right tnum">
                     {r.stats.count.toLocaleString()}
                   </td>
@@ -197,6 +217,51 @@ function BreakdownTable({
             + {(rows.length - cap).toLocaleString()} more not shown
           </div>
         )}
+      </div>
+    </Card>
+  );
+}
+
+/** Same BoxWhiskerChart shape but one box per CATEGORY (service type,
+ *  group type, group) instead of per month. Helps spot e.g. one group
+ *  type with a 200-day median tail dragging the overall average. */
+function CategoricalBoxChart({
+  title,
+  rows,
+  subtitle,
+  cap = 25,
+}: {
+  title: string;
+  rows: PipelineDim[];
+  subtitle?: string;
+  cap?: number;
+}) {
+  const filtered = rows
+    .filter((r) => statsToBox(r.stats) !== null)
+    .slice(0, cap);
+  if (filtered.length === 0) return null;
+  const boxes = filtered.map((r) => statsToBox(r.stats));
+  const xLabels = filtered.map((r) => r.name);
+  return (
+    <Card>
+      <CardHeader
+        title={title}
+        right={
+          <span className="text-xs text-muted">
+            {filtered.length.toLocaleString()} of{" "}
+            {rows.length.toLocaleString()}
+          </span>
+        }
+      />
+      <div className="p-5 space-y-3">
+        {subtitle && (
+          <p className="text-xs text-muted">
+            {subtitle} Each box is one segment — whiskers show min / max
+            days, the box is the 25th–75th percentile, white tick is the
+            median.
+          </p>
+        )}
+        <BoxWhiskerChart boxes={boxes} xLabels={xLabels} rotateLabels />
       </div>
     </Card>
   );
@@ -294,7 +359,16 @@ export async function ServingPipelineSection({
         <UntriggeredCard untriggered={data.untriggered} />
       )}
 
-      <BreakdownTable title="By service type" rows={data.byServiceType} />
+      <BreakdownTable
+        title="By service type"
+        rows={data.byServiceType}
+        rowHref="/pipeline/serving"
+      />
+      <CategoricalBoxChart
+        title="Serving pipeline · by service type"
+        subtitle="Spread of conversion days within each service type."
+        rows={data.byServiceType}
+      />
       <HistoryBoxChart
         title="Serving pipeline · trend"
         subtitle="Cohort grouped by the month the trigger form was submitted."
@@ -368,7 +442,22 @@ export async function GroupPipelineSection({ orgId }: { orgId: number }) {
       </div>
       <StatStrip stats={data.overall} />
       <BreakdownTable title="By group type" rows={data.byGroupType} />
-      <BreakdownTable title="By group" rows={data.byGroup} cap={25} />
+      <CategoricalBoxChart
+        title="Group pipeline · by group type"
+        subtitle="Spread of conversion days within each group type."
+        rows={data.byGroupType}
+      />
+      <BreakdownTable
+        title="By group"
+        rows={data.byGroup}
+        cap={25}
+        rowHref="/pipeline/group"
+      />
+      <CategoricalBoxChart
+        title="Group pipeline · by group"
+        subtitle="Spread of conversion days within each group. Click a row above to drill in."
+        rows={data.byGroup}
+      />
       <HistoryBoxChart
         title="Group pipeline · trend"
         subtitle="Cohort grouped by the month the application was submitted."

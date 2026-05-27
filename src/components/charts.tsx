@@ -669,17 +669,21 @@ export function BoxWhiskerChart({
   xLabels,
   height = 240,
   yLabelSuffix = "d",
+  rotateLabels = false,
 }: {
   boxes: Array<BoxWhiskerBox | null>;
   xLabels: string[];
   height?: number;
   yLabelSuffix?: string;
+  /** Rotate x-axis labels -35° so long category names don't overlap.
+   *  Adds extra bottom padding to make room. */
+  rotateLabels?: boolean;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const padL = 44;
   const padR = 12;
   const padT = 12;
-  const padB = 32;
+  const padB = rotateLabels ? 64 : 32;
   const viewBoxW = 900;
   const innerH = height - padT - padB;
   const innerW = viewBoxW - padL - padR;
@@ -690,8 +694,11 @@ export function BoxWhiskerChart({
   );
   const yScale = (v: number) => padT + innerH - (v / maxY) * innerH;
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((t) => t * maxY);
-  // Show ~10 x-labels max so they don't overlap.
-  const labelStride = Math.max(1, Math.ceil(boxes.length / 10));
+  // Show ~10 x-labels max so they don't overlap. With rotation we can
+  // fit more, but still cap to keep them legible.
+  const labelStride = rotateLabels
+    ? Math.max(1, Math.ceil(boxes.length / 20))
+    : Math.max(1, Math.ceil(boxes.length / 10));
 
   return (
     <div className="w-full">
@@ -807,16 +814,34 @@ export function BoxWhiskerChart({
         {xLabels.map((lab, i) => {
           if (i % labelStride !== 0) return null;
           const cx = padL + colW * (i + 0.5);
+          const y = height - padB + 14;
+          // Truncate long labels — full text still in tooltip on hover.
+          const shown = lab.length > 22 ? `${lab.slice(0, 21)}…` : lab;
+          if (rotateLabels) {
+            return (
+              <text
+                key={i}
+                x={cx}
+                y={y}
+                textAnchor="end"
+                fontSize={10}
+                fill="#7c879c"
+                transform={`rotate(-35 ${cx} ${y})`}
+              >
+                {shown}
+              </text>
+            );
+          }
           return (
             <text
               key={i}
               x={cx}
-              y={height - padB + 14}
+              y={y}
               textAnchor="middle"
               fontSize={10}
               fill="#7c879c"
             >
-              {lab}
+              {shown}
             </text>
           );
         })}
@@ -847,68 +872,97 @@ export function BoxWhiskerChart({
 
 /** Inline horizontal box-and-whisker — one box rendered in-line as a
  *  table cell so each breakdown row shows its distribution shape.
- *  `scaleMax` is shared across rows so boxes are comparable. */
+ *  `scaleMax` is shared across rows so boxes are comparable.
+ *
+ *  The numeric labels are part of the cell (not the SVG) so they stay
+ *  legible at any column width — without them the rows are decorative
+ *  blobs and the user has to hover the column header to know what 0 –
+ *  Nd even means. */
 export function BoxWhiskerRow({
   box,
   scaleMax,
   height = 18,
+  unitSuffix = "d",
 }: {
   box: BoxWhiskerBox;
   scaleMax: number;
   height?: number;
+  unitSuffix?: string;
 }) {
   const w = 220;
   const h = height;
   const denom = Math.max(1, scaleMax);
   const xScale = (v: number) => (v / denom) * w;
+  // Where the median tick sits as a 0-100 percentage — used to position
+  // the floating label above the box so it tracks the median.
+  const medianPct = (box.median / denom) * 100;
   return (
-    <svg
-      viewBox={`0 0 ${w} ${h}`}
-      preserveAspectRatio="none"
-      className="block w-full max-w-[260px]"
-      style={{ height }}
-    >
-      <line
-        x1={xScale(box.min)}
-        x2={xScale(box.max)}
-        y1={h / 2}
-        y2={h / 2}
-        stroke="rgba(168,178,198,0.55)"
-        strokeWidth={1}
-      />
-      <line
-        x1={xScale(box.min)}
-        x2={xScale(box.min)}
-        y1={h * 0.3}
-        y2={h * 0.7}
-        stroke="rgba(168,178,198,0.55)"
-        strokeWidth={1}
-      />
-      <line
-        x1={xScale(box.max)}
-        x2={xScale(box.max)}
-        y1={h * 0.3}
-        y2={h * 0.7}
-        stroke="rgba(168,178,198,0.55)"
-        strokeWidth={1}
-      />
-      <rect
-        x={xScale(box.p25)}
-        y={h * 0.2}
-        width={Math.max(1, xScale(box.p75) - xScale(box.p25))}
-        height={h * 0.6}
-        fill="rgba(52,211,153,0.22)"
-        stroke="#34d399"
-        strokeWidth={1}
-      />
-      <line
-        x1={xScale(box.median)}
-        x2={xScale(box.median)}
-        y1={h * 0.12}
-        y2={h * 0.88}
-        stroke="#e8ebf2"
-        strokeWidth={1.5}
-      />
-    </svg>
+    <div className="flex items-center gap-2 w-full max-w-[320px]">
+      <span className="text-[10px] tnum text-subtle shrink-0 w-8 text-right">
+        {Math.round(box.min)}
+        {unitSuffix}
+      </span>
+      <div className="relative flex-1 min-w-0">
+        <svg
+          viewBox={`0 0 ${w} ${h}`}
+          preserveAspectRatio="none"
+          className="block w-full"
+          style={{ height }}
+        >
+          <line
+            x1={xScale(box.min)}
+            x2={xScale(box.max)}
+            y1={h / 2}
+            y2={h / 2}
+            stroke="rgba(168,178,198,0.55)"
+            strokeWidth={1}
+          />
+          <line
+            x1={xScale(box.min)}
+            x2={xScale(box.min)}
+            y1={h * 0.3}
+            y2={h * 0.7}
+            stroke="rgba(168,178,198,0.55)"
+            strokeWidth={1}
+          />
+          <line
+            x1={xScale(box.max)}
+            x2={xScale(box.max)}
+            y1={h * 0.3}
+            y2={h * 0.7}
+            stroke="rgba(168,178,198,0.55)"
+            strokeWidth={1}
+          />
+          <rect
+            x={xScale(box.p25)}
+            y={h * 0.2}
+            width={Math.max(1, xScale(box.p75) - xScale(box.p25))}
+            height={h * 0.6}
+            fill="rgba(52,211,153,0.22)"
+            stroke="#34d399"
+            strokeWidth={1}
+          />
+          <line
+            x1={xScale(box.median)}
+            x2={xScale(box.median)}
+            y1={h * 0.12}
+            y2={h * 0.88}
+            stroke="#e8ebf2"
+            strokeWidth={1.5}
+          />
+        </svg>
+        <span
+          className="absolute -top-3.5 text-[10px] tnum text-fg pointer-events-none whitespace-nowrap -translate-x-1/2"
+          style={{ left: `${Math.min(92, Math.max(8, medianPct))}%` }}
+        >
+          {Math.round(box.median)}
+          {unitSuffix}
+        </span>
+      </div>
+      <span className="text-[10px] tnum text-subtle shrink-0 w-10">
+        {Math.round(box.max)}
+        {unitSuffix}
+      </span>
+    </div>
   );
 }
