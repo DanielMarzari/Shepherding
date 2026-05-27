@@ -51,6 +51,12 @@ const LINKS: MoreLink[] = [
     description:
       "Standard nonprofit logic-model docs — Resources, Activities, Outputs, Outcomes, Impact — describing what each ministry is accomplishing and for whom. Hand-edited today; PCO data will fill more of it in over time.",
   },
+  {
+    href: "/pipeline",
+    title: "Pipeline",
+    description:
+      "From interest to action: time from a form submission to first serve (per service type) and from a group application to first attended event (per group + group type). Includes a 5-year cohort trend so you can see when follow-up is fast and when it's slipping.",
+  },
 ];
 
 export default function MorePage() {
