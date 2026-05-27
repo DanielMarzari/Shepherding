@@ -3,10 +3,12 @@ import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, LaneTag } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
+import { getLaneFlow } from "@/lib/dashboard-refresh";
 import { getLaneStats, getRecentMovement } from "@/lib/dashboard-read";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
 import { listShepherds } from "@/lib/shepherds-read";
+import { LaneSankey } from "./lane-sankey";
 
 export default async function LanesPage() {
   const session = await requireOrg();
@@ -35,41 +37,29 @@ export default async function LanesPage() {
           <LaneCards orgId={session.orgId} />
         </Suspense>
 
-        {/* Flow + sequences */}
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 mb-5">
-          <Card className="xl:col-span-8 p-5">
-            <div className="flex items-baseline justify-between mb-1">
+        {/* Flow */}
+        <div className="grid grid-cols-1 gap-3 mb-5">
+          <Card className="p-5">
+            <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
               <h2 className="text-sm font-semibold">
-                Lane flow · last 12 months
+                Lane flow · entry → today
               </h2>
-              <span className="text-xs text-muted hidden md:inline">
-                Sankey of source → next-added lane
+              <span className="text-xs text-muted">
+                Community + Serving only — Worship needs Sunday check-in
+                data and Giving isn&apos;t synced.
               </span>
             </div>
             <p className="text-xs text-muted mb-4">
-              Width = number of people who added that next lane after the
-              source.
+              Each person sits on the left at the lane they first
+              entered (community = first group joined, serving = first
+              team added, both = within 30 days of each other, none =
+              never entered either). On the right they sit at the lane
+              they&apos;re currently active in. Curve width is
+              proportional to the count.
             </p>
-            <InsufficientDataBlock
-              line1="Lane-transition history isn't logged yet."
-              line2="Building this needs a per-person snapshot of which lanes were active each month — once that's wired the sankey here lights up."
-            />
-          </Card>
-
-          <Card className="xl:col-span-4 p-5">
-            <div className="flex items-baseline justify-between mb-1">
-              <h2 className="text-sm font-semibold">
-                Common journey sequences
-              </h2>
-              <span className="text-xs text-muted">order &amp; count</span>
-            </div>
-            <p className="text-xs text-muted mb-4">
-              Lanes added in chronological order. People may add more later.
-            </p>
-            <InsufficientDataBlock
-              line1="Same source as the flow above — not wired."
-              line2="Once lane snapshots accumulate (a few months at minimum) we can compute the top sequences."
-            />
+            <Suspense fallback={<SankeySkeleton />}>
+              <SankeySection orgId={session.orgId} />
+            </Suspense>
           </Card>
         </div>
 
@@ -99,6 +89,19 @@ export default async function LanesPage() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+// ─── Sankey (lane entry → today) ──────────────────────────────────
+
+async function SankeySection({ orgId }: { orgId: number }) {
+  const flow = getLaneFlow(orgId);
+  return <LaneSankey flow={flow} />;
+}
+
+function SankeySkeleton() {
+  return (
+    <div className="h-[400px] rounded-lg bg-bg-elev-2/40 animate-pulse" />
   );
 }
 

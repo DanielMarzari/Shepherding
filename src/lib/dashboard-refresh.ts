@@ -47,6 +47,7 @@ function rebuildPersonActivity(
         last_pco_updated_at, last_activity_at,
         active_group_count, active_team_count,
         in_lane_wors, in_lane_comm, in_lane_serv,
+        first_comm_at, first_serv_at,
         classification)
      SELECT
        ?,
@@ -121,6 +122,18 @@ function rebuildPersonActivity(
           WHERE tm.org_id = p.org_id AND tm.person_id = p.pco_id
             AND tm.archived_at IS NULL
        ) THEN 1 ELSE 0 END,
+       -- first_comm_at: earliest joined-a-group date (ever, including
+       -- archived memberships — we want to know when they first
+       -- entered the lane, not whether they're still in it).
+       (SELECT MIN(joined_at) FROM pco_group_memberships gm
+         WHERE gm.org_id = p.org_id AND gm.person_id = p.pco_id
+           AND gm.joined_at IS NOT NULL AND gm.joined_at <= ?),
+       -- first_serv_at: earliest team-add date (PCO created_at on
+       -- person_team_position_assignments — captured into
+       -- pco_team_memberships.pco_created_at by the services sync).
+       (SELECT MIN(pco_created_at) FROM pco_team_memberships tm
+         WHERE tm.org_id = p.org_id AND tm.person_id = p.pco_id
+           AND tm.pco_created_at IS NOT NULL AND tm.pco_created_at <= ?),
        NULL  -- classification filled in by a second pass below
      FROM pco_people p
      WHERE p.org_id = ?`,
@@ -129,6 +142,7 @@ function rebuildPersonActivity(
     nowIso, nowIso, // attended / served upper bounds
     nowIso, nowIso, nowIso, nowIso, nowIso, // last_activity max sub-queries
     cutoffActivity, cutoffActivity, // in_lane_wors cutoffs
+    nowIso, nowIso, // first_comm_at / first_serv_at upper bounds
     orgId,
   );
 
@@ -372,6 +386,110 @@ export interface OrgSnapshot {
   laneNone: number;
   activityMonths: number;
   refreshedAt: string;
+}
+
+// ─── Lane flow (for the /lanes sankey) ────────────────────────────
+
+/** Lane category for the sankey. We deliberately only model the lanes
+ *  we can actually measure right now — community (groups) and serving
+ *  (teams). Worship needs Sunday check-in to be reliable and most
+ *  churches don't require it; giving needs PCO Giving sync. Both stay
+ *  out of the chart until we can capture them honestly. */
+export type LaneCategory = "comm" | "serv" | "both" | "none";
+
+export interface LaneFlow {
+  /** Flow rows: how many people started in `from` and currently sit
+   *  in `to`. Sums per `from` equal the total population. */
+  flows: Array<{ from: LaneCategory; to: LaneCategory; count: number }>;
+  /** Per-source totals — used to size the left-column rectangles. */
+  fromTotals: Record<LaneCategory, number>;
+  /** Per-destination totals — sizes the right-column rectangles. */
+  toTotals: Record<LaneCategory, number>;
+  /** Total people considered (everyone in the org). */
+  total: number;
+}
+
+/** People bucketed by "first lane entered" × "currently in lane". Reads
+ *  entirely from person_activity so the sankey rebuild is a single
+ *  table scan. Two people who entered both lanes within 30 days of
+ *  each other are classified as "both" on the entry side. */
+export function getLaneFlow(orgId: number): LaneFlow {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT first_comm_at, first_serv_at,
+              active_group_count, active_team_count
+         FROM person_activity
+        WHERE org_id = ?`,
+    )
+    .all(orgId) as Array<{
+    first_comm_at: string | null;
+    first_serv_at: string | null;
+    active_group_count: number;
+    active_team_count: number;
+  }>;
+
+  const SAME_TIME_MS = 30 * 86_400_000;
+  const buckets: Record<string, number> = {};
+  const fromTotals: Record<LaneCategory, number> = {
+    comm: 0,
+    serv: 0,
+    both: 0,
+    none: 0,
+  };
+  const toTotals: Record<LaneCategory, number> = {
+    comm: 0,
+    serv: 0,
+    both: 0,
+    none: 0,
+  };
+
+  function bucketKey(from: LaneCategory, to: LaneCategory): string {
+    return `${from}>${to}`;
+  }
+
+  for (const r of rows) {
+    let from: LaneCategory;
+    if (!r.first_comm_at && !r.first_serv_at) {
+      from = "none";
+    } else if (r.first_comm_at && !r.first_serv_at) {
+      from = "comm";
+    } else if (r.first_serv_at && !r.first_comm_at) {
+      from = "serv";
+    } else {
+      const dComm = new Date(r.first_comm_at!).getTime();
+      const dServ = new Date(r.first_serv_at!).getTime();
+      from =
+        Math.abs(dComm - dServ) <= SAME_TIME_MS
+          ? "both"
+          : dComm < dServ
+            ? "comm"
+            : "serv";
+    }
+
+    let to: LaneCategory;
+    if (r.active_group_count > 0 && r.active_team_count > 0) to = "both";
+    else if (r.active_group_count > 0) to = "comm";
+    else if (r.active_team_count > 0) to = "serv";
+    else to = "none";
+
+    fromTotals[from]++;
+    toTotals[to]++;
+    const k = bucketKey(from, to);
+    buckets[k] = (buckets[k] ?? 0) + 1;
+  }
+
+  const flows: LaneFlow["flows"] = [];
+  for (const k of Object.keys(buckets)) {
+    const [from, to] = k.split(">") as [LaneCategory, LaneCategory];
+    flows.push({ from, to, count: buckets[k] });
+  }
+  return {
+    flows,
+    fromTotals,
+    toTotals,
+    total: rows.length,
+  };
 }
 
 /** Returns NULL when no snapshot has ever been computed for the org.
