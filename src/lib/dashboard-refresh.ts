@@ -152,6 +152,42 @@ function updateRefreshProgress(
     .run(step, label, runId);
 }
 
+/** Abandon a running refresh — marks the row as error so the UI
+ *  unblocks immediately. We can't actually kill the background work
+ *  (better-sqlite3 is synchronous; once a phase starts there's no
+ *  abort token to flip), but the abandoned work just keeps writing
+ *  to the snapshot tables in the background, and the next refresh
+ *  the user starts will overwrite those tables anyway. Safe. */
+export function abandonRefreshRun(runId: number): void {
+  getDb()
+    .prepare(
+      `UPDATE dashboard_refresh_runs
+          SET status = 'error',
+              error = 'Abandoned by user — background work may still finish silently.',
+              finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ? AND status = 'running'`,
+    )
+    .run(runId);
+}
+
+/** Most-recent run for this org, regardless of status — used by the
+ *  home page so we can show a "still going" banner across page
+ *  reloads (rather than only showing the banner when the user's
+ *  current tab triggered it). */
+export function getLatestRefreshRunForOrg(
+  orgId: number,
+): RefreshRunStatus | null {
+  const row = getDb()
+    .prepare(
+      `SELECT id FROM dashboard_refresh_runs
+        WHERE org_id = ?
+        ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(orgId) as { id: number } | undefined;
+  if (!row) return null;
+  return getRefreshRunStatus(row.id);
+}
+
 function finishRefreshRun(
   runId: number,
   status: "ok" | "error",

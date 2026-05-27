@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  abandonRefreshAction,
+  getLatestRefreshAction,
   getRefreshStatusAction,
   revalidateDashboardAction,
   startRefreshAction,
@@ -31,13 +33,41 @@ export function RefreshSnapshotsButton({
   refreshedAt: string | null;
 }) {
   const [run, setRun] = useState<RunState | null>(null);
+  const [runId, setRunId] = useState<number | null>(null);
   const [errMessage, setErrMessage] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // On mount, see if a refresh is already in flight (started in
+  // another tab, before a page reload, by the PCO sync, etc.) and
+  // re-attach the banner to it. Without this you can navigate to /
+  // mid-refresh and see no indication that anything's happening.
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const latest = await getLatestRefreshAction();
+        if (cancelled || !latest) return;
+        if (latest.status === "running") {
+          setRunId(latest.id);
+          setRun({
+            step: latest.currentStep,
+            total: latest.totalSteps,
+            label: latest.stepLabel ?? "",
+            status: latest.status,
+            error: latest.error,
+            elapsedMs: latest.elapsedMs,
+          });
+          pollUntilDone(latest.id);
+        }
+      } catch {
+        // ignore — banner just stays hidden
+      }
+    })();
     return () => {
+      cancelled = true;
       if (pollRef.current) clearInterval(pollRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function pollUntilDone(runId: number) {
@@ -89,10 +119,23 @@ export function RefreshSnapshotsButton({
         setRun(null);
         return;
       }
+      setRunId(result.runId);
       pollUntilDone(result.runId);
     } catch (e) {
       setErrMessage(e instanceof Error ? e.message : "Failed to start.");
       setRun(null);
+    }
+  }
+
+  async function handleCancel() {
+    if (runId == null) return;
+    try {
+      await abandonRefreshAction(runId);
+      // The polling loop will pick up the "error" status and tear down
+      // the banner itself. Leave it running rather than stopping it
+      // here so the user sees the "Cancelled" message briefly.
+    } catch (e) {
+      setErrMessage(e instanceof Error ? e.message : "Cancel failed.");
     }
   }
 
@@ -177,6 +220,18 @@ export function RefreshSnapshotsButton({
           <div className="mt-2 text-[11px] text-muted break-words">
             {isError ? (run.error ?? "unknown error") : run.label || "Starting…"}
           </div>
+          {isAdmin && isRunning && runId != null && (
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="text-[11px] text-muted hover:text-warn-soft-fg cursor-pointer underline-offset-2 hover:underline"
+                title="Mark this run abandoned. The background work won't be killed — it'll keep going silently and any half-written rows just get overwritten by the next refresh. Use this if you don't want to wait."
+              >
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
       )}
     </>
