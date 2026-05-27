@@ -4,12 +4,16 @@ import {
   type BoxWhiskerBox,
   BoxWhiskerChart,
   BoxWhiskerRow,
+  ScatterChart,
 } from "@/components/charts";
 import {
   type ConversionStats,
+  type EngagementSummary,
   type PipelineBucket,
   type PipelineDim,
+  getGroupConverterEngagement,
   getGroupPipeline,
+  getServingConverterEngagement,
   getServingPipeline,
 } from "@/lib/pipeline-read";
 
@@ -222,6 +226,147 @@ function BreakdownTable({
   );
 }
 
+/** Two-stage box-and-whisker. Each stage is one fixed category, so we
+ *  reuse the existing categorical chart with two columns. Helps show
+ *  WHERE the time goes — admin lag (apply → join, sub → schedule) vs.
+ *  the show-up gap that follows. */
+function StagesBoxChart({
+  title,
+  subtitle,
+  stageLabels,
+  stages,
+}: {
+  title: string;
+  subtitle: string;
+  stageLabels: [string, string];
+  stages: [ConversionStats, ConversionStats];
+}) {
+  const boxes = [statsToBox(stages[0]), statsToBox(stages[1])];
+  if (boxes.every((b) => b === null)) return null;
+  const formatStage = (label: string, s: ConversionStats) =>
+    `${label}: n=${s.count} · median ${fmtDays(s.medianDays)} · avg ${fmtDays(s.avgDays)}`;
+  return (
+    <Card>
+      <CardHeader title={title} />
+      <div className="p-5 space-y-3">
+        <p className="text-xs text-muted">{subtitle}</p>
+        <BoxWhiskerChart boxes={boxes} xLabels={stageLabels} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-muted pt-1">
+          <div>{formatStage(stageLabels[0], stages[0])}</div>
+          <div>{formatStage(stageLabels[1], stages[1])}</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function EngagementCard({
+  title,
+  subtitle,
+  engagement,
+  xLabel,
+  yLabel = "Attendance %",
+}: {
+  title: string;
+  subtitle: string;
+  engagement: EngagementSummary;
+  xLabel: string;
+  yLabel?: string;
+}) {
+  if (engagement.points.length === 0) {
+    return (
+      <Card>
+        <CardHeader title={title} />
+        <p className="px-5 py-6 text-sm text-muted text-center">
+          Not enough post-conversion data yet — converters need at least
+          a few events / scheduled plans on the books before this chart
+          fills in.
+        </p>
+      </Card>
+    );
+  }
+  // Quartile split on daysToConvert so we can compare the fast cohort
+  // to the slow cohort numerically alongside the scatter.
+  const sortedDays = [...engagement.points]
+    .map((p) => p.daysToConvert)
+    .sort((a, b) => a - b);
+  const q25 = sortedDays[Math.floor(sortedDays.length * 0.25)] ?? 0;
+  const q75 = sortedDays[Math.floor(sortedDays.length * 0.75)] ?? 0;
+  const fast = engagement.points.filter((p) => p.daysToConvert <= q25);
+  const slow = engagement.points.filter((p) => p.daysToConvert >= q75);
+  const avg = (arr: number[]) =>
+    arr.length === 0
+      ? null
+      : Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+  const fastAvg = avg(fast.map((p) => p.attendancePct));
+  const slowAvg = avg(slow.map((p) => p.attendancePct));
+
+  const corr = engagement.correlation;
+  const corrLabel =
+    corr == null
+      ? "—"
+      : Math.abs(corr) < 0.1
+        ? `≈ 0 (no relationship)`
+        : `${corr.toFixed(2)} (${
+            corr < 0 ? "fast → more engaged" : "slow → more engaged"
+          })`;
+
+  return (
+    <Card>
+      <CardHeader
+        title={title}
+        right={
+          <span className="text-xs text-muted">
+            {engagement.points.length.toLocaleString()} converters
+          </span>
+        }
+      />
+      <div className="p-5 space-y-3">
+        <p className="text-xs text-muted">
+          {subtitle} Dot size = lifespan in the group/team (bigger = stuck
+          around longer). Dashed line is the linear trend.
+        </p>
+        <ScatterChart
+          points={engagement.points.map((p) => ({
+            x: p.daysToConvert,
+            y: p.attendancePct,
+            size: p.lifespanDays,
+            label: `${p.lifespanDays}d lifespan · ${p.eventsAvailable} events`,
+          }))}
+          xLabel={xLabel}
+          yLabel={yLabel}
+          xSuffix="d"
+          ySuffix="%"
+          trendline
+        />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+          <Stat
+            label="Fast converters (bottom 25%)"
+            value={fastAvg == null ? "—" : `${fastAvg}%`}
+            valueTone="good"
+            delta={`${fast.length} people · ≤ ${Math.round(q25)}d to convert`}
+          />
+          <Stat
+            label="Slow converters (top 25%)"
+            value={slowAvg == null ? "—" : `${slowAvg}%`}
+            valueTone={
+              slowAvg != null && fastAvg != null && slowAvg < fastAvg - 10
+                ? "warn"
+                : "default"
+            }
+            delta={`${slow.length} people · ≥ ${Math.round(q75)}d to convert`}
+          />
+          <Stat
+            label="Correlation"
+            value={corrLabel}
+            delta="negative = faster converters engage more"
+          />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 /** Same BoxWhiskerChart shape but one box per CATEGORY (service type,
  *  group type, group) instead of per month. Helps spot e.g. one group
  *  type with a 200-day median tail dragging the overall average. */
@@ -315,6 +460,7 @@ export async function ServingPipelineSection({
   formId: string | null;
 }) {
   const data = getServingPipeline(orgId, formId);
+  const engagement = getServingConverterEngagement(orgId, formId);
   return (
     <Card className="p-5 space-y-5">
       <div>
@@ -359,6 +505,12 @@ export async function ServingPipelineSection({
         <UntriggeredCard untriggered={data.untriggered} />
       )}
 
+      <StagesBoxChart
+        title="Serving pipeline · stages"
+        subtitle="Where the time actually goes: form-to-scheduled (admin lag, getting them on a plan) vs. scheduled-to-first-served (show-up gap, declined plans, etc.)."
+        stageLabels={["Form → Scheduled", "Scheduled → First served"]}
+        stages={[data.stages.formToSchedule, data.stages.scheduleToServe]}
+      />
       <BreakdownTable
         title="By service type"
         rows={data.byServiceType}
@@ -370,9 +522,16 @@ export async function ServingPipelineSection({
         rows={data.byServiceType}
       />
       <HistoryBoxChart
-        title="Serving pipeline · trend"
-        subtitle="Cohort grouped by the month the trigger form was submitted."
+        title="Serving pipeline · trend (last 5 years)"
+        subtitle="Cohort grouped by the month the trigger form was submitted. Months with no conversions get a small baseline dot so the timeline reads as a full 5-year span."
         buckets={data.history}
+      />
+      <EngagementCard
+        title="Serving pipeline · engagement"
+        subtitle="Do fast converters serve more reliably once they're on the rotation? Y-axis is the % of scheduled plans they actually served (status not declined)."
+        engagement={engagement}
+        xLabel="Days to first serve"
+        yLabel="Plans served %"
       />
     </Card>
   );
@@ -411,6 +570,7 @@ function UntriggeredCard({
 
 export async function GroupPipelineSection({ orgId }: { orgId: number }) {
   const data = getGroupPipeline(orgId);
+  const engagement = getGroupConverterEngagement(orgId);
   return (
     <Card className="p-5 space-y-5">
       <div>
@@ -421,6 +581,12 @@ export async function GroupPipelineSection({ orgId }: { orgId: number }) {
         </p>
       </div>
       <StatStrip stats={data.overall} />
+      <StagesBoxChart
+        title="Group pipeline · stages"
+        subtitle="Where the time actually goes: apply-to-join (waiting for the leader to add them) vs. join-to-first-attended (showing up the first Sunday after joining)."
+        stageLabels={["Apply → Join", "Join → First attended"]}
+        stages={[data.stages.applyToJoin, data.stages.joinToAttend]}
+      />
       <BreakdownTable title="By group type" rows={data.byGroupType} />
       <CategoricalBoxChart
         title="Group pipeline · by group type"
@@ -435,13 +601,19 @@ export async function GroupPipelineSection({ orgId }: { orgId: number }) {
       />
       <CategoricalBoxChart
         title="Group pipeline · by group"
-        subtitle="Spread of conversion days within each group. Click a row above to drill in."
+        subtitle="Spread of conversion days within each group. Click a row in the table above to drill in."
         rows={data.byGroup}
       />
       <HistoryBoxChart
-        title="Group pipeline · trend"
-        subtitle="Cohort grouped by the month the application was submitted."
+        title="Group pipeline · trend (last 5 years)"
+        subtitle="Cohort grouped by the month the application was submitted. Months with no conversions get a small baseline dot so the timeline reads as a full 5-year span."
         buckets={data.history}
+      />
+      <EngagementCard
+        title="Group pipeline · engagement"
+        subtitle="Do fast converters stay engaged? Y-axis is the % of group events they attended after joining."
+        engagement={engagement}
+        xLabel="Days to first attended"
       />
     </Card>
   );

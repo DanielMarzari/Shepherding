@@ -667,12 +667,15 @@ export interface BoxWhiskerBox {
 export function BoxWhiskerChart({
   boxes,
   xLabels,
-  height = 240,
+  height,
   yLabelSuffix = "d",
   rotateLabels = false,
 }: {
   boxes: Array<BoxWhiskerBox | null>;
   xLabels: string[];
+  /** Total SVG height. Defaults are tuned to leave room for rotated x
+   *  labels — pass an explicit value only when you need more vertical
+   *  room for tall data. */
   height?: number;
   yLabelSuffix?: string;
   /** Rotate x-axis labels -35° so long category names don't overlap.
@@ -683,9 +686,19 @@ export function BoxWhiskerChart({
   const padL = 44;
   const padR = 12;
   const padT = 12;
-  const padB = rotateLabels ? 64 : 32;
+  // Compute bottom padding from the longest visible label when rotated
+  // — a 22-char label at fontSize 10 projects ~75px downward at -35°.
+  // Without this the categorical chart gets clipped off the bottom of
+  // its card and the bottom row of labels is unreadable.
+  const longestVisibleLabel = rotateLabels
+    ? xLabels.reduce((m, l) => Math.max(m, Math.min(22, l.length)), 0)
+    : 0;
+  const padB = rotateLabels
+    ? Math.max(60, Math.round(longestVisibleLabel * 6 * 0.57) + 22)
+    : 32;
+  const resolvedHeight = height ?? (rotateLabels ? 280 : 240);
   const viewBoxW = 900;
-  const innerH = height - padT - padB;
+  const innerH = resolvedHeight - padT - padB;
   const innerW = viewBoxW - padL - padR;
   const colW = innerW / Math.max(1, boxes.length);
   const maxY = Math.max(
@@ -703,8 +716,9 @@ export function BoxWhiskerChart({
   return (
     <div className="w-full">
       <svg
-        viewBox={`0 0 ${viewBoxW} ${height}`}
+        viewBox={`0 0 ${viewBoxW} ${resolvedHeight}`}
         className="block w-full"
+        style={{ overflow: "visible" }}
         onMouseLeave={() => setHover(null)}
       >
         {yTicks.map((v, i) => (
@@ -733,18 +747,29 @@ export function BoxWhiskerChart({
           const cx = padL + colW * (i + 0.5);
           const halfW = Math.max(2, Math.min(8, colW * 0.35));
           if (!b || b.count === 0) {
-            // empty bucket — invisible hover hit so the tooltip still
-            // says "no data" if the user mouses over.
+            // Empty bucket — still draw a tiny baseline dot so the
+            // timeline reads as a full 5-year span even when most
+            // months have no conversions. Without this, the chart
+            // looks like it starts wherever the data starts.
+            const baselineY = padT + innerH;
             return (
-              <rect
-                key={i}
-                x={padL + colW * i}
-                y={padT}
-                width={colW}
-                height={innerH}
-                fill="transparent"
-                onMouseEnter={() => setHover(i)}
-              />
+              <g key={i}>
+                <rect
+                  x={padL + colW * i}
+                  y={padT}
+                  width={colW}
+                  height={innerH}
+                  fill="transparent"
+                  onMouseEnter={() => setHover(i)}
+                />
+                <circle
+                  cx={cx}
+                  cy={baselineY}
+                  r={1.2}
+                  fill="rgba(124,135,156,0.55)"
+                  pointerEvents="none"
+                />
+              </g>
             );
           }
           const isHover = hover === i;
@@ -814,7 +839,7 @@ export function BoxWhiskerChart({
         {xLabels.map((lab, i) => {
           if (i % labelStride !== 0) return null;
           const cx = padL + colW * (i + 0.5);
-          const y = height - padB + 14;
+          const y = resolvedHeight - padB + 14;
           // Truncate long labels — full text still in tooltip on hover.
           const shown = lab.length > 22 ? `${lab.slice(0, 21)}…` : lab;
           if (rotateLabels) {
@@ -866,6 +891,228 @@ export function BoxWhiskerChart({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Scatter (engagement) ────────────────────────────────────────
+
+export interface ScatterPoint {
+  x: number;
+  y: number;
+  /** Optional third dimension encoded as dot radius. Values are
+   *  normalized within the chart so a 0/1 scaling matters only as a
+   *  ratio between points. */
+  size?: number;
+  /** Free-form label shown in the hover tooltip. Recommended format:
+   *  "value1 · value2 · context". */
+  label?: string;
+}
+
+/** Scatter plot for two continuous variables. Used on /pipeline to
+ *  compare how fast a person converted vs. how engaged they stayed
+ *  after, with an optional 3rd dimension (e.g. group lifespan) as dot
+ *  size. Dots are translucent so dense clusters reveal a shape; hover
+ *  highlights the nearest one. */
+export function ScatterChart({
+  points,
+  xLabel,
+  yLabel,
+  xSuffix = "",
+  ySuffix = "",
+  height = 280,
+  trendline = false,
+}: {
+  points: ScatterPoint[];
+  xLabel: string;
+  yLabel: string;
+  xSuffix?: string;
+  ySuffix?: string;
+  height?: number;
+  /** Draw a least-squares regression line through the points so the
+   *  reader can see the broad trend without us doing the inference. */
+  trendline?: boolean;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const padL = 48;
+  const padR = 16;
+  const padT = 14;
+  const padB = 36;
+  const viewW = 900;
+  const innerW = viewW - padL - padR;
+  const innerH = height - padT - padB;
+
+  if (points.length === 0) {
+    return (
+      <div className="text-xs text-muted py-10 text-center">
+        Not enough data yet for an engagement scatter.
+      </div>
+    );
+  }
+
+  const xMax = Math.max(1, ...points.map((p) => p.x));
+  const yMax = Math.max(1, ...points.map((p) => p.y));
+  const sizes = points.map((p) => p.size ?? 0);
+  const sizeMax = Math.max(0, ...sizes);
+
+  const xFor = (v: number) => padL + (v / xMax) * innerW;
+  const yFor = (v: number) => padT + innerH - (v / yMax) * innerH;
+  const rFor = (v: number | undefined) => {
+    if (sizeMax <= 0 || v == null) return 3.5;
+    const norm = Math.min(1, Math.max(0, v / sizeMax));
+    return 2.5 + norm * 7;
+  };
+
+  // Trend line via least-squares.
+  const trend = (() => {
+    if (!trendline || points.length < 3) return null;
+    let sx = 0,
+      sy = 0,
+      sxy = 0,
+      sxx = 0;
+    const n = points.length;
+    for (const p of points) {
+      sx += p.x;
+      sy += p.y;
+      sxy += p.x * p.y;
+      sxx += p.x * p.x;
+    }
+    const denom = n * sxx - sx * sx;
+    if (denom === 0) return null;
+    const m = (n * sxy - sx * sy) / denom;
+    const b = (sy - m * sx) / n;
+    const x0 = 0;
+    const x1 = xMax;
+    return {
+      x1: xFor(x0),
+      y1: yFor(Math.max(0, Math.min(yMax, m * x0 + b))),
+      x2: xFor(x1),
+      y2: yFor(Math.max(0, Math.min(yMax, m * x1 + b))),
+    };
+  })();
+
+  const xTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(xMax * f));
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(yMax * f));
+
+  return (
+    <div>
+      <svg
+        viewBox={`0 0 ${viewW} ${height}`}
+        className="block w-full"
+        style={{ overflow: "visible" }}
+        onMouseLeave={() => setHover(null)}
+      >
+        {yTicks.map((v, i) => (
+          <g key={`y-${i}`}>
+            <line
+              x1={padL}
+              x2={viewW - padR}
+              y1={yFor(v)}
+              y2={yFor(v)}
+              stroke="rgba(140,150,170,0.15)"
+              strokeWidth={1}
+            />
+            <text
+              x={padL - 6}
+              y={yFor(v) + 3}
+              textAnchor="end"
+              fontSize={10}
+              fill="#7c879c"
+            >
+              {v}
+              {ySuffix}
+            </text>
+          </g>
+        ))}
+        {xTicks.map((v, i) => (
+          <g key={`x-${i}`}>
+            <line
+              x1={xFor(v)}
+              x2={xFor(v)}
+              y1={padT}
+              y2={padT + innerH}
+              stroke="rgba(140,150,170,0.10)"
+              strokeWidth={1}
+            />
+            <text
+              x={xFor(v)}
+              y={height - padB + 14}
+              textAnchor="middle"
+              fontSize={10}
+              fill="#7c879c"
+            >
+              {v}
+              {xSuffix}
+            </text>
+          </g>
+        ))}
+        <text
+          x={padL + innerW / 2}
+          y={height - 4}
+          textAnchor="middle"
+          fontSize={10}
+          fill="#7c879c"
+        >
+          {xLabel}
+        </text>
+        <text
+          x={-(padT + innerH / 2)}
+          y={12}
+          textAnchor="middle"
+          fontSize={10}
+          fill="#7c879c"
+          transform="rotate(-90)"
+        >
+          {yLabel}
+        </text>
+        {trend && (
+          <line
+            x1={trend.x1}
+            y1={trend.y1}
+            x2={trend.x2}
+            y2={trend.y2}
+            stroke="#34d399"
+            strokeOpacity={0.65}
+            strokeWidth={1.5}
+            strokeDasharray="4 3"
+            pointerEvents="none"
+          />
+        )}
+        {points.map((p, i) => {
+          const isHover = hover === i;
+          return (
+            <circle
+              key={i}
+              cx={xFor(p.x)}
+              cy={yFor(p.y)}
+              r={rFor(p.size)}
+              fill={isHover ? "#34d399" : "var(--accent)"}
+              fillOpacity={isHover ? 0.9 : 0.35}
+              stroke={isHover ? "#34d399" : "transparent"}
+              strokeWidth={1.5}
+              onMouseEnter={() => setHover(i)}
+              style={{ cursor: "pointer", transition: "fill-opacity 120ms" }}
+            />
+          );
+        })}
+      </svg>
+      <div className="min-h-[28px] mt-1 text-xs">
+        {hover != null && points[hover] && (
+          <span className="text-muted">
+            <span className="text-fg tnum">
+              {points[hover].x}
+              {xSuffix}
+            </span>{" "}
+            to convert · attendance{" "}
+            <span className="text-fg tnum">
+              {points[hover].y}%
+            </span>
+            {points[hover].label && (
+              <span className="ml-2">· {points[hover].label}</span>
+            )}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
