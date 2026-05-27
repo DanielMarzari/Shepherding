@@ -652,3 +652,175 @@ export function getShepherds(
     }))
     .sort((a, b) => a.shepherd.fullName.localeCompare(b.shepherd.fullName));
 }
+
+// ─── Leader-oversight lookup (used by /shepherds list) ────────────
+
+export interface LeaderOverseer {
+  shepherd: PersonRef;
+  /** Short label like "Leads Tuesday Men's Bible Study (Small Groups)". */
+  via: string;
+  viaKind: "group" | "group_type" | "team" | "service_type";
+}
+
+/** Who oversees this person *as a leader* of a group or team — i.e.
+ *  the shepherd-map assignment(s) covering a unit they actually lead.
+ *  This is the relationship surfaced in the /shepherds "Overseen by"
+ *  column: a small-group leader is overseen by whoever in the shepherd
+ *  team is assigned to the group, its group type, the specific team, or
+ *  its service type.
+ *
+ *  Unlike getShepherds, this DOES return shepherds via per-group /
+ *  per-team assignments even though those assignments normally cover
+ *  members-not-leaders — the leader IS the unit, so an explicit
+ *  oversight assignment on the unit covers them. */
+export function getLeaderOverseers(
+  orgId: number,
+  personId: string,
+): LeaderOverseer[] {
+  const db = getDb();
+  const groupRows = db
+    .prepare(
+      `SELECT g.pco_id AS groupId, g.name AS groupName,
+              g.group_type_id AS groupTypeId, gt.name AS groupTypeName
+         FROM pco_group_memberships m
+         JOIN pco_groups g
+           ON g.org_id = m.org_id AND g.pco_id = m.group_id
+    LEFT JOIN pco_group_types gt
+           ON gt.org_id = g.org_id AND gt.pco_id = g.group_type_id
+        WHERE m.org_id = ? AND m.person_id = ?
+          AND m.archived_at IS NULL AND g.archived_at IS NULL
+          AND lower(coalesce(m.role, '')) LIKE '%leader%'`,
+    )
+    .all(orgId, personId) as Array<{
+    groupId: string;
+    groupName: string | null;
+    groupTypeId: string | null;
+    groupTypeName: string | null;
+  }>;
+  const teamRows = db
+    .prepare(
+      `SELECT DISTINCT t.pco_id AS teamId, t.name AS teamName,
+              t.service_type_id AS serviceTypeId, st.name AS serviceTypeName
+         FROM pco_team_memberships m
+         JOIN pco_teams t
+           ON t.org_id = m.org_id AND t.pco_id = m.team_id
+    LEFT JOIN pco_service_types st
+           ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
+        WHERE m.org_id = ? AND m.person_id = ?
+          AND m.archived_at IS NULL AND m.person_id != ''
+          AND m.is_team_leader = 1
+          AND t.archived_at IS NULL AND t.deleted_at IS NULL`,
+    )
+    .all(orgId, personId) as Array<{
+    teamId: string;
+    teamName: string | null;
+    serviceTypeId: string | null;
+    serviceTypeName: string | null;
+  }>;
+
+  // (shepherdId, via) -> link. Dedup so the same overseer via the same
+  // context appears once even if the underlying SQL returns dupes.
+  const links = new Map<
+    string,
+    { shepherdId: string; via: string; viaKind: LeaderOverseer["viaKind"] }
+  >();
+  function add(
+    shepherdId: string,
+    via: string,
+    viaKind: LeaderOverseer["viaKind"],
+  ) {
+    if (shepherdId === personId) return;
+    links.set(`${shepherdId}::${via}`, { shepherdId, via, viaKind });
+  }
+
+  function fetchAssignments(
+    kind: LeaderOverseer["viaKind"],
+    ids: string[],
+  ): Array<{ shepherdId: string; targetId: string }> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return [];
+    return db
+      .prepare(
+        `SELECT shepherd_person_id AS shepherdId, target_id AS targetId
+           FROM shepherd_assignments
+          WHERE org_id = ? AND target_kind = ?
+            AND target_id IN (${inPlaceholders(unique.length)})`,
+      )
+      .all(orgId, kind, ...unique) as Array<{
+      shepherdId: string;
+      targetId: string;
+    }>;
+  }
+
+  const groupById = new Map(groupRows.map((g) => [g.groupId, g]));
+  for (const r of fetchAssignments(
+    "group",
+    groupRows.map((g) => g.groupId),
+  )) {
+    const g = groupById.get(r.targetId);
+    add(r.shepherdId, `Leads ${g?.groupName ?? "a group"}`, "group");
+  }
+  // group_type -> may cover multiple groups this person leads. Show one
+  // line per led group so the user sees exactly which leader role this
+  // overseer covers.
+  const typeToLedGroups = new Map<string, typeof groupRows>();
+  for (const g of groupRows) {
+    if (!g.groupTypeId) continue;
+    const arr = typeToLedGroups.get(g.groupTypeId) ?? [];
+    arr.push(g);
+    typeToLedGroups.set(g.groupTypeId, arr);
+  }
+  for (const r of fetchAssignments(
+    "group_type",
+    [...typeToLedGroups.keys()],
+  )) {
+    for (const g of typeToLedGroups.get(r.targetId) ?? []) {
+      add(
+        r.shepherdId,
+        `Leads ${g.groupName ?? "a group"}${g.groupTypeName ? ` (${g.groupTypeName})` : ""}`,
+        "group_type",
+      );
+    }
+  }
+
+  const teamById = new Map(teamRows.map((t) => [t.teamId, t]));
+  for (const r of fetchAssignments(
+    "team",
+    teamRows.map((t) => t.teamId),
+  )) {
+    const t = teamById.get(r.targetId);
+    add(r.shepherdId, `Leads ${t?.teamName ?? "a team"}`, "team");
+  }
+  const stToLedTeams = new Map<string, typeof teamRows>();
+  for (const t of teamRows) {
+    if (!t.serviceTypeId) continue;
+    const arr = stToLedTeams.get(t.serviceTypeId) ?? [];
+    arr.push(t);
+    stToLedTeams.set(t.serviceTypeId, arr);
+  }
+  for (const r of fetchAssignments(
+    "service_type",
+    [...stToLedTeams.keys()],
+  )) {
+    for (const t of stToLedTeams.get(r.targetId) ?? []) {
+      add(
+        r.shepherdId,
+        `Leads ${t.teamName ?? "a team"}${t.serviceTypeName ? ` (${t.serviceTypeName})` : ""}`,
+        "service_type",
+      );
+    }
+  }
+
+  const list = [...links.values()];
+  const names = namesFor(
+    orgId,
+    list.map((l) => l.shepherdId),
+  );
+  return list
+    .map((l) => ({
+      shepherd: names.get(l.shepherdId)!,
+      via: l.via,
+      viaKind: l.viaKind,
+    }))
+    .sort((a, b) => a.shepherd.fullName.localeCompare(b.shepherd.fullName));
+}

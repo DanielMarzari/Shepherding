@@ -18,7 +18,6 @@ import { decryptJson } from "./encryption";
 const MS_PER_DAY = 86_400_000;
 const PIPELINE_WINDOW_DAYS = 365;
 const HISTORY_MONTHS = 60; // 5 years
-const UNTRIGGERED_SAMPLE = 50;
 
 interface PIIBlob {
   first_name?: string | null;
@@ -45,12 +44,6 @@ export interface PipelineBucket {
   /** "YYYY-MM" of the month the interest event landed in. */
   month: string;
   stats: ConversionStats;
-}
-
-export interface UntriggeredServer {
-  personId: string;
-  fullName: string;
-  firstServeAt: string;
 }
 
 export interface PipelinePerson {
@@ -89,10 +82,9 @@ export interface ServingPipelineSummary {
   overall: ConversionStats;
   byServiceType: PipelineDim[];
   history: PipelineBucket[];
-  /** People who started serving without ever submitting the configured
-   *  serving-interest form. Only meaningful when a form is configured;
-   *  empty otherwise. */
-  untriggered: { count: number; sample: UntriggeredServer[] };
+  /** Count of people who started serving without ever submitting the
+   *  configured serving-interest form. 0 when no form is configured. */
+  untriggered: { count: number };
 }
 
 export interface GroupPipelineSummary {
@@ -289,11 +281,12 @@ export function getServingPipeline(
   }
 
   // Untriggered servers — people whose first serve has NO matching
-  // form-submission gate. Only computed when a form is configured.
+  // form-submission gate. Only the COUNT is shown on /pipeline (the
+  // list of names isn't actionable enough to justify the decryption
+  // cost on every page load).
   let untriggeredCount = 0;
-  let untriggeredSample: UntriggeredServer[] = [];
   if (formId) {
-    const untriggeredRows = db
+    const row = db
       .prepare(
         `WITH first_serve_overall AS (
            SELECT pp.person_id, MIN(p.sort_date) AS first_serve_at
@@ -305,10 +298,8 @@ export function getServingPipeline(
               AND p.sort_date IS NOT NULL
             GROUP BY pp.person_id
          )
-         SELECT fso.person_id, fso.first_serve_at, ppl.enc_pii
+         SELECT COUNT(*) AS c
            FROM first_serve_overall fso
-           LEFT JOIN pco_people ppl
-             ON ppl.org_id = ? AND ppl.pco_id = fso.person_id
           WHERE NOT EXISTS (
             SELECT 1 FROM pco_form_submissions sub
              WHERE sub.org_id = ?
@@ -316,22 +307,10 @@ export function getServingPipeline(
                AND sub.form_id = ?
                AND sub.pco_created_at IS NOT NULL
                AND sub.pco_created_at < fso.first_serve_at
-          )
-          ORDER BY fso.first_serve_at DESC`,
+          )`,
       )
-      .all(orgId, orgId, orgId, formId) as Array<{
-      person_id: string;
-      first_serve_at: string;
-      enc_pii: string | null;
-    }>;
-    untriggeredCount = untriggeredRows.length;
-    untriggeredSample = untriggeredRows
-      .slice(0, UNTRIGGERED_SAMPLE)
-      .map((r) => ({
-        personId: r.person_id,
-        firstServeAt: r.first_serve_at,
-        fullName: nameFromEncPii(r.enc_pii, r.person_id),
-      }));
+      .get(orgId, orgId, formId) as { c: number } | undefined;
+    untriggeredCount = row?.c ?? 0;
   }
 
   return {
@@ -340,7 +319,7 @@ export function getServingPipeline(
     overall: statsFor(rows.map((r) => r.days)),
     byServiceType: rollupByDim(rows),
     history: bucketByMonth(rows),
-    untriggered: { count: untriggeredCount, sample: untriggeredSample },
+    untriggered: { count: untriggeredCount },
   };
 }
 

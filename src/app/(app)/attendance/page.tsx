@@ -1,6 +1,7 @@
 import { AppShell } from "@/components/AppShell";
-import { Card, CardHeader } from "@/components/ui";
+import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
+import { getWeeklyAttendance } from "@/lib/attendance-read";
 import { listAttendanceSources } from "@/lib/attendance-sources-read";
 import { buildAttendanceDistribution } from "@/lib/attendance-distribution";
 import { getSyncSettings } from "@/lib/pco";
@@ -10,6 +11,8 @@ import {
   removeAttendanceSourceAction,
 } from "./actions";
 import { AttendanceForm } from "./form";
+import { AttendanceUploadForm } from "./upload-form";
+import { AttendanceHistoryChart } from "./history-chart";
 import { DistributionChart } from "./distribution-chart";
 
 export default async function AttendancePage() {
@@ -18,6 +21,7 @@ export default async function AttendancePage() {
   const counts = getClassificationCounts(session.orgId, settings.activityMonths);
   const weekly = settings.weeklyAttendance;
   const sources = listAttendanceSources(session.orgId);
+  const history = getWeeklyAttendance(session.orgId);
   const isAdmin = session.role === "admin";
 
   const expected = counts.shepherded + counts.active + counts.present;
@@ -73,6 +77,92 @@ export default async function AttendancePage() {
             <div className="text-xs text-muted mt-1">between visits per person</div>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader
+            title="Weekly attendance history"
+            badge={
+              history.rows.length > 0 ? (
+                <Pill tone="muted">
+                  {history.rows.length.toLocaleString()} weeks
+                </Pill>
+              ) : null
+            }
+            right={
+              history.earliest && history.latest ? (
+                <span className="text-xs text-muted">
+                  {history.earliest} → {history.latest} ·{" "}
+                  {history.totalSourceFiles} file
+                  {history.totalSourceFiles === 1 ? "" : "s"}
+                </span>
+              ) : null
+            }
+          />
+          <div className="p-5 space-y-4">
+            {history.rows.length === 0 ? (
+              <p className="text-sm text-muted">
+                No weekly history imported yet. Upload one or more{" "}
+                <span className="text-fg">
+                  &ldquo;Worship and Activities Attendance - YYYY QN.xlsx&rdquo;
+                </span>{" "}
+                files below and the chart will fill in.
+              </p>
+            ) : (
+              <>
+                {history.inPerson12moAvg != null && (
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    <Card className="p-3">
+                      <div className="text-xs text-muted mb-1">
+                        In-person · last 12 mo avg
+                      </div>
+                      <div className="tnum text-xl font-semibold">
+                        {history.inPerson12moAvg.toLocaleString()}
+                      </div>
+                      {history.inPersonTrend12moDelta != null && (
+                        <div
+                          className={`text-[11px] mt-1 ${
+                            history.inPersonTrend12moDelta > 0
+                              ? "text-good-soft-fg"
+                              : history.inPersonTrend12moDelta < 0
+                                ? "text-warn-soft-fg"
+                                : "text-muted"
+                          }`}
+                        >
+                          {history.inPersonTrend12moDelta > 0 ? "↑" : "↓"}{" "}
+                          {Math.abs(history.inPersonTrend12moDelta)}% vs
+                          prior 12 mo
+                        </div>
+                      )}
+                    </Card>
+                    <Card className="p-3">
+                      <div className="text-xs text-muted mb-1">
+                        Peak Sunday · last 12 mo
+                      </div>
+                      <div className="tnum text-xl font-semibold">
+                        {history.inPerson12moPeak?.toLocaleString() ?? "—"}
+                      </div>
+                      <div className="text-[11px] text-muted mt-1">
+                        biggest single Sunday
+                      </div>
+                    </Card>
+                    <Card className="p-3">
+                      <div className="text-xs text-muted mb-1">
+                        Data span
+                      </div>
+                      <div className="tnum text-xl font-semibold">
+                        {history.rows.length.toLocaleString()}
+                      </div>
+                      <div className="text-[11px] text-muted mt-1">
+                        Sundays imported
+                      </div>
+                    </Card>
+                  </div>
+                )}
+                <AttendanceHistoryChart rows={history.rows} />
+              </>
+            )}
+          </div>
+        </Card>
 
         <Card>
           <CardHeader title="Set weekly attendance" />
@@ -143,10 +233,29 @@ export default async function AttendancePage() {
           <div className="p-5 space-y-4">
             <p className="text-xs text-muted">
               Spreadsheets and docs that hold historical attendance data
-              (e.g. SharePoint Excel files). We just store the links here
-              for now — wiring those numbers into the graphs above will
-              come later.
+              (e.g. SharePoint Excel files). Links go below; for the
+              standard{" "}
+              <span className="text-fg">
+                Worship and Activities Attendance
+              </span>{" "}
+              quarterly files you can also drop the .xlsx into the
+              importer to populate the chart above.
             </p>
+            {isAdmin && (
+              <div className="rounded-lg border border-border-soft bg-bg-elev-2/50 p-4">
+                <div className="text-xs font-medium mb-2">
+                  Import attendance .xlsx files
+                </div>
+                <p className="text-[11px] text-muted mb-3">
+                  Multi-select supported. The parser scans for &ldquo;Total
+                  In-Person Worship&rdquo;, kids / student / adult
+                  subtotals, the Sunday live-stream count, and ABFs. Files
+                  that don&apos;t match still upload — they just produce a
+                  warning instead of throwing.
+                </p>
+                <AttendanceUploadForm />
+              </div>
+            )}
             {sources.length > 0 && (
               <ul className="divide-y divide-border-softer rounded-lg border border-border-soft">
                 {sources.map((s) => (

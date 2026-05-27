@@ -381,7 +381,7 @@ export async function ServingPipelineSection({
 function UntriggeredCard({
   untriggered,
 }: {
-  untriggered: { count: number; sample: { personId: string; fullName: string; firstServeAt: string }[] };
+  untriggered: { count: number };
 }) {
   if (untriggered.count === 0) {
     return (
@@ -395,36 +395,16 @@ function UntriggeredCard({
     );
   }
   return (
-    <Card>
-      <CardHeader
-        title="Started serving without submitting the form"
-        badge={<Pill tone="warn">{untriggered.count.toLocaleString()}</Pill>}
-        right={
-          <span className="text-xs text-muted">
-            {untriggered.sample.length < untriggered.count
-              ? `showing ${untriggered.sample.length} most recent`
-              : ""}
-          </span>
-        }
-      />
-      <ul className="divide-y divide-border-softer">
-        {untriggered.sample.map((p) => (
-          <li
-            key={p.personId}
-            className="px-5 py-2.5 flex items-baseline justify-between text-sm gap-3"
-          >
-            <Link
-              href={`/people/${p.personId}`}
-              className="font-medium truncate hover:text-accent"
-            >
-              {p.fullName}
-            </Link>
-            <span className="text-xs text-muted tnum shrink-0">
-              first served {new Date(p.firstServeAt).toLocaleDateString()}
-            </span>
-          </li>
-        ))}
-      </ul>
+    <Card className="p-4 flex items-baseline justify-between gap-4">
+      <div className="text-sm">
+        <span className="text-warn-soft-fg font-medium">
+          {untriggered.count.toLocaleString()}
+        </span>{" "}
+        <span className="text-muted">
+          started serving without ever submitting the configured form —
+          these people bypass the pipeline entirely.
+        </span>
+      </div>
     </Card>
   );
 }

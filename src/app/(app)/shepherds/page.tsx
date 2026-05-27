@@ -7,7 +7,7 @@ import {
   listLeadPastorIds,
   listShepherdTeamIds,
 } from "@/lib/assignments-read";
-import { getShepherds } from "@/lib/shepherd-graph";
+import { getLeaderOverseers } from "@/lib/shepherd-graph";
 import { listShepherds } from "@/lib/shepherds-read";
 
 export default async function ShepherdsPage() {
@@ -72,6 +72,9 @@ function OverviewSkeleton() {
 interface OverseerRef {
   personId: string;
   fullName: string;
+  /** "Leads Tuesday Men's Bible Study (Small Groups)" — the led unit
+   *  this overseer covers. Title-attribute on the pill. */
+  via: string;
 }
 
 /** The list + the overseer lookup. Streams in behind a Suspense
@@ -86,16 +89,23 @@ async function ShepherdsOverview({ orgId }: { orgId: number }) {
   // hierarchy we're auditing here.
   const teamIds = new Set(listShepherdTeamIds(orgId));
 
-  // For each shepherd, who on the shepherd team oversees them. An empty
-  // result means "not overseen by the shepherd team yet".
+  // For each shepherd: who on the shepherd team is assigned (via the
+  // shepherd map) to oversee a group / team they LEAD. Membership-only
+  // links don't count here — this column is about leader oversight.
   const rows = shepherds.map((s) => {
     const seen = new Map<string, OverseerRef>();
-    for (const link of getShepherds(orgId, s.personId)) {
+    for (const link of getLeaderOverseers(orgId, s.personId)) {
       if (!teamIds.has(link.shepherd.personId)) continue;
-      if (!seen.has(link.shepherd.personId)) {
+      const existing = seen.get(link.shepherd.personId);
+      if (existing) {
+        // Same overseer surfaces through multiple led units — keep the
+        // first via and append the others on a new line for the tooltip.
+        existing.via += `\n${link.via}`;
+      } else {
         seen.set(link.shepherd.personId, {
           personId: link.shepherd.personId,
           fullName: link.shepherd.fullName,
+          via: link.via,
         });
       }
     }
@@ -198,6 +208,7 @@ async function ShepherdsOverview({ orgId }: { orgId: number }) {
                           <Link
                             key={o.personId}
                             href={`/people/${o.personId}`}
+                            title={o.via}
                             className="text-xs px-2 py-0.5 rounded-full bg-bg-elev-2 text-fg hover:text-accent"
                           >
                             {o.fullName}
