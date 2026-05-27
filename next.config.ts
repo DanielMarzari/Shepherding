@@ -5,7 +5,13 @@ const nextConfig: NextConfig = {
   // pdf-parse / pdfjs-dist do their own dynamic loading (workers etc.)
   // that Next's bundler chokes on — keep them external and resolved at
   // runtime by Node, same as better-sqlite3.
-  serverExternalPackages: ["better-sqlite3", "pdf-parse", "pdfjs-dist"],
+  serverExternalPackages: [
+    "better-sqlite3",
+    "pdf-parse",
+    "pdfjs-dist",
+    "tesseract.js",
+    "@napi-rs/canvas",
+  ],
   // pdfjs loads its "fake worker" via a dynamic import to a sibling
   // file Next's tracer can't see — without this the standalone build
   // ships pdf.mjs but NOT pdf.worker.mjs, and uploads die with
@@ -15,10 +21,18 @@ const nextConfig: NextConfig = {
     "/mir": [
       "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
       "./node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+      // tesseract.js worker + WASM core + native canvas binding — none
+      // of these are reachable by Next's static tracer.
+      "./node_modules/tesseract.js/**/*",
+      "./node_modules/tesseract.js-core/**/*",
+      "./node_modules/@napi-rs/canvas/**/*",
     ],
     "/mir/**": [
       "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
       "./node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+      "./node_modules/tesseract.js/**/*",
+      "./node_modules/tesseract.js-core/**/*",
+      "./node_modules/@napi-rs/canvas/**/*",
     ],
   },
   experimental: {

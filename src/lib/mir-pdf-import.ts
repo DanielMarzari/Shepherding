@@ -181,7 +181,13 @@ function parseOnePage(pageText: string): ParsedMir | null {
       !/ministry impact report/i.test(l) &&
       !/^\d{1,3}$/.test(l),
   );
-  const title = (titleCandidates[0] ?? "Untitled MIR").slice(0, 300);
+  // OCR sometimes appends a stray single capital from the logo
+  // ("ADULT DISCIPLESHIP A") — strip a trailing space + 1-letter all-caps
+  // token before storing.
+  const title = (titleCandidates[0] ?? "Untitled MIR")
+    .replace(/\s+[A-Z]\s*$/, "")
+    .trim()
+    .slice(0, 300);
 
   const joined = (k: CanonicalKey): string | null => {
     const arr = buckets[k];
@@ -231,20 +237,26 @@ export async function parseMirPdf(data: Uint8Array): Promise<ParsedMir[]> {
     await parser.destroy();
   }
 
-  // If virtually no text came back — meaning text was exported as
-  // outlines, the doc is scanned images, etc. — bail with a message
-  // the admin can actually act on.
+  // If virtually no text came back — text was exported as outlines,
+  // the doc is scanned images, etc. — fall back to OCR. Slow, but it
+  // actually reads outlined / image-based MIRs.
   const meaningful = pages
     .map((p) => p.text.replace(/\s+/g, ""))
     .join("")
     .replace(/\d+/g, "");
   if (meaningful.length < 80) {
-    throw new Error(
-      "Couldn't read any text from this PDF. It looks like the text was " +
-        "exported as outlined paths or images (common with Canva, scanned " +
-        "PDFs, etc.). Re-export the source with 'selectable text' / " +
-        "'editable text' / 'embed fonts' enabled and try again.",
-    );
+    const { ocrPagesFromPdf } = await import("./mir-pdf-ocr");
+    pages = await ocrPagesFromPdf(data);
+    const ocrMeaningful = pages
+      .map((p) => p.text.replace(/\s+/g, ""))
+      .join("")
+      .replace(/\d+/g, "");
+    if (ocrMeaningful.length < 80) {
+      throw new Error(
+        "Couldn't read any text from this PDF — even OCR found nothing. " +
+          "The file may be empty, blank, or unreadable.",
+      );
+    }
   }
 
   const mirs: ParsedMir[] = [];
