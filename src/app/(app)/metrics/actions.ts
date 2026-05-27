@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
-import { saveMetricsSettings } from "@/lib/pco";
+import { saveMetricsSettings, saveServingInterestFormId } from "@/lib/pco";
 
 export interface MetricsSaveState {
   status: "idle" | "saved" | "error";
@@ -46,4 +46,31 @@ export async function saveThresholdsAction(
   revalidatePath("/people");
   revalidatePath("/attendance");
   return { status: "saved", message: "Thresholds saved." };
+}
+
+export interface ServingFormState {
+  status: "idle" | "saved" | "error";
+  message?: string;
+}
+
+/** Persist the org's choice of "serving interest" form. Drives the
+ *  /pipeline page's trigger logic. Saving "" clears the selection so
+ *  the pipeline falls back to "any form submission". */
+export async function saveServingInterestFormAction(
+  _prev: ServingFormState | null,
+  formData: FormData,
+): Promise<ServingFormState> {
+  const session = await requireOrg();
+  if (session.role !== "admin") {
+    return { status: "error", message: "Admin only." };
+  }
+  const raw = String(formData.get("formId") ?? "").trim();
+  const formId = raw === "" ? null : raw;
+  saveServingInterestFormId(session.orgId, formId);
+  revalidatePath("/metrics");
+  revalidatePath("/pipeline");
+  return {
+    status: "saved",
+    message: formId ? "Saved." : "Cleared — pipeline will use any form.",
+  };
 }

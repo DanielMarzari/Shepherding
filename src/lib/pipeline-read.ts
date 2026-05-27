@@ -1,12 +1,16 @@
 import "server-only";
 import { getDb } from "./db";
+import { decryptJson } from "./encryption";
 
 // "How long does it take someone to go from interest -> action?"
 // Two pipelines:
-//  * Serving — a form submission (interest signal) -> first time the
-//    person is scheduled on a service plan, per service type.
-//  * Groups — a group application -> first time the person actually
-//    attended an event for that group, per group AND per group type.
+//  * Serving — a submission of the configured serving-interest form
+//    (set on /metrics) -> the first time the person is scheduled on
+//    a service plan, per service type. People who start serving
+//    without ever submitting the form are tallied separately. With no
+//    form configured the trigger falls back to "any form submission".
+//  * Groups — a group application -> first attended event for that
+//    group, per group AND per group type.
 //
 // Time-to-conversion is capped at PIPELINE_WINDOW_DAYS so a form
 // submitted years before a first serve doesn't count as "pipeline".
@@ -14,14 +18,21 @@ import { getDb } from "./db";
 const MS_PER_DAY = 86_400_000;
 const PIPELINE_WINDOW_DAYS = 365;
 const HISTORY_MONTHS = 60; // 5 years
+const UNTRIGGERED_SAMPLE = 50;
+
+interface PIIBlob {
+  first_name?: string | null;
+  last_name?: string | null;
+}
 
 export interface ConversionStats {
-  /** People who converted (i.e. did the action after the interest). */
   count: number;
-  medianDays: number | null;
-  avgDays: number | null;
+  minDays: number | null;
   p25Days: number | null;
+  medianDays: number | null;
   p75Days: number | null;
+  maxDays: number | null;
+  avgDays: number | null;
 }
 
 export interface PipelineDim {
@@ -36,10 +47,24 @@ export interface PipelineBucket {
   stats: ConversionStats;
 }
 
+export interface UntriggeredServer {
+  personId: string;
+  fullName: string;
+  firstServeAt: string;
+}
+
 export interface ServingPipelineSummary {
+  /** Whether an admin has picked a specific serving-interest form. If
+   *  false the trigger is the latest of ANY form submission. */
+  formConfigured: boolean;
+  formName: string | null;
   overall: ConversionStats;
   byServiceType: PipelineDim[];
   history: PipelineBucket[];
+  /** People who started serving without ever submitting the configured
+   *  serving-interest form. Only meaningful when a form is configured;
+   *  empty otherwise. */
+  untriggered: { count: number; sample: UntriggeredServer[] };
 }
 
 export interface GroupPipelineSummary {
@@ -63,28 +88,31 @@ function statsFor(days: number[]): ConversionStats {
   if (days.length === 0) {
     return {
       count: 0,
-      medianDays: null,
-      avgDays: null,
+      minDays: null,
       p25Days: null,
+      medianDays: null,
       p75Days: null,
+      maxDays: null,
+      avgDays: null,
     };
   }
   const sorted = [...days].sort((a, b) => a - b);
   const sum = sorted.reduce((a, b) => a + b, 0);
   return {
     count: sorted.length,
-    medianDays: quantile(sorted, 0.5),
-    avgDays: sum / sorted.length,
+    minDays: sorted[0],
     p25Days: quantile(sorted, 0.25),
+    medianDays: quantile(sorted, 0.5),
     p75Days: quantile(sorted, 0.75),
+    maxDays: sorted[sorted.length - 1],
+    avgDays: sum / sorted.length,
   };
 }
 
 function monthKey(iso: string): string {
-  return iso.slice(0, 7); // "YYYY-MM"
+  return iso.slice(0, 7);
 }
 
-/** Last N months ending with the current month, oldest -> newest. */
 export function recentMonthKeys(n: number = HISTORY_MONTHS): string[] {
   const out: string[] = [];
   const now = new Date();
@@ -136,46 +164,78 @@ function rollupByDim(rows: RawRow[]): PipelineDim[] {
     .sort((a, b) => b.stats.count - a.stats.count);
 }
 
+function nameFromEncPii(encPii: string | null, personId: string): string {
+  if (!encPii) return `(unknown #${personId})`;
+  const pii = decryptJson<PIIBlob>(encPii);
+  const name =
+    [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") || "";
+  return name || `(unknown #${personId})`;
+}
+
 // ─── Serving pipeline ─────────────────────────────────────────────
 
-export function getServingPipeline(orgId: number): ServingPipelineSummary {
+export function getServingPipeline(
+  orgId: number,
+  servingInterestFormId: string | null,
+): ServingPipelineSummary {
   const db = getDb();
-  // For each (person, service_type), find the first time they were
-  // scheduled to serve on a plan of that type. Join to the most-recent
-  // form submission they made strictly before that first-serve date.
-  // Trigger form is the LATEST form within the window — most likely
-  // the one that actually drove the conversion.
-  const raw = db
-    .prepare(
-      `WITH first_serve AS (
-         SELECT pp.person_id, t.service_type_id,
-                MIN(p.sort_date) AS first_serve_at
-           FROM pco_plan_people pp
-           JOIN pco_plans p
-             ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-           JOIN pco_teams t
-             ON t.org_id = pp.org_id AND t.pco_id = pp.team_id
-          WHERE pp.org_id = ?
-            AND pp.person_id != ''
-            AND p.sort_date IS NOT NULL
-            AND t.service_type_id IS NOT NULL
-          GROUP BY pp.person_id, t.service_type_id
-       )
-       SELECT fs.person_id, fs.service_type_id AS dimKey,
-              st.name AS dimName,
-              fs.first_serve_at AS endAt,
-              (SELECT MAX(sub.pco_created_at)
-                 FROM pco_form_submissions sub
-                WHERE sub.org_id = ?
-                  AND sub.person_id = fs.person_id
-                  AND sub.pco_created_at IS NOT NULL
-                  AND sub.pco_created_at < fs.first_serve_at
-              ) AS startAt
-         FROM first_serve fs
-         LEFT JOIN pco_service_types st
-           ON st.org_id = ? AND st.pco_id = fs.service_type_id`,
-    )
-    .all(orgId, orgId, orgId) as Array<{
+  const formId = servingInterestFormId ?? null;
+
+  // Form name for display.
+  let formName: string | null = null;
+  if (formId) {
+    const row = db
+      .prepare(
+        `SELECT COALESCE(NULLIF(name, ''), '(unnamed)') AS name
+           FROM pco_forms WHERE org_id = ? AND pco_id = ?`,
+      )
+      .get(orgId, formId) as { name: string } | undefined;
+    formName = row?.name ?? null;
+  }
+
+  // Trigger subquery — bound by formId when set, otherwise any form.
+  // SQLite doesn't let us "optionally" filter cleanly in a single
+  // prepared query, so we branch.
+  const triggerSelect = formId
+    ? `SELECT MAX(sub.pco_created_at)
+         FROM pco_form_submissions sub
+        WHERE sub.org_id = ? AND sub.person_id = fs.person_id
+          AND sub.pco_created_at IS NOT NULL
+          AND sub.pco_created_at < fs.first_serve_at
+          AND sub.form_id = ?`
+    : `SELECT MAX(sub.pco_created_at)
+         FROM pco_form_submissions sub
+        WHERE sub.org_id = ? AND sub.person_id = fs.person_id
+          AND sub.pco_created_at IS NOT NULL
+          AND sub.pco_created_at < fs.first_serve_at`;
+
+  const rawStmt = db.prepare(
+    `WITH first_serve AS (
+       SELECT pp.person_id, t.service_type_id,
+              MIN(p.sort_date) AS first_serve_at
+         FROM pco_plan_people pp
+         JOIN pco_plans p
+           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+         JOIN pco_teams t
+           ON t.org_id = pp.org_id AND t.pco_id = pp.team_id
+        WHERE pp.org_id = ?
+          AND pp.person_id != ''
+          AND p.sort_date IS NOT NULL
+          AND t.service_type_id IS NOT NULL
+        GROUP BY pp.person_id, t.service_type_id
+     )
+     SELECT fs.person_id, fs.service_type_id AS dimKey,
+            st.name AS dimName,
+            fs.first_serve_at AS endAt,
+            (${triggerSelect}) AS startAt
+       FROM first_serve fs
+       LEFT JOIN pco_service_types st
+         ON st.org_id = ? AND st.pco_id = fs.service_type_id`,
+  );
+
+  const raw = (formId
+    ? rawStmt.all(orgId, orgId, formId, orgId)
+    : rawStmt.all(orgId, orgId, orgId)) as Array<{
     person_id: string;
     dimKey: string;
     dimName: string | null;
@@ -200,10 +260,59 @@ export function getServingPipeline(orgId: number): ServingPipelineSummary {
     });
   }
 
+  // Untriggered servers — people whose first serve has NO matching
+  // form-submission gate. Only computed when a form is configured.
+  let untriggeredCount = 0;
+  let untriggeredSample: UntriggeredServer[] = [];
+  if (formId) {
+    const untriggeredRows = db
+      .prepare(
+        `WITH first_serve_overall AS (
+           SELECT pp.person_id, MIN(p.sort_date) AS first_serve_at
+             FROM pco_plan_people pp
+             JOIN pco_plans p
+               ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+            WHERE pp.org_id = ?
+              AND pp.person_id != ''
+              AND p.sort_date IS NOT NULL
+            GROUP BY pp.person_id
+         )
+         SELECT fso.person_id, fso.first_serve_at, ppl.enc_pii
+           FROM first_serve_overall fso
+           LEFT JOIN pco_people ppl
+             ON ppl.org_id = ? AND ppl.pco_id = fso.person_id
+          WHERE NOT EXISTS (
+            SELECT 1 FROM pco_form_submissions sub
+             WHERE sub.org_id = ?
+               AND sub.person_id = fso.person_id
+               AND sub.form_id = ?
+               AND sub.pco_created_at IS NOT NULL
+               AND sub.pco_created_at < fso.first_serve_at
+          )
+          ORDER BY fso.first_serve_at DESC`,
+      )
+      .all(orgId, orgId, orgId, formId) as Array<{
+      person_id: string;
+      first_serve_at: string;
+      enc_pii: string | null;
+    }>;
+    untriggeredCount = untriggeredRows.length;
+    untriggeredSample = untriggeredRows
+      .slice(0, UNTRIGGERED_SAMPLE)
+      .map((r) => ({
+        personId: r.person_id,
+        firstServeAt: r.first_serve_at,
+        fullName: nameFromEncPii(r.enc_pii, r.person_id),
+      }));
+  }
+
   return {
+    formConfigured: !!formId,
+    formName,
     overall: statsFor(rows.map((r) => r.days)),
     byServiceType: rollupByDim(rows),
     history: bucketByMonth(rows),
+    untriggered: { count: untriggeredCount, sample: untriggeredSample },
   };
 }
 
@@ -265,11 +374,7 @@ export function getGroupPipeline(orgId: number): GroupPipelineSummary {
     if (!Number.isFinite(days) || days < 0 || days > PIPELINE_WINDOW_DAYS) {
       continue;
     }
-    const base = {
-      startAt: r.startAt,
-      endAt: r.endAt,
-      days,
-    };
+    const base = { startAt: r.startAt, endAt: r.endAt, days };
     flatRows.push({ ...base, dimKey: r.group_id, dimName: r.group_name });
     byGroupRows.push({ ...base, dimKey: r.group_id, dimName: r.group_name });
     if (r.group_type_id) {

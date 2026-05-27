@@ -1,12 +1,16 @@
-import { Card, CardHeader, Stat } from "@/components/ui";
-import { MultiLineChart } from "@/components/charts";
+import Link from "next/link";
+import { Card, CardHeader, Pill, Stat } from "@/components/ui";
+import {
+  type BoxWhiskerBox,
+  BoxWhiskerChart,
+  BoxWhiskerRow,
+} from "@/components/charts";
 import {
   type ConversionStats,
   type PipelineBucket,
   type PipelineDim,
   getGroupPipeline,
   getServingPipeline,
-  recentMonthKeys,
 } from "@/lib/pipeline-read";
 
 const MONTH_LABELS = [
@@ -25,7 +29,6 @@ const MONTH_LABELS = [
 ];
 
 function shortMonthLabel(k: string): string {
-  // "YYYY-MM" -> "Jan '20"
   const [y, m] = k.split("-");
   const mm = Number(m);
   return `${MONTH_LABELS[mm - 1] ?? m} '${y.slice(2)}`;
@@ -37,6 +40,27 @@ function fmtDays(n: number | null): string {
   return `${Math.round(n)}d`;
 }
 
+function statsToBox(s: ConversionStats): BoxWhiskerBox | null {
+  if (
+    s.count === 0 ||
+    s.minDays === null ||
+    s.p25Days === null ||
+    s.medianDays === null ||
+    s.p75Days === null ||
+    s.maxDays === null
+  ) {
+    return null;
+  }
+  return {
+    min: s.minDays,
+    p25: s.p25Days,
+    median: s.medianDays,
+    p75: s.p75Days,
+    max: s.maxDays,
+    count: s.count,
+  };
+}
+
 // ─── Skeletons ────────────────────────────────────────────────────
 
 export function PipelineSectionSkeleton({ title }: { title: string }) {
@@ -45,13 +69,10 @@ export function PipelineSectionSkeleton({ title }: { title: string }) {
       <div className="h-3.5 w-48 bg-bg-elev-2 rounded" />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {Array.from({ length: 4 }, (_, i) => (
-          <div
-            key={i}
-            className="h-20 rounded-[10px] bg-bg-elev-2/60"
-          />
+          <div key={i} className="h-20 rounded-[10px] bg-bg-elev-2/60" />
         ))}
       </div>
-      <div className="h-[200px] bg-bg-elev-2/40 rounded" />
+      <div className="h-[240px] bg-bg-elev-2/40 rounded" />
       <span className="sr-only">Loading {title}…</span>
     </Card>
   );
@@ -108,6 +129,10 @@ function BreakdownTable({
     );
   }
   const shown = rows.slice(0, cap);
+  const scaleMax = Math.max(
+    1,
+    ...rows.flatMap((r) => (r.stats.maxDays !== null ? [r.stats.maxDays] : [])),
+  );
   return (
     <Card>
       <CardHeader
@@ -115,7 +140,7 @@ function BreakdownTable({
         right={
           <span className="text-xs text-muted">
             {rows.length.toLocaleString()} segment
-            {rows.length === 1 ? "" : "s"}
+            {rows.length === 1 ? "" : "s"} · scale 0 – {Math.round(scaleMax)}d
           </span>
         }
       />
@@ -124,35 +149,47 @@ function BreakdownTable({
           <thead className="text-xs text-muted">
             <tr className="border-b border-border-soft">
               <th className="text-left font-medium px-5 py-2">Segment</th>
-              <th className="text-right font-medium px-5 py-2">Converters</th>
+              <th className="text-right font-medium px-5 py-2">n</th>
               <th className="text-right font-medium px-5 py-2">Median</th>
-              <th className="text-right font-medium px-5 py-2">Avg</th>
-              <th className="text-right font-medium px-5 py-2">25th – 75th</th>
+              <th className="text-left font-medium px-5 py-2 w-[260px]">
+                Distribution
+              </th>
             </tr>
           </thead>
           <tbody>
-            {shown.map((r) => (
-              <tr
-                key={r.key}
-                className="border-b border-border-softer hover:bg-bg-elev-2/60"
-              >
-                <td className="px-5 py-2.5">
-                  <span className="font-medium truncate">{r.name}</span>
-                </td>
-                <td className="px-5 py-2.5 text-right tnum">
-                  {r.stats.count.toLocaleString()}
-                </td>
-                <td className="px-5 py-2.5 text-right tnum">
-                  {fmtDays(r.stats.medianDays)}
-                </td>
-                <td className="px-5 py-2.5 text-right tnum text-muted">
-                  {fmtDays(r.stats.avgDays)}
-                </td>
-                <td className="px-5 py-2.5 text-right tnum text-muted">
-                  {fmtDays(r.stats.p25Days)} – {fmtDays(r.stats.p75Days)}
-                </td>
-              </tr>
-            ))}
+            {shown.map((r) => {
+              const box = statsToBox(r.stats);
+              return (
+                <tr
+                  key={r.key}
+                  className="border-b border-border-softer hover:bg-bg-elev-2/60"
+                >
+                  <td className="px-5 py-2.5">
+                    <span
+                      className="font-medium truncate block max-w-[260px]"
+                      title={r.name}
+                    >
+                      {r.name}
+                    </span>
+                  </td>
+                  <td className="px-5 py-2.5 text-right tnum">
+                    {r.stats.count.toLocaleString()}
+                  </td>
+                  <td className="px-5 py-2.5 text-right tnum">
+                    {fmtDays(r.stats.medianDays)}
+                  </td>
+                  <td className="px-5 py-2.5">
+                    {box ? (
+                      <div title={`${Math.round(box.min)}d – ${Math.round(box.max)}d (median ${Math.round(box.median)}d)`}>
+                        <BoxWhiskerRow box={box} scaleMax={scaleMax} />
+                      </div>
+                    ) : (
+                      <span className="text-xs text-subtle">—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {rows.length > cap && (
@@ -165,7 +202,7 @@ function BreakdownTable({
   );
 }
 
-function HistoryChart({
+function HistoryBoxChart({
   title,
   subtitle,
   buckets,
@@ -175,11 +212,8 @@ function HistoryChart({
   buckets: PipelineBucket[];
 }) {
   const xLabels = buckets.map((b) => shortMonthLabel(b.month));
-  const medians = buckets.map((b) =>
-    b.stats.medianDays === null ? 0 : Math.round(b.stats.medianDays),
-  );
-  const counts = buckets.map((b) => b.stats.count);
-  const hasAny = counts.some((c) => c > 0);
+  const boxes = buckets.map((b) => statsToBox(b.stats));
+  const hasAny = boxes.some((b) => b !== null);
   return (
     <Card>
       <CardHeader
@@ -190,20 +224,12 @@ function HistoryChart({
       />
       <div className="p-5 space-y-3">
         <p className="text-xs text-muted">
-          {subtitle} Months with no conversions read as zero — gaps in the
-          line are inactivity, not zero-day conversions.
+          {subtitle} Each box is a monthly cohort — whiskers show min /
+          max days, the box is the 25th–75th percentile, and the white
+          tick is the median. Empty months simply had no conversions.
         </p>
         {hasAny ? (
-          <MultiLineChart
-            series={[
-              {
-                label: "Median days to convert",
-                values: medians,
-              },
-            ]}
-            xLabels={xLabels}
-            height={220}
-          />
+          <BoxWhiskerChart boxes={boxes} xLabels={xLabels} />
         ) : (
           <p className="text-sm text-muted text-center py-8">
             No history yet — pipeline data builds up over time.
@@ -216,26 +242,115 @@ function HistoryChart({
 
 // ─── Pipelines ────────────────────────────────────────────────────
 
-export async function ServingPipelineSection({ orgId }: { orgId: number }) {
-  const data = getServingPipeline(orgId);
+export async function ServingPipelineSection({
+  orgId,
+  formId,
+}: {
+  orgId: number;
+  formId: string | null;
+}) {
+  const data = getServingPipeline(orgId, formId);
   return (
     <Card className="p-5 space-y-5">
       <div>
         <h2 className="text-base font-semibold">Serving pipeline</h2>
         <p className="text-sm text-muted mt-0.5">
-          From a person&apos;s most recent form submission to their first
-          time scheduled on a serving plan — per service type. Pipelines
+          From the trigger form below to a person&apos;s first time
+          scheduled on a serving plan — per service type. Pipelines
           longer than a year are excluded so old submissions don&apos;t
           inflate the numbers.
         </p>
+        <div className="mt-2 text-xs">
+          {data.formConfigured ? (
+            <span className="text-muted">
+              Trigger:{" "}
+              <span className="text-fg font-medium">{data.formName}</span>{" "}
+              ·{" "}
+              <Link
+                href="/metrics"
+                className="text-accent hover:underline"
+              >
+                change
+              </Link>
+            </span>
+          ) : (
+            <span className="text-warn-soft-fg">
+              No serving-interest form configured —{" "}
+              <Link
+                href="/metrics"
+                className="text-accent hover:underline"
+              >
+                pick one on /metrics
+              </Link>
+              . Pipeline is using <em>any</em> form submission until you do.
+            </span>
+          )}
+        </div>
       </div>
+
       <StatStrip stats={data.overall} />
+
+      {data.formConfigured && (
+        <UntriggeredCard untriggered={data.untriggered} />
+      )}
+
       <BreakdownTable title="By service type" rows={data.byServiceType} />
-      <HistoryChart
+      <HistoryBoxChart
         title="Serving pipeline · trend"
         subtitle="Cohort grouped by the month the trigger form was submitted."
         buckets={data.history}
       />
+    </Card>
+  );
+}
+
+function UntriggeredCard({
+  untriggered,
+}: {
+  untriggered: { count: number; sample: { personId: string; fullName: string; firstServeAt: string }[] };
+}) {
+  if (untriggered.count === 0) {
+    return (
+      <Card className="p-4 text-sm text-muted">
+        <span className="text-good-soft-fg font-medium">
+          ✓ Every server submitted the form first.
+        </span>{" "}
+        No one started serving without going through the configured
+        pipeline.
+      </Card>
+    );
+  }
+  return (
+    <Card>
+      <CardHeader
+        title="Started serving without submitting the form"
+        badge={<Pill tone="warn">{untriggered.count.toLocaleString()}</Pill>}
+        right={
+          <span className="text-xs text-muted">
+            {untriggered.sample.length < untriggered.count
+              ? `showing ${untriggered.sample.length} most recent`
+              : ""}
+          </span>
+        }
+      />
+      <ul className="divide-y divide-border-softer">
+        {untriggered.sample.map((p) => (
+          <li
+            key={p.personId}
+            className="px-5 py-2.5 flex items-baseline justify-between text-sm gap-3"
+          >
+            <Link
+              href={`/people/${p.personId}`}
+              className="font-medium truncate hover:text-accent"
+            >
+              {p.fullName}
+            </Link>
+            <span className="text-xs text-muted tnum shrink-0">
+              first served {new Date(p.firstServeAt).toLocaleDateString()}
+            </span>
+          </li>
+        ))}
+      </ul>
     </Card>
   );
 }
@@ -254,7 +369,7 @@ export async function GroupPipelineSection({ orgId }: { orgId: number }) {
       <StatStrip stats={data.overall} />
       <BreakdownTable title="By group type" rows={data.byGroupType} />
       <BreakdownTable title="By group" rows={data.byGroup} cap={25} />
-      <HistoryChart
+      <HistoryBoxChart
         title="Group pipeline · trend"
         subtitle="Cohort grouped by the month the application was submitted."
         buckets={data.history}
@@ -262,6 +377,3 @@ export async function GroupPipelineSection({ orgId }: { orgId: number }) {
     </Card>
   );
 }
-
-// Re-export so the page only has to import from one place.
-export { recentMonthKeys };

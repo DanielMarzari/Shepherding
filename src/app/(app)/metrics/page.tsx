@@ -1,14 +1,16 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { getSyncSettings } from "@/lib/pco";
+import { getSyncSettings, listForms } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
+import { ServingFormPicker } from "./ServingFormPicker";
 import { ThresholdForm } from "./threshold-form";
 
 export default async function MetricsPage() {
   const session = await requireOrg();
   const settings = getSyncSettings(session.orgId);
   const counts = getClassificationCounts(session.orgId, settings.activityMonths);
+  const forms = listForms(session.orgId);
 
   return (
     <AppShell active="Metrics" breadcrumb="Settings › Metrics">
@@ -124,6 +126,25 @@ export default async function MetricsPage() {
             </p>
           </Card>
         </div>
+
+        <Card className="p-5">
+          <h2 className="text-sm font-semibold mb-1">
+            Serving interest form
+          </h2>
+          <p className="text-xs text-muted mb-3 max-w-2xl">
+            Which PCO form do people fill out to say &ldquo;I want to
+            serve&rdquo;? The <a href="/pipeline" className="text-accent hover:underline">/pipeline</a>{" "}
+            page uses a submission of this form as the trigger for the
+            serving-pipeline conversion clock. People who start serving
+            without ever submitting this form are surfaced separately so
+            you can see who&apos;s slipping past the formal pipeline.
+          </p>
+          <ServingFormPicker
+            forms={forms}
+            current={settings.servingInterestFormId}
+            isAdmin={session.role === "admin"}
+          />
+        </Card>
 
         <Card className="p-5">
           <h2 className="text-sm font-semibold mb-2">Sync behavior</h2>

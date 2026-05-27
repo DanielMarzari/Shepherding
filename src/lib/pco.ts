@@ -203,6 +203,10 @@ export interface SyncSettings {
   /** Window for the check-in-shepherded rule. Counted check-ins must
    *  fall within the last N months (default 12). */
   shepherdedCheckinWindowMonths: number;
+  /** PCO form id whose submissions count as a serving-interest signal
+   *  for the pipeline page. Null = not configured; the pipeline then
+   *  falls back to "any form submission" as the trigger. */
+  servingInterestFormId: string | null;
 }
 
 /** Cached for the lifetime of a single request — both /people and
@@ -220,7 +224,8 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
               activity_tracking_months, weekly_attendance, lapsed_weeks,
               lapsed_from_team_months, lapsed_from_team_events,
               shepherded_checkin_min_events,
-              shepherded_checkin_window_months
+              shepherded_checkin_window_months,
+              serving_interest_form_id
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -241,6 +246,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
         lapsed_from_team_events: number | null;
         shepherded_checkin_min_events: number | null;
         shepherded_checkin_window_months: number | null;
+        serving_interest_form_id: string | null;
       }
     | undefined;
   if (!row) {
@@ -261,6 +267,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
       lapsedFromTeamEvents: 3,
       shepherdedCheckinMinEvents: 3,
       shepherdedCheckinWindowMonths: 12,
+      servingInterestFormId: null,
     };
   }
   const freq: SyncFrequency =
@@ -282,6 +289,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
     lapsedFromTeamEvents: row.lapsed_from_team_events ?? 3,
     shepherdedCheckinMinEvents: row.shepherded_checkin_min_events ?? 3,
     shepherdedCheckinWindowMonths: row.shepherded_checkin_window_months ?? 12,
+    servingInterestFormId: row.serving_interest_form_id ?? null,
   };
 }
 
@@ -294,8 +302,9 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
           sync_threshold_months, activity_tracking_months, weekly_attendance,
           lapsed_weeks, lapsed_from_team_months, lapsed_from_team_events,
           shepherded_checkin_min_events, shepherded_checkin_window_months,
+          serving_interest_form_id,
           updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id) DO UPDATE SET
          enabled = excluded.enabled,
          frequency = excluded.frequency,
@@ -313,6 +322,7 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
          lapsed_from_team_events = excluded.lapsed_from_team_events,
          shepherded_checkin_min_events = excluded.shepherded_checkin_min_events,
          shepherded_checkin_window_months = excluded.shepherded_checkin_window_months,
+         serving_interest_form_id = excluded.serving_interest_form_id,
          updated_at = excluded.updated_at`,
     )
     .run(
@@ -335,7 +345,37 @@ export function saveSyncSettings(orgId: number, s: SyncSettings) {
       Math.max(1, Math.min(20, Math.floor(s.lapsedFromTeamEvents))),
       Math.max(1, Math.min(50, Math.floor(s.shepherdedCheckinMinEvents))),
       Math.max(1, Math.min(36, Math.floor(s.shepherdedCheckinWindowMonths))),
+      s.servingInterestFormId,
     );
+}
+
+/** Persist just the serving-interest form selection — keeps the rest
+ *  of the settings untouched. */
+export function saveServingInterestFormId(
+  orgId: number,
+  formId: string | null,
+) {
+  const current = getSyncSettings(orgId);
+  saveSyncSettings(orgId, { ...current, servingInterestFormId: formId });
+}
+
+/** All synced PCO forms — drives the "Serving interest form" picker
+ *  on /metrics. Active forms first, then archived ones with a tag. */
+export function listForms(
+  orgId: number,
+): Array<{ id: string; name: string; active: boolean }> {
+  return (
+    getDb()
+      .prepare(
+        `SELECT pco_id AS id,
+                COALESCE(NULLIF(name, ''), '(unnamed)') AS name,
+                COALESCE(active, 0) AS active
+           FROM pco_forms
+          WHERE org_id = ?
+          ORDER BY active DESC, lower(COALESCE(name, ''))`,
+      )
+      .all(orgId) as Array<{ id: string; name: string; active: number }>
+  ).map((r) => ({ id: r.id, name: r.name, active: r.active === 1 }));
 }
 
 /** Update only the metric-related thresholds (keeps the rest untouched). */

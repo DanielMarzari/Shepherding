@@ -649,3 +649,266 @@ export function MultiLineChart({
     </div>
   );
 }
+
+// ─── Box & whisker ────────────────────────────────────────────────
+
+export interface BoxWhiskerBox {
+  min: number;
+  p25: number;
+  median: number;
+  p75: number;
+  max: number;
+  count: number;
+}
+
+/** Vertical box-and-whisker chart — one box per x-bucket. Used for
+ *  pipeline trend lines: each month gets a box showing the spread of
+ *  conversion days for that cohort. */
+export function BoxWhiskerChart({
+  boxes,
+  xLabels,
+  height = 240,
+  yLabelSuffix = "d",
+}: {
+  boxes: Array<BoxWhiskerBox | null>;
+  xLabels: string[];
+  height?: number;
+  yLabelSuffix?: string;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const padL = 44;
+  const padR = 12;
+  const padT = 12;
+  const padB = 32;
+  const viewBoxW = 900;
+  const innerH = height - padT - padB;
+  const innerW = viewBoxW - padL - padR;
+  const colW = innerW / Math.max(1, boxes.length);
+  const maxY = Math.max(
+    1,
+    ...boxes.flatMap((b) => (b && b.count > 0 ? [b.max] : [0])),
+  );
+  const yScale = (v: number) => padT + innerH - (v / maxY) * innerH;
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((t) => t * maxY);
+  // Show ~10 x-labels max so they don't overlap.
+  const labelStride = Math.max(1, Math.ceil(boxes.length / 10));
+
+  return (
+    <div className="w-full">
+      <svg
+        viewBox={`0 0 ${viewBoxW} ${height}`}
+        className="block w-full"
+        onMouseLeave={() => setHover(null)}
+      >
+        {yTicks.map((v, i) => (
+          <g key={i}>
+            <line
+              x1={padL}
+              x2={viewBoxW - padR}
+              y1={yScale(v)}
+              y2={yScale(v)}
+              stroke="rgba(140,150,170,0.18)"
+              strokeWidth={1}
+            />
+            <text
+              x={padL - 6}
+              y={yScale(v) + 3}
+              textAnchor="end"
+              fontSize={10}
+              fill="#7c879c"
+            >
+              {Math.round(v)}
+              {yLabelSuffix}
+            </text>
+          </g>
+        ))}
+        {boxes.map((b, i) => {
+          const cx = padL + colW * (i + 0.5);
+          const halfW = Math.max(2, Math.min(8, colW * 0.35));
+          if (!b || b.count === 0) {
+            // empty bucket — invisible hover hit so the tooltip still
+            // says "no data" if the user mouses over.
+            return (
+              <rect
+                key={i}
+                x={padL + colW * i}
+                y={padT}
+                width={colW}
+                height={innerH}
+                fill="transparent"
+                onMouseEnter={() => setHover(i)}
+              />
+            );
+          }
+          const isHover = hover === i;
+          const stroke = isHover ? "#34d399" : "rgba(168,178,198,0.7)";
+          const fill = isHover
+            ? "rgba(52,211,153,0.28)"
+            : "rgba(168,178,198,0.16)";
+          const medianStroke = isHover ? "#34d399" : "#e8ebf2";
+          const yMin = yScale(b.min);
+          const yMax = yScale(b.max);
+          const yP25 = yScale(b.p25);
+          const yP75 = yScale(b.p75);
+          const yMed = yScale(b.median);
+          return (
+            <g key={i} onMouseEnter={() => setHover(i)}>
+              <rect
+                x={padL + colW * i}
+                y={padT}
+                width={colW}
+                height={innerH}
+                fill="transparent"
+              />
+              <line
+                x1={cx}
+                x2={cx}
+                y1={yMax}
+                y2={yMin}
+                stroke={stroke}
+                strokeWidth={1}
+              />
+              <line
+                x1={cx - halfW * 0.55}
+                x2={cx + halfW * 0.55}
+                y1={yMin}
+                y2={yMin}
+                stroke={stroke}
+                strokeWidth={1}
+              />
+              <line
+                x1={cx - halfW * 0.55}
+                x2={cx + halfW * 0.55}
+                y1={yMax}
+                y2={yMax}
+                stroke={stroke}
+                strokeWidth={1}
+              />
+              <rect
+                x={cx - halfW}
+                y={yP75}
+                width={halfW * 2}
+                height={Math.max(1, yP25 - yP75)}
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={1}
+              />
+              <line
+                x1={cx - halfW}
+                x2={cx + halfW}
+                y1={yMed}
+                y2={yMed}
+                stroke={medianStroke}
+                strokeWidth={1.5}
+              />
+            </g>
+          );
+        })}
+        {xLabels.map((lab, i) => {
+          if (i % labelStride !== 0) return null;
+          const cx = padL + colW * (i + 0.5);
+          return (
+            <text
+              key={i}
+              x={cx}
+              y={height - padB + 14}
+              textAnchor="middle"
+              fontSize={10}
+              fill="#7c879c"
+            >
+              {lab}
+            </text>
+          );
+        })}
+      </svg>
+      {hover !== null && (
+        <div className="mt-1 text-xs">
+          <span className="font-medium">{xLabels[hover] ?? ""}</span>
+          {boxes[hover] && boxes[hover]!.count > 0 ? (
+            <span className="text-muted">
+              {" "}
+              · n={boxes[hover]!.count} · min{" "}
+              {Math.round(boxes[hover]!.min)}d · p25{" "}
+              {Math.round(boxes[hover]!.p25)}d · median{" "}
+              <span className="text-fg">
+                {Math.round(boxes[hover]!.median)}d
+              </span>{" "}
+              · p75 {Math.round(boxes[hover]!.p75)}d · max{" "}
+              {Math.round(boxes[hover]!.max)}d
+            </span>
+          ) : (
+            <span className="text-subtle"> · no conversions this month</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Inline horizontal box-and-whisker — one box rendered in-line as a
+ *  table cell so each breakdown row shows its distribution shape.
+ *  `scaleMax` is shared across rows so boxes are comparable. */
+export function BoxWhiskerRow({
+  box,
+  scaleMax,
+  height = 18,
+}: {
+  box: BoxWhiskerBox;
+  scaleMax: number;
+  height?: number;
+}) {
+  const w = 220;
+  const h = height;
+  const denom = Math.max(1, scaleMax);
+  const xScale = (v: number) => (v / denom) * w;
+  return (
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      preserveAspectRatio="none"
+      className="block w-full max-w-[260px]"
+      style={{ height }}
+    >
+      <line
+        x1={xScale(box.min)}
+        x2={xScale(box.max)}
+        y1={h / 2}
+        y2={h / 2}
+        stroke="rgba(168,178,198,0.55)"
+        strokeWidth={1}
+      />
+      <line
+        x1={xScale(box.min)}
+        x2={xScale(box.min)}
+        y1={h * 0.3}
+        y2={h * 0.7}
+        stroke="rgba(168,178,198,0.55)"
+        strokeWidth={1}
+      />
+      <line
+        x1={xScale(box.max)}
+        x2={xScale(box.max)}
+        y1={h * 0.3}
+        y2={h * 0.7}
+        stroke="rgba(168,178,198,0.55)"
+        strokeWidth={1}
+      />
+      <rect
+        x={xScale(box.p25)}
+        y={h * 0.2}
+        width={Math.max(1, xScale(box.p75) - xScale(box.p25))}
+        height={h * 0.6}
+        fill="rgba(52,211,153,0.22)"
+        stroke="#34d399"
+        strokeWidth={1}
+      />
+      <line
+        x1={xScale(box.median)}
+        x2={xScale(box.median)}
+        y1={h * 0.12}
+        y2={h * 0.88}
+        stroke="#e8ebf2"
+        strokeWidth={1.5}
+      />
+    </svg>
+  );
+}

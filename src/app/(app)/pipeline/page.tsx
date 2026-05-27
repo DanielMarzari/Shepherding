@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
 import { requireOrg } from "@/lib/auth";
+import { getSyncSettings } from "@/lib/pco";
 import {
   GroupPipelineSection,
   PipelineSectionSkeleton,
@@ -9,6 +10,7 @@ import {
 
 export default async function PipelinePage() {
   const session = await requireOrg();
+  const settings = getSyncSettings(session.orgId);
   return (
     <AppShell active="See more" breadcrumb="See more › Pipeline">
       <div className="px-5 md:px-7 py-7 space-y-6 max-w-5xl">
@@ -28,7 +30,10 @@ export default async function PipelinePage() {
         <Suspense
           fallback={<PipelineSectionSkeleton title="serving pipeline" />}
         >
-          <ServingPipelineSection orgId={session.orgId} />
+          <ServingPipelineSection
+            orgId={session.orgId}
+            formId={settings.servingInterestFormId}
+          />
         </Suspense>
 
         <Suspense
