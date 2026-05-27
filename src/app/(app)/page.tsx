@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PieChart } from "@/components/charts";
 import { requireOrg } from "@/lib/auth";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
@@ -54,11 +55,10 @@ export default async function HomePage() {
           </Card>
 
           <Card>
-            <SectionHeader title="Next-step ready" rightCount={null} />
-            <InsufficientDataBlock
-              line1="No next-step classifier yet."
-              line2="Once we wire the &ldquo;attended N+ Sundays AND not in a group&rdquo; rule and similar, this list fills in."
-            />
+            <SectionHeader title="People mix" rightLabel="by classification" />
+            <Suspense fallback={<PieSkeleton />}>
+              <PeopleMixPie orgId={session.orgId} />
+            </Suspense>
           </Card>
         </div>
 
@@ -86,6 +86,54 @@ export default async function HomePage() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+// ─── People mix pie (shepherded / active / present) ──────────────
+
+async function PeopleMixPie({ orgId }: { orgId: number }) {
+  const settings = getSyncSettings(orgId);
+  const counts = getClassificationCounts(orgId, settings.activityMonths);
+  // Inactive is omitted — that bucket is people the system has
+  // explicitly given up on, not a slice of the "currently engaged"
+  // pie. Falling-through-the-cracks already surfaces them next to
+  // this card.
+  const data = [
+    { label: "Shepherded", count: counts.shepherded },
+    { label: "Active", count: counts.active },
+    { label: "Present", count: counts.present },
+  ];
+  const total = data.reduce((s, d) => s + d.count, 0);
+  if (total === 0) {
+    return (
+      <InsufficientDataBlock
+        line1="No people synced yet."
+        line2="Run a sync on /pco to populate."
+      />
+    );
+  }
+  return (
+    <div className="p-5">
+      <PieChart data={data} />
+      <p className="text-[11px] text-subtle mt-3 leading-snug">
+        Excludes <span className="text-fg">{counts.inactive.toLocaleString()}</span>{" "}
+        inactive (no measurable activity in {settings.activityMonths} mo) —
+        those surface in &ldquo;Falling through the cracks&rdquo;.
+      </p>
+    </div>
+  );
+}
+
+function PieSkeleton() {
+  return (
+    <div className="p-5 animate-pulse">
+      <div className="mx-auto w-[180px] h-[180px] rounded-full bg-bg-elev-2/50" />
+      <div className="space-y-2 mt-4">
+        {Array.from({ length: 3 }, (_, i) => (
+          <div key={i} className="h-3 bg-bg-elev-2/50 rounded" />
+        ))}
+      </div>
+    </div>
   );
 }
 

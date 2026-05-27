@@ -404,18 +404,25 @@ export function getShepherdWorkload(
   limit: number = 5,
 ): ShepherdWorkload[] {
   const db = getDb();
+  // Compute group-side and team-side reach separately, then UNION at
+  // the person level. This avoids the previous single-query approach
+  // that did a kind-conditional LEFT JOIN to BOTH pco_group_memberships
+  // and pco_team_memberships per leader row — that produced an
+  // O(leaders × group_members + leaders × team_members) cartesian and
+  // dominated home-page load time on real data.
   const rows = db
     .prepare(
-      `WITH leaders AS (
-         SELECT m.person_id, m.group_id AS unit_id, 'group' AS kind
+      `WITH group_leaders AS (
+         SELECT DISTINCT m.person_id, m.group_id AS unit_id
            FROM pco_group_memberships m
            JOIN pco_groups g
              ON g.org_id = m.org_id AND g.pco_id = m.group_id
           WHERE m.org_id = ? AND m.archived_at IS NULL
             AND g.archived_at IS NULL
             AND lower(coalesce(m.role,'')) LIKE '%leader%'
-         UNION ALL
-         SELECT tm.person_id, tm.team_id AS unit_id, 'team' AS kind
+       ),
+       team_leaders AS (
+         SELECT DISTINCT tm.person_id, tm.team_id AS unit_id
            FROM pco_team_memberships tm
            JOIN pco_teams t
              ON t.org_id = tm.org_id AND t.pco_id = tm.team_id
@@ -424,39 +431,39 @@ export function getShepherdWorkload(
             AND tm.archived_at IS NULL
             AND t.archived_at IS NULL AND t.deleted_at IS NULL
        ),
-       leader_groups AS (
-         SELECT person_id, COUNT(DISTINCT unit_id) AS n
-           FROM leaders GROUP BY person_id
-       ),
-       flock AS (
-         SELECT l.person_id,
-                COUNT(DISTINCT
-                  CASE WHEN l.kind = 'group' THEN 'g:' || m.person_id
-                       WHEN l.kind = 'team'  THEN 't:' || tm.person_id
-                  END
-                ) AS reach
-           FROM leaders l
-           LEFT JOIN pco_group_memberships m
-             ON l.kind = 'group'
-            AND m.org_id = ?
-            AND m.group_id = l.unit_id
+       group_reach AS (
+         SELECT gl.person_id, gl.unit_id, m.person_id AS reached_id
+           FROM group_leaders gl
+           JOIN pco_group_memberships m
+             ON m.org_id = ? AND m.group_id = gl.unit_id
             AND m.archived_at IS NULL
-            AND m.person_id != l.person_id
-           LEFT JOIN pco_team_memberships tm
-             ON l.kind = 'team'
-            AND tm.org_id = ?
-            AND tm.team_id = l.unit_id
-            AND tm.archived_at IS NULL
-            AND tm.person_id != ''
-            AND tm.person_id != l.person_id
-          GROUP BY l.person_id
+            AND m.person_id != gl.person_id
+       ),
+       team_reach AS (
+         SELECT tl.person_id, tl.unit_id, tm.person_id AS reached_id
+           FROM team_leaders tl
+           JOIN pco_team_memberships tm
+             ON tm.org_id = ? AND tm.team_id = tl.unit_id
+            AND tm.archived_at IS NULL AND tm.person_id != ''
+            AND tm.person_id != tl.person_id
+       ),
+       all_reach AS (
+         SELECT person_id, reached_id FROM group_reach
+         UNION
+         SELECT person_id, reached_id FROM team_reach
+       ),
+       all_leaders AS (
+         SELECT person_id, unit_id FROM group_leaders
+         UNION
+         SELECT person_id, unit_id FROM team_leaders
        )
-       SELECT lg.person_id AS personId,
-              lg.n AS unitsLed,
-              coalesce(f.reach, 0) AS flockSize
-         FROM leader_groups lg
-         LEFT JOIN flock f ON f.person_id = lg.person_id
-        ORDER BY flockSize DESC, lg.n DESC
+       SELECT al.person_id AS personId,
+              COUNT(DISTINCT al.unit_id) AS unitsLed,
+              (SELECT COUNT(DISTINCT reached_id) FROM all_reach ar
+                WHERE ar.person_id = al.person_id) AS flockSize
+         FROM all_leaders al
+        GROUP BY al.person_id
+        ORDER BY flockSize DESC, unitsLed DESC
         LIMIT ?`,
     )
     .all(orgId, orgId, orgId, orgId, limit) as Array<{

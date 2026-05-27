@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 import {
@@ -412,7 +413,12 @@ export interface ClassificationCounts {
   visibleByDefault: number;
 }
 
-export function getClassificationCounts(
+/** React.cache so sections that both want the classification counts
+ *  on the home page (the top stat strip + the people-mix pie) hit one
+ *  query instead of two. */
+export const getClassificationCounts = cache(getClassificationCountsImpl);
+
+function getClassificationCountsImpl(
   orgId: number,
   activityMonths: number,
 ): ClassificationCounts {
