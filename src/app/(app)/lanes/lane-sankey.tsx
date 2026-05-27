@@ -45,17 +45,22 @@ export function LaneSankey({ flow }: { flow: LaneFlow }) {
     );
   }
 
-  const width = 760;
-  const height = 380;
+  const width = 820;
+  const height = 460;
   const colW = 14;
   const padX = 12;
-  const padTop = 24;
-  const padBottom = 28;
-  const gap = 10; // vertical gap between stacked rects in the same column
+  const padTop = 28;
+  const padBottom = 32;
+  // Wider gap so the label sitting on one side of a small rect can't
+  // visually butt up against the label of the rect below.
+  const gap = 16;
   const innerH = height - padTop - padBottom;
+  // Min height a rect needs before its label is allowed to render —
+  // smaller than this and the text just falls into the rect below.
+  const MIN_LABEL_H = 18;
 
-  const leftX = padX + 80;
-  const rightX = width - padX - 80 - colW;
+  const leftX = padX + 140;
+  const rightX = width - padX - 140 - colW;
 
   // Compute rect geometry for each column. The "free" vertical space
   // (innerH minus the gaps) is distributed proportional to each
@@ -162,10 +167,16 @@ export function LaneSankey({ flow }: { flow: LaneFlow }) {
           );
         })}
 
-        {/* Left column rects + labels */}
+        {/* Left column rects + labels. Label + count render on a
+            SINGLE line vertically centered on the rect so two adjacent
+            rects can never have their text overlap. Rects shorter
+            than MIN_LABEL_H suppress text entirely (count is still
+            visible in the per-flow tooltip + the column-total in the
+            bottom callout grid). */}
         {CATEGORY_ORDER.map((c) => {
           const r = leftRects[c];
           if (!r) return null;
+          const showText = r.h >= MIN_LABEL_H;
           return (
             <g key={`L-${c}`}>
               <rect
@@ -175,33 +186,39 @@ export function LaneSankey({ flow }: { flow: LaneFlow }) {
                 height={r.h}
                 fill={CATEGORY_COLOR[c]}
                 rx={2}
-              />
-              <text
-                x={leftX - 6}
-                y={r.y + 12}
-                textAnchor="end"
-                fontSize={11}
-                fill="var(--fg)"
               >
-                {CATEGORY_LABEL[c]}
-              </text>
-              <text
-                x={leftX - 6}
-                y={r.y + 24}
-                textAnchor="end"
-                fontSize={10}
-                fill="var(--fg-muted, #7c879c)"
-              >
-                {flow.fromTotals[c].toLocaleString()} entered first
-              </text>
+                <title>
+                  {CATEGORY_LABEL[c]} ·{" "}
+                  {flow.fromTotals[c].toLocaleString()} entered first
+                </title>
+              </rect>
+              {showText && (
+                <text
+                  x={leftX - 8}
+                  y={r.y + r.h / 2 + 4}
+                  textAnchor="end"
+                  fontSize={11}
+                  fill="var(--fg)"
+                >
+                  <tspan fontWeight={500}>{CATEGORY_LABEL[c]}</tspan>
+                  <tspan
+                    dx={6}
+                    fill="var(--fg-muted, #7c879c)"
+                    fontSize={10}
+                  >
+                    {flow.fromTotals[c].toLocaleString()}
+                  </tspan>
+                </text>
+              )}
             </g>
           );
         })}
 
-        {/* Right column rects + labels */}
+        {/* Right column rects + labels — same single-line pattern. */}
         {CATEGORY_ORDER.map((c) => {
           const r = rightRects[c];
           if (!r) return null;
+          const showText = r.h >= MIN_LABEL_H;
           return (
             <g key={`R-${c}`}>
               <rect
@@ -211,41 +228,46 @@ export function LaneSankey({ flow }: { flow: LaneFlow }) {
                 height={r.h}
                 fill={CATEGORY_COLOR[c]}
                 rx={2}
-              />
-              <text
-                x={rightX + colW + 6}
-                y={r.y + 12}
-                textAnchor="start"
-                fontSize={11}
-                fill="var(--fg)"
               >
-                {CATEGORY_LABEL[c]}
-              </text>
-              <text
-                x={rightX + colW + 6}
-                y={r.y + 24}
-                textAnchor="start"
-                fontSize={10}
-                fill="var(--fg-muted, #7c879c)"
-              >
-                {flow.toTotals[c].toLocaleString()} today
-              </text>
+                <title>
+                  {CATEGORY_LABEL[c]} ·{" "}
+                  {flow.toTotals[c].toLocaleString()} today
+                </title>
+              </rect>
+              {showText && (
+                <text
+                  x={rightX + colW + 8}
+                  y={r.y + r.h / 2 + 4}
+                  textAnchor="start"
+                  fontSize={11}
+                  fill="var(--fg)"
+                >
+                  <tspan fontWeight={500}>{CATEGORY_LABEL[c]}</tspan>
+                  <tspan
+                    dx={6}
+                    fill="var(--fg-muted, #7c879c)"
+                    fontSize={10}
+                  >
+                    {flow.toTotals[c].toLocaleString()}
+                  </tspan>
+                </text>
+              )}
             </g>
           );
         })}
 
         <text
           x={leftX + colW / 2}
-          y={height - 8}
+          y={height - 10}
           textAnchor="middle"
           fontSize={10}
           fill="var(--fg-muted, #7c879c)"
         >
-          First lane entered (any time)
+          First lane entered · any time
         </text>
         <text
           x={rightX + colW / 2}
-          y={height - 8}
+          y={height - 10}
           textAnchor="middle"
           fontSize={10}
           fill="var(--fg-muted, #7c879c)"

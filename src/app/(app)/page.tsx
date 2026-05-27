@@ -105,10 +105,26 @@ async function PeopleMixPie({ orgId }: { orgId: number }) {
   // explicitly given up on, not a slice of the "currently engaged"
   // pie. Falling-through-the-cracks already surfaces them next to
   // this card.
+  // Color semantics:
+  //   Shepherded → green   (in a group/team — healthiest)
+  //   Active     → amber   (engaging in some way, but not yet shepherded)
+  //   Present    → grey    (on the books, no measurable engagement)
   const data = [
-    { label: "Shepherded", count: counts.shepherded },
-    { label: "Active", count: counts.active },
-    { label: "Present", count: counts.present },
+    {
+      label: "Shepherded",
+      count: counts.shepherded,
+      color: "var(--good-soft-fg)",
+    },
+    {
+      label: "Active",
+      count: counts.active,
+      color: "var(--warn-soft-fg)",
+    },
+    {
+      label: "Present",
+      count: counts.present,
+      color: "var(--fg-subtle, #94a3b8)",
+    },
   ];
   const total = data.reduce((s, d) => s + d.count, 0);
   if (total === 0) {

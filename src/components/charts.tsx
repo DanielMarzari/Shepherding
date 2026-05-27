@@ -17,6 +17,11 @@ const PALETTE = [
 export interface ChartDatum {
   label: string;
   count: number;
+  /** Optional override for slice / bar color. When unset, the chart
+   *  picks from PALETTE by index. Use this when the categories have
+   *  meaning attached to specific colors (e.g. Shepherded = green,
+   *  Active = yellow, Present = grey on the home people-mix pie). */
+  color?: string;
 }
 
 interface ChartCardProps {
@@ -139,6 +144,9 @@ export function PieChart({
     pct: number;
     mid: { x: number; y: number };
   }> = [];
+  function colorFor(slice: ChartDatum, i: number): string {
+    return slice.color ?? PALETTE[i % PALETTE.length];
+  }
   slices.forEach((slice, i) => {
     const pct = slice.count / total;
     const sweep = pct * Math.PI * 2;
@@ -156,7 +164,7 @@ export function PieChart({
     const midR = (r + innerR) / 2;
     paths.push({
       d: `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${xi2} ${yi2} A ${innerR} ${innerR} 0 ${large} 0 ${xi1} ${yi1} Z`,
-      color: PALETTE[i % PALETTE.length],
+      color: colorFor(slice, i),
       label: slice.label,
       count: slice.count,
       pct,
@@ -237,7 +245,7 @@ export function PieChart({
             >
               <span
                 className="w-2.5 h-2.5 rounded-sm shrink-0"
-                style={{ background: PALETTE[i % PALETTE.length] }}
+                style={{ background: colorFor(s, i) }}
               />
               <span
                 className="text-fg flex-1 break-words"
