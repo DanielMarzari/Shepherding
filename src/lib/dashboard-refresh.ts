@@ -1129,6 +1129,177 @@ export function getLaneFlow(orgId: number): LaneFlow {
   };
 }
 
+// ─── Lane sequences (ordered journey patterns) ───────────────────
+
+export interface LaneSequence {
+  /** Ordered list of category keys, e.g. ["serv", "comm"]. */
+  seq: LaneCategory[];
+  /** Number of people who match this exact entry pattern. */
+  count: number;
+  /** Human-readable headline ("Entered serving, then community"). */
+  label: string;
+  /** Short note — "healthy onramp", "stuck after entry", etc. */
+  note: string;
+  /** Tone hint for the count chip. */
+  tone: "good" | "warn" | "muted" | "accent";
+}
+
+/** Rolls up the same person_activity buckets that drive the sankey
+ *  into ordered "journey" sequences. Each sequence is the chronology
+ *  of lane entries (community / serving) the person went through —
+ *  read from first_comm_at + first_serv_at — followed by the current
+ *  retention state.
+ *
+ *  Only Community + Serving are modeled (Worship needs check-in,
+ *  Giving needs PCO Giving sync). Sequences with 0 matches are
+ *  filtered out so the list shows only patterns the org actually
+ *  has people in. Sorted by count desc — heaviest first. */
+export function getLaneSequences(orgId: number): LaneSequence[] {
+  const db = getDb();
+  const SAME_TIME_MS = 30 * 86_400_000;
+  const rows = db
+    .prepare(
+      `SELECT first_comm_at, first_serv_at,
+              active_group_count, active_team_count
+         FROM person_activity
+        WHERE org_id = ?`,
+    )
+    .all(orgId) as Array<{
+    first_comm_at: string | null;
+    first_serv_at: string | null;
+    active_group_count: number;
+    active_team_count: number;
+  }>;
+
+  // Bucket keys we'll roll up into.
+  type Key =
+    | "serv_then_comm_stayed"
+    | "serv_then_comm_lost"
+    | "comm_then_serv_stayed"
+    | "comm_then_serv_lost"
+    | "both_at_once_stayed"
+    | "both_at_once_lost"
+    | "comm_only_stayed"
+    | "comm_only_dropped"
+    | "serv_only_stayed"
+    | "serv_only_dropped"
+    | "never";
+  const counts: Record<Key, number> = {
+    serv_then_comm_stayed: 0,
+    serv_then_comm_lost: 0,
+    comm_then_serv_stayed: 0,
+    comm_then_serv_lost: 0,
+    both_at_once_stayed: 0,
+    both_at_once_lost: 0,
+    comm_only_stayed: 0,
+    comm_only_dropped: 0,
+    serv_only_stayed: 0,
+    serv_only_dropped: 0,
+    never: 0,
+  };
+
+  for (const r of rows) {
+    const haveComm = !!r.first_comm_at;
+    const haveServ = !!r.first_serv_at;
+    const stillComm = r.active_group_count > 0;
+    const stillServ = r.active_team_count > 0;
+    if (!haveComm && !haveServ) {
+      counts.never++;
+      continue;
+    }
+    if (haveComm && haveServ) {
+      const dComm = new Date(r.first_comm_at!).getTime();
+      const dServ = new Date(r.first_serv_at!).getTime();
+      if (Math.abs(dComm - dServ) <= SAME_TIME_MS) {
+        if (stillComm && stillServ) counts.both_at_once_stayed++;
+        else counts.both_at_once_lost++;
+      } else if (dComm < dServ) {
+        if (stillComm && stillServ) counts.comm_then_serv_stayed++;
+        else counts.comm_then_serv_lost++;
+      } else {
+        if (stillComm && stillServ) counts.serv_then_comm_stayed++;
+        else counts.serv_then_comm_lost++;
+      }
+      continue;
+    }
+    if (haveComm && !haveServ) {
+      if (stillComm) counts.comm_only_stayed++;
+      else counts.comm_only_dropped++;
+    } else {
+      if (stillServ) counts.serv_only_stayed++;
+      else counts.serv_only_dropped++;
+    }
+  }
+
+  const seqs: LaneSequence[] = [
+    {
+      seq: ["comm", "serv"],
+      count: counts.comm_then_serv_stayed,
+      label: "Community first, then added serving",
+      note: "Healthy onramp — group brought them into a team. Still in both.",
+      tone: "good",
+    },
+    {
+      seq: ["serv", "comm"],
+      count: counts.serv_then_comm_stayed,
+      label: "Serving first, then added community",
+      note: "Team brought them into a group. Still in both.",
+      tone: "good",
+    },
+    {
+      seq: ["both"],
+      count: counts.both_at_once_stayed,
+      label: "Entered both lanes together",
+      note: "Joined community + serving within 30 days. Still in both.",
+      tone: "accent",
+    },
+    {
+      seq: ["comm"],
+      count: counts.comm_only_stayed,
+      label: "Community only",
+      note: "Never moved into serving — invite candidates.",
+      tone: "muted",
+    },
+    {
+      seq: ["serv"],
+      count: counts.serv_only_stayed,
+      label: "Serving only",
+      note: "Never joined a group — connect to community.",
+      tone: "muted",
+    },
+    {
+      seq: ["comm", "none"],
+      count: counts.comm_only_dropped + counts.comm_then_serv_lost,
+      label: "Community first, then dropped off",
+      note: "Was in a group, now in nothing — care follow-up.",
+      tone: "warn",
+    },
+    {
+      seq: ["serv", "none"],
+      count: counts.serv_only_dropped + counts.serv_then_comm_lost,
+      label: "Serving first, then dropped off",
+      note: "Was on a team, now in nothing — re-engage.",
+      tone: "warn",
+    },
+    {
+      seq: ["both", "none"],
+      count: counts.both_at_once_lost,
+      label: "Entered both, then dropped off",
+      note: "Was in both lanes — surprising attrition.",
+      tone: "warn",
+    },
+    {
+      seq: ["none"],
+      count: counts.never,
+      label: "Never entered either lane",
+      note: "On the books but no group/team history.",
+      tone: "muted",
+    },
+  ];
+
+  return seqs.filter((s) => s.count > 0).sort((a, b) => b.count - a.count);
+}
+
 /** Returns NULL when no snapshot has ever been computed for the org.
  *  Read paths fall back to live computation in that case so the page
  *  still works on a fresh install — just slower. */

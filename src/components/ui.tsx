@@ -108,9 +108,21 @@ export function LaneTag({
   laneKey,
   short = false,
 }: {
-  laneKey: "give" | "wors" | "outr" | "comm" | "serv" | "none";
+  laneKey: "give" | "wors" | "outr" | "comm" | "serv" | "none" | "both";
   short?: boolean;
 }) {
+  // "both" is a composite — we render the Community + Serving tags
+  // side by side rather than picking one color. Used by the lane
+  // sequences card where someone may have entered both lanes within
+  // 30 days of each other.
+  if (laneKey === "both") {
+    return (
+      <span className="inline-flex items-center gap-0.5">
+        <LaneTag laneKey="comm" short={short} />
+        <LaneTag laneKey="serv" short={short} />
+      </span>
+    );
+  }
   const labels = {
     give: short ? "G" : "Giving",
     wors: short ? "W" : "Worship",

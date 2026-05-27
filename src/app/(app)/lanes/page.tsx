@@ -3,7 +3,11 @@ import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, LaneTag } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { getLaneFlow } from "@/lib/dashboard-refresh";
+import {
+  type LaneSequence,
+  getLaneFlow,
+  getLaneSequences,
+} from "@/lib/dashboard-refresh";
 import { getLaneStats, getRecentMovement } from "@/lib/dashboard-read";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
@@ -30,6 +34,12 @@ export default async function LanesPage() {
               wired to a source yet.
             </p>
           </div>
+          <Link
+            href="/lanes/example"
+            className="text-xs text-muted hover:text-fg underline"
+          >
+            View design preview (mock data) →
+          </Link>
         </div>
 
         {/* 6 lane stat cards */}
@@ -37,9 +47,9 @@ export default async function LanesPage() {
           <LaneCards orgId={session.orgId} />
         </Suspense>
 
-        {/* Flow */}
-        <div className="grid grid-cols-1 gap-3 mb-5">
-          <Card className="p-5">
+        {/* Flow + sequences */}
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 mb-5">
+          <Card className="xl:col-span-8 p-5">
             <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
               <h2 className="text-sm font-semibold">
                 Lane flow · entry → today
@@ -59,6 +69,23 @@ export default async function LanesPage() {
             </p>
             <Suspense fallback={<SankeySkeleton />}>
               <SankeySection orgId={session.orgId} />
+            </Suspense>
+          </Card>
+
+          <Card className="xl:col-span-4 p-5">
+            <div className="flex items-baseline justify-between mb-1">
+              <h2 className="text-sm font-semibold">
+                Common journey sequences
+              </h2>
+              <span className="text-xs text-muted">order &amp; count</span>
+            </div>
+            <p className="text-xs text-muted mb-4">
+              Lanes added in chronological order, then current retention
+              tacked on the end. People may add more lanes later as
+              Worship and Giving sources come online.
+            </p>
+            <Suspense fallback={<SequenceListSkeleton />}>
+              <LaneSequencesList orgId={session.orgId} />
             </Suspense>
           </Card>
         </div>
@@ -102,6 +129,79 @@ async function SankeySection({ orgId }: { orgId: number }) {
 function SankeySkeleton() {
   return (
     <div className="h-[400px] rounded-lg bg-bg-elev-2/40 animate-pulse" />
+  );
+}
+
+// ─── Common journey sequences ────────────────────────────────────
+
+async function LaneSequencesList({ orgId }: { orgId: number }) {
+  const seqs = getLaneSequences(orgId);
+  if (seqs.length === 0) {
+    return (
+      <InsufficientDataBlock
+        line1="No lane history in person_activity yet."
+        line2="Run a refresh on /home (or wait for the next PCO sync) to populate."
+      />
+    );
+  }
+  return (
+    <ul className="space-y-3 text-sm">
+      {seqs.map((s, i) => (
+        <SequenceRow key={i} seq={s} />
+      ))}
+    </ul>
+  );
+}
+
+function SequenceRow({ seq }: { seq: LaneSequence }) {
+  const toneClass: Record<LaneSequence["tone"], string> = {
+    good: "text-good-soft-fg",
+    warn: "text-warn-soft-fg",
+    muted: "text-muted",
+    accent: "text-accent",
+  };
+  const borderClass: Record<LaneSequence["tone"], string> = {
+    good: "border-good-soft-fg/30",
+    warn: "border-warn-soft-fg/30 ring-1 ring-warn-soft-fg/15",
+    muted: "border-border-soft",
+    accent: "border-accent/30",
+  };
+  return (
+    <li className={`rounded border p-3 ${borderClass[seq.tone]}`}>
+      <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+        {seq.seq.map((k, idx) => (
+          <span key={idx} className="flex items-center gap-1.5">
+            <LaneTag laneKey={k} short />
+            {idx < seq.seq.length - 1 ? (
+              <span className="text-muted">→</span>
+            ) : null}
+          </span>
+        ))}
+      </div>
+      <div className="flex justify-between">
+        <span className="text-sm">{seq.label}</span>
+        <span className={`tnum ${toneClass[seq.tone]}`}>
+          {seq.count.toLocaleString()}
+        </span>
+      </div>
+      <div className="text-xs text-muted mt-0.5">{seq.note}</div>
+    </li>
+  );
+}
+
+function SequenceListSkeleton() {
+  return (
+    <ul className="space-y-3">
+      {Array.from({ length: 5 }, (_, i) => (
+        <li
+          key={i}
+          className="rounded border border-border-soft p-3 animate-pulse"
+        >
+          <div className="h-3 w-32 bg-bg-elev-2/70 rounded mb-2" />
+          <div className="h-2 w-48 bg-bg-elev-2/50 rounded" />
+        </li>
+      ))}
+    </ul>
   );
 }
 
