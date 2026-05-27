@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PieChart } from "@/components/charts";
 import { requireOrg } from "@/lib/auth";
+import { getOrgSnapshot } from "@/lib/dashboard-refresh";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
 import { listGroups } from "@/lib/community-lane";
@@ -12,13 +13,15 @@ import {
   getRecentMovement,
   getShepherdWorkload,
 } from "@/lib/dashboard-read";
+import { RefreshSnapshotsButton } from "./refresh-button";
 
 export default async function HomePage() {
   const session = await requireOrg();
+  const snapshot = getOrgSnapshot(session.orgId);
   return (
     <AppShell active="Home" breadcrumb="Home">
       <div className="px-5 md:px-7 py-7">
-        <div className="flex items-baseline justify-between mb-6">
+        <div className="flex items-baseline justify-between mb-6 gap-3 flex-wrap">
           <div>
             <div className="text-muted text-xs mb-1">
               {new Date().toLocaleDateString(undefined, {
@@ -33,10 +36,14 @@ export default async function HomePage() {
               the flock is moving this week.
             </p>
           </div>
-          <div className="hidden lg:flex items-center gap-2 text-xs">
+          <div className="flex items-center gap-3">
+            <RefreshSnapshotsButton
+              isAdmin={session.role === "admin"}
+              refreshedAt={snapshot?.refreshedAt ?? null}
+            />
             <Link
               href="/care-queue"
-              className="px-2.5 py-1.5 rounded bg-accent text-[var(--accent-fg)] font-medium"
+              className="px-2.5 py-1.5 rounded bg-accent text-[var(--accent-fg)] font-medium text-xs"
             >
               Open care queue
             </Link>

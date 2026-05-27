@@ -1,9 +1,9 @@
 import "server-only";
 import { getDb } from "./db";
+import { getOrgSnapshot } from "./dashboard-refresh";
 import { decryptJson } from "./encryption";
 
 const MS_PER_DAY = 86_400_000;
-const MS_PER_MONTH = 30 * MS_PER_DAY;
 
 interface PIIBlob {
   first_name?: string | null;
@@ -32,133 +32,61 @@ export interface DashboardStats {
 
 export function getDashboardStats(
   orgId: number,
-  activityMonths: number,
+  _activityMonths: number,
 ): DashboardStats {
-  const db = getDb();
-  const cutoff30 = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
-  const cutoffActivity = new Date(
-    Date.now() - activityMonths * MS_PER_MONTH,
-  ).toISOString();
-
-  // Active = anyone with a form sub, group attendance, plan serve, or
-  // PCO record update in the activity window. Mirrors the looser
-  // people-read definition rather than the stricter classification
-  // bucket so the headline doesn't look artificially small.
-  const active = (
-    db
-      .prepare(
-        `SELECT COUNT(DISTINCT pco_id) AS n
-           FROM pco_people
-          WHERE org_id = ?
-            AND (
-              last_form_submission_at >= ?
-              OR pco_updated_at >= ?
-              OR pco_id IN (
-                SELECT DISTINCT person_id FROM pco_event_attendances
-                 WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?
-              )
-              OR pco_id IN (
-                SELECT DISTINCT pp.person_id FROM pco_plan_people pp
-                  JOIN pco_plans p
-                    ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-                 WHERE pp.org_id = ?
-                   AND pp.person_id != ''
-                   AND p.sort_date >= ?
-                   AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
-              )
-            )`,
-      )
-      .get(
-        orgId,
-        cutoffActivity,
-        cutoffActivity,
-        orgId,
-        cutoffActivity,
-        orgId,
-        cutoffActivity,
-      ) as { n: number } | undefined
-  )?.n ?? 0;
-
-  // Joined this month = distinct person ids with a new (group joined_at
-  // OR team pco_created_at) inside the last 30 days.
-  const joinedRow = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM (
-         SELECT DISTINCT person_id FROM pco_group_memberships
-          WHERE org_id = ? AND joined_at IS NOT NULL AND joined_at >= ?
-         UNION
-         SELECT DISTINCT person_id FROM pco_team_memberships
-          WHERE org_id = ? AND person_id != ''
-            AND pco_created_at IS NOT NULL AND pco_created_at >= ?
-       )`,
-    )
-    .get(orgId, cutoff30, orgId, cutoff30) as { n: number } | undefined;
-  // Detect "we have no data at all" so we render NULL → "insufficient",
-  // not a deceptively confident 0.
-  const haveJoinData = (
-    db
-      .prepare(
-        `SELECT EXISTS(
-           SELECT 1 FROM pco_group_memberships WHERE org_id = ? AND joined_at IS NOT NULL
-         ) OR EXISTS(
-           SELECT 1 FROM pco_team_memberships WHERE org_id = ? AND pco_created_at IS NOT NULL
-         ) AS yes`,
-      )
-      .get(orgId, orgId) as { yes: number } | undefined
-  )?.yes === 1;
-
-  // Departed = distinct person ids with archived_at inside last 30d
-  // (group or team).
-  const departedRow = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM (
-         SELECT DISTINCT person_id FROM pco_group_memberships
-          WHERE org_id = ? AND archived_at IS NOT NULL AND archived_at >= ?
-         UNION
-         SELECT DISTINCT person_id FROM pco_team_memberships
-          WHERE org_id = ? AND person_id != ''
-            AND archived_at IS NOT NULL AND archived_at >= ?
-       )`,
-    )
-    .get(orgId, cutoff30, orgId, cutoff30) as { n: number } | undefined;
-
-  // Unshepherded = people who have NO active membership in any group
-  // AND NO active membership on any team. We use the same membership
-  // definitions as the /shepherds page so the numbers tie out.
-  const unshepherded = (
-    db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM pco_people p
-          WHERE p.org_id = ?
-            AND NOT EXISTS (
-              SELECT 1 FROM pco_group_memberships m
-               WHERE m.org_id = p.org_id
-                 AND m.person_id = p.pco_id
-                 AND m.archived_at IS NULL
-            )
-            AND NOT EXISTS (
-              SELECT 1 FROM pco_team_memberships tm
-               WHERE tm.org_id = p.org_id
-                 AND tm.person_id = p.pco_id
-                 AND tm.archived_at IS NULL
-            )`,
-      )
-      .get(orgId) as { n: number } | undefined
-  )?.n ?? 0;
-
   const now = new Date();
   const monthLabel = `${now.toLocaleString("en-US", {
     month: "short",
   })} ${now.getFullYear()}`;
 
+  // Snapshot fast path — one indexed row read replaces the previous
+  // 4-CTE / multiple-NOT-EXISTS scan over pco_people.
+  const snap = getOrgSnapshot(orgId);
+  if (snap) {
+    // Detect "we have no joined-at history at all" so we still show
+    // an honest "—" instead of a confident 0.
+    const haveJoinData = hasMembershipTimestamps(orgId);
+    return {
+      active: snap.activeCount + snap.shepherdedCount + snap.presentCount,
+      joinedMonth: haveJoinData ? snap.joined30d : null,
+      departedMonth: haveJoinData ? snap.departed30d : null,
+      unshepherded: snap.unshepherdedCount,
+      nextStepReady: null,
+      monthLabel,
+    };
+  }
+
+  // Cold-start fallback — no snapshot yet (fresh install, or refresh
+  // hasn't run). Return zeros so the page still renders quickly
+  // instead of hanging. The first sync after install populates the
+  // snapshot and subsequent loads use the fast path.
   return {
-    active,
-    joinedMonth: haveJoinData ? (joinedRow?.n ?? 0) : null,
-    departedMonth: haveJoinData ? (departedRow?.n ?? 0) : null,
-    unshepherded,
+    active: 0,
+    joinedMonth: null,
+    departedMonth: null,
+    unshepherded: 0,
     nextStepReady: null,
     monthLabel,
   };
+}
+
+function hasMembershipTimestamps(orgId: number): boolean {
+  const db = getDb();
+  return (
+    (
+      db
+        .prepare(
+          `SELECT EXISTS(
+             SELECT 1 FROM pco_group_memberships
+              WHERE org_id = ? AND joined_at IS NOT NULL
+           ) OR EXISTS(
+             SELECT 1 FROM pco_team_memberships
+              WHERE org_id = ? AND pco_created_at IS NOT NULL
+           ) AS yes`,
+        )
+        .get(orgId, orgId) as { yes: number } | undefined
+    )?.yes === 1
+  );
 }
 
 // ─── Falling through the cracks ──────────────────────────────────
@@ -182,88 +110,47 @@ export interface FallingPerson {
  *  priority follow-ups. */
 export function getFallingThroughCracks(
   orgId: number,
-  activityMonths: number,
+  _activityMonths: number,
   limit: number = 6,
 ): FallingPerson[] {
   const db = getDb();
-  const cutoffActivity = new Date(
-    Date.now() - activityMonths * MS_PER_MONTH,
-  ).toISOString();
+  // Snapshot fast path — person_activity carries classification +
+  // last_activity_at pre-computed, so this read is one indexed
+  // ORDER BY ... LIMIT instead of the previous 3-CTE join.
   const rows = db
     .prepare(
-      `WITH last_act AS (
-         SELECT pco_id,
-                MAX(coalesce(last_form_submission_at, '')) AS last_form,
-                MAX(coalesce(pco_updated_at, '')) AS last_updated
-           FROM pco_people
-          WHERE org_id = ?
-          GROUP BY pco_id
-       ),
-       last_att AS (
-         SELECT person_id, MAX(event_starts_at) AS last_att_at
-           FROM pco_event_attendances
-          WHERE org_id = ? AND attended = 1
-          GROUP BY person_id
-       ),
-       last_serve AS (
-         SELECT pp.person_id, MAX(p.sort_date) AS last_serve_at
-           FROM pco_plan_people pp
-           JOIN pco_plans p
-             ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-          WHERE pp.org_id = ?
-            AND pp.person_id != ''
-            AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
-          GROUP BY pp.person_id
-       )
-       SELECT p.pco_id AS personId,
-              p.enc_pii AS encPii,
-              p.pco_created_at AS createdAt,
-              max(
-                coalesce(la.last_form, ''),
-                coalesce(la.last_updated, ''),
-                coalesce(att.last_att_at, ''),
-                coalesce(srv.last_serve_at, '')
-              ) AS lastActivityAt
-         FROM pco_people p
-         LEFT JOIN last_act la ON la.pco_id = p.pco_id
-         LEFT JOIN last_att att ON att.person_id = p.pco_id
-         LEFT JOIN last_serve srv ON srv.person_id = p.pco_id
-        WHERE p.org_id = ?
-          AND p.pco_created_at IS NOT NULL
-          AND p.pco_created_at < ?
-        ORDER BY lastActivityAt ASC NULLS FIRST
+      `SELECT pa.person_id AS personId,
+              pa.last_activity_at AS lastActivityAt,
+              pp.enc_pii AS encPii
+         FROM person_activity pa
+         LEFT JOIN pco_people pp
+           ON pp.org_id = pa.org_id AND pp.pco_id = pa.person_id
+        WHERE pa.org_id = ?
+          AND pa.classification = 'inactive'
+        ORDER BY pa.last_activity_at ASC NULLS FIRST
         LIMIT ?`,
     )
-    .all(
-      orgId,
-      orgId,
-      orgId,
-      orgId,
-      cutoffActivity,
-      limit * 4, // overscan because filter below trims many
-    ) as Array<{
+    .all(orgId, limit) as Array<{
     personId: string;
-    encPii: string | null;
-    createdAt: string;
     lastActivityAt: string | null;
+    encPii: string | null;
   }>;
-
+  // Cold-start fallback: if person_activity is empty (snapshot not
+  // yet built) just return an empty list — the page renders with
+  // "no one has gone silent" copy instead of hanging.
   const now = Date.now();
-  const out: FallingPerson[] = [];
-  for (const r of rows) {
-    const lastIso = r.lastActivityAt && r.lastActivityAt !== ""
-      ? r.lastActivityAt
-      : null;
-    // Keep only people who haven't had activity inside the window.
-    if (lastIso && lastIso >= cutoffActivity) continue;
+  return rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
     const name =
       [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") ||
       `(unknown #${r.personId})`;
+    const lastIso = r.lastActivityAt && r.lastActivityAt !== ""
+      ? r.lastActivityAt
+      : null;
     const daysSilent = lastIso
       ? Math.floor((now - new Date(lastIso).getTime()) / MS_PER_DAY)
       : null;
-    out.push({
+    return {
       personId: r.personId,
       fullName: name,
       lastActivityAt: lastIso,
@@ -271,10 +158,8 @@ export function getFallingThroughCracks(
       context: lastIso
         ? `Last activity ${new Date(lastIso).toLocaleDateString()}`
         : "Never had measurable activity",
-    });
-    if (out.length >= limit) break;
-  }
-  return out;
+    };
+  });
 }
 
 // ─── Recent movement (joined / left this week or month) ──────────
@@ -524,79 +409,16 @@ export interface LaneStat {
  *  scan instead of millions of subquery executions. */
 export function getLaneStats(
   orgId: number,
-  activityMonths: number,
+  _activityMonths: number,
 ): LaneStat[] {
-  const db = getDb();
-  const cutoff = new Date(
-    Date.now() - activityMonths * MS_PER_MONTH,
-  ).toISOString();
-
-  // Build "anyone with any signal in the window" once. Connection-
-  // local TEMP table, primary-keyed by person_id so subsequent joins
-  // are O(1) per row.
-  db.exec(`DROP TABLE IF EXISTS _lane_active;
-           CREATE TEMP TABLE _lane_active (person_id TEXT PRIMARY KEY);`);
-  db.prepare(
-    `INSERT OR IGNORE INTO _lane_active
-       SELECT DISTINCT person_id FROM pco_event_attendances
-        WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?`,
-  ).run(orgId, cutoff);
-  db.prepare(
-    `INSERT OR IGNORE INTO _lane_active
-       SELECT DISTINCT pp.person_id FROM pco_plan_people pp
-         JOIN pco_plans p
-           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-        WHERE pp.org_id = ?
-          AND pp.person_id != ''
-          AND p.sort_date >= ?
-          AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')`,
-  ).run(orgId, cutoff);
-
-  const wors =
-    (db.prepare(`SELECT COUNT(*) AS n FROM _lane_active`).get() as
-      | { n: number }
-      | undefined)?.n ?? 0;
-
-  // Community + serve are cheap independent queries on indexed tables.
-  const comm =
-    (db
-      .prepare(
-        `SELECT COUNT(DISTINCT person_id) AS n
-           FROM pco_group_memberships
-          WHERE org_id = ? AND archived_at IS NULL`,
-      )
-      .get(orgId) as { n: number } | undefined)?.n ?? 0;
-
-  const serv =
-    (db
-      .prepare(
-        `SELECT COUNT(DISTINCT person_id) AS n
-           FROM pco_team_memberships
-          WHERE org_id = ? AND person_id != '' AND archived_at IS NULL`,
-      )
-      .get(orgId) as { n: number } | undefined)?.n ?? 0;
-
-  // Extend the active set with current group + team members so "none"
-  // accounts for ALL lane signals before we count the gap.
-  db.prepare(
-    `INSERT OR IGNORE INTO _lane_active
-       SELECT DISTINCT person_id FROM pco_group_memberships
-        WHERE org_id = ? AND archived_at IS NULL`,
-  ).run(orgId);
-  db.prepare(
-    `INSERT OR IGNORE INTO _lane_active
-       SELECT DISTINCT person_id FROM pco_team_memberships
-        WHERE org_id = ? AND archived_at IS NULL AND person_id != ''`,
-  ).run(orgId);
-
-  const none =
-    (db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM pco_people p
-          WHERE p.org_id = ?
-            AND p.pco_id NOT IN (SELECT person_id FROM _lane_active)`,
-      )
-      .get(orgId) as { n: number } | undefined)?.n ?? 0;
+  // Snapshot fast path — every count comes from a single indexed row
+  // instead of scanning pco_people / pco_event_attendances on every
+  // page render. The snapshot is refreshed after every sync.
+  const snap = getOrgSnapshot(orgId);
+  const wors = snap?.laneWors ?? 0;
+  const comm = snap?.laneComm ?? 0;
+  const serv = snap?.laneServ ?? 0;
+  const none = snap?.laneNone ?? 0;
 
   return [
     { key: "wors", label: "Worship", count: wors },

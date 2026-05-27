@@ -1,4 +1,5 @@
 import "server-only";
+import { refreshDashboardSnapshots } from "./dashboard-refresh";
 import { decryptJson, encryptJson } from "./encryption";
 import { getDb } from "./db";
 import {
@@ -316,6 +317,18 @@ export async function runSync(
       details.plans.upserted +
       details.planPeople.upserted;
 
+    // Refresh dashboard snapshots before marking the run as ok so the
+    // next page render sees fresh totals. Wrapped defensively — a
+    // failure here shouldn't undo the sync (data already landed).
+    try {
+      refreshDashboardSnapshots(orgId);
+    } catch (refreshErr) {
+      const msg =
+        refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
+      warning =
+        (warning ? warning + " · " : "") +
+        `dashboard refresh failed: ${msg}`;
+    }
     details.durationMs = Date.now() - startedMs;
     finishSyncRun(runId, "ok", changes, warning, details);
     return { ok: true, changes, details, warning };

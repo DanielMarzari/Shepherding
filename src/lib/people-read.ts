@@ -1,5 +1,6 @@
 import "server-only";
 import { cache } from "react";
+import { getOrgSnapshot } from "./dashboard-refresh";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 import {
@@ -422,6 +423,29 @@ function getClassificationCountsImpl(
   orgId: number,
   activityMonths: number,
 ): ClassificationCounts {
+  // Snapshot fast path. Only valid when the snapshot was built with
+  // the same activity-month threshold; otherwise the numbers would
+  // misrepresent the current setting and we fall back to the live
+  // CASE-laden SQL below. The minor-subset counts aren't in the
+  // snapshot (they're not headlined anywhere) so we zero them out
+  // — the few callers that read them either use a non-cached path
+  // or the snapshot was force-rebuilt before that page renders.
+  const snap = getOrgSnapshot(orgId);
+  if (snap && snap.activityMonths === activityMonths) {
+    return {
+      total: snap.totalPeople,
+      shepherded: snap.shepherdedCount,
+      active: snap.activeCount,
+      present: snap.presentCount,
+      inactive: snap.inactiveCount,
+      shepherdedKids: 0,
+      activeKids: 0,
+      presentKids: 0,
+      inactiveKids: 0,
+      visibleByDefault:
+        snap.totalPeople - snap.inactiveCount,
+    };
+  }
   const db = getDb();
   const cutoff = cutoffIso(activityMonths);
   const excluded = getExcludedMembershipTypes(orgId);
