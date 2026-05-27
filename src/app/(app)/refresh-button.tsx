@@ -66,8 +66,13 @@ export function RefreshSnapshotsButton({
       if (status.status !== "running") {
         if (pollRef.current) clearInterval(pollRef.current);
         if (status.status === "ok") {
-          // Revalidate so the page re-reads the new snapshot.
+          // Revalidate so the page re-reads the new snapshot. The
+          // parent server component re-renders with a fresh
+          // `refreshedAt` prop, then we clear the inline run-state
+          // a moment later so the new stamp ("Snapshot updated …")
+          // takes over from the green "Done" pill.
           await revalidateDashboardAction();
+          setTimeout(() => setRun(null), 2500);
         }
       }
     }, POLL_INTERVAL_MS);

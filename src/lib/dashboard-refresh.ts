@@ -74,6 +74,39 @@ export function refreshDashboardSnapshots(
   }
 }
 
+/** Same work as refreshDashboardSnapshots but yields to the event loop
+ *  AFTER each phase commits. That release is critical for the
+ *  background-refresh + progress-polling pattern: better-sqlite3 is
+ *  synchronous, so without an `await` between phases the entire
+ *  rebuild blocks the Node worker — meaning polling requests queue
+ *  up behind the work and the client only sees status updates after
+ *  EVERYTHING has finished, defeating the progress bar. */
+export async function refreshDashboardSnapshotsAsync(
+  orgId: number,
+  onProgress?: RefreshProgressCallback,
+): Promise<void> {
+  const db = getDb();
+  const settings = getSyncSettings(orgId);
+  const activityMonths = settings.activityMonths;
+  const ctx = {
+    cutoffActivity: new Date(
+      Date.now() - activityMonths * MS_PER_MONTH,
+    ).toISOString(),
+    cutoff30: new Date(Date.now() - 30 * MS_PER_DAY).toISOString(),
+    activityMonths,
+  };
+  for (let i = 0; i < REFRESH_PHASES.length; i++) {
+    const phase = REFRESH_PHASES[i];
+    db.transaction(() => phase.run(orgId, ctx))();
+    onProgress?.(i + 1, REFRESH_PHASES.length, phase.label);
+    // Yield. setImmediate clears the queue of pending I/O including
+    // polling requests, so the freshly-committed progress row gets
+    // a chance to be read before we hog the worker for the next
+    // phase.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
 // ─── Background-run tracking (for the progress-bar UI) ───────────
 
 export interface RefreshRunStatus {
@@ -135,19 +168,35 @@ function finishRefreshRun(
 }
 
 /** Fire-and-forget a refresh, return the run id immediately. The
- *  client polls status via getRefreshRunStatus. */
+ *  client polls status via getRefreshRunStatus. Critical detail: we
+ *  defer the actual work via setImmediate AND use the async refresh
+ *  variant — without both, the synchronous better-sqlite3 work would
+ *  block the same Node worker that handles the caller's response,
+ *  and the action would only return AFTER the rebuild finished
+ *  (defeating the whole "background" idea + the progress bar). */
 export function startRefreshInBackground(orgId: number): number {
   const runId = createRefreshRun(orgId);
-  const promise = (async () => {
-    try {
-      refreshDashboardSnapshots(orgId, (step, _total, label) => {
-        updateRefreshProgress(runId, step, label);
-      });
-      finishRefreshRun(runId, "ok", null);
-    } catch (e) {
-      finishRefreshRun(runId, "error", e instanceof Error ? e.message : String(e));
-    }
-  })();
+  const promise = new Promise<void>((resolve) => {
+    setImmediate(async () => {
+      try {
+        await refreshDashboardSnapshotsAsync(
+          orgId,
+          (step, _total, label) => {
+            updateRefreshProgress(runId, step, label);
+          },
+        );
+        finishRefreshRun(runId, "ok", null);
+      } catch (e) {
+        finishRefreshRun(
+          runId,
+          "error",
+          e instanceof Error ? e.message : String(e),
+        );
+      } finally {
+        resolve();
+      }
+    });
+  });
   inFlightRefreshes.add(promise);
   promise.finally(() => inFlightRefreshes.delete(promise));
   return runId;
