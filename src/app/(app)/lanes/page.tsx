@@ -5,14 +5,14 @@ import { Card, CardHeader, LaneTag } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import {
   type LaneSequence,
-  getLaneFlow,
   getLaneSequences,
+  getLaneTransitions,
 } from "@/lib/dashboard-refresh";
 import { getLaneStats, getRecentMovement } from "@/lib/dashboard-read";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
 import { listShepherds } from "@/lib/shepherds-read";
-import { LaneSankey } from "./lane-sankey";
+import { LaneSankey, LaneTransitionMatrix } from "./lane-sankey";
 
 export default async function LanesPage() {
   const session = await requireOrg();
@@ -52,24 +52,42 @@ export default async function LanesPage() {
           <Card className="xl:col-span-8 p-5">
             <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
               <h2 className="text-sm font-semibold">
-                Lane flow · entry → today
+                Lane transitions · all-time
               </h2>
               <span className="text-xs text-muted">
-                Community + Serving only — Worship needs Sunday check-in
-                data and Giving isn&apos;t synced.
+                Community + Serving only — Worship + Giving lanes don&apos;t
+                have data sources wired.
               </span>
             </div>
             <p className="text-xs text-muted mb-4">
-              Each person sits on the left at the lane they first
-              entered (community = first group joined, serving = first
-              team added, both = within 30 days of each other, none =
-              never entered either). On the right they sit at the lane
-              they&apos;re currently active in. Curve width is
-              proportional to the count.
+              Every time someone changes lane state (joining a group,
+              leaving a team, etc.) counts as one transition. Each
+              ribbon shows how many transitions moved between two
+              states; left rects = transitions OUT of, right rects =
+              transitions INTO. So a person who went none → comm →
+              both → serv → none contributes four ribbons. On-ramps
+              cluster on the right side; drop-offs cluster into
+              &ldquo;No activity&rdquo;.
             </p>
             <Suspense fallback={<SankeySkeleton />}>
               <SankeySection orgId={session.orgId} />
             </Suspense>
+            <div className="mt-5 pt-4 border-t border-border-soft">
+              <h3 className="text-xs font-semibold text-muted mb-2 uppercase tracking-wider">
+                Same data, compact matrix
+              </h3>
+              <p className="text-[11px] text-muted mb-2">
+                Cell shading shows what % of all transitions out of
+                each row state ended up in each column state.
+              </p>
+              <Suspense
+                fallback={
+                  <div className="h-32 bg-bg-elev-2/40 rounded animate-pulse" />
+                }
+              >
+                <MatrixSection orgId={session.orgId} />
+              </Suspense>
+            </div>
           </Card>
 
           <Card className="xl:col-span-4 p-5">
@@ -119,16 +137,21 @@ export default async function LanesPage() {
   );
 }
 
-// ─── Sankey (lane entry → today) ──────────────────────────────────
+// ─── Sankey (all-time lane transitions) ───────────────────────────
 
 async function SankeySection({ orgId }: { orgId: number }) {
-  const flow = getLaneFlow(orgId);
+  const flow = getLaneTransitions(orgId);
   return <LaneSankey flow={flow} />;
+}
+
+async function MatrixSection({ orgId }: { orgId: number }) {
+  const flow = getLaneTransitions(orgId);
+  return <LaneTransitionMatrix flow={flow} />;
 }
 
 function SankeySkeleton() {
   return (
-    <div className="h-[400px] rounded-lg bg-bg-elev-2/40 animate-pulse" />
+    <div className="h-[480px] rounded-lg bg-bg-elev-2/40 animate-pulse" />
   );
 }
 

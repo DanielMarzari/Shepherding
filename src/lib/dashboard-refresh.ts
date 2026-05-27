@@ -39,6 +39,10 @@ const REFRESH_PHASES: Array<{
     label: "Aggregating org totals",
     run: (orgId, ctx) => rebuildOrgSnapshot(orgId, ctx.activityMonths),
   },
+  {
+    label: "Computing lane transitions",
+    run: (orgId) => rebuildLaneTransitions(orgId),
+  },
 ];
 
 export const REFRESH_TOTAL_STEPS = REFRESH_PHASES.length;
@@ -115,6 +119,10 @@ export async function refreshDashboardSnapshotsAsync(
 
   rebuildOrgSnapshot(orgId, activityMonths);
   onProgress?.(4, REFRESH_TOTAL_STEPS, REFRESH_PHASES[3].label);
+  await yieldTick();
+
+  rebuildLaneTransitions(orgId);
+  onProgress?.(5, REFRESH_TOTAL_STEPS, REFRESH_PHASES[4].label);
 }
 
 // ─── Background-run tracking (for the progress-bar UI) ───────────
@@ -1126,6 +1134,196 @@ export function getLaneFlow(orgId: number): LaneFlow {
     fromTotals,
     toTotals,
     total: rows.length,
+  };
+}
+
+// ─── Lane transitions (aggregated chronology) ────────────────────
+
+type LaneState = "none" | "comm" | "serv" | "both";
+
+function laneStateFor(commCount: number, servCount: number): LaneState {
+  if (commCount > 0 && servCount > 0) return "both";
+  if (commCount > 0) return "comm";
+  if (servCount > 0) return "serv";
+  return "none";
+}
+
+/** For each person, build their full chronology of lane-state
+ *  transitions from their group + team membership history. Aggregate
+ *  the (prev_state, next_state) counts across the org, then write
+ *  into lane_transitions for fast reads.
+ *
+ *  Why per-person chronologies rather than just first→current:
+ *  someone who went none → comm → both → serv → none generates FOUR
+ *  transition records (one per arrow), and aggregating across the
+ *  org reveals the actual on-ramps and drop-off points — not just
+ *  net "where they ended up". */
+function rebuildLaneTransitions(orgId: number): void {
+  const db = getDb();
+  // Pull every group + team membership row with the dates that
+  // change lane state — joined_at / archived_at for groups,
+  // pco_created_at / archived_at for teams.
+  const groupRows = db
+    .prepare(
+      `SELECT person_id, joined_at, archived_at
+         FROM pco_group_memberships
+        WHERE org_id = ?
+          AND person_id != ''`,
+    )
+    .all(orgId) as Array<{
+    person_id: string;
+    joined_at: string | null;
+    archived_at: string | null;
+  }>;
+  const teamRows = db
+    .prepare(
+      `SELECT person_id, pco_created_at, archived_at
+         FROM pco_team_memberships
+        WHERE org_id = ?
+          AND person_id != ''`,
+    )
+    .all(orgId) as Array<{
+    person_id: string;
+    pco_created_at: string | null;
+    archived_at: string | null;
+  }>;
+
+  // (person_id) → list of events (at + delta to comm or serv counter).
+  type Event = {
+    at: string;
+    deltaComm: number;
+    deltaServ: number;
+  };
+  const byPerson = new Map<string, Event[]>();
+  function push(personId: string, ev: Event) {
+    const arr = byPerson.get(personId);
+    if (arr) arr.push(ev);
+    else byPerson.set(personId, [ev]);
+  }
+  for (const r of groupRows) {
+    if (r.joined_at) {
+      push(r.person_id, {
+        at: r.joined_at,
+        deltaComm: 1,
+        deltaServ: 0,
+      });
+    }
+    if (r.archived_at) {
+      push(r.person_id, {
+        at: r.archived_at,
+        deltaComm: -1,
+        deltaServ: 0,
+      });
+    }
+  }
+  for (const r of teamRows) {
+    if (r.pco_created_at) {
+      push(r.person_id, {
+        at: r.pco_created_at,
+        deltaComm: 0,
+        deltaServ: 1,
+      });
+    }
+    if (r.archived_at) {
+      push(r.person_id, {
+        at: r.archived_at,
+        deltaComm: 0,
+        deltaServ: -1,
+      });
+    }
+  }
+
+  // Aggregate transitions across the whole org.
+  const counts = new Map<string, number>();
+  for (const events of byPerson.values()) {
+    events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    let comm = 0;
+    let serv = 0;
+    let prev: LaneState = "none";
+    for (const e of events) {
+      comm = Math.max(0, comm + e.deltaComm);
+      serv = Math.max(0, serv + e.deltaServ);
+      const next = laneStateFor(comm, serv);
+      if (next !== prev) {
+        const k = `${prev}>${next}`;
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+        prev = next;
+      }
+    }
+  }
+
+  // Wipe + repopulate. Tiny table, fast.
+  db.transaction(() => {
+    db.prepare(`DELETE FROM lane_transitions WHERE org_id = ?`).run(orgId);
+    const stmt = db.prepare(
+      `INSERT INTO lane_transitions (org_id, from_state, to_state, count)
+       VALUES (?, ?, ?, ?)`,
+    );
+    for (const [k, n] of counts.entries()) {
+      const [from, to] = k.split(">") as [LaneState, LaneState];
+      stmt.run(orgId, from, to, n);
+    }
+  })();
+}
+
+export interface LaneTransition {
+  from: LaneCategory;
+  to: LaneCategory;
+  count: number;
+}
+
+export interface LaneTransitionSummary {
+  /** All non-zero transitions, sorted by count desc. */
+  transitions: LaneTransition[];
+  /** Per-source totals (sum of outflows per state). */
+  fromTotals: Record<LaneCategory, number>;
+  /** Per-destination totals (sum of inflows per state). */
+  toTotals: Record<LaneCategory, number>;
+  /** Sum across all transitions — equals fromTotals total and
+   *  toTotals total by construction. */
+  total: number;
+}
+
+export function getLaneTransitions(orgId: number): LaneTransitionSummary {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT from_state AS fromState, to_state AS toState, count
+         FROM lane_transitions WHERE org_id = ? AND count > 0
+         ORDER BY count DESC`,
+    )
+    .all(orgId) as Array<{
+    fromState: LaneCategory;
+    toState: LaneCategory;
+    count: number;
+  }>;
+  const fromTotals: Record<LaneCategory, number> = {
+    comm: 0,
+    serv: 0,
+    both: 0,
+    none: 0,
+  };
+  const toTotals: Record<LaneCategory, number> = {
+    comm: 0,
+    serv: 0,
+    both: 0,
+    none: 0,
+  };
+  let total = 0;
+  for (const r of rows) {
+    fromTotals[r.fromState] += r.count;
+    toTotals[r.toState] += r.count;
+    total += r.count;
+  }
+  return {
+    transitions: rows.map((r) => ({
+      from: r.fromState,
+      to: r.toState,
+      count: r.count,
+    })),
+    fromTotals,
+    toTotals,
+    total,
   };
 }
 
