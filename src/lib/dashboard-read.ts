@@ -510,11 +510,18 @@ export interface LaneStat {
 }
 
 /** Per-lane headcounts. Worship = distinct people who attended any
- *  group event in the activity window OR appear in any active team
- *  roster (a rough "in the building" proxy). Community = active group
- *  members. Serve = active team members. Give + Outreach are NULL —
- *  we don't sync donations or outreach activity yet. None = total
- *  people with NO activity in the window (the inactive bucket). */
+ *  group event in the activity window OR served on a plan. Community
+ *  = active group members. Serve = active team members. Give +
+ *  Outreach are NULL — no source synced. None = total people with no
+ *  trace of any of the above.
+ *
+ *  Implementation note: the previous version ran 4 NOT EXISTS
+ *  subqueries against the full pco_people table to compute "none",
+ *  which produced an O(people × 4) lookup pattern and made the page
+ *  hang on real data. The fix builds the active-person id set once
+ *  into an in-memory TEMP TABLE (with a primary key index) and joins
+ *  against it — every lane count then resolves to a single indexed
+ *  scan instead of millions of subquery executions. */
 export function getLaneStats(
   orgId: number,
   activityMonths: number,
@@ -524,79 +531,72 @@ export function getLaneStats(
     Date.now() - activityMonths * MS_PER_MONTH,
   ).toISOString();
 
-  // Worship — anyone with a group attendance OR an attended plan in
-  // the window. Best proxy we have without check-in sync.
-  const wors = (
-    db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM (
-           SELECT DISTINCT person_id FROM pco_event_attendances
-            WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?
-           UNION
-           SELECT DISTINCT pp.person_id FROM pco_plan_people pp
-             JOIN pco_plans p
-               ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-            WHERE pp.org_id = ?
-              AND pp.person_id != ''
-              AND p.sort_date >= ?
-              AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
-         )`,
-      )
-      .get(orgId, cutoff, orgId, cutoff) as { n: number } | undefined
-  )?.n ?? 0;
+  // Build "anyone with any signal in the window" once. Connection-
+  // local TEMP table, primary-keyed by person_id so subsequent joins
+  // are O(1) per row.
+  db.exec(`DROP TABLE IF EXISTS _lane_active;
+           CREATE TEMP TABLE _lane_active (person_id TEXT PRIMARY KEY);`);
+  db.prepare(
+    `INSERT OR IGNORE INTO _lane_active
+       SELECT DISTINCT person_id FROM pco_event_attendances
+        WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?`,
+  ).run(orgId, cutoff);
+  db.prepare(
+    `INSERT OR IGNORE INTO _lane_active
+       SELECT DISTINCT pp.person_id FROM pco_plan_people pp
+         JOIN pco_plans p
+           ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+        WHERE pp.org_id = ?
+          AND pp.person_id != ''
+          AND p.sort_date >= ?
+          AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')`,
+  ).run(orgId, cutoff);
 
-  const comm = (
-    db
+  const wors =
+    (db.prepare(`SELECT COUNT(*) AS n FROM _lane_active`).get() as
+      | { n: number }
+      | undefined)?.n ?? 0;
+
+  // Community + serve are cheap independent queries on indexed tables.
+  const comm =
+    (db
       .prepare(
         `SELECT COUNT(DISTINCT person_id) AS n
            FROM pco_group_memberships
           WHERE org_id = ? AND archived_at IS NULL`,
       )
-      .get(orgId) as { n: number } | undefined
-  )?.n ?? 0;
+      .get(orgId) as { n: number } | undefined)?.n ?? 0;
 
-  const serv = (
-    db
+  const serv =
+    (db
       .prepare(
         `SELECT COUNT(DISTINCT person_id) AS n
            FROM pco_team_memberships
           WHERE org_id = ? AND person_id != '' AND archived_at IS NULL`,
       )
-      .get(orgId) as { n: number } | undefined
-  )?.n ?? 0;
+      .get(orgId) as { n: number } | undefined)?.n ?? 0;
 
-  // None = people who DON'T appear in any of the three lane sets above.
-  const none = (
-    db
+  // Extend the active set with current group + team members so "none"
+  // accounts for ALL lane signals before we count the gap.
+  db.prepare(
+    `INSERT OR IGNORE INTO _lane_active
+       SELECT DISTINCT person_id FROM pco_group_memberships
+        WHERE org_id = ? AND archived_at IS NULL`,
+  ).run(orgId);
+  db.prepare(
+    `INSERT OR IGNORE INTO _lane_active
+       SELECT DISTINCT person_id FROM pco_team_memberships
+        WHERE org_id = ? AND archived_at IS NULL AND person_id != ''`,
+  ).run(orgId);
+
+  const none =
+    (db
       .prepare(
         `SELECT COUNT(*) AS n FROM pco_people p
           WHERE p.org_id = ?
-            AND NOT EXISTS (
-              SELECT 1 FROM pco_event_attendances a
-               WHERE a.org_id = p.org_id AND a.person_id = p.pco_id
-                 AND a.attended = 1 AND a.event_starts_at >= ?
-            )
-            AND NOT EXISTS (
-              SELECT 1 FROM pco_plan_people pp
-                JOIN pco_plans pl
-                  ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
-               WHERE pp.org_id = p.org_id AND pp.person_id = p.pco_id
-                 AND pl.sort_date >= ?
-                 AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
-            )
-            AND NOT EXISTS (
-              SELECT 1 FROM pco_group_memberships m
-               WHERE m.org_id = p.org_id AND m.person_id = p.pco_id
-                 AND m.archived_at IS NULL
-            )
-            AND NOT EXISTS (
-              SELECT 1 FROM pco_team_memberships tm
-               WHERE tm.org_id = p.org_id AND tm.person_id = p.pco_id
-                 AND tm.archived_at IS NULL
-            )`,
+            AND p.pco_id NOT IN (SELECT person_id FROM _lane_active)`,
       )
-      .get(orgId, cutoff, cutoff) as { n: number } | undefined
-  )?.n ?? 0;
+      .get(orgId) as { n: number } | undefined)?.n ?? 0;
 
   return [
     { key: "wors", label: "Worship", count: wors },
