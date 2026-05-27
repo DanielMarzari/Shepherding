@@ -6,6 +6,21 @@ const nextConfig: NextConfig = {
   // that Next's bundler chokes on — keep them external and resolved at
   // runtime by Node, same as better-sqlite3.
   serverExternalPackages: ["better-sqlite3", "pdf-parse", "pdfjs-dist"],
+  // pdfjs loads its "fake worker" via a dynamic import to a sibling
+  // file Next's tracer can't see — without this the standalone build
+  // ships pdf.mjs but NOT pdf.worker.mjs, and uploads die with
+  // "Setting up fake worker failed". Pin the worker files into the
+  // standalone output for any /mir route.
+  outputFileTracingIncludes: {
+    "/mir": [
+      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+    ],
+    "/mir/**": [
+      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+    ],
+  },
   experimental: {
     serverActions: {
       // Default is 1 MB, which silently 502s MIR PDF uploads (the real
