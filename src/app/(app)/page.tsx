@@ -138,11 +138,6 @@ async function PeopleMixPie({ orgId }: { orgId: number }) {
   return (
     <div className="p-5">
       <PieChart data={data} preserveOrder />
-      <p className="text-[11px] text-subtle mt-3 leading-snug">
-        Excludes <span className="text-fg">{counts.inactive.toLocaleString()}</span>{" "}
-        inactive (no measurable activity in {settings.activityMonths} mo) —
-        those surface in &ldquo;Falling through the cracks&rdquo;.
-      </p>
     </div>
   );
 }
@@ -201,15 +196,26 @@ async function TopStats({ orgId }: { orgId: number }) {
             : "archived from group + team · 30d"
         }
       />
-      <Stat
-        label="Unshepherded"
-        value={stats.unshepherded.toLocaleString()}
-        delta={
-          counts.total > 0
-            ? `${Math.round((stats.unshepherded / counts.total) * 100)}% of all people`
-            : "no people synced"
-        }
-      />
+      {(() => {
+        // "Unshepherded" should answer "of the people we're trying to
+        // pastor, how many aren't in a group or team yet?" — that
+        // means we deliberately drop the inactive bucket (people the
+        // system has already classified as drifted away) and only
+        // count active + present as the denominator.
+        const engagedTotal = counts.active + counts.present + counts.shepherded;
+        const unshepherdedEngaged = counts.active + counts.present;
+        return (
+          <Stat
+            label="Unshepherded"
+            value={unshepherdedEngaged.toLocaleString()}
+            delta={
+              engagedTotal > 0
+                ? `of ${engagedTotal.toLocaleString()} active + present`
+                : "no engaged people"
+            }
+          />
+        );
+      })()}
       <Stat
         label="Next-step ready"
         value="—"
@@ -240,7 +246,7 @@ function TopStatsSkeleton() {
 
 async function FallingThroughCracks({ orgId }: { orgId: number }) {
   const settings = getSyncSettings(orgId);
-  const list = getFallingThroughCracks(orgId, settings.activityMonths, 6);
+  const list = getFallingThroughCracks(orgId, 6);
   return (
     <>
       <div className="px-5 pt-4 pb-3 flex items-center justify-between border-b border-border-soft">
@@ -251,16 +257,17 @@ async function FallingThroughCracks({ orgId }: { orgId: number }) {
           </span>
         </div>
         <Link
-          href="/people?tab=inactive"
+          href="/metrics"
           className="text-xs text-accent hover:underline"
         >
-          See all inactive →
+          Set thresholds →
         </Link>
       </div>
       {list.length === 0 ? (
         <p className="px-5 py-8 text-sm text-muted text-center">
-          ✓ No one has gone silent past the {settings.activityMonths}-month
-          threshold.
+          ✓ Nobody on a group / team roster has lapsed past your{" "}
+          {settings.lapsedWeeks}-week group or{" "}
+          {settings.lapsedFromTeamMonths}-month team threshold.
         </p>
       ) : (
         <table className="w-full text-sm">
@@ -296,8 +303,8 @@ async function FallingThroughCracks({ orgId }: { orgId: number }) {
                     <div className="text-xs text-muted">{p.context}</div>
                   </td>
                   <td className="px-5 py-3 text-muted hidden md:table-cell">
-                    {p.lastActivityAt
-                      ? new Date(p.lastActivityAt).toLocaleDateString()
+                    {p.lastTouchAt
+                      ? new Date(p.lastTouchAt).toLocaleDateString()
                       : "—"}
                   </td>
                   <td className={`px-5 py-3 text-right tnum ${tone}`}>

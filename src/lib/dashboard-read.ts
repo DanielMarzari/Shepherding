@@ -2,8 +2,10 @@ import "server-only";
 import { getDb } from "./db";
 import { getOrgSnapshot } from "./dashboard-refresh";
 import { decryptJson } from "./encryption";
+import { getSyncSettings } from "./pco";
 
 const MS_PER_DAY = 86_400_000;
+const MS_PER_MONTH = 30 * MS_PER_DAY;
 
 interface PIIBlob {
   first_name?: string | null;
@@ -94,70 +96,123 @@ function hasMembershipTimestamps(orgId: number): boolean {
 export interface FallingPerson {
   personId: string;
   fullName: string;
-  /** Last activity date (any source). NULL when we've never seen
-   *  activity. */
-  lastActivityAt: string | null;
-  /** Free-form context like "Active Sundays · last seen Mar 2025". */
+  /** Last attended or served date — whichever is more recent and
+   *  applies to a roster the person is still on. */
+  lastTouchAt: string | null;
+  /** Free-form context — "Group: last attended Apr 2025" etc. */
   context: string;
-  /** Days since last activity, used for sorting + the "risk" tone. */
+  /** Days since last touch, used for sorting + the "risk" tone. */
   daysSilent: number | null;
 }
 
-/** People classified as inactive (no measurable activity in the last
- *  `activityMonths` window) — pulled directly from the classification
- *  rule used everywhere else, so the count here matches the Metrics
- *  page. Sorted by longest silence first since those are the highest-
- *  priority follow-ups. */
+/** People who are STILL on a group or team roster but haven't
+ *  attended / served within the org's lapsed thresholds. Reads:
+ *
+ *    Group lapsed = active group membership AND last attendance
+ *                   is older than `lapsedWeeks` weeks.
+ *    Team lapsed  = active team membership AND last serve is
+ *                   older than `lapsedFromTeamMonths` months.
+ *
+ *  This is the actually-pastoral signal — a fully-inactive person
+ *  who's been off the radar for two years isn't who you can
+ *  intervene with this week; someone who joined the men's group
+ *  in February and went quiet in April is. Sorted by longest
+ *  silence first so the most-overdue follow-ups bubble to the top. */
 export function getFallingThroughCracks(
   orgId: number,
-  _activityMonths: number,
   limit: number = 6,
 ): FallingPerson[] {
   const db = getDb();
-  // Snapshot fast path — person_activity carries classification +
-  // last_activity_at pre-computed, so this read is one indexed
-  // ORDER BY ... LIMIT instead of the previous 3-CTE join.
+  const settings = getSyncSettings(orgId);
+  const now = Date.now();
+  const lapsedGroupCutoff = new Date(
+    now - settings.lapsedWeeks * 7 * MS_PER_DAY,
+  ).toISOString();
+  const lapsedTeamCutoff = new Date(
+    now - settings.lapsedFromTeamMonths * MS_PER_MONTH,
+  ).toISOString();
+
+  // Snapshot fast path — person_activity carries last_attended_at +
+  // last_served_at + active counts pre-computed.
   const rows = db
     .prepare(
       `SELECT pa.person_id AS personId,
-              pa.last_activity_at AS lastActivityAt,
+              pa.last_attended_at AS lastAttendedAt,
+              pa.last_served_at  AS lastServedAt,
+              pa.active_group_count AS groupCount,
+              pa.active_team_count  AS teamCount,
               pp.enc_pii AS encPii
          FROM person_activity pa
          LEFT JOIN pco_people pp
            ON pp.org_id = pa.org_id AND pp.pco_id = pa.person_id
         WHERE pa.org_id = ?
-          AND pa.classification = 'inactive'
-        ORDER BY pa.last_activity_at ASC NULLS FIRST
+          AND (
+            (pa.active_group_count > 0
+             AND pa.last_attended_at IS NOT NULL
+             AND pa.last_attended_at < ?)
+            OR
+            (pa.active_team_count > 0
+             AND pa.last_served_at IS NOT NULL
+             AND pa.last_served_at < ?)
+          )
+        ORDER BY COALESCE(
+          MIN(
+            COALESCE(pa.last_attended_at, '9999'),
+            COALESCE(pa.last_served_at, '9999')
+          ),
+          '0'
+        ) ASC
         LIMIT ?`,
     )
-    .all(orgId, limit) as Array<{
+    .all(orgId, lapsedGroupCutoff, lapsedTeamCutoff, limit) as Array<{
     personId: string;
-    lastActivityAt: string | null;
+    lastAttendedAt: string | null;
+    lastServedAt: string | null;
+    groupCount: number;
+    teamCount: number;
     encPii: string | null;
   }>;
-  // Cold-start fallback: if person_activity is empty (snapshot not
-  // yet built) just return an empty list — the page renders with
-  // "no one has gone silent" copy instead of hanging.
-  const now = Date.now();
+
   return rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
     const name =
       [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") ||
       `(unknown #${r.personId})`;
-    const lastIso = r.lastActivityAt && r.lastActivityAt !== ""
-      ? r.lastActivityAt
-      : null;
-    const daysSilent = lastIso
-      ? Math.floor((now - new Date(lastIso).getTime()) / MS_PER_DAY)
+    // Use the OLDER of the two lapsed signals — that's the one
+    // dragging them down. If only one lane is lapsed (e.g. they're
+    // serving fine but stopped attending group), use that one.
+    const groupLapsed =
+      r.groupCount > 0 &&
+      r.lastAttendedAt !== null &&
+      r.lastAttendedAt < lapsedGroupCutoff;
+    const teamLapsed =
+      r.teamCount > 0 &&
+      r.lastServedAt !== null &&
+      r.lastServedAt < lapsedTeamCutoff;
+    let lastTouchAt: string | null = null;
+    let context = "";
+    if (groupLapsed && teamLapsed) {
+      lastTouchAt =
+        r.lastAttendedAt! < r.lastServedAt!
+          ? r.lastAttendedAt
+          : r.lastServedAt;
+      context = `Group + team both lapsed · last touch ${new Date(lastTouchAt!).toLocaleDateString()}`;
+    } else if (groupLapsed) {
+      lastTouchAt = r.lastAttendedAt;
+      context = `Group lapsed · last attended ${new Date(r.lastAttendedAt!).toLocaleDateString()}`;
+    } else if (teamLapsed) {
+      lastTouchAt = r.lastServedAt;
+      context = `Team lapsed · last served ${new Date(r.lastServedAt!).toLocaleDateString()}`;
+    }
+    const daysSilent = lastTouchAt
+      ? Math.floor((now - new Date(lastTouchAt).getTime()) / MS_PER_DAY)
       : null;
     return {
       personId: r.personId,
       fullName: name,
-      lastActivityAt: lastIso,
+      lastTouchAt,
       daysSilent,
-      context: lastIso
-        ? `Last activity ${new Date(lastIso).toLocaleDateString()}`
-        : "Never had measurable activity",
+      context,
     };
   });
 }
