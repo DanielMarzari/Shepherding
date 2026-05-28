@@ -44,7 +44,11 @@ export default async function PersonProfilePage({
   if (!person) notFound();
 
   const orgId = session.orgId;
-  const age = person.birthdate ? computeAge(person.birthdate) : null;
+  // Per Dan's note: never display age on these pages — it's PII the
+  // pastoral UI doesn't need surfaced, and screenshots / shared links
+  // shouldn't reveal it. Kept the helper around for is-minor flagging
+  // elsewhere (group-attendance card etc.) but the header chip is
+  // dropped entirely.
   const firstName = person.firstName ?? person.fullName;
 
   return (
@@ -76,9 +80,6 @@ export default async function PersonProfilePage({
                 )}
                 {person.gender && (
                   <span className="text-muted">· {person.gender}</span>
-                )}
-                {age !== null && (
-                  <span className="text-muted">· age {age}</span>
                 )}
                 {person.maritalStatus && (
                   <span className="text-muted">· {person.maritalStatus}</span>
@@ -124,7 +125,10 @@ export default async function PersonProfilePage({
                   <Row label="Membership" value={person.membershipType} />
                   <Row label="Status (computed)" value={person.classification} />
                   <Row label="Gender" value={person.gender} />
-                  <Row label="Birthdate" value={person.birthdate} />
+                  {/* Birthdate intentionally not surfaced — see header
+                      comment. The is-minor flag is computed server-side
+                      from it for the "kid" pill in roster cards, but
+                      the raw value never lands on the page. */}
                   <Row label="Marital status" value={person.maritalStatus} />
                   <Row label="Address" value={person.address} />
                   <Row label="In PCO since" value={fmtDate(person.pcoCreatedAt)} />
@@ -138,7 +142,7 @@ export default async function PersonProfilePage({
                   />
                 </dl>
                 <p className="mt-5 pt-4 border-t border-border-soft text-xs text-muted">
-                  Name, birthdate, and address are stored encrypted at rest.
+                  Name and address are stored encrypted at rest.
                   Decrypted only to render this page.
                 </p>
               </Card>
@@ -195,12 +199,3 @@ function fmtDate(iso: string | null): string | null {
   return Number.isNaN(d.valueOf()) ? null : d.toLocaleDateString();
 }
 
-function computeAge(birthdate: string): number | null {
-  const d = new Date(birthdate);
-  if (Number.isNaN(d.valueOf())) return null;
-  const now = new Date();
-  let age = now.getFullYear() - d.getFullYear();
-  const m = now.getMonth() - d.getMonth();
-  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
-  return age;
-}
