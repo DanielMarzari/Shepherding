@@ -426,21 +426,63 @@ function getClassificationCountsImpl(
   // Snapshot fast path. Only valid when the snapshot was built with
   // the same activity-month threshold; otherwise the numbers would
   // misrepresent the current setting and we fall back to the live
-  // CASE-laden SQL below. Kid sub-counts are now stored on the
-  // snapshot itself (migration 0037), so the fast path is one
-  // indexed singleton-row read rather than a 33k-row JOIN.
+  // CASE-laden SQL below. Kid sub-counts are stored on the snapshot
+  // (migration 0037) so the common case is one indexed singleton-row
+  // read.
   const snap = getOrgSnapshot(orgId);
   if (snap && snap.activityMonths === activityMonths) {
+    let { shepherdedKids, activeKids, presentKids, inactiveKids } = snap;
+    // Self-heal: when migration 0037 added the kid columns it
+    // backfilled them to 0 on the existing snapshot row, so the kid
+    // breakdown vanishes until the next full refresh runs. If all
+    // four are 0 but there ARE people, the columns are almost
+    // certainly stale (a real church has minors) — recompute them
+    // once from person_activity. This is a single indexed GROUP BY,
+    // cheap, and only fires until the next refresh persists real
+    // values.
+    const kidsAllZero =
+      shepherdedKids === 0 &&
+      activeKids === 0 &&
+      presentKids === 0 &&
+      inactiveKids === 0;
+    if (kidsAllZero && snap.totalPeople > 0) {
+      const k = getDb()
+        .prepare(
+          `SELECT
+             SUM(CASE WHEN pa.classification = 'shepherded'
+                       AND p.is_minor = 1 THEN 1 ELSE 0 END) AS shepherdedKids,
+             SUM(CASE WHEN pa.classification = 'active'
+                       AND p.is_minor = 1 THEN 1 ELSE 0 END) AS activeKids,
+             SUM(CASE WHEN pa.classification = 'present'
+                       AND p.is_minor = 1 THEN 1 ELSE 0 END) AS presentKids,
+             SUM(CASE WHEN pa.classification = 'inactive'
+                       AND p.is_minor = 1 THEN 1 ELSE 0 END) AS inactiveKids
+             FROM person_activity pa
+             JOIN pco_people p
+               ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
+            WHERE pa.org_id = ?`,
+        )
+        .get(orgId) as {
+        shepherdedKids: number | null;
+        activeKids: number | null;
+        presentKids: number | null;
+        inactiveKids: number | null;
+      };
+      shepherdedKids = k.shepherdedKids ?? 0;
+      activeKids = k.activeKids ?? 0;
+      presentKids = k.presentKids ?? 0;
+      inactiveKids = k.inactiveKids ?? 0;
+    }
     return {
       total: snap.totalPeople,
       shepherded: snap.shepherdedCount,
       active: snap.activeCount,
       present: snap.presentCount,
       inactive: snap.inactiveCount,
-      shepherdedKids: snap.shepherdedKids,
-      activeKids: snap.activeKids,
-      presentKids: snap.presentKids,
-      inactiveKids: snap.inactiveKids,
+      shepherdedKids,
+      activeKids,
+      presentKids,
+      inactiveKids,
       visibleByDefault: snap.totalPeople - snap.inactiveCount,
     };
   }
