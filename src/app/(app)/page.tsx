@@ -162,11 +162,15 @@ async function TopStats({ orgId }: { orgId: number }) {
   const counts = getClassificationCounts(orgId, settings.activityMonths);
   const stats = getDashboardStats(orgId, settings.activityMonths);
 
+  const visibleKids =
+    counts.shepherdedKids + counts.activeKids + counts.presentKids;
+  const activeAdults = stats.active - visibleKids;
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
       <Stat
         label="Active people"
-        value={stats.active.toLocaleString()}
+        value={activeAdults.toLocaleString()}
+        kids={visibleKids}
         delta={`activity in last ${settings.activityMonths} mo`}
       />
       <Stat
@@ -203,11 +207,14 @@ async function TopStats({ orgId }: { orgId: number }) {
         // system has already classified as drifted away) and only
         // count active + present as the denominator.
         const engagedTotal = counts.active + counts.present + counts.shepherded;
-        const unshepherdedEngaged = counts.active + counts.present;
+        const unshepherdedKids = counts.activeKids + counts.presentKids;
+        const unshepherdedAdults =
+          counts.active + counts.present - unshepherdedKids;
         return (
           <Stat
             label="Unshepherded"
-            value={unshepherdedEngaged.toLocaleString()}
+            value={unshepherdedAdults.toLocaleString()}
+            kids={unshepherdedKids}
             delta={
               engagedTotal > 0
                 ? `of ${engagedTotal.toLocaleString()} active + present`
@@ -542,21 +549,34 @@ function Stat({
   value,
   delta,
   valueTone,
+  kids,
 }: {
   label: string;
   value: string | number;
   delta: string;
   valueTone?: "accent" | "default";
+  /** Optional adult/kid split. When set the headline value is shown
+   *  as the adult count with "+ N kids" rendered inline as a smaller
+   *  muted suffix — same pattern used on /people. Pass null/0 to
+   *  hide. */
+  kids?: number | null;
 }) {
   return (
     <div className="rounded-[10px] bg-bg-elev border border-border-soft p-4">
       <div className="text-xs text-muted mb-1.5">{label}</div>
-      <div
-        className={`tnum text-2xl font-semibold ${
-          valueTone === "accent" ? "text-accent" : ""
-        }`}
-      >
-        {value}
+      <div className="flex items-baseline gap-2">
+        <div
+          className={`tnum text-2xl font-semibold ${
+            valueTone === "accent" ? "text-accent" : ""
+          }`}
+        >
+          {value}
+        </div>
+        {kids != null && kids > 0 && (
+          <div className="tnum text-xs text-subtle">
+            + {kids.toLocaleString()} kids
+          </div>
+        )}
       </div>
       <div className="text-xs text-muted mt-1">{delta}</div>
     </div>
