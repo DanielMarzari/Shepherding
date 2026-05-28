@@ -6,6 +6,38 @@ import { logoutAction } from "@/app/orgs/actions";
 import { CollapsibleNavGroup } from "./CollapsibleNavGroup";
 import { SearchBar } from "./SearchBar";
 
+// Exported nav lists so the AppShellSkeleton (used by per-route
+// loading.tsx files) can paint exactly the same sidebar without
+// awaiting any DB work.
+export const SHELL_NAV = {
+  primary: [
+    { href: "/", label: "Home" },
+    { href: "/care-queue", label: "Care queue" },
+  ],
+  leadership: [
+    { href: "/shepherd-team", label: "Shepherd team" },
+    { href: "/shepherds", label: "Shepherds" },
+  ],
+  pcoData: [
+    { href: "/people", label: "People" },
+    { href: "/groups", label: "Groups" },
+    { href: "/teams", label: "Teams" },
+    { href: "/checkins", label: "Check-ins" },
+  ],
+  nextSteps: [
+    { href: "/lanes", label: "Activity overview" },
+    { href: "/lanes/list", label: "Lanes" },
+  ],
+  settings: [
+    { href: "/pco", label: "Sync" },
+    { href: "/pco/filters", label: "Filters" },
+    { href: "/metrics", label: "Metrics" },
+    { href: "/shepherd-map", label: "Shepherd map" },
+    { href: "/care-map", label: "Care map" },
+  ],
+  other: [{ href: "/more", label: "See more" }],
+};
+
 const NAV_ITEMS = [
   { href: "/", label: "Home" },
   { href: "/care-queue", label: "Care queue", badge: 17 },
@@ -258,4 +290,89 @@ function initials(name: string) {
     .slice(0, 2)
     .join("")
     .toUpperCase();
+}
+
+/** Static, DB-free version of AppShell for use inside loading.tsx
+ *  files. Paints the sidebar with real nav links (so navigations
+ *  feel instant — the user still sees where they can click) and a
+ *  passthrough `<main>` area for the page-specific skeleton.
+ *
+ *  Differences from AppShell:
+ *   - No `await getSession()` — paints the sidebar header as a static
+ *     placeholder instead of org name + role.
+ *   - No search bar or active-row highlighting — the loading state is
+ *     transient enough that those details don't matter.
+ *   - No collapsible groups — each nav group's links are always shown
+ *     so the user can see options even if their last expansion state
+ *     isn't reflected during the brief loading window. */
+export function AppShellSkeleton({
+  children,
+  active,
+  breadcrumb,
+}: {
+  children: ReactNode;
+  active?: string;
+  breadcrumb?: string;
+}) {
+  return (
+    <div className="flex min-h-screen bg-bg text-fg">
+      <aside className="w-56 shrink-0 border-r border-border-soft px-4 py-5 text-sm hidden md:flex md:flex-col sticky top-0 h-screen overflow-y-auto">
+        <Link href="/" className="flex items-center gap-2 mb-3">
+          <Image
+            src="/icon.svg"
+            alt="Shepherding"
+            width={28}
+            height={28}
+            unoptimized
+            className="shrink-0"
+          />
+          <span className="font-semibold tracking-tight">Shepherding</span>
+        </Link>
+        <div className="px-2 mb-5 h-8 rounded bg-bg-elev-2/40" />
+        {(
+          [
+            { title: "Dashboard", items: SHELL_NAV.primary },
+            { title: "Leadership", items: SHELL_NAV.leadership },
+            { title: "PCO data", items: SHELL_NAV.pcoData },
+            { title: "Activity", items: SHELL_NAV.nextSteps },
+            { title: "Settings", items: SHELL_NAV.settings },
+            { title: "Other", items: SHELL_NAV.other },
+          ] as const
+        ).map((group) => (
+          <div key={group.title} className="mb-4">
+            <div className="text-xs text-muted uppercase tracking-wider mb-2 px-2">
+              {group.title}
+            </div>
+            <ul className="space-y-0.5">
+              {group.items.map((item) => {
+                const isActive = item.label === active;
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      className={`px-2 py-1.5 rounded flex items-center transition-colors ${
+                        isActive
+                          ? "bg-bg-elev-2 text-fg font-medium"
+                          : "text-fg hover:bg-bg-elev-2"
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </aside>
+      <main className="flex-1 min-w-0">
+        {breadcrumb && (
+          <div className="px-5 md:px-7 pt-5 text-xs text-muted">
+            {breadcrumb}
+          </div>
+        )}
+        {children}
+      </main>
+    </div>
+  );
 }
