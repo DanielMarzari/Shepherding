@@ -58,7 +58,7 @@ export function MembershipFilter({
         <option value="">All</option>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
-            {o.label} ({o.count.toLocaleString()})
+            {o.label}
           </option>
         ))}
       </select>

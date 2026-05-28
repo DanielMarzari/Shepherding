@@ -20,7 +20,13 @@ import {
 //   inactive   = no measurable activity within threshold
 export type ActivityClassification = "shepherded" | "active" | "present" | "inactive";
 
-export type SortColumn = "updated" | "created" | "membership" | "status";
+export type SortColumn =
+  | "updated"
+  | "created"
+  | "membership"
+  | "status"
+  | "age"
+  | "name";
 export type SortDir = "asc" | "desc";
 
 export interface SyncedPersonRow {
@@ -270,21 +276,11 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
     excluded,
     opts.membershipType,
   );
-  const orderSql = buildOrderBy(opts.sort, opts.dir, cutoff);
-
-  const rows = db
-    .prepare(
-      `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
+  const selectCols = `pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
               is_minor, birth_year,
-              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
-         FROM pco_people
-         LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
-         ${whereSql}
-         ${orderSql}
-         LIMIT ? OFFSET ?`,
-    )
-    .all(...whereArgs, opts.limit, opts.offset) as RawRow[];
+              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded`;
+
   const totalRow = db
     .prepare(
       `SELECT COUNT(*) AS n
@@ -293,6 +289,46 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
          ${whereSql}`,
     )
     .get(...whereArgs) as { n: number };
+
+  // Name sort can't happen in SQL (names are encrypted). When it's
+  // requested we fetch ALL matching rows, decrypt + sort by full name
+  // in JS, then slice to the page. This is the same full-decrypt the
+  // search box already does; it only runs when the user explicitly
+  // sorts by name, so the default (fast, SQL-paginated) path is
+  // unaffected.
+  if (opts.sort === "name") {
+    const allRows = db
+      .prepare(
+        `SELECT ${selectCols}
+           FROM pco_people
+           LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+           ${whereSql}`,
+      )
+      .all(...whereArgs) as RawRow[];
+    const mapped = allRows.map((r) => toRow(r, opts.activityMonths));
+    const factor = opts.dir === "asc" ? 1 : -1;
+    mapped.sort(
+      (a, b) => a.fullName.localeCompare(b.fullName) * factor,
+    );
+    return {
+      rows: mapped.slice(opts.offset, opts.offset + opts.limit),
+      total: totalRow.n,
+      pageSize: opts.limit,
+      page: Math.floor(opts.offset / opts.limit) + 1,
+    };
+  }
+
+  const orderSql = buildOrderBy(opts.sort, opts.dir, cutoff);
+  const rows = db
+    .prepare(
+      `SELECT ${selectCols}
+         FROM pco_people
+         LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+         ${whereSql}
+         ${orderSql}
+         LIMIT ? OFFSET ?`,
+    )
+    .all(...whereArgs, opts.limit, opts.offset) as RawRow[];
   return {
     rows: rows.map((r) => toRow(r, opts.activityMonths)),
     total: totalRow.n,
@@ -392,6 +428,16 @@ function buildOrderBy(sort: SortColumn, dir: SortDir, cutoff: string): string {
       )`;
       return `ORDER BY ${expr} ${direction}, pco_updated_at DESC`;
     }
+    case "age":
+      // birth_year ASC = oldest first; DESC = youngest (kids) first.
+      // NULLs (no birthdate on file) sort last either way.
+      return `ORDER BY birth_year ${direction} ${nulls}, pco_updated_at DESC`;
+    case "name":
+      // Names live encrypted in enc_pii — they can't be ORDER BY'd in
+      // SQL. listPeople detects sort === "name" and takes a
+      // decrypt-then-sort path instead; this ORDER BY is only the
+      // fallback shape and never actually used for name.
+      return `ORDER BY pco_updated_at DESC ${nulls}`;
     default:
       return `ORDER BY pco_updated_at DESC ${nulls}`;
   }

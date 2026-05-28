@@ -29,7 +29,14 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "inactive", label: "Inactive" },
 ];
 
-const VALID_SORTS: SortColumn[] = ["updated", "created", "membership", "status"];
+const VALID_SORTS: SortColumn[] = [
+  "updated",
+  "created",
+  "membership",
+  "status",
+  "age",
+  "name",
+];
 
 interface SearchParams {
   tab?: string;
@@ -393,8 +400,20 @@ function PeopleTable({
           </colgroup>
           <thead className="text-xs text-muted">
             <tr className="border-b border-border-soft">
-              <th className="text-left font-medium px-5 py-2">Name</th>
-              <th className="text-left font-medium px-5 py-2">Age</th>
+              <SortableTh
+                label="Name"
+                column="name"
+                currentSort={sort}
+                currentDir={dir}
+                link={sortLink("name")}
+              />
+              <SortableTh
+                label="Age"
+                column="age"
+                currentSort={sort}
+                currentDir={dir}
+                link={sortLink("age")}
+              />
               <SortableTh
                 label="Status"
                 column="status"
