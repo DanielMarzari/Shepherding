@@ -906,26 +906,38 @@ function rebuildGroupSummary(
 function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
   const db = getDb();
   const cutoff30 = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
-  // Totals roll up from person_activity (which we just rebuilt).
+  // Totals roll up from person_activity JOIN pco_people for is_minor.
+  // Kid sub-counts get stored on the snapshot so the read path doesn't
+  // have to re-run this join on every page render.
   const counts = db
     .prepare(
       `SELECT
          COUNT(*) AS total,
-         SUM(CASE WHEN classification = 'shepherded' THEN 1 ELSE 0 END) AS shepherded,
-         SUM(CASE WHEN classification = 'active'     THEN 1 ELSE 0 END) AS active,
-         SUM(CASE WHEN classification = 'present'    THEN 1 ELSE 0 END) AS present,
-         SUM(CASE WHEN classification = 'inactive'   THEN 1 ELSE 0 END) AS inactive,
-         SUM(CASE WHEN active_group_count = 0
-                   AND active_team_count = 0
+         SUM(CASE WHEN pa.classification = 'shepherded' THEN 1 ELSE 0 END) AS shepherded,
+         SUM(CASE WHEN pa.classification = 'active'     THEN 1 ELSE 0 END) AS active,
+         SUM(CASE WHEN pa.classification = 'present'    THEN 1 ELSE 0 END) AS present,
+         SUM(CASE WHEN pa.classification = 'inactive'   THEN 1 ELSE 0 END) AS inactive,
+         SUM(CASE WHEN pa.classification = 'shepherded'
+                   AND p.is_minor = 1 THEN 1 ELSE 0 END) AS shepherdedKids,
+         SUM(CASE WHEN pa.classification = 'active'
+                   AND p.is_minor = 1 THEN 1 ELSE 0 END) AS activeKids,
+         SUM(CASE WHEN pa.classification = 'present'
+                   AND p.is_minor = 1 THEN 1 ELSE 0 END) AS presentKids,
+         SUM(CASE WHEN pa.classification = 'inactive'
+                   AND p.is_minor = 1 THEN 1 ELSE 0 END) AS inactiveKids,
+         SUM(CASE WHEN pa.active_group_count = 0
+                   AND pa.active_team_count = 0
                   THEN 1 ELSE 0 END) AS unshepherded,
-         SUM(in_lane_wors) AS lane_wors,
-         SUM(in_lane_comm) AS lane_comm,
-         SUM(in_lane_serv) AS lane_serv,
-         SUM(CASE WHEN in_lane_wors = 0 AND in_lane_comm = 0
-                   AND in_lane_serv = 0
+         SUM(pa.in_lane_wors) AS lane_wors,
+         SUM(pa.in_lane_comm) AS lane_comm,
+         SUM(pa.in_lane_serv) AS lane_serv,
+         SUM(CASE WHEN pa.in_lane_wors = 0 AND pa.in_lane_comm = 0
+                   AND pa.in_lane_serv = 0
                   THEN 1 ELSE 0 END) AS lane_none
-       FROM person_activity
-       WHERE org_id = ?`,
+       FROM person_activity pa
+       JOIN pco_people p
+         ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
+       WHERE pa.org_id = ?`,
     )
     .get(orgId) as {
     total: number;
@@ -933,6 +945,10 @@ function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
     active: number;
     present: number;
     inactive: number;
+    shepherdedKids: number;
+    activeKids: number;
+    presentKids: number;
+    inactiveKids: number;
     unshepherded: number;
     lane_wors: number;
     lane_comm: number;
@@ -978,8 +994,9 @@ function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
        (org_id, total_people, shepherded_count, active_count, present_count,
         inactive_count, unshepherded_count, joined_30d, departed_30d,
         lane_wors, lane_comm, lane_serv, lane_none, activity_months,
+        shepherded_kids, active_kids, present_kids, inactive_kids,
         refreshed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id) DO UPDATE SET
        total_people = excluded.total_people,
@@ -995,6 +1012,10 @@ function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
        lane_serv = excluded.lane_serv,
        lane_none = excluded.lane_none,
        activity_months = excluded.activity_months,
+       shepherded_kids = excluded.shepherded_kids,
+       active_kids = excluded.active_kids,
+       present_kids = excluded.present_kids,
+       inactive_kids = excluded.inactive_kids,
        refreshed_at = excluded.refreshed_at`,
   ).run(
     orgId,
@@ -1011,6 +1032,10 @@ function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
     counts.lane_serv,
     counts.lane_none,
     activityMonths,
+    counts.shepherdedKids,
+    counts.activeKids,
+    counts.presentKids,
+    counts.inactiveKids,
   );
 }
 
@@ -1030,6 +1055,10 @@ export interface OrgSnapshot {
   laneServ: number;
   laneNone: number;
   activityMonths: number;
+  shepherdedKids: number;
+  activeKids: number;
+  presentKids: number;
+  inactiveKids: number;
   refreshedAt: string;
 }
 
@@ -1517,6 +1546,10 @@ export function getOrgSnapshot(orgId: number): OrgSnapshot | null {
               lane_serv AS laneServ,
               lane_none AS laneNone,
               activity_months AS activityMonths,
+              shepherded_kids AS shepherdedKids,
+              active_kids AS activeKids,
+              present_kids AS presentKids,
+              inactive_kids AS inactiveKids,
               refreshed_at AS refreshedAt
          FROM org_snapshot WHERE org_id = ?`,
     )
