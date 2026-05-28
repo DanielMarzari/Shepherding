@@ -824,3 +824,226 @@ export function getLeaderOverseers(
     }))
     .sort((a, b) => a.shepherd.fullName.localeCompare(b.shepherd.fullName));
 }
+
+/** Batch variant of getLeaderOverseers — does the whole computation
+ *  for N people in a small fixed number of queries instead of
+ *  N × ~6 per-person calls. Used by the /shepherds list to eliminate
+ *  the N+1 pattern that was running ~600 queries per page render on
+ *  real data; same Map<personId, overseers[]> the caller iterates.
+ *
+ *  Missing entries in the returned Map mean "no overseers". The
+ *  shepherd refs inside each LeaderOverseer are sorted by full name
+ *  same as the single-person version. */
+export function getLeaderOverseersBatch(
+  orgId: number,
+  personIds: string[],
+): Map<string, LeaderOverseer[]> {
+  const out = new Map<string, LeaderOverseer[]>();
+  const uniqueIds = [...new Set(personIds.filter(Boolean))];
+  if (uniqueIds.length === 0) return out;
+  const db = getDb();
+  const idPlaceholders = inPlaceholders(uniqueIds.length);
+
+  const groupRows = db
+    .prepare(
+      `SELECT m.person_id   AS personId,
+              g.pco_id      AS groupId,
+              g.name        AS groupName,
+              g.group_type_id AS groupTypeId,
+              gt.name       AS groupTypeName
+         FROM pco_group_memberships m
+         JOIN pco_groups g
+           ON g.org_id = m.org_id AND g.pco_id = m.group_id
+    LEFT JOIN pco_group_types gt
+           ON gt.org_id = g.org_id AND gt.pco_id = g.group_type_id
+        WHERE m.org_id = ?
+          AND m.person_id IN (${idPlaceholders})
+          AND m.archived_at IS NULL
+          AND g.archived_at IS NULL
+          AND lower(coalesce(m.role, '')) LIKE '%leader%'`,
+    )
+    .all(orgId, ...uniqueIds) as Array<{
+    personId: string;
+    groupId: string;
+    groupName: string | null;
+    groupTypeId: string | null;
+    groupTypeName: string | null;
+  }>;
+
+  const teamRows = db
+    .prepare(
+      `SELECT DISTINCT m.person_id AS personId,
+              t.pco_id   AS teamId,
+              t.name     AS teamName,
+              t.service_type_id AS serviceTypeId,
+              st.name    AS serviceTypeName
+         FROM pco_team_memberships m
+         JOIN pco_teams t
+           ON t.org_id = m.org_id AND t.pco_id = m.team_id
+    LEFT JOIN pco_service_types st
+           ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
+        WHERE m.org_id = ?
+          AND m.person_id IN (${idPlaceholders})
+          AND m.archived_at IS NULL AND m.person_id != ''
+          AND m.is_team_leader = 1
+          AND t.archived_at IS NULL AND t.deleted_at IS NULL`,
+    )
+    .all(orgId, ...uniqueIds) as Array<{
+    personId: string;
+    teamId: string;
+    teamName: string | null;
+    serviceTypeId: string | null;
+    serviceTypeName: string | null;
+  }>;
+
+  const groupIds = new Set<string>();
+  const groupTypeIds = new Set<string>();
+  const teamIds = new Set<string>();
+  const serviceTypeIds = new Set<string>();
+  for (const r of groupRows) {
+    groupIds.add(r.groupId);
+    if (r.groupTypeId) groupTypeIds.add(r.groupTypeId);
+  }
+  for (const r of teamRows) {
+    teamIds.add(r.teamId);
+    if (r.serviceTypeId) serviceTypeIds.add(r.serviceTypeId);
+  }
+
+  type AssignRow = {
+    kind: LeaderOverseer["viaKind"];
+    shepherdId: string;
+    targetId: string;
+  };
+  const assignRows: AssignRow[] = [];
+  function fetchKind(
+    kind: LeaderOverseer["viaKind"],
+    ids: Set<string>,
+  ): void {
+    if (ids.size === 0) return;
+    const arr = [...ids];
+    const rows = db
+      .prepare(
+        `SELECT shepherd_person_id AS shepherdId, target_id AS targetId
+           FROM shepherd_assignments
+          WHERE org_id = ? AND target_kind = ?
+            AND target_id IN (${inPlaceholders(arr.length)})`,
+      )
+      .all(orgId, kind, ...arr) as Array<{
+      shepherdId: string;
+      targetId: string;
+    }>;
+    for (const r of rows) assignRows.push({ kind, ...r });
+  }
+  fetchKind("group", groupIds);
+  fetchKind("group_type", groupTypeIds);
+  fetchKind("team", teamIds);
+  fetchKind("service_type", serviceTypeIds);
+
+  const assignByTarget = new Map<string, AssignRow[]>();
+  for (const a of assignRows) {
+    const k = `${a.kind}:${a.targetId}`;
+    const arr = assignByTarget.get(k) ?? [];
+    arr.push(a);
+    assignByTarget.set(k, arr);
+  }
+
+  const groupsByPerson = new Map<string, typeof groupRows>();
+  for (const r of groupRows) {
+    const arr = groupsByPerson.get(r.personId) ?? [];
+    arr.push(r);
+    groupsByPerson.set(r.personId, arr);
+  }
+  const teamsByPerson = new Map<string, typeof teamRows>();
+  for (const r of teamRows) {
+    const arr = teamsByPerson.get(r.personId) ?? [];
+    arr.push(r);
+    teamsByPerson.set(r.personId, arr);
+  }
+
+  const allShepherdIds = new Set<string>();
+  const linksByPerson = new Map<
+    string,
+    Map<string, { shepherdId: string; via: string; viaKind: LeaderOverseer["viaKind"] }>
+  >();
+  function pushLink(
+    personId: string,
+    shepherdId: string,
+    via: string,
+    viaKind: LeaderOverseer["viaKind"],
+  ): void {
+    if (shepherdId === personId) return;
+    let pl = linksByPerson.get(personId);
+    if (!pl) {
+      pl = new Map();
+      linksByPerson.set(personId, pl);
+    }
+    pl.set(`${shepherdId}::${via}`, { shepherdId, via, viaKind });
+    allShepherdIds.add(shepherdId);
+  }
+
+  for (const personId of uniqueIds) {
+    const groups = groupsByPerson.get(personId) ?? [];
+    const teams = teamsByPerson.get(personId) ?? [];
+    for (const g of groups) {
+      for (const a of assignByTarget.get(`group:${g.groupId}`) ?? []) {
+        pushLink(
+          personId,
+          a.shepherdId,
+          `Leads ${g.groupName ?? "a group"}`,
+          "group",
+        );
+      }
+    }
+    for (const g of groups) {
+      if (!g.groupTypeId) continue;
+      for (const a of assignByTarget.get(
+        `group_type:${g.groupTypeId}`,
+      ) ?? []) {
+        pushLink(
+          personId,
+          a.shepherdId,
+          `Leads ${g.groupName ?? "a group"}${g.groupTypeName ? ` (${g.groupTypeName})` : ""}`,
+          "group_type",
+        );
+      }
+    }
+    for (const t of teams) {
+      for (const a of assignByTarget.get(`team:${t.teamId}`) ?? []) {
+        pushLink(
+          personId,
+          a.shepherdId,
+          `Leads ${t.teamName ?? "a team"}`,
+          "team",
+        );
+      }
+    }
+    for (const t of teams) {
+      if (!t.serviceTypeId) continue;
+      for (const a of assignByTarget.get(
+        `service_type:${t.serviceTypeId}`,
+      ) ?? []) {
+        pushLink(
+          personId,
+          a.shepherdId,
+          `Leads ${t.teamName ?? "a team"}${t.serviceTypeName ? ` (${t.serviceTypeName})` : ""}`,
+          "service_type",
+        );
+      }
+    }
+  }
+
+  // ONE names lookup for every referenced shepherd, regardless of
+  // how many input people reference them.
+  const names = namesFor(orgId, [...allShepherdIds]);
+  for (const [personId, links] of linksByPerson.entries()) {
+    const arr = [...links.values()]
+      .map((l) => ({
+        shepherd: names.get(l.shepherdId)!,
+        via: l.via,
+        viaKind: l.viaKind,
+      }))
+      .sort((a, b) => a.shepherd.fullName.localeCompare(b.shepherd.fullName));
+    out.set(personId, arr);
+  }
+  return out;
+}

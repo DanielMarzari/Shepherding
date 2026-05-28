@@ -7,7 +7,7 @@ import {
   listLeadPastorIds,
   listShepherdTeamIds,
 } from "@/lib/assignments-read";
-import { getLeaderOverseers } from "@/lib/shepherd-graph";
+import { getLeaderOverseersBatch } from "@/lib/shepherd-graph";
 import { listShepherds } from "@/lib/shepherds-read";
 
 export default async function ShepherdsPage() {
@@ -92,9 +92,16 @@ async function ShepherdsOverview({ orgId }: { orgId: number }) {
   // For each shepherd: who on the shepherd team is assigned (via the
   // shepherd map) to oversee a group / team they LEAD. Membership-only
   // links don't count here — this column is about leader oversight.
+  //
+  // Batched in one call rather than per-shepherd to kill the N+1 — the
+  // previous version ran ~6 queries × N shepherds (600+ on real data).
+  const overseersByPerson = getLeaderOverseersBatch(
+    orgId,
+    shepherds.map((s) => s.personId),
+  );
   const rows = shepherds.map((s) => {
     const seen = new Map<string, OverseerRef>();
-    for (const link of getLeaderOverseers(orgId, s.personId)) {
+    for (const link of overseersByPerson.get(s.personId) ?? []) {
       if (!teamIds.has(link.shepherd.personId)) continue;
       const existing = seen.get(link.shepherd.personId);
       if (existing) {
