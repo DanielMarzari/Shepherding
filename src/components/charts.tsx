@@ -2,6 +2,16 @@
 
 import { useState, type ReactNode } from "react";
 
+/** Deterministic thousands-grouping formatter — produces the same
+ *  output server-side and client-side regardless of locale. We can't
+ *  use Number.prototype.toLocaleString() in client components because
+ *  Node and the browser default to different locales, and the
+ *  resulting string mismatch triggers React hydration error #418.
+ *  This regex-based grouping always emits ASCII commas. */
+function fmt(n: number): string {
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
 /** Shared chart palette — stable accent + 5 distinct hues rotating around
  *  the wheel so adjacent slices/bars stay distinguishable. */
 const PALETTE = [
@@ -22,6 +32,10 @@ export interface ChartDatum {
    *  meaning attached to specific colors (e.g. Shepherded = green,
    *  Active = yellow, Present = grey on the home people-mix pie). */
   color?: string;
+  /** Optional minors-only sub-count. When >0, the pie legend renders
+   *  the row as "{adults} + {kids} kids ({pct}%)" with the adults
+   *  count = `count - kids`. */
+  kids?: number;
 }
 
 interface ChartCardProps {
@@ -212,7 +226,7 @@ export function PieChart({
             fontWeight="600"
             fill="var(--fg)"
           >
-            {total.toLocaleString()}
+            {total.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
           </text>
           <text
             x={cx}
@@ -228,7 +242,7 @@ export function PieChart({
               x={hovered.mid.x}
               y={hovered.mid.y}
               viewWidth={size}
-              text={`${hovered.label}: ${hovered.count.toLocaleString()} (${Math.round(hovered.pct * 100)}%)`}
+              text={`${hovered.label}: ${hovered.count.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")} (${Math.round(hovered.pct * 100)}%)`}
             />
           )}
         </svg>
@@ -254,7 +268,17 @@ export function PieChart({
                 {s.label}
               </span>
               <span className="tnum text-muted shrink-0">
-                {s.count.toLocaleString()}{" "}
+                {s.kids != null && s.kids > 0 ? (
+                  <>
+                    {(s.count - s.kids).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+                    <span className="text-subtle">
+                      {" + "}
+                      {s.kids.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")} kids
+                    </span>{" "}
+                  </>
+                ) : (
+                  <>{s.count.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")} </>
+                )}
                 <span className="text-subtle">({Math.round(pct)}%)</span>
               </span>
             </li>
@@ -296,7 +320,7 @@ export function BarChart({ data }: { data: ChartDatum[] }) {
                   className="text-[10px] tnum font-medium px-1.5 py-0.5 rounded"
                   style={{ background: "#0f172a", color: "#ffffff" }}
                 >
-                  {d.count.toLocaleString()} · {Math.round(pct)}%
+                  {d.count.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")} · {Math.round(pct)}%
                 </div>
               ) : (
                 <div className="text-[10px] tnum text-subtle invisible">·</div>
@@ -324,7 +348,7 @@ export function BarChart({ data }: { data: ChartDatum[] }) {
             className="flex flex-col items-center flex-1 min-w-0"
           >
             <div className="text-xs tnum font-medium text-fg">
-              {d.count.toLocaleString()}
+              {d.count.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
             </div>
             <div className="text-[10px] text-muted text-center truncate w-full">
               {d.label}
@@ -419,7 +443,7 @@ export function DistributionCurve({ data }: { data: ChartDatum[] }) {
             x={hovered.x}
             y={hovered.y}
             viewWidth={width}
-            text={`${hovered.d.label}: ${hovered.d.count.toLocaleString()}`}
+            text={`${hovered.d.label}: ${hovered.d.count.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`}
           />
         )}
       </svg>
@@ -430,7 +454,7 @@ export function DistributionCurve({ data }: { data: ChartDatum[] }) {
       </div>
       {unknown > 0 && (
         <div className="text-[10px] text-subtle mt-1">
-          {unknown.toLocaleString()} unknown (no birthdate on file)
+          {unknown.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")} unknown (no birthdate on file)
         </div>
       )}
     </div>
@@ -588,7 +612,7 @@ export function MultiLineChart({
                 fontSize="9"
                 fill="var(--subtle)"
               >
-                {yMode === "percent" ? `${tick}%` : tick.toLocaleString()}
+                {yMode === "percent" ? `${tick}%` : tick.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
               </text>
             </g>
           );
@@ -646,7 +670,7 @@ export function MultiLineChart({
             text={
               yMode === "percent"
                 ? `${Math.round(hoveredPoint.s.plotValues[hoveredPoint.idx])}%`
-                : `${hoveredPoint.s.values[hoveredPoint.idx].toLocaleString()}`
+                : `${hoveredPoint.s.values[hoveredPoint.idx].toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`
             }
           />
         )}

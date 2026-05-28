@@ -113,16 +113,19 @@ async function PeopleMixPie({ orgId }: { orgId: number }) {
     {
       label: "Shepherded",
       count: counts.shepherded,
+      kids: counts.shepherdedKids,
       color: "var(--good-soft-fg)",
     },
     {
       label: "Active",
       count: counts.active,
+      kids: counts.activeKids,
       color: "var(--warn-soft-fg)",
     },
     {
       label: "Present",
       count: counts.present,
+      kids: counts.presentKids,
       color: "var(--fg-subtle, #94a3b8)",
     },
   ];

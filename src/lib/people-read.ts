@@ -575,8 +575,42 @@ export function getPersonByPcoId(
   pcoId: string,
   activityMonths: number,
 ): SyncedPersonRow | null {
+  const db = getDb();
+  // Snapshot fast path: if person_activity has a row for this person
+  // we already know whether they're shepherded (active group / team
+  // count > 0). Skipping populateShepherdedTempTable here saves the
+  // multi-table scan that used to run on EVERY profile page load —
+  // that scan was the dominant blocker for /people/[slug] paint.
+  const fast = db
+    .prepare(
+      `SELECT CASE WHEN active_group_count > 0
+                    OR active_team_count > 0
+                   THEN 1 ELSE 0 END AS isShepherded
+         FROM person_activity
+        WHERE org_id = ? AND person_id = ?`,
+    )
+    .get(orgId, pcoId) as { isShepherded: number } | undefined;
+
+  if (fast) {
+    const row = db
+      .prepare(
+        `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
+                pco_created_at, pco_updated_at, last_form_submission_at,
+                last_check_in_at, is_minor, birth_year,
+                ? AS is_shepherded
+           FROM pco_people
+          WHERE org_id = ? AND pco_id = ?`,
+      )
+      .get(fast.isShepherded, orgId, pcoId) as RawRow | undefined;
+    if (!row) return null;
+    return toRow(row, activityMonths);
+  }
+
+  // Cold-start fallback — no snapshot row for this person yet. Run
+  // the old temp-table path so the page still works on a fresh
+  // install / before the first refresh.
   populateShepherdedTempTable(orgId);
-  const row = getDb()
+  const row = db
     .prepare(
       `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,

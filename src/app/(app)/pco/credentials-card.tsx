@@ -206,7 +206,10 @@ export function CredentialsCard({
 
         {/* Action buttons */}
         <div className="flex items-center justify-between pt-3 border-t border-border-soft">
-          <div className="text-xs text-muted">
+          <div className="text-xs text-muted" suppressHydrationWarning>
+            {/* toLocaleString() formats in the visitor's timezone,
+                which differs from the server's TZ on SSR — same root
+                cause as the refresh-button stamp. */}
             {initial.verifiedAt
               ? `Last verified ${new Date(initial.verifiedAt).toLocaleString()}`
               : "Never tested"}

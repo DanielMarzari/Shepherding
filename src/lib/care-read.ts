@@ -224,15 +224,22 @@ export function getCareCoverage(
   };
 }
 
-/** Total Active (not shepherded) people in the org — assigned or not.
- *  Used to estimate how many people each shepherd-team member would
- *  carry if the whole active category were split evenly. */
+/** Total people who could land on a care roster — not shepherded
+ *  (no active group / team), not a minor, and engaged in SOME way
+ *  in the activity window (form submission, check-in, OR a recent
+ *  PCO record update — matching the broader "active + present"
+ *  classification rather than the narrower "active = form/check-in"
+ *  rule the rest of /care-map's candidate list already uses).
+ *
+ *  Used as the "Even split per shepherd" denominator so a pastor
+ *  sees what the load would look like if every non-shepherded
+ *  engaged adult had a touch point — not just the form-submitters. */
 export function countActiveNotShepherded(orgId: number): number {
   const db = getDb();
   populateShepherdedTempTable(orgId);
   const cutoff = activityCutoff(orgId);
   const excluded = getExcludedMembershipTypes(orgId);
-  const args: (string | number)[] = [orgId, cutoff, cutoff];
+  const args: (string | number)[] = [orgId, cutoff, cutoff, cutoff];
   let excludeSql = "";
   if (excluded.length > 0) {
     const ph = excluded.map(() => "?").join(",");
@@ -248,7 +255,8 @@ export function countActiveNotShepherded(orgId: number): number {
           AND s.person_id IS NULL
           AND p.is_minor = 0
           AND ((p.last_form_submission_at IS NOT NULL AND p.last_form_submission_at >= ?)
-            OR (p.last_check_in_at IS NOT NULL AND p.last_check_in_at >= ?))
+            OR (p.last_check_in_at IS NOT NULL AND p.last_check_in_at >= ?)
+            OR (p.pco_updated_at IS NOT NULL AND p.pco_updated_at >= ?))
           ${excludeSql}`,
     )
     .get(...args) as { n: number };
