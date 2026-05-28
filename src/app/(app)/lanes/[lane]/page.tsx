@@ -49,10 +49,15 @@ export default async function LanePage({
       session.orgId,
       settings.activityTrackingMonths,
     );
+    // Halved from 100 → 50: each row carries an encrypted PII blob
+    // that has to be decrypted in JS on every render; cutting the
+    // list in half cuts decryption work + paint time roughly in
+    // half too, and the long tail past row 50 is rarely what the
+    // pastor is looking at first.
     const people = listCommunityPeople(
       session.orgId,
       settings.activityTrackingMonths,
-      100,
+      50,
     );
     return (
       <CommunityLane
@@ -73,10 +78,13 @@ export default async function LanePage({
       settings.lapsedFromTeamMonths,
     );
     const totals = getTeamTotals(teams);
+    // See note above on the community side: 50 keeps decryption
+    // + render fast for the top of the list, which is what gets
+    // looked at first.
     const people = listServingPeople(
       session.orgId,
       settings.activityTrackingMonths,
-      100,
+      50,
     );
     return (
       <ServingLane
