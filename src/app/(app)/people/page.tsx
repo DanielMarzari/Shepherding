@@ -100,11 +100,42 @@ export default async function PeoplePage({
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">People</h1>
-          <p className="text-muted text-sm mt-1">
-            {counts.total === 0
-              ? "No synced people yet — connect PCO and run a sync."
-              : `${counts.visibleByDefault.toLocaleString()} visible · ${counts.inactive.toLocaleString()} inactive (hidden) · activity threshold ${settings.activityMonths}mo (set in Metrics)`}
-          </p>
+          {counts.total === 0 ? (
+            <p className="text-muted text-sm mt-1">
+              No synced people yet — connect PCO and run a sync.
+            </p>
+          ) : (
+            (() => {
+              // Reconstitute the adult/kid split for the header so the
+              // pastor sees the actual headcount of adults they're
+              // pastoring, not a number inflated by kids' check-in
+              // records. visibleByDefault = shepherded + active + present.
+              const visibleKids =
+                counts.shepherdedKids +
+                counts.activeKids +
+                counts.presentKids;
+              const visibleAdults = counts.visibleByDefault - visibleKids;
+              return (
+                <p className="text-muted text-sm mt-1">
+                  <span className="text-fg tnum">
+                    {visibleAdults.toLocaleString()}
+                  </span>{" "}
+                  people
+                  {visibleKids > 0 && (
+                    <>
+                      {" "}
+                      <span className="text-subtle">
+                        + {visibleKids.toLocaleString()} kids
+                      </span>
+                    </>
+                  )}{" "}
+                  · {counts.inactive.toLocaleString()} inactive (hidden) ·
+                  activity threshold {settings.activityMonths}mo (set in
+                  Metrics)
+                </p>
+              );
+            })()
+          )}
         </div>
 
         {/* Stat strip: Shepherded · Active · Present · Inactive */}
@@ -150,21 +181,29 @@ export default async function PeoplePage({
           </Card>
         </div>
 
-        {/* Tabs */}
+        {/* Tabs. Each shows "adults (+N kids)" so a single number doesn't
+            silently lump children into outreach totals. */}
         <div className="border-b border-border-soft">
           <nav className="flex gap-1 -mb-px overflow-x-auto">
             {TABS.map((t) => {
               const isActive = t.key === tab;
-              const count =
+              const { total, kids } =
                 t.key === "all"
-                  ? counts.visibleByDefault
+                  ? {
+                      total: counts.visibleByDefault,
+                      kids:
+                        counts.shepherdedKids +
+                        counts.activeKids +
+                        counts.presentKids,
+                    }
                   : t.key === "shepherded"
-                    ? counts.shepherded
+                    ? { total: counts.shepherded, kids: counts.shepherdedKids }
                     : t.key === "active"
-                      ? counts.active
+                      ? { total: counts.active, kids: counts.activeKids }
                       : t.key === "present"
-                        ? counts.present
-                        : counts.inactive;
+                        ? { total: counts.present, kids: counts.presentKids }
+                        : { total: counts.inactive, kids: counts.inactiveKids };
+              const adults = total - kids;
               return (
                 <Link
                   key={t.key}
@@ -179,7 +218,13 @@ export default async function PeoplePage({
                   <span
                     className={`tnum text-xs ${isActive ? "text-accent" : "text-subtle"}`}
                   >
-                    {count.toLocaleString()}
+                    {adults.toLocaleString()}
+                    {kids > 0 && (
+                      <span className="text-subtle">
+                        {" + "}
+                        {kids.toLocaleString()} kids
+                      </span>
+                    )}
                   </span>
                 </Link>
               );
