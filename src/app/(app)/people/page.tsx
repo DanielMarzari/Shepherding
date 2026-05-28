@@ -98,25 +98,13 @@ export default async function PeoplePage({
   return (
     <AppShell active="People" breadcrumb={`People › ${TABS.find((t) => t.key === tab)!.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
-        <div className="flex items-end justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">People</h1>
-            <p className="text-muted text-sm mt-1">
-              {counts.total === 0
-                ? "No synced people yet — connect PCO and run a sync."
-                : `${counts.visibleByDefault.toLocaleString()} visible · ${counts.inactive.toLocaleString()} inactive (hidden) · activity threshold ${settings.activityMonths}mo (set in Metrics)`}
-            </p>
-          </div>
-          {counts.total > 0 && (
-            <MembershipFilter
-              current={membership ?? ""}
-              options={memTypeStats.map((s) => ({
-                value: s.membershipType ?? "__none__",
-                label: s.membershipType ?? "(no membership)",
-                count: s.count,
-              }))}
-            />
-          )}
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">People</h1>
+          <p className="text-muted text-sm mt-1">
+            {counts.total === 0
+              ? "No synced people yet — connect PCO and run a sync."
+              : `${counts.visibleByDefault.toLocaleString()} visible · ${counts.inactive.toLocaleString()} inactive (hidden) · activity threshold ${settings.activityMonths}mo (set in Metrics)`}
+          </p>
         </div>
 
         {/* Stat strip: Shepherded · Active · Present · Inactive */}
@@ -231,17 +219,40 @@ export default async function PeoplePage({
         )}
 
         {counts.total > 0 && (
-          <Suspense
-            fallback={
-              <DemographicChartsSkeleton title="Demographics — all people" />
-            }
-          >
-            <AsyncDemographicCharts
-              orgId={session.orgId}
-              scope={{ kind: "all" }}
-              title="Demographics — all people"
-            />
-          </Suspense>
+          <div className="space-y-3">
+            <div className="flex items-baseline justify-between gap-3 flex-wrap">
+              <div>
+                <h2 className="text-sm font-semibold">
+                  Demographics — active people
+                </h2>
+                <p className="text-xs text-muted">
+                  Only people NOT classified as inactive — shepherded,
+                  active, or present. Drops the historical
+                  /already-gone bucket so the charts reflect who
+                  you&apos;re actually trying to pastor.
+                </p>
+              </div>
+              <MembershipFilter
+                current={membership ?? ""}
+                options={memTypeStats.map((s) => ({
+                  value: s.membershipType ?? "__none__",
+                  label: s.membershipType ?? "(no membership)",
+                  count: s.count,
+                }))}
+              />
+            </div>
+            <Suspense
+              fallback={
+                <DemographicChartsSkeleton title="Demographics — active people" />
+              }
+            >
+              <AsyncDemographicCharts
+                orgId={session.orgId}
+                scope={{ kind: "engaged" }}
+                title="Demographics — active people"
+              />
+            </Suspense>
+          </div>
         )}
       </div>
     </AppShell>

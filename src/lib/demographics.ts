@@ -3,6 +3,11 @@ import { getDb } from "./db";
 
 export type DemographicScope =
   | { kind: "all" }
+  /** Everyone NOT classified as inactive — shepherded + active +
+   *  present. This is what the /people demographics card defaults to
+   *  so the charts reflect the engaged population we're actually
+   *  trying to pastor, not historical / drifted-away records. */
+  | { kind: "engaged" }
   | { kind: "groups" }
   | { kind: "teams" }
   | { kind: "group"; id: string }
@@ -51,6 +56,17 @@ export function populatePeopleInScope(
       db.prepare(
         `INSERT OR IGNORE INTO temp.${tableName} (person_id)
            SELECT pco_id FROM pco_people WHERE org_id = ?`,
+      ).run(orgId);
+      break;
+    case "engaged":
+      // Read from the snapshot's classification column. If the
+      // snapshot is empty (cold start before first sync) the temp
+      // table stays empty and the demographic card renders its
+      // empty-state copy.
+      db.prepare(
+        `INSERT OR IGNORE INTO temp.${tableName} (person_id)
+           SELECT person_id FROM person_activity
+            WHERE org_id = ? AND classification != 'inactive'`,
       ).run(orgId);
       break;
     case "groups":

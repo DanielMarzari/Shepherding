@@ -1,29 +1,16 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import { Avatar, Card, Pill } from "@/components/ui";
+import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import {
-  TARGET_KIND_LABELS,
   type Assignment,
-  type TargetKind,
   listAssignments,
 } from "@/lib/assignments-read";
 import { getListByName, listReferenceListNames } from "@/lib/lists-read";
 import { getShepherdTeamBreakdown } from "@/lib/shepherd-team-read";
+import { ShepherdTeamTable } from "./shepherd-team-table";
 
 const SHEPHERD_TEAM_LIST = "REFERENCE - Shepherd Team";
-
-const KIND_TONES: Record<TargetKind, "muted" | "accent" | "warn" | "good"> = {
-  group: "accent",
-  group_type: "muted",
-  team: "good",
-  service_type: "muted",
-  team_position: "good",
-  person: "warn",
-  membership_type: "accent",
-  shepherd_team: "warn",
-  reference_list: "muted",
-};
 
 export default async function ShepherdTeamPage() {
   const session = await requireOrg();
@@ -108,159 +95,27 @@ export default async function ShepherdTeamPage() {
             </div>
 
             <Card>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="text-xs text-muted">
-                    <tr className="border-b border-border-soft">
-                      <th className="text-left font-medium px-5 py-2.5">
-                        Person
-                      </th>
-                      <th className="text-left font-medium px-5 py-2.5">
-                        Assignments
-                      </th>
-                      <th
-                        className="text-right font-medium px-3 py-2.5"
-                        title="Staff list members directly assigned to this shepherd who aren't already counted in the other three buckets."
-                      >
-                        Staff
-                      </th>
-                      <th
-                        className="text-right font-medium px-3 py-2.5"
-                        title="Distinct leaders of groups/teams this shepherd oversees via the shepherd map."
-                      >
-                        Volunteer leaders
-                      </th>
-                      <th
-                        className="text-right font-medium px-3 py-2.5"
-                        title="Distinct non-leader members of groups/teams this shepherd directly leads in PCO."
-                      >
-                        Congregants
-                      </th>
-                      <th
-                        className="text-right font-medium px-3 py-2.5"
-                        title="Care-map assignments to people not currently in any group or team."
-                      >
-                        Assigned
-                      </th>
-                      <th className="text-right font-medium px-5 py-2.5">
-                        Total
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {list.members.map((m) => (
-                      <ShepherdRow
-                        key={m.personId}
-                        personId={m.personId}
-                        fullName={m.fullName}
-                        initials={m.initials}
-                        membershipType={m.membershipType}
-                        assignments={byShepherd.get(m.personId) ?? []}
-                        breakdown={breakdowns.get(m.personId) ?? null}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <ShepherdTeamTable
+                rows={list.members.map((m) => {
+                  const b = breakdowns.get(m.personId);
+                  return {
+                    personId: m.personId,
+                    fullName: m.fullName,
+                    initials: m.initials,
+                    membershipType: m.membershipType,
+                    assignments: byShepherd.get(m.personId) ?? [],
+                    staffDirect: b?.staffDirect ?? 0,
+                    volunteerLeaders: b?.volunteerLeaders ?? 0,
+                    congregants: b?.congregants ?? 0,
+                    careNonShepherded: b?.careNonShepherded ?? 0,
+                    totalReach: b?.totalReach ?? 0,
+                  };
+                })}
+              />
             </Card>
           </>
         )}
       </div>
     </AppShell>
-  );
-}
-
-function ShepherdRow({
-  personId,
-  fullName,
-  initials,
-  membershipType,
-  assignments,
-  breakdown,
-}: {
-  personId: string;
-  fullName: string;
-  initials: string;
-  membershipType: string | null;
-  assignments: Assignment[];
-  breakdown: {
-    volunteerLeaders: number;
-    congregants: number;
-    careNonShepherded: number;
-    staffDirect: number;
-    totalReach: number;
-  } | null;
-}) {
-  return (
-    <tr className="border-b border-border-softer hover:bg-bg-elev-2/60 align-top">
-      <td className="px-5 py-3.5 min-w-[220px]">
-        <div className="flex items-center gap-3">
-          <Avatar initials={initials} size="sm" />
-          <div className="min-w-0">
-            <Link
-              href={`/people/${personId}`}
-              className="font-medium truncate hover:text-accent"
-            >
-              {fullName}
-            </Link>
-            {membershipType && (
-              <div className="text-xs text-muted truncate">
-                {membershipType}
-              </div>
-            )}
-          </div>
-        </div>
-      </td>
-      <td className="px-5 py-3.5">
-        {assignments.length === 0 ? (
-          <span className="text-xs text-subtle">No assignments yet</span>
-        ) : (
-          <ul className="space-y-1 max-w-md">
-            {assignments.map((a) => (
-              <li
-                key={a.id}
-                className="flex items-center gap-2 text-xs flex-wrap"
-              >
-                <Pill tone={KIND_TONES[a.targetKind]}>
-                  {TARGET_KIND_LABELS[a.targetKind]}
-                </Pill>
-                <span className="truncate">{a.targetName}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </td>
-      <BreakdownCell value={breakdown?.staffDirect ?? 0} tone="muted" />
-      <BreakdownCell value={breakdown?.volunteerLeaders ?? 0} tone="good" />
-      <BreakdownCell value={breakdown?.congregants ?? 0} tone="accent" />
-      <BreakdownCell value={breakdown?.careNonShepherded ?? 0} tone="warn" />
-      <td className="px-5 py-3.5 text-right tnum font-medium">
-        {breakdown?.totalReach.toLocaleString() ?? "—"}
-      </td>
-    </tr>
-  );
-}
-
-function BreakdownCell({
-  value,
-  tone,
-}: {
-  value: number;
-  tone: "good" | "accent" | "warn" | "muted";
-}) {
-  const cls =
-    value === 0
-      ? "text-subtle"
-      : tone === "good"
-        ? "text-good-soft-fg"
-        : tone === "accent"
-          ? "text-accent"
-          : tone === "warn"
-            ? "text-warn-soft-fg"
-            : "text-muted";
-  return (
-    <td className={`px-3 py-3.5 text-right tnum ${cls}`}>
-      {value === 0 ? "—" : value.toLocaleString()}
-    </td>
   );
 }

@@ -18,6 +18,16 @@ export interface TargetOption {
   name: string;
 }
 
+export interface Assignment {
+  id: number;
+  shepherdPersonId: string;
+  targetKind: TargetKind;
+  targetId: string;
+  targetName: string;
+  note: string | null;
+  createdAt: string;
+}
+
 export const TARGET_KIND_LABELS: Record<TargetKind, string> = {
   group: "Group",
   group_type: "Group type",

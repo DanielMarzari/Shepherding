@@ -9,6 +9,7 @@ import {
 } from "@/lib/assignments-read";
 import { getLeaderOverseersBatch } from "@/lib/shepherd-graph";
 import { listShepherds } from "@/lib/shepherds-read";
+import { ShepherdsTable } from "./shepherds-table";
 
 export default async function ShepherdsPage() {
   const session = await requireOrg();
@@ -169,98 +170,20 @@ async function ShepherdsOverview({ orgId }: { orgId: number }) {
       </div>
 
       <Card>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-xs text-muted">
-              <tr className="border-b border-border-soft">
-                <th className="text-left font-medium px-5 py-2">Shepherd</th>
-                <th className="text-left font-medium px-5 py-2">Overseen by</th>
-                <th className="text-left font-medium px-5 py-2">Groups led</th>
-                <th className="text-left font-medium px-5 py-2">Teams led</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({ shepherd: s, overseers, isLeadPastor, needsMapping }) => (
-                <tr
-                  key={s.personId}
-                  className="border-b border-border-softer hover:bg-bg-elev-2/60"
-                >
-                  <td className="px-5 py-3">
-                    <div className="flex items-center gap-3">
-                      <Avatar initials={s.initials} />
-                      <Link
-                        href={`/people/${s.personId}`}
-                        className="font-medium hover:text-accent"
-                      >
-                        {s.fullName}
-                      </Link>
-                      {isLeadPastor && <Pill tone="accent">lead pastor</Pill>}
-                    </div>
-                  </td>
-                  <td className="px-5 py-3">
-                    {isLeadPastor ? (
-                      <span className="text-xs text-muted">
-                        Top of the structure — no overseer
-                      </span>
-                    ) : needsMapping ? (
-                      <Link
-                        href="/shepherd-map"
-                        title="Set this up on the Shepherd map"
-                      >
-                        <Pill tone="warn">needs mapping</Pill>
-                      </Link>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        {overseers.map((o) => (
-                          <Link
-                            key={o.personId}
-                            href={`/people/${o.personId}`}
-                            title={o.via}
-                            className="text-xs px-2 py-0.5 rounded-full bg-bg-elev-2 text-fg hover:text-accent"
-                          >
-                            {o.fullName}
-                          </Link>
-                        ))}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-5 py-3 text-muted">
-                    {s.groupsLed.length === 0 ? (
-                      <span className="text-subtle">—</span>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        {s.groupsLed.map((g) => (
-                          <span
-                            key={g.id}
-                            className="text-xs px-2 py-0.5 rounded-full bg-bg-elev-2 text-fg"
-                          >
-                            {g.name ?? `#${g.id}`}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-5 py-3 text-muted">
-                    {s.teamsLed.length === 0 ? (
-                      <span className="text-subtle">—</span>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        {s.teamsLed.map((t) => (
-                          <span
-                            key={t.id}
-                            className="text-xs px-2 py-0.5 rounded-full bg-bg-elev-2 text-fg"
-                          >
-                            {t.name ?? `#${t.id}`}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ShepherdsTable
+          rows={rows.map(
+            ({ shepherd: s, overseers, isLeadPastor, needsMapping }) => ({
+              personId: s.personId,
+              fullName: s.fullName,
+              initials: s.initials,
+              isLeadPastor,
+              needsMapping,
+              overseers,
+              groupsLed: s.groupsLed,
+              teamsLed: s.teamsLed,
+            }),
+          )}
+        />
       </Card>
     </div>
   );

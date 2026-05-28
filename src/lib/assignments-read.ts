@@ -2,9 +2,9 @@ import "server-only";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 import { getMembershipTypeStats } from "./pco";
-import type { TargetKind, TargetOption } from "./assignments-types";
+import type { Assignment, TargetKind, TargetOption } from "./assignments-types";
 
-export type { TargetKind, TargetOption } from "./assignments-types";
+export type { Assignment, TargetKind, TargetOption } from "./assignments-types";
 export { TARGET_KIND_LABELS } from "./assignments-types";
 
 interface PIIBlob {
@@ -89,15 +89,8 @@ export interface ShepherdPerson {
   initials: string;
 }
 
-export interface Assignment {
-  id: number;
-  shepherdPersonId: string;
-  targetKind: TargetKind;
-  targetId: string;
-  targetName: string;
-  note: string | null;
-  createdAt: string;
-}
+// Assignment is re-exported from ./assignments-types above so client
+// components can import it without pulling in better-sqlite3.
 
 /** Roster of people on the "REFERENCE - Shepherd Team" PCO list. These
  *  are the only people who can have assignments — the page lets you
