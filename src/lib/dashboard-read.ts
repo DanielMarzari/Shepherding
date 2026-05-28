@@ -133,7 +133,12 @@ export function getFallingThroughCracks(
   ).toISOString();
 
   // Snapshot fast path — person_activity carries last_attended_at +
-  // last_served_at + active counts pre-computed.
+  // last_served_at + active counts + classification pre-computed.
+  // The `classification != 'inactive'` filter is the key: an
+  // already-classified-inactive person isn't "falling" — they've
+  // already gone. This list is the actionable middle: still on a
+  // roster, still classified as engaged, but lapsed in attendance
+  // or serving past your threshold.
   const rows = db
     .prepare(
       `SELECT pa.person_id AS personId,
@@ -146,6 +151,7 @@ export function getFallingThroughCracks(
          LEFT JOIN pco_people pp
            ON pp.org_id = pa.org_id AND pp.pco_id = pa.person_id
         WHERE pa.org_id = ?
+          AND pa.classification != 'inactive'
           AND (
             (pa.active_group_count > 0
              AND pa.last_attended_at IS NOT NULL

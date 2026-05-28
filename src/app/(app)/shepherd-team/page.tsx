@@ -120,6 +120,12 @@ export default async function ShepherdTeamPage() {
                       </th>
                       <th
                         className="text-right font-medium px-3 py-2.5"
+                        title="Staff list members directly assigned to this shepherd who aren't already counted in the other three buckets."
+                      >
+                        Staff
+                      </th>
+                      <th
+                        className="text-right font-medium px-3 py-2.5"
                         title="Distinct leaders of groups/teams this shepherd oversees via the shepherd map."
                       >
                         Volunteer leaders
@@ -134,13 +140,7 @@ export default async function ShepherdTeamPage() {
                         className="text-right font-medium px-3 py-2.5"
                         title="Care-map assignments to people not currently in any group or team."
                       >
-                        Care (non-shep.)
-                      </th>
-                      <th
-                        className="text-right font-medium px-3 py-2.5"
-                        title="Staff list members directly assigned to this shepherd who aren't already counted in the other three buckets."
-                      >
-                        Staff (direct)
+                        Assigned
                       </th>
                       <th className="text-right font-medium px-5 py-2.5">
                         Total
@@ -230,10 +230,10 @@ function ShepherdRow({
           </ul>
         )}
       </td>
+      <BreakdownCell value={breakdown?.staffDirect ?? 0} tone="muted" />
       <BreakdownCell value={breakdown?.volunteerLeaders ?? 0} tone="good" />
       <BreakdownCell value={breakdown?.congregants ?? 0} tone="accent" />
       <BreakdownCell value={breakdown?.careNonShepherded ?? 0} tone="warn" />
-      <BreakdownCell value={breakdown?.staffDirect ?? 0} tone="muted" />
       <td className="px-5 py-3.5 text-right tnum font-medium">
         {breakdown?.totalReach.toLocaleString() ?? "—"}
       </td>
