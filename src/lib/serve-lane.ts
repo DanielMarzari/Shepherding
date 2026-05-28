@@ -290,55 +290,56 @@ export function listTeamMembershipsByPerson(
   const cutoff = new Date(
     Date.now() - activityMonths * 30 * 24 * 60 * 60 * 1000,
   ).toISOString();
+  // One CTE pass over the person's plan_people (joined to plans for
+  // sort_date) aggregated by team replaces the three correlated
+  // subqueries that used to run per team row. The composite index
+  // pco_plan_people_person_team makes this a covering range scan.
   const rows = db
     .prepare(
-      `SELECT DISTINCT
+      `WITH served AS (
+         SELECT pp.team_id AS team_id,
+                COUNT(DISTINCT CASE
+                  WHEN p.sort_date >= ?
+                   AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
+                  THEN pp.plan_id END) AS servedInWindow,
+                COUNT(DISTINCT CASE
+                  WHEN p.sort_date >= ?
+                  THEN pp.plan_id END) AS scheduledInWindow,
+                MAX(CASE
+                  WHEN lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
+                  THEN p.sort_date END) AS lastServedAt
+           FROM pco_plan_people pp
+           JOIN pco_plans p
+             ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
+          WHERE pp.org_id = ? AND pp.person_id = ?
+          GROUP BY pp.team_id
+       )
+       SELECT DISTINCT
          t.pco_id          AS teamId,
          t.name            AS teamName,
          st.name           AS serviceTypeName,
          MAX(m.is_team_leader) AS isLeader,
-         (SELECT COUNT(DISTINCT pp.plan_id)
-            FROM pco_plan_people pp
-            JOIN pco_plans p
-              ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-           WHERE pp.org_id = t.org_id
-             AND pp.team_id = t.pco_id
-             AND pp.person_id = ?
-             AND p.sort_date >= ?
-             AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')) AS servedInWindow,
-         (SELECT COUNT(DISTINCT pp.plan_id)
-            FROM pco_plan_people pp
-            JOIN pco_plans p
-              ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-           WHERE pp.org_id = t.org_id
-             AND pp.team_id = t.pco_id
-             AND pp.person_id = ?
-             AND p.sort_date >= ?) AS scheduledInWindow,
-         (SELECT MAX(p.sort_date)
-            FROM pco_plan_people pp
-            JOIN pco_plans p
-              ON p.org_id = pp.org_id AND p.pco_id = pp.plan_id
-           WHERE pp.org_id = t.org_id
-             AND pp.team_id = t.pco_id
-             AND pp.person_id = ?
-             AND lower(coalesce(pp.status, 'c')) NOT IN ('d', 'declined')) AS lastServedAt
+         coalesce(served.servedInWindow, 0)    AS servedInWindow,
+         coalesce(served.scheduledInWindow, 0) AS scheduledInWindow,
+         served.lastServedAt                   AS lastServedAt
        FROM pco_team_memberships m
        JOIN pco_teams t
          ON t.org_id = m.org_id AND t.pco_id = m.team_id
        LEFT JOIN pco_service_types st
          ON st.org_id = t.org_id AND st.pco_id = t.service_type_id
+       LEFT JOIN served ON served.team_id = t.pco_id
       WHERE m.org_id = ?
         AND m.person_id = ?
         AND m.archived_at IS NULL
         AND t.archived_at IS NULL
         AND t.deleted_at IS NULL
-      GROUP BY t.pco_id, t.name, st.name
+      GROUP BY t.pco_id, t.name, st.name,
+               served.servedInWindow, served.scheduledInWindow, served.lastServedAt
       ORDER BY servedInWindow DESC, t.name ASC`,
     )
     .all(
-      personId, cutoff,  // servedInWindow
-      personId, cutoff,  // scheduledInWindow
-      personId,          // lastServedAt
+      cutoff, cutoff,    // served CTE window predicates
+      orgId, personId,   // served CTE filter
       orgId, personId,   // outer where
     ) as Array<{
     teamId: string;

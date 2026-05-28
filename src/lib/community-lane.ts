@@ -32,75 +32,62 @@ export function listGroupsAttendedByPerson(
   orgId: number,
   personId: string,
 ): PersonGroupAttendance[] {
+  // Two single-pass CTEs over the person's OWN rows replace what used
+  // to be six correlated subqueries evaluated per group:
+  //   att  — one scan of the person's attendance rows, aggregated by
+  //          group: total / attended / first / last.
+  //   mem  — one scan of the person's group memberships, aggregated by
+  //          group: is-current + most-recent archived_at.
+  // The composite index pco_event_attendances_person_group makes `att`
+  // a covering range scan; pco_group_memberships_person covers `mem`.
   const rows = getDb()
     .prepare(
-      `WITH person_groups AS (
-         SELECT DISTINCT m.group_id
-           FROM pco_group_memberships m
-           WHERE m.org_id = ? AND m.person_id = ?
-         UNION
-         SELECT DISTINCT a.group_id
+      `WITH att AS (
+         SELECT a.group_id AS group_id,
+                COUNT(*) AS totalEventCount,
+                SUM(CASE WHEN a.attended = 1 THEN 1 ELSE 0 END) AS attendedCount,
+                MIN(CASE WHEN a.attended = 1 THEN a.event_starts_at END) AS firstAttendedAt,
+                MAX(CASE WHEN a.attended = 1 THEN a.event_starts_at END) AS lastAttendedAt
            FROM pco_event_attendances a
-           WHERE a.org_id = ? AND a.person_id = ? AND a.group_id IS NOT NULL
+          WHERE a.org_id = ? AND a.person_id = ? AND a.group_id IS NOT NULL
+          GROUP BY a.group_id
+       ),
+       mem AS (
+         SELECT m.group_id AS group_id,
+                MAX(CASE WHEN m.archived_at IS NULL THEN 1 ELSE 0 END) AS isCurrentMember,
+                MAX(m.archived_at) AS membershipArchivedAt
+           FROM pco_group_memberships m
+          WHERE m.org_id = ? AND m.person_id = ?
+          GROUP BY m.group_id
+       ),
+       person_groups AS (
+         SELECT group_id FROM mem
+         UNION
+         SELECT group_id FROM att
        )
        SELECT
          g.pco_id            AS groupId,
          g.name              AS groupName,
          t.name              AS groupTypeName,
-         (SELECT 1
-            FROM pco_group_memberships m
-            WHERE m.org_id = g.org_id
-              AND m.group_id = g.pco_id
-              AND m.person_id = ?
-              AND m.archived_at IS NULL
-            LIMIT 1) AS isCurrentMember,
-         (SELECT m.archived_at
-            FROM pco_group_memberships m
-            WHERE m.org_id = g.org_id
-              AND m.group_id = g.pco_id
-              AND m.person_id = ?
-            ORDER BY m.archived_at DESC NULLS LAST
-            LIMIT 1) AS membershipArchivedAt,
-         (SELECT COUNT(*)
-            FROM pco_event_attendances a
-            WHERE a.org_id = g.org_id
-              AND a.group_id = g.pco_id
-              AND a.person_id = ?
-              AND a.attended = 1) AS attendedCount,
-         (SELECT COUNT(*)
-            FROM pco_event_attendances a
-            WHERE a.org_id = g.org_id
-              AND a.group_id = g.pco_id
-              AND a.person_id = ?) AS totalEventCount,
-         (SELECT MIN(a.event_starts_at)
-            FROM pco_event_attendances a
-            WHERE a.org_id = g.org_id
-              AND a.group_id = g.pco_id
-              AND a.person_id = ?
-              AND a.attended = 1) AS firstAttendedAt,
-         (SELECT MAX(a.event_starts_at)
-            FROM pco_event_attendances a
-            WHERE a.org_id = g.org_id
-              AND a.group_id = g.pco_id
-              AND a.person_id = ?
-              AND a.attended = 1) AS lastAttendedAt
+         coalesce(mem.isCurrentMember, 0)        AS isCurrentMember,
+         mem.membershipArchivedAt                AS membershipArchivedAt,
+         coalesce(att.attendedCount, 0)          AS attendedCount,
+         coalesce(att.totalEventCount, 0)        AS totalEventCount,
+         att.firstAttendedAt                     AS firstAttendedAt,
+         att.lastAttendedAt                      AS lastAttendedAt
        FROM pco_groups g
        JOIN person_groups pg ON pg.group_id = g.pco_id
+       LEFT JOIN att ON att.group_id = g.pco_id
+       LEFT JOIN mem ON mem.group_id = g.pco_id
        LEFT JOIN pco_group_types t
          ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
        WHERE g.org_id = ?
        ORDER BY isCurrentMember DESC, lastAttendedAt DESC NULLS LAST, g.name ASC`,
     )
     .all(
-      orgId, personId, // person_groups CTE
-      orgId, personId,
-      personId, // isCurrentMember subquery
-      personId, // membershipArchivedAt
-      personId, // attendedCount
-      personId, // totalEventCount
-      personId, // firstAttendedAt
-      personId, // lastAttendedAt
-      orgId,    // outer WHERE
+      orgId, personId, // att CTE
+      orgId, personId, // mem CTE
+      orgId,           // outer WHERE
     ) as Array<{
     groupId: string;
     groupName: string | null;
