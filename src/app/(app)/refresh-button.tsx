@@ -154,7 +154,18 @@ export function RefreshSnapshotsButton({
     <>
       <div className="flex items-center gap-3 text-xs flex-wrap justify-end">
         {!run && (
-          <span className="text-subtle hidden xl:inline">
+          <span
+            className="text-subtle hidden xl:inline"
+            suppressHydrationWarning
+          >
+            {/* suppressHydrationWarning: toLocaleString() formats the
+                timestamp in the visitor's timezone, which differs
+                from the server's. Without this, the server-rendered
+                string and the client-rendered string disagree on
+                first paint and React throws hydration error #418.
+                The text is purely informational so eating the warning
+                is fine; the value re-resolves immediately on the
+                client. */}
             {refreshedAt
               ? `Snapshot updated ${new Date(refreshedAt).toLocaleString()}`
               : "Snapshot not built yet — click refresh."}

@@ -426,24 +426,46 @@ function getClassificationCountsImpl(
   // Snapshot fast path. Only valid when the snapshot was built with
   // the same activity-month threshold; otherwise the numbers would
   // misrepresent the current setting and we fall back to the live
-  // CASE-laden SQL below. The minor-subset counts aren't in the
-  // snapshot (they're not headlined anywhere) so we zero them out
-  // — the few callers that read them either use a non-cached path
-  // or the snapshot was force-rebuilt before that page renders.
+  // CASE-laden SQL below. The minor-subset (kids) counts aren't in
+  // the snapshot table itself, so we run ONE small extra query
+  // joining person_activity → pco_people to roll them up. It's a
+  // single indexed scan with a GROUP BY — cheap enough that the
+  // overall path is still dramatically faster than the live SQL.
   const snap = getOrgSnapshot(orgId);
   if (snap && snap.activityMonths === activityMonths) {
+    const kidsRow = getDb()
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN pa.classification = 'shepherded'
+                     AND p.is_minor = 1 THEN 1 ELSE 0 END) AS shepherdedKids,
+           SUM(CASE WHEN pa.classification = 'active'
+                     AND p.is_minor = 1 THEN 1 ELSE 0 END) AS activeKids,
+           SUM(CASE WHEN pa.classification = 'present'
+                     AND p.is_minor = 1 THEN 1 ELSE 0 END) AS presentKids,
+           SUM(CASE WHEN pa.classification = 'inactive'
+                     AND p.is_minor = 1 THEN 1 ELSE 0 END) AS inactiveKids
+           FROM person_activity pa
+           JOIN pco_people p
+             ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
+          WHERE pa.org_id = ?`,
+      )
+      .get(orgId) as {
+      shepherdedKids: number | null;
+      activeKids: number | null;
+      presentKids: number | null;
+      inactiveKids: number | null;
+    };
     return {
       total: snap.totalPeople,
       shepherded: snap.shepherdedCount,
       active: snap.activeCount,
       present: snap.presentCount,
       inactive: snap.inactiveCount,
-      shepherdedKids: 0,
-      activeKids: 0,
-      presentKids: 0,
-      inactiveKids: 0,
-      visibleByDefault:
-        snap.totalPeople - snap.inactiveCount,
+      shepherdedKids: kidsRow.shepherdedKids ?? 0,
+      activeKids: kidsRow.activeKids ?? 0,
+      presentKids: kidsRow.presentKids ?? 0,
+      inactiveKids: kidsRow.inactiveKids ?? 0,
+      visibleByDefault: snap.totalPeople - snap.inactiveCount,
     };
   }
   const db = getDb();
