@@ -13,12 +13,21 @@ export async function AsyncDemographicCharts({
   orgId,
   scope,
   title,
+  membershipType,
 }: {
   orgId: number;
   scope: DemographicScope;
   title: string;
+  membershipType?: string;
 }) {
-  return <DemographicCharts orgId={orgId} scope={scope} title={title} />;
+  return (
+    <DemographicCharts
+      orgId={orgId}
+      scope={scope}
+      title={title}
+      membershipType={membershipType}
+    />
+  );
 }
 
 export async function AsyncAttendanceTrendCard({

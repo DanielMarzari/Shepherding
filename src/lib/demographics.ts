@@ -43,6 +43,11 @@ const AGE_BANDS: Array<{ label: string; max: number }> = [
 export function populatePeopleInScope(
   orgId: number,
   scope: DemographicScope,
+  /** Optional UI membership filter. When set, the scope set is pruned
+   *  to people of that membership type after it's built — so the
+   *  /people demographics card honors the same dropdown as the rest
+   *  of the page. "__none__" keeps only rows PCO left blank. */
+  membershipType?: string,
 ): string {
   const db = getDb();
   const tableName = "people_scope";
@@ -140,15 +145,36 @@ export function populatePeopleInScope(
       ).run(orgId, scope.id);
       break;
   }
+
+  // Prune to the selected membership type, if any.
+  if (membershipType === "__none__") {
+    db.prepare(
+      `DELETE FROM temp.${tableName}
+        WHERE person_id IN (
+          SELECT pco_id FROM pco_people
+           WHERE org_id = ? AND membership_type IS NOT NULL
+        )`,
+    ).run(orgId);
+  } else if (membershipType) {
+    db.prepare(
+      `DELETE FROM temp.${tableName}
+        WHERE person_id IN (
+          SELECT pco_id FROM pco_people
+           WHERE org_id = ?
+             AND coalesce(membership_type, '') != ?
+        )`,
+    ).run(orgId, membershipType);
+  }
   return tableName;
 }
 
 export function getDemographics(
   orgId: number,
   scope: DemographicScope,
+  membershipType?: string,
 ): DemographicSnapshot {
   const db = getDb();
-  populatePeopleInScope(orgId, scope);
+  populatePeopleInScope(orgId, scope, membershipType);
   const thisYear = new Date().getUTCFullYear();
   // Everything reads from pco_people via the scoped temp table — one
   // indexed inner-join, no per-row EXISTS work.

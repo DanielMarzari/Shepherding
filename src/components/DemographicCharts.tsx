@@ -10,12 +10,14 @@ export function DemographicCharts({
   orgId,
   scope,
   title,
+  membershipType,
 }: {
   orgId: number;
   scope: DemographicScope;
   title: string;
+  membershipType?: string;
 }) {
-  const demo = getDemographics(orgId, scope);
+  const demo = getDemographics(orgId, scope, membershipType);
   if (demo.total === 0) {
     return (
       <div className="space-y-3 pt-3">

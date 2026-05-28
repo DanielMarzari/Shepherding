@@ -56,7 +56,11 @@ export default async function PeoplePage({
   const dir: SortDir = params.dir === "asc" ? "asc" : "desc";
   const membership = (params.membership ?? "").trim() || undefined;
 
-  const counts = getClassificationCounts(session.orgId, settings.activityMonths);
+  const counts = getClassificationCounts(
+    session.orgId,
+    settings.activityMonths,
+    membership,
+  );
   const memTypeStats = getMembershipTypeStats(session.orgId);
   const result = listPeople({
     orgId: session.orgId,
@@ -98,7 +102,8 @@ export default async function PeoplePage({
   return (
     <AppShell active="People" breadcrumb={`People › ${TABS.find((t) => t.key === tab)!.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
-        <div>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
           <h1 className="text-2xl font-semibold tracking-tight">People</h1>
           {counts.total === 0 ? (
             <p className="text-muted text-sm mt-1">
@@ -135,6 +140,17 @@ export default async function PeoplePage({
                 </p>
               );
             })()
+          )}
+          </div>
+          {counts.total > 0 && (
+            <MembershipFilter
+              current={membership ?? ""}
+              options={memTypeStats.map((s) => ({
+                value: s.membershipType ?? "__none__",
+                label: s.membershipType ?? "(no membership)",
+                count: s.count,
+              }))}
+            />
           )}
         </div>
 
@@ -265,36 +281,20 @@ export default async function PeoplePage({
 
         {counts.total > 0 && (
           <div className="space-y-3">
-            <div className="flex items-baseline justify-between gap-3 flex-wrap">
-              <div>
-                <h2 className="text-sm font-semibold">
-                  Demographics — active people
-                </h2>
-                <p className="text-xs text-muted">
-                  Only people NOT classified as inactive — shepherded,
-                  active, or present. Drops the historical
-                  /already-gone bucket so the charts reflect who
-                  you&apos;re actually trying to pastor.
-                </p>
-              </div>
-              <MembershipFilter
-                current={membership ?? ""}
-                options={memTypeStats.map((s) => ({
-                  value: s.membershipType ?? "__none__",
-                  label: s.membershipType ?? "(no membership)",
-                  count: s.count,
-                }))}
-              />
-            </div>
             <Suspense
               fallback={
                 <DemographicChartsSkeleton title="Demographics — active people" />
               }
             >
+              {/* Demographics scope = engaged (not inactive). Honors the
+                  membership dropdown via membershipType so the charts
+                  match the rest of the page. The card renders its own
+                  title, so no separate <h2> here. */}
               <AsyncDemographicCharts
                 orgId={session.orgId}
                 scope={{ kind: "engaged" }}
                 title="Demographics — active people"
+                membershipType={membership}
               />
             </Suspense>
           </div>

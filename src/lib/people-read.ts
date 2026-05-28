@@ -422,14 +422,13 @@ export const getClassificationCounts = cache(getClassificationCountsImpl);
 function getClassificationCountsImpl(
   orgId: number,
   activityMonths: number,
+  membershipType?: string,
 ): ClassificationCounts {
   // Snapshot fast path. Only valid when the snapshot was built with
-  // the same activity-month threshold; otherwise the numbers would
-  // misrepresent the current setting and we fall back to the live
-  // CASE-laden SQL below. Kid sub-counts are stored on the snapshot
-  // (migration 0037) so the common case is one indexed singleton-row
-  // read.
-  const snap = getOrgSnapshot(orgId);
+  // the same activity-month threshold AND no membership filter is
+  // active (the snapshot is org-wide). With a membership filter set
+  // we always run the live CASE-laden SQL with the extra predicate.
+  const snap = membershipType ? null : getOrgSnapshot(orgId);
   if (snap && snap.activityMonths === activityMonths) {
     let { shepherdedKids, activeKids, presentKids, inactiveKids } = snap;
     // Self-heal: when migration 0037 added the kid columns it
@@ -493,6 +492,17 @@ function getClassificationCountsImpl(
     excluded.length === 0
       ? ""
       : ` AND (membership_type IS NULL OR membership_type NOT IN (${excluded.map(() => "?").join(",")}))`;
+  // Optional UI membership filter — pins the whole stat strip / tabs /
+  // header to one membership type. "__none__" picks the rows PCO left
+  // blank, matching the convention in listPeople.buildWhere.
+  let memSql = "";
+  const memArgs: string[] = [];
+  if (membershipType === "__none__") {
+    memSql = " AND membership_type IS NULL";
+  } else if (membershipType) {
+    memSql = " AND membership_type = ?";
+    memArgs.push(membershipType);
+  }
   // Precompute shepherded set into a TEMP TABLE (with PRIMARY KEY) so the
   // LEFT JOIN below is indexed instead of a full scan per pco_people row.
   populateShepherdedTempTable(orgId);
@@ -546,7 +556,7 @@ function getClassificationCountsImpl(
                THEN 1 ELSE 0 END) AS inactiveKids
        FROM pco_people
        LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
-       WHERE pco_people.org_id = ?${exclSql}`,
+       WHERE pco_people.org_id = ?${exclSql}${memSql}`,
     )
     .get(
       cutoff, cutoff,            // active total
@@ -557,6 +567,7 @@ function getClassificationCountsImpl(
       cutoff, cutoff, cutoff,    // inactiveKids
       orgId,
       ...excluded,
+      ...memArgs,
     ) as {
     total: number;
     shepherded: number | null;
