@@ -825,6 +825,162 @@ export function getLeaderOverseers(
     .sort((a, b) => a.shepherd.fullName.localeCompare(b.shepherd.fullName));
 }
 
+/** Co-shepherd info for the /people/[slug] ShepherdingOverview card.
+ *  For a set of flock people (typically 20-200 for an active pastor),
+ *  returns Map<personId, Array<{shepherdId, shepherdName}>> of OTHER
+ *  shepherds reaching each of them — used to split the flock into
+ *  "exclusive" vs "co-shepherded".
+ *
+ *  The full getShepherds() considers ten different paths someone can
+ *  be shepherded through. This batch focuses on the four that dominate
+ *  real pastoral data — direct group leadership, direct team
+ *  leadership, care-roster assignments, and direct person assignments
+ *  — because those are the only ones that actually carry meaningful
+ *  volume per flock. The rarer paths (group_type / service_type /
+ *  team_position / membership_type / reference_list / shepherd_team
+ *  expansions) are skipped here; if a co-shepherd relationship exists
+ *  ONLY through one of those it won't surface, but the alternative is
+ *  the N+1 we're trying to kill.
+ *
+ *  Fixed query count: 5 indexed queries regardless of flock size, vs.
+ *  the previous ~12 × N pattern. */
+export function getCoShepherdsBatch(
+  orgId: number,
+  personIds: string[],
+  excludeShepherdId: string,
+): Map<string, Array<{ shepherdId: string; shepherdName: string }>> {
+  const out = new Map<
+    string,
+    Array<{ shepherdId: string; shepherdName: string }>
+  >();
+  const flock = [...new Set(personIds.filter((p) => p !== excludeShepherdId))];
+  if (flock.length === 0) return out;
+  const db = getDb();
+  const ph = inPlaceholders(flock.length);
+
+  // accumulated other-shepherd ids per flock person (deduped)
+  const byPerson = new Map<string, Set<string>>();
+  function add(personId: string, shepherdId: string): void {
+    if (shepherdId === excludeShepherdId) return;
+    if (shepherdId === personId) return;
+    let s = byPerson.get(personId);
+    if (!s) {
+      s = new Set();
+      byPerson.set(personId, s);
+    }
+    s.add(shepherdId);
+  }
+
+  // 1) Other group leaders of any group a flock member is a NON-leader
+  //    member of. The self-join finds (member-side row, leader-side
+  //    row) pairs in one indexed scan.
+  for (const r of db
+    .prepare(
+      `SELECT mm.person_id AS personId,
+              ml.person_id AS shepherdId
+         FROM pco_group_memberships mm
+         JOIN pco_group_memberships ml
+           ON ml.org_id = mm.org_id
+          AND ml.group_id = mm.group_id
+          AND ml.archived_at IS NULL
+          AND lower(coalesce(ml.role,'')) LIKE '%leader%'
+         JOIN pco_groups g
+           ON g.org_id = mm.org_id AND g.pco_id = mm.group_id
+        WHERE mm.org_id = ?
+          AND mm.person_id IN (${ph})
+          AND mm.archived_at IS NULL
+          AND g.archived_at IS NULL
+          AND lower(coalesce(mm.role,'')) NOT LIKE '%leader%'`,
+    )
+    .all(orgId, ...flock) as Array<{
+    personId: string;
+    shepherdId: string;
+  }>) {
+    add(r.personId, r.shepherdId);
+  }
+
+  // 2) Other team leaders of any team a flock member is a non-leader
+  //    of. Same self-join pattern.
+  for (const r of db
+    .prepare(
+      `SELECT mm.person_id AS personId,
+              ml.person_id AS shepherdId
+         FROM pco_team_memberships mm
+         JOIN pco_team_memberships ml
+           ON ml.org_id = mm.org_id
+          AND ml.team_id = mm.team_id
+          AND ml.archived_at IS NULL
+          AND ml.person_id != ''
+          AND ml.is_team_leader = 1
+         JOIN pco_teams t
+           ON t.org_id = mm.org_id AND t.pco_id = mm.team_id
+        WHERE mm.org_id = ?
+          AND mm.person_id IN (${ph})
+          AND mm.archived_at IS NULL AND mm.person_id != ''
+          AND mm.is_team_leader = 0
+          AND t.archived_at IS NULL AND t.deleted_at IS NULL`,
+    )
+    .all(orgId, ...flock) as Array<{
+    personId: string;
+    shepherdId: string;
+  }>) {
+    add(r.personId, r.shepherdId);
+  }
+
+  // 3) Care assignments — anyone else carrying this flock person on
+  //    their care roster.
+  for (const r of db
+    .prepare(
+      `SELECT person_id AS personId,
+              shepherd_person_id AS shepherdId
+         FROM care_assignments
+        WHERE org_id = ?
+          AND person_id IN (${ph})`,
+    )
+    .all(orgId, ...flock) as Array<{
+    personId: string;
+    shepherdId: string;
+  }>) {
+    add(r.personId, r.shepherdId);
+  }
+
+  // 4) Direct person-kind shepherd_assignments to any flock member.
+  for (const r of db
+    .prepare(
+      `SELECT target_id AS personId,
+              shepherd_person_id AS shepherdId
+         FROM shepherd_assignments
+        WHERE org_id = ?
+          AND target_kind = 'person'
+          AND target_id IN (${ph})`,
+    )
+    .all(orgId, ...flock) as Array<{
+    personId: string;
+    shepherdId: string;
+  }>) {
+    add(r.personId, r.shepherdId);
+  }
+
+  // 5) Single batched name decryption for every shepherd id we collected.
+  const allShepherds = new Set<string>();
+  for (const s of byPerson.values()) for (const id of s) allShepherds.add(id);
+  const names = namesFor(orgId, [...allShepherds]);
+
+  for (const [personId, shepherdSet] of byPerson.entries()) {
+    const list: Array<{ shepherdId: string; shepherdName: string }> = [];
+    for (const sid of shepherdSet) {
+      const ref = names.get(sid);
+      list.push({
+        shepherdId: sid,
+        shepherdName: ref?.fullName ?? `(unknown #${sid})`,
+      });
+    }
+    list.sort((a, b) => a.shepherdName.localeCompare(b.shepherdName));
+    out.set(personId, list);
+  }
+  return out;
+}
+
 /** Batch variant of getLeaderOverseers — does the whole computation
  *  for N people in a small fixed number of queries instead of
  *  N × ~6 per-person calls. Used by the /shepherds list to eliminate

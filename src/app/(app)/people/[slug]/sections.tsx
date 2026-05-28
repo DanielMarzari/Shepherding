@@ -6,6 +6,7 @@ import { listGroupsAttendedByPerson } from "@/lib/community-lane";
 import { listTeamMembershipsByPerson } from "@/lib/serve-lane";
 import {
   type PersonRef,
+  getCoShepherdsBatch,
   getShepherdees,
   getShepherds,
 } from "@/lib/shepherd-graph";
@@ -147,20 +148,22 @@ export async function ShepherdingOverview({
   }
 
   // Split: exclusive (no other shepherd reaches them) vs co-shepherded.
+  // The "other shepherds" lookup is batched into a fixed number of
+  // queries via getCoShepherdsBatch — the previous per-person
+  // getShepherds() call was an N+1 that dominated profile-page load
+  // time for any pastor with a sizable flock.
+  const flockPersonIds = [...flock.keys()];
+  const othersByPerson = getCoShepherdsBatch(orgId, flockPersonIds, slug);
   const exclusive: Array<{ person: PersonRef; sub?: string }> = [];
   const coShepherded: Array<{ person: PersonRef; sub?: string }> = [];
   for (const [pid, e] of flock) {
-    const others = new Map<string, string>();
-    for (const link of getShepherds(orgId, pid)) {
-      if (link.shepherd.personId === slug) continue;
-      others.set(link.shepherd.personId, link.shepherd.fullName);
-    }
-    if (others.size === 0) {
+    const others = othersByPerson.get(pid) ?? [];
+    if (others.length === 0) {
       exclusive.push({ person: e.ref, sub: [...e.vias].join(" · ") });
     } else {
       coShepherded.push({
         person: e.ref,
-        sub: withLabel([...others.values()]),
+        sub: withLabel(others.map((o) => o.shepherdName)),
       });
     }
   }
