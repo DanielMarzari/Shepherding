@@ -9,6 +9,8 @@ import {
   listCareAssignments,
   listCareCandidates,
 } from "@/lib/care-read";
+import { getSyncSettings } from "@/lib/pco";
+import { getClassificationCounts } from "@/lib/people-read";
 import { CareAssignPanel } from "./CareAssignPanel";
 import { removeCareAssignmentAction } from "./actions";
 
@@ -35,6 +37,18 @@ export default async function CareMapPage({
     0,
   );
 
+  // Reconciliation against the /people "Active" count. Care candidates
+  // = active adults not already on a roster, so the gap to the raw
+  // Active number is exactly (active kids, who aren't care-assigned) +
+  // (people already assigned). Surface it so the Unassigned number
+  // never looks mysteriously short of Active.
+  const settings = getSyncSettings(session.orgId);
+  const counts = getClassificationCounts(
+    session.orgId,
+    settings.activityMonths,
+  );
+  const activeKids = counts.activeKids;
+
   // Even-split estimate: if the whole Active category were divided
   // across the shepherd team, how many people would each carry?
   const activeTotal = countActiveNotShepherded(session.orgId);
@@ -60,6 +74,15 @@ export default async function CareMapPage({
             label={`Unassigned (${includePresent ? "active + present" : "active"})`}
             value={candidates.length.toLocaleString()}
             valueTone={candidates.length > 0 ? "warn" : "good"}
+            delta={
+              activeKids > 0 || assignedCount > 0
+                ? `${counts.active.toLocaleString()} active − ${activeKids.toLocaleString()} kids${
+                    assignedCount > 0
+                      ? ` − ${assignedCount.toLocaleString()} assigned`
+                      : ""
+                  }`
+                : "active adults, not yet assigned"
+            }
           />
           <Stat label="On a care roster" value={assignedCount.toLocaleString()} />
           <Stat label="Shepherd team" value={shepherds.length.toLocaleString()} />
