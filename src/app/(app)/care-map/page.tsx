@@ -38,16 +38,16 @@ export default async function CareMapPage({
   );
 
   // Reconciliation against the /people "Active" count. Care candidates
-  // = active adults not already on a roster, so the gap to the raw
-  // Active number is exactly (active kids, who aren't care-assigned) +
-  // (people already assigned). Surface it so the Unassigned number
-  // never looks mysteriously short of Active.
+  // = active ADULTS not already on a roster. /people's Active headline
+  // is also adults-only (kids shown separately), and both now use the
+  // identical shepherded definition, so the only gap is people already
+  // on a roster. Surface the math so the number isn't a mystery.
   const settings = getSyncSettings(session.orgId);
   const counts = getClassificationCounts(
     session.orgId,
     settings.activityMonths,
   );
-  const activeKids = counts.activeKids;
+  const activeAdults = counts.active - counts.activeKids;
 
   // Even-split estimate: if the whole Active category were divided
   // across the shepherd team, how many people would each carry?
@@ -75,13 +75,9 @@ export default async function CareMapPage({
             value={candidates.length.toLocaleString()}
             valueTone={candidates.length > 0 ? "warn" : "good"}
             delta={
-              activeKids > 0 || assignedCount > 0
-                ? `${counts.active.toLocaleString()} active − ${activeKids.toLocaleString()} kids${
-                    assignedCount > 0
-                      ? ` − ${assignedCount.toLocaleString()} assigned`
-                      : ""
-                  }`
-                : "active adults, not yet assigned"
+              assignedCount > 0
+                ? `${activeAdults.toLocaleString()} active adults − ${assignedCount.toLocaleString()} assigned`
+                : `${activeAdults.toLocaleString()} active adults, none assigned yet`
             }
           />
           <Stat label="On a care roster" value={assignedCount.toLocaleString()} />

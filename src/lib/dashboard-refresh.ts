@@ -1,6 +1,7 @@
 import "server-only";
 import { getDb } from "./db";
 import { getSyncSettings } from "./pco";
+import { populateShepherdedTempTable } from "./people-read";
 
 const MS_PER_DAY = 86_400_000;
 const MS_PER_MONTH = 30 * MS_PER_DAY;
@@ -804,10 +805,19 @@ function rebuildPersonActivity(
  *  the refresh progress bar can report it as its own step. */
 function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
   const db = getDb();
+  // Build the canonical shepherded set — the SAME definition /people
+  // (live path) and /care-map use: it honors excluded group/team
+  // types + positions AND the dependent-check-in shepherding path.
+  // The old shortcut here ("active_group_count>0 OR active_team_count
+  // >0") ignored both, so the snapshot's active/shepherded split
+  // diverged from the live computation — care showed 1,452 active
+  // adults while /people (snapshot) showed 1,466. Using shep_set keeps
+  // them identical.
+  populateShepherdedTempTable(orgId);
   db.prepare(
     `UPDATE person_activity
         SET classification = CASE
-              WHEN active_group_count > 0 OR active_team_count > 0
+              WHEN person_id IN (SELECT person_id FROM temp.shep_set)
                    THEN 'shepherded'
               WHEN (last_form_at IS NOT NULL AND last_form_at >= ?)
                 OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?)
