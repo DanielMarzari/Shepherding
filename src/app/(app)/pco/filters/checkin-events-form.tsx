@@ -14,31 +14,35 @@ interface Stat {
   lastEventAt: string | null;
 }
 
-type Kind = "kid" | "adult" | "ignore";
+type Kind = "kid" | "adult" | "ignore" | "neutral";
 
 export function CheckinEventsForm({
   stats,
   initialExcluded,
   initialAdult,
+  initialKid,
   isAdmin,
 }: {
   stats: Stat[];
   initialExcluded: string[];
   initialAdult: string[];
+  initialKid: string[];
   isAdmin: boolean;
 }) {
-  // Reconstruct the per-event kind. Default = kid; adult overrides
-  // ignore (we store adult ids in both lists, but adult is the more
-  // specific signal).
+  // Reconstruct the per-event kind. Default = neutral (uncategorized,
+  // no age implication). kid / adult / ignore are explicit. Priority
+  // when an id somehow appears in multiple lists: kid > adult > ignore.
   const initialKinds = useMemo(() => {
     const m = new Map<string, Kind>();
+    const kidSet = new Set(initialKid);
     const adultSet = new Set(initialAdult);
     const excludedSet = new Set(initialExcluded);
     for (const id of excludedSet) {
       m.set(id, adultSet.has(id) ? "adult" : "ignore");
     }
+    for (const id of kidSet) m.set(id, "kid");
     return m;
-  }, [initialAdult, initialExcluded]);
+  }, [initialKid, initialAdult, initialExcluded]);
   const [kinds, setKinds] = useState<Map<string, Kind>>(initialKinds);
   const [showArchived, setShowArchived] = useState(false);
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
@@ -58,20 +62,22 @@ export function CheckinEventsForm({
     let kid = 0;
     let adult = 0;
     let ignore = 0;
+    let neutral = 0;
     for (const s of stats) {
       if (s.archivedAt) continue;
-      const k = kinds.get(s.eventId) ?? "kid";
+      const k = kinds.get(s.eventId) ?? "neutral";
       if (k === "kid") kid++;
       else if (k === "adult") adult++;
-      else ignore++;
+      else if (k === "ignore") ignore++;
+      else neutral++;
     }
-    return { kid, adult, ignore };
+    return { kid, adult, ignore, neutral };
   }, [stats, kinds]);
 
   function setKind(id: string, kind: Kind) {
     setKinds((prev) => {
       const next = new Map(prev);
-      if (kind === "kid") next.delete(id);
+      if (kind === "neutral") next.delete(id);
       else next.set(id, kind);
       return next;
     });
@@ -82,9 +88,12 @@ export function CheckinEventsForm({
       <div className="px-5 py-3 border-b border-border-soft flex items-center justify-between gap-4 flex-wrap">
         <p className="text-xs text-muted max-w-2xl">
           Tag each check-in event so the kid/shepherded math runs on the
-          right ones. <span className="text-good-soft-fg">Kid</span> (default)
-          counts toward Shepherded + implies minor for unknown-birthdate
-          people. <span className="text-accent">Adult</span> excludes from
+          right ones. <span className="text-fg">Other</span> (default)
+          counts toward Shepherded with no age implication.{" "}
+          <span className="text-good-soft-fg">Kid</span> counts toward
+          Shepherded + implies minor for unknown-birthdate people (a
+          dependent check-in by a parent flips them to kid).{" "}
+          <span className="text-accent">Adult</span> excludes from
           Shepherded + implies adult (Office Visitors, adult Bible studies).
           <span className="text-warn-soft-fg"> Ignore</span> excludes
           without any age implication.
@@ -103,14 +112,16 @@ export function CheckinEventsForm({
       </div>
       <ul className="divide-y divide-border-softer">
         {visible.map((s) => {
-          const kind = kinds.get(s.eventId) ?? "kid";
+          const kind = kinds.get(s.eventId) ?? "neutral";
           const isArchived = !!s.archivedAt;
           const rowTone =
             kind === "adult"
               ? "bg-accent-soft-bg/20"
               : kind === "ignore"
                 ? "bg-warn-soft-bg/20"
-                : "";
+                : kind === "kid"
+                  ? "bg-good-soft-bg/20"
+                  : "";
           return (
             <li
               key={s.eventId}
@@ -155,9 +166,12 @@ export function CheckinEventsForm({
                       ? "text-good-soft-fg"
                       : kind === "adult"
                         ? "text-accent"
-                        : "text-warn-soft-fg"
+                        : kind === "ignore"
+                          ? "text-warn-soft-fg"
+                          : "text-muted"
                   }`}
                 >
+                  <option value="neutral">Other (default)</option>
                   <option value="kid">Kid event</option>
                   <option value="adult">Adult event</option>
                   <option value="ignore">Ignore</option>
@@ -183,6 +197,8 @@ export function CheckinEventsForm({
               <span className="text-accent">{counts.adult} adult</span>
               <span className="mx-1.5">·</span>
               <span className="text-warn-soft-fg">{counts.ignore} ignored</span>
+              <span className="mx-1.5">·</span>
+              <span className="text-muted">{counts.neutral} other</span>
             </>
           )}
         </div>

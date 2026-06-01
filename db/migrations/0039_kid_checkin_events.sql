@@ -1,0 +1,12 @@
+-- Explicit "kids program" check-in events. Until now "Kid" was the
+-- DEFAULT for any uncategorized check-in event, and the is_minor
+-- overlay flipped any no-birthdate person checked into a non-excluded
+-- event to minor. That mis-flagged adults who happened to be checked
+-- into uncategorized events (greeter sign-ins, serving stations, etc.)
+-- as kids.
+--
+-- New model: only events explicitly designated as kids programs imply
+-- minor. A no-birthdate person defaults to ADULT unless they have a
+-- dependent check-in to one of these events. NULL / empty = no events
+-- imply minor (everyone unknown defaults adult).
+ALTER TABLE pco_sync_settings ADD COLUMN kid_checkin_events TEXT;

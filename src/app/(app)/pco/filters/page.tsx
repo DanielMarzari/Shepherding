@@ -13,6 +13,7 @@ import {
   getServiceTypeStats,
   getAdultCheckinEvents,
   getExcludedCheckinEvents,
+  getKidCheckinEvents,
   getTeamPositionStats,
 } from "@/lib/pco";
 import { CheckinEventsForm } from "./checkin-events-form";
@@ -59,6 +60,7 @@ export default async function FiltersPage({
   const checkinStats = getCheckinEventStats(session.orgId);
   const excludedCheckin = getExcludedCheckinEvents(session.orgId);
   const adultCheckin = getAdultCheckinEvents(session.orgId);
+  const kidCheckin = getKidCheckinEvents(session.orgId);
 
   return (
     <AppShell active="Filters" breadcrumb="Settings › Filters">
@@ -160,6 +162,7 @@ export default async function FiltersPage({
                 stats={checkinStats}
                 initialExcluded={excludedCheckin}
                 initialAdult={adultCheckin}
+                initialKid={kidCheckin}
                 isAdmin={session.role === "admin"}
               />
             )}

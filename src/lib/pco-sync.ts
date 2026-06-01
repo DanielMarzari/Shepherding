@@ -5,7 +5,7 @@ import { getDb } from "./db";
 import {
   getAdultCheckinEvents,
   getDecryptedCreds,
-  getExcludedCheckinEvents,
+  getKidCheckinEvents,
   getSyncEntities,
   getSyncSettings,
 } from "./pco";
@@ -839,29 +839,18 @@ function refreshIsMinor(orgId: number) {
   }
   tx(batch);
 
-  // Overlay pass: flip a no-birthday person to is_minor=1 ONLY when a
-  // check-in carries the dependent signal — it was done BY SOMEONE ELSE
-  // (a parent / guardian checked them in). The default for an unknown
-  // birthday is ADULT; a bare check-in is not enough to override that,
-  // because adults self-check-in to plenty of non-excluded events. The
-  // birth_year IS NULL guard keeps PCO-known ages safe.
-  const excludedEvents = getExcludedCheckinEvents(orgId);
-  if (excludedEvents.length === 0) {
-    db.prepare(
-      `UPDATE pco_people
-          SET is_minor = 1
-        WHERE org_id = ?
-          AND birth_year IS NULL
-          AND pco_id IN (
-            SELECT DISTINCT person_id
-              FROM pco_check_ins
-             WHERE org_id = ? AND person_id IS NOT NULL
-               AND checked_in_by_id IS NOT NULL
-               AND checked_in_by_id != person_id
-          )`,
-    ).run(orgId, orgId);
-  } else {
-    const placeholders = excludedEvents.map(() => "?").join(",");
+  // Overlay pass: flip a no-birthday person to is_minor=1 ONLY when
+  // they have a DEPENDENT check-in (done BY SOMEONE ELSE — a parent /
+  // guardian) to an event the admin has explicitly marked as a KIDS
+  // program. The default for an unknown birthday is ADULT; being
+  // checked into an uncategorized event is NOT enough — adults get
+  // checked into greeter stations, serving sign-ins, etc. by others
+  // all the time. With no kid events configured, nothing flips
+  // (everyone unknown stays adult). The birth_year IS NULL guard
+  // keeps PCO-known ages safe.
+  const kidEvents = getKidCheckinEvents(orgId);
+  if (kidEvents.length > 0) {
+    const placeholders = kidEvents.map(() => "?").join(",");
     db.prepare(
       `UPDATE pco_people
           SET is_minor = 1
@@ -874,9 +863,9 @@ function refreshIsMinor(orgId: number) {
                AND person_id IS NOT NULL
                AND checked_in_by_id IS NOT NULL
                AND checked_in_by_id != person_id
-               AND event_id NOT IN (${placeholders})
+               AND event_id IN (${placeholders})
           )`,
-    ).run(orgId, orgId, ...excludedEvents);
+    ).run(orgId, orgId, ...kidEvents);
   }
 
   // Second overlay: the ADULT-event list. Runs AFTER the kid-event

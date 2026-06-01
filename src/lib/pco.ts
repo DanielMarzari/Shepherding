@@ -587,6 +587,71 @@ export function saveAdultCheckinEvents(orgId: number, ids: string[]) {
   }
 }
 
+/** Check-in events the admin has explicitly marked as KIDS programs.
+ *  These are the ONLY events that imply a no-birthdate person is a
+ *  minor: a dependent check-in (done by someone else) to one of them
+ *  flips is_minor=1. An empty list means nothing auto-implies minor —
+ *  unknown-birthday people default to adult. */
+export const getKidCheckinEvents = cache(getKidCheckinEventsImpl);
+function getKidCheckinEventsImpl(orgId: number): string[] {
+  const row = getDb()
+    .prepare(
+      "SELECT kid_checkin_events FROM pco_sync_settings WHERE org_id = ?",
+    )
+    .get(orgId) as { kid_checkin_events: string | null } | undefined;
+  if (!row?.kid_checkin_events) return [];
+  try {
+    const parsed = JSON.parse(row.kid_checkin_events);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveKidCheckinEvents(orgId: number, ids: string[]) {
+  const cleaned = Array.from(new Set(ids.filter(Boolean)));
+  const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) saveSyncSettings(orgId, getSyncSettings(orgId));
+  getDb()
+    .prepare(
+      "UPDATE pco_sync_settings SET kid_checkin_events = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
+    )
+    .run(json, orgId);
+
+  // Recompute the minor flag for everyone with no birthdate on file,
+  // immediately — so the dropdown change corrects mis-flagged adults
+  // without waiting for the next sync. People WITH a known birthday
+  // keep their birthday-derived flag (untouched). Null-birthday
+  // people: minor=1 iff they have a dependent (checked-in-by-other)
+  // check-in to one of the designated kid events; else 0.
+  const db = getDb();
+  db.prepare(
+    `UPDATE pco_people SET is_minor = 0
+      WHERE org_id = ? AND birth_year IS NULL`,
+  ).run(orgId);
+  if (cleaned.length > 0) {
+    const placeholders = cleaned.map(() => "?").join(",");
+    db.prepare(
+      `UPDATE pco_people
+          SET is_minor = 1
+        WHERE org_id = ?
+          AND birth_year IS NULL
+          AND pco_id IN (
+            SELECT DISTINCT person_id
+              FROM pco_check_ins
+             WHERE org_id = ?
+               AND person_id IS NOT NULL
+               AND checked_in_by_id IS NOT NULL
+               AND checked_in_by_id != person_id
+               AND event_id IN (${placeholders})
+          )`,
+    ).run(orgId, orgId, ...cleaned);
+  }
+}
+
 export function saveExcludedCheckinEvents(orgId: number, ids: string[]) {
   const cleaned = Array.from(new Set(ids.filter(Boolean)));
   const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);

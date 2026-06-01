@@ -9,6 +9,7 @@ import {
   saveExcludedMembershipTypes,
   saveExcludedTeamPositions,
   saveExcludedTeamTypes,
+  saveKidCheckinEvents,
 } from "@/lib/pco";
 
 export interface FilterSaveState {
@@ -76,24 +77,28 @@ export async function saveCheckinEventsAction(
   if (s.role !== "admin") {
     return { status: "error", message: "Only admins can change filters." };
   }
-  // Each event row submits checkin_event_kind[event_id] = "kid" | "adult" | "ignore".
-  // Default ("kid") doesn't need to be sent. We collect adult + ignore
-  // ids and write them to the two list columns. Adult events are ALSO
-  // added to the excluded list so they don't contribute to the kid
-  // shepherded count (a kid wouldn't be in Office Visitors).
+  // Each event row submits checkin_event_kind[event_id] =
+  //   "kid" | "adult" | "ignore" | "neutral".
+  // "neutral" is the new default — uncategorized, no age implication
+  // (counts toward shepherded but never flips is_minor). Only events
+  // explicitly tagged "kid" go in the kid list and can imply minor.
+  const kidIds: string[] = [];
   const adultIds: string[] = [];
   const ignoreIds: string[] = [];
   for (const [key, value] of formData.entries()) {
     const m = key.match(/^checkin_event_kind\[(.+)\]$/);
     if (!m) continue;
     const eventId = m[1];
-    if (value === "adult") adultIds.push(eventId);
+    if (value === "kid") kidIds.push(eventId);
+    else if (value === "adult") adultIds.push(eventId);
     else if (value === "ignore") ignoreIds.push(eventId);
   }
-  // Adult events are excluded from the kid count too.
+  // Adult + ignore events are excluded from the shepherded check-in
+  // count. Kid + neutral events count toward it (they're not excluded).
   const excludedIds = Array.from(new Set([...ignoreIds, ...adultIds]));
   saveExcludedCheckinEvents(s.orgId, excludedIds);
   saveAdultCheckinEvents(s.orgId, adultIds);
+  saveKidCheckinEvents(s.orgId, kidIds);
   revalidatePath("/pco/filters");
   revalidatePath("/people");
   revalidatePath("/metrics");
@@ -102,6 +107,8 @@ export async function saveCheckinEventsAction(
   revalidatePath("/lanes/care");
   revalidatePath("/checkins");
   const summary: string[] = [];
+  if (kidIds.length > 0)
+    summary.push(`${kidIds.length} kid event${kidIds.length === 1 ? "" : "s"}`);
   if (adultIds.length > 0)
     summary.push(`${adultIds.length} adult event${adultIds.length === 1 ? "" : "s"}`);
   if (ignoreIds.length > 0)
@@ -110,8 +117,8 @@ export async function saveCheckinEventsAction(
     status: "saved",
     message:
       summary.length === 0
-        ? "Every check-in event counts as a kid event."
-        : `Marked ${summary.join(" + ")}; the rest count as kid events.`,
+        ? "No events tagged — unknown-birthday people default to adult."
+        : `Marked ${summary.join(" + ")}.`,
   };
 }
 
