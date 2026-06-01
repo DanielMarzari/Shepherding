@@ -429,9 +429,14 @@ function buildOrderBy(sort: SortColumn, dir: SortDir, cutoff: string): string {
       return `ORDER BY ${expr} ${direction}, pco_updated_at DESC`;
     }
     case "age":
-      // birth_year ASC = oldest first; DESC = youngest (kids) first.
-      // NULLs (no birthdate on file) sort last either way.
-      return `ORDER BY birth_year ${direction} ${nulls}, pco_updated_at DESC`;
+      // The Age column only shows a Kid / Adult badge (driven by
+      // is_minor), so the sort groups by that SAME flag — otherwise a
+      // minor flagged via a kids-event check-in but with no birthdate
+      // on file (birth_year NULL) would sort to the very end and the
+      // "kids" would seem to vanish, even though the count says they
+      // exist. DESC = kids first; within each group, birth_year orders
+      // youngest/oldest, NULLs last.
+      return `ORDER BY is_minor ${direction}, birth_year ${direction} ${nulls}, pco_updated_at DESC`;
     case "name":
       // Names live encrypted in enc_pii — they can't be ORDER BY'd in
       // SQL. listPeople detects sort === "name" and takes a
