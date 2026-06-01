@@ -11,6 +11,7 @@ import {
 } from "@/lib/care-read";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
+import { listKnownMarksByPerson } from "@/lib/shepherd-intake";
 import { CareAssignPanel } from "./CareAssignPanel";
 import { removeCareAssignmentAction } from "./actions";
 
@@ -48,6 +49,16 @@ export default async function CareMapPage({
     settings.activityMonths,
   );
   const activeAdults = counts.active - counts.activeKids;
+
+  // "I know them" marks from the public /know intake page, keyed by
+  // person → shepherd names. Surfaced on the assign panel so the admin
+  // can prioritize the relationships shepherds have already flagged.
+  const knownMarks = listKnownMarksByPerson(session.orgId);
+  const knownBy: Record<string, string[]> = {};
+  for (const [personId, marks] of knownMarks) {
+    knownBy[personId] = marks.map((m) => m.shepherdName);
+  }
+  const knownMarkCount = knownMarks.size;
 
   // Even-split estimate: if the whole Active category were divided
   // across the shepherd team, how many people would each carry?
@@ -106,6 +117,32 @@ export default async function CareMapPage({
           />
         </div>
 
+        {isAdmin && (
+          <Card className="p-4 text-xs flex items-baseline justify-between gap-3 flex-wrap">
+            <span className="text-muted">
+              Shepherds can flag who they personally know at{" "}
+              <span className="font-mono text-fg">/know</span> (public,
+              email sign-in).{" "}
+              {knownMarkCount > 0 ? (
+                <span className="text-accent">
+                  {knownMarkCount.toLocaleString()}{" "}
+                  {knownMarkCount === 1 ? "person has" : "people have"} been
+                  flagged — they sort to the top with a “known by” tag.
+                </span>
+              ) : (
+                "No one's been flagged yet."
+              )}
+            </span>
+            <Link
+              href="/know"
+              target="_blank"
+              className="text-accent hover:underline shrink-0"
+            >
+              Open intake page ↗
+            </Link>
+          </Card>
+        )}
+
         <Card className="p-5">
           <h2 className="text-sm font-semibold mb-1">Assign people</h2>
           <p className="text-xs text-muted mb-4">
@@ -121,6 +158,7 @@ export default async function CareMapPage({
                 personId: s.personId,
                 fullName: s.fullName,
               }))}
+              knownBy={knownBy}
             />
           ) : (
             <p className="text-sm text-muted">

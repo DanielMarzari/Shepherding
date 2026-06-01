@@ -19,19 +19,34 @@ interface ShepherdOption {
 export function CareAssignPanel({
   candidates,
   shepherds,
+  knownBy = {},
 }: {
   candidates: CareCandidate[];
   shepherds: ShepherdOption[];
+  /** personId → names of shepherd-team members who marked "I know
+   *  them" on the public intake page. A hint for assignment, not an
+   *  assignment itself. */
+  knownBy?: Record<string, string[]>;
 }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [shepherdId, setShepherdId] = useState("");
+  const [knownOnly, setKnownOnly] = useState(false);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return candidates;
-    return candidates.filter((c) => c.fullName.toLowerCase().includes(q));
-  }, [candidates, query]);
+    let base = candidates;
+    if (q) base = base.filter((c) => c.fullName.toLowerCase().includes(q));
+    if (knownOnly) base = base.filter((c) => (knownBy[c.personId]?.length ?? 0) > 0);
+    // People a shepherd already flagged as known bubble to the top —
+    // they're the readiest assignments.
+    return [...base].sort((a, b) => {
+      const ak = knownBy[a.personId]?.length ?? 0;
+      const bk = knownBy[b.personId]?.length ?? 0;
+      if ((ak > 0) !== (bk > 0)) return ak > 0 ? -1 : 1;
+      return a.fullName.localeCompare(b.fullName);
+    });
+  }, [candidates, query, knownOnly, knownBy]);
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -72,6 +87,17 @@ export function CareAssignPanel({
           placeholder="Search names…"
           className="bg-bg-elev-2 border border-border-soft rounded px-2.5 py-1.5 text-sm text-fg placeholder:text-subtle flex-1 min-w-[12rem]"
         />
+        {Object.keys(knownBy).length > 0 && (
+          <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              checked={knownOnly}
+              onChange={(e) => setKnownOnly(e.target.checked)}
+              className="accent-[var(--accent)] w-3.5 h-3.5"
+            />
+            Marked known only
+          </label>
+        )}
         <span className="text-xs text-muted tnum">
           {selected.size.toLocaleString()} selected · {filtered.length}{" "}
           shown
@@ -113,6 +139,15 @@ export function CareAssignPanel({
                 <span className="font-medium text-sm truncate flex-1">
                   {c.fullName}
                 </span>
+                {(knownBy[c.personId]?.length ?? 0) > 0 && (
+                  <span
+                    title={`Marked known by: ${knownBy[c.personId].join(", ")}`}
+                  >
+                    <Pill tone="accent">
+                      known by {knownBy[c.personId].length}
+                    </Pill>
+                  </span>
+                )}
                 <Pill tone={c.classification === "active" ? "good" : "muted"}>
                   {c.classification}
                 </Pill>

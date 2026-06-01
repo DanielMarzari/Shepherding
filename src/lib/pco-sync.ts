@@ -1,6 +1,6 @@
 import "server-only";
 import { refreshDashboardSnapshots } from "./dashboard-refresh";
-import { decryptJson, encryptJson } from "./encryption";
+import { decryptJson, encryptJson, hmac } from "./encryption";
 import { getDb } from "./db";
 import {
   getAdultCheckinEvents,
@@ -348,7 +348,7 @@ async function syncPeople(
   cutoff: string | null,
 ): Promise<{ fetched: number; upserted: number; maxUpdatedAt: string | null }> {
   const params = new URLSearchParams({
-    include: "addresses,marital_status",
+    include: "addresses,marital_status,emails",
     per_page: "100",
     order: "updated_at",
   });
@@ -364,9 +364,11 @@ async function syncPeople(
     const included = page.included ?? [];
     const addressById = new Map<string, PCOResource>();
     const maritalById = new Map<string, PCOResource>();
+    const emailById = new Map<string, PCOResource>();
     for (const inc of included) {
       if (inc.type === "Address") addressById.set(inc.id, inc);
       if (inc.type === "MaritalStatus") maritalById.set(inc.id, inc);
+      if (inc.type === "Email") emailById.set(inc.id, inc);
     }
 
     for (const p of records) {
@@ -427,10 +429,50 @@ async function syncPeople(
         inactivatedAt: (attrs.inactivated_at as string | undefined) ?? null,
       });
       upserted++;
+
+      // Email-hash lookup for the public shepherd-intake page. We
+      // store only the keyed HMAC of each lowercased address — never
+      // the plaintext — so a shepherd can identify by email without us
+      // holding raw addresses at rest.
+      const emailRel = rels.emails?.data;
+      const emailIds: string[] = Array.isArray(emailRel)
+        ? emailRel.map((r) => r.id)
+        : emailRel
+          ? [emailRel.id]
+          : [];
+      const hashes = new Set<string>();
+      for (const id of emailIds) {
+        const e = emailById.get(id);
+        const addr = (e?.attributes as Record<string, unknown> | undefined)
+          ?.address;
+        if (typeof addr === "string" && addr.includes("@")) {
+          hashes.add(hmac(addr.trim().toLowerCase()));
+        }
+      }
+      replacePersonEmails(orgId, p.id, [...hashes]);
     }
   }
 
   return { fetched, upserted, maxUpdatedAt };
+}
+
+/** Replace the stored email hashes for one person. Cheap delete+insert
+ *  so a removed PCO email drops out of the lookup. */
+function replacePersonEmails(
+  orgId: number,
+  personId: string,
+  hashes: string[],
+): void {
+  const db = getDb();
+  db.prepare(
+    `DELETE FROM pco_person_emails WHERE org_id = ? AND person_id = ?`,
+  ).run(orgId, personId);
+  if (hashes.length === 0) return;
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO pco_person_emails (org_id, person_id, email_hash)
+     VALUES (?, ?, ?)`,
+  );
+  for (const h of hashes) stmt.run(orgId, personId, h);
 }
 
 /** True when a name field looks like a placeholder/system-entry, not a

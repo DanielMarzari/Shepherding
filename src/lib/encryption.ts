@@ -58,3 +58,40 @@ export function decryptJson<T>(payload: string | null | undefined): T | null {
     return null;
   }
 }
+
+/** Keyed HMAC-SHA256 hex digest, keyed by the app ENCRYPTION_KEY. Used
+ *  as a one-way lookup token — e.g. hashing an email so we can match a
+ *  person by email without ever storing the plaintext address at rest.
+ *  Deterministic, so the same input always yields the same digest. */
+export function hmac(value: string): string {
+  return crypto.createHmac("sha256", getKey()).update(value).digest("hex");
+}
+
+/** Sign an arbitrary string with the app key. Returns "<value>.<sig>".
+ *  Used for stateless signed cookies (the public shepherd-intake
+ *  session). verifySigned returns the original value only if the
+ *  signature checks out. */
+export function sign(value: string): string {
+  const sig = crypto
+    .createHmac("sha256", getKey())
+    .update(value)
+    .digest("base64url");
+  return `${value}.${sig}`;
+}
+
+export function verifySigned(token: string | undefined | null): string | null {
+  if (!token) return null;
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const value = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = crypto
+    .createHmac("sha256", getKey())
+    .update(value)
+    .digest("base64url");
+  // Constant-time compare to avoid leaking via timing.
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  return value;
+}
