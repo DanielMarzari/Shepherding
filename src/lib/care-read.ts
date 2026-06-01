@@ -55,7 +55,13 @@ function nameParts(encPii: string | null): {
 }
 
 function activityCutoff(orgId: number): string {
-  const months = getSyncSettings(orgId).activityTrackingMonths;
+  // Use activityMonths — the SAME window the "Active" classification
+  // uses on /people, /home, etc. Previously this used
+  // activityTrackingMonths (default 3) while the classification uses
+  // activityMonths (default 18), so the care map's "active" set was a
+  // much narrower slice than the Active count it was supposed to
+  // mirror (993 vs 1,466). They now agree on who counts as active.
+  const months = getSyncSettings(orgId).activityMonths;
   return new Date(Date.now() - months * 30 * 24 * 60 * 60 * 1000).toISOString();
 }
 
