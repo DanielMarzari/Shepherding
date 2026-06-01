@@ -1,6 +1,6 @@
 import "server-only";
 import { getDb } from "./db";
-import { getSyncSettings } from "./pco";
+import { getExcludedMembershipTypes, getSyncSettings } from "./pco";
 import { populateShepherdedTempTable } from "./people-read";
 
 const MS_PER_DAY = 86_400_000;
@@ -916,6 +916,18 @@ function rebuildGroupSummary(
 function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
   const db = getDb();
   const cutoff30 = new Date(Date.now() - 30 * MS_PER_DAY).toISOString();
+  // Excluded membership types are dropped from the headline counts so
+  // org_snapshot matches the LIVE getClassificationCounts (which also
+  // excludes them) AND the care map. Without this, the snapshot
+  // counted excluded-membership people as active/present while the
+  // live paths didn't — another source of the /people-vs-care gap.
+  const excludedMem = getExcludedMembershipTypes(orgId);
+  const memSql =
+    excludedMem.length === 0
+      ? ""
+      : ` AND (p.membership_type IS NULL OR p.membership_type NOT IN (${excludedMem
+          .map(() => "?")
+          .join(",")}))`;
   // Totals roll up from person_activity JOIN pco_people for is_minor.
   // Kid sub-counts get stored on the snapshot so the read path doesn't
   // have to re-run this join on every page render.
@@ -947,9 +959,9 @@ function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
        FROM person_activity pa
        JOIN pco_people p
          ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
-       WHERE pa.org_id = ?`,
+       WHERE pa.org_id = ?${memSql}`,
     )
-    .get(orgId) as {
+    .get(orgId, ...excludedMem) as {
     total: number;
     shepherded: number;
     active: number;

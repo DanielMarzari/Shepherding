@@ -84,60 +84,105 @@ export function listCareCandidates(
   includePresent: boolean,
 ): CareCandidate[] {
   const db = getDb();
-  populateShepherdedTempTable(orgId);
-  const cutoff = activityCutoff(orgId);
   const excluded = getExcludedMembershipTypes(orgId);
-
-  const args: (string | number)[] = [orgId, orgId];
-  // Active = form submission or check-in in-window.
-  let predicate = `((p.last_form_submission_at IS NOT NULL AND p.last_form_submission_at >= ?)
-       OR (p.last_check_in_at IS NOT NULL AND p.last_check_in_at >= ?))`;
-  args.push(cutoff, cutoff);
-  if (includePresent) {
-    // Union with Present — a record edited in-window. (Active people
-    // may or may not also satisfy this; the OR covers both tiers.)
-    predicate = `(${predicate}
-       OR (p.pco_updated_at IS NOT NULL AND p.pco_updated_at >= ?))`;
-    args.push(cutoff);
-  }
-
   let excludeSql = "";
+  const excludeArgs: string[] = [];
   if (excluded.length > 0) {
     const ph = excluded.map(() => "?").join(",");
     excludeSql = `AND (p.membership_type IS NULL OR p.membership_type NOT IN (${ph}))`;
-    args.push(...excluded);
+    excludeArgs.push(...excluded);
   }
 
-  const rows = db
-    .prepare(
-      `SELECT p.pco_id, p.enc_pii, p.membership_type, p.is_minor,
-              p.last_form_submission_at, p.last_check_in_at, p.pco_updated_at
-         FROM pco_people p
-         LEFT JOIN temp.shep_set s ON s.person_id = p.pco_id
-        WHERE p.org_id = ?
-          AND s.person_id IS NULL
-          AND p.is_minor = 0
-          AND p.pco_id NOT IN (
-            SELECT person_id FROM care_assignments WHERE org_id = ?
-          )
-          AND ${predicate}
-          ${excludeSql}`,
-    )
-    .all(...args) as CandidateRawRow[];
+  // Source of truth = person_activity (the SAME canonical
+  // classification /people shows). A candidate is an adult classified
+  // active (or present, when that scope is on), not yet on a care
+  // roster. Reading the shared snapshot — rather than recomputing
+  // "active" + "shepherded" with a separate live query — guarantees
+  // /people and /care-map can never disagree on who's active.
+  const hasSnapshot =
+    db
+      .prepare(`SELECT 1 FROM person_activity WHERE org_id = ? LIMIT 1`)
+      .get(orgId) != null;
 
+  let rows: Array<CandidateRawRow & { classification?: string }>;
+  if (hasSnapshot) {
+    const classList = includePresent ? "('active','present')" : "('active')";
+    rows = db
+      .prepare(
+        `SELECT p.pco_id, p.enc_pii, p.membership_type, p.is_minor,
+                p.last_form_submission_at, p.last_check_in_at, p.pco_updated_at,
+                pa.classification AS classification
+           FROM person_activity pa
+           JOIN pco_people p
+             ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
+          WHERE pa.org_id = ?
+            AND pa.classification IN ${classList}
+            AND p.is_minor = 0
+            AND p.pco_id NOT IN (
+              SELECT person_id FROM care_assignments WHERE org_id = ?
+            )
+            ${excludeSql}`,
+      )
+      .all(orgId, orgId, ...excludeArgs) as Array<
+      CandidateRawRow & { classification?: string }
+    >;
+  } else {
+    // Cold-start fallback (snapshot not built yet): compute live with
+    // the canonical shepherded set so the page still works.
+    populateShepherdedTempTable(orgId);
+    const cutoff = activityCutoff(orgId);
+    const args: (string | number)[] = [orgId, orgId];
+    let predicate = `((p.last_form_submission_at IS NOT NULL AND p.last_form_submission_at >= ?)
+         OR (p.last_check_in_at IS NOT NULL AND p.last_check_in_at >= ?))`;
+    args.push(cutoff, cutoff);
+    if (includePresent) {
+      predicate = `(${predicate}
+         OR (p.pco_updated_at IS NOT NULL AND p.pco_updated_at >= ?))`;
+      args.push(cutoff);
+    }
+    args.push(...excludeArgs);
+    rows = db
+      .prepare(
+        `SELECT p.pco_id, p.enc_pii, p.membership_type, p.is_minor,
+                p.last_form_submission_at, p.last_check_in_at, p.pco_updated_at
+           FROM pco_people p
+           LEFT JOIN temp.shep_set s ON s.person_id = p.pco_id
+          WHERE p.org_id = ?
+            AND s.person_id IS NULL
+            AND p.is_minor = 0
+            AND p.pco_id NOT IN (
+              SELECT person_id FROM care_assignments WHERE org_id = ?
+            )
+            AND ${predicate}
+            ${excludeSql}`,
+      )
+      .all(...args) as Array<CandidateRawRow & { classification?: string }>;
+  }
+
+  const liveCutoff = hasSnapshot ? null : activityCutoff(orgId);
   const out: CareCandidate[] = rows.map((r) => {
     const { fullName, initials } = nameParts(r.enc_pii);
-    const isActive =
-      (r.last_form_submission_at !== null &&
-        r.last_form_submission_at >= cutoff) ||
-      (r.last_check_in_at !== null && r.last_check_in_at >= cutoff);
+    // Prefer the snapshot's stored classification; fall back to the
+    // timestamp-derived split on the cold-start path.
+    const classification: "active" | "present" =
+      r.classification === "present"
+        ? "present"
+        : r.classification === "active"
+          ? "active"
+          : liveCutoff &&
+              ((r.last_form_submission_at !== null &&
+                r.last_form_submission_at >= liveCutoff) ||
+                (r.last_check_in_at !== null &&
+                  r.last_check_in_at >= liveCutoff))
+            ? "active"
+            : "present";
     return {
       personId: r.pco_id,
       fullName,
       initials,
       membershipType: r.membership_type,
       isMinor: r.is_minor === 1,
-      classification: isActive ? "active" : "present",
+      classification,
     };
   });
   out.sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -230,28 +275,43 @@ export function getCareCoverage(
   };
 }
 
-/** Total people who could land on a care roster — not shepherded
- *  (no active group / team), not a minor, and engaged in SOME way
- *  in the activity window (form submission, check-in, OR a recent
- *  PCO record update — matching the broader "active + present"
- *  classification rather than the narrower "active = form/check-in"
- *  rule the rest of /care-map's candidate list already uses).
- *
- *  Used as the "Even split per shepherd" denominator so a pastor
- *  sees what the load would look like if every non-shepherded
- *  engaged adult had a touch point — not just the form-submitters. */
+/** Total non-shepherded engaged ADULTS — active + present, minus
+ *  minors. Used as the "Even split per shepherd" denominator. Reads
+ *  the shared person_activity snapshot (same classification /people
+ *  shows) so it can't diverge from the candidate list / Active count.
+ *  Cold-start falls back to a live computation. */
 export function countActiveNotShepherded(orgId: number): number {
   const db = getDb();
-  populateShepherdedTempTable(orgId);
-  const cutoff = activityCutoff(orgId);
   const excluded = getExcludedMembershipTypes(orgId);
-  const args: (string | number)[] = [orgId, cutoff, cutoff, cutoff];
   let excludeSql = "";
+  const excludeArgs: string[] = [];
   if (excluded.length > 0) {
     const ph = excluded.map(() => "?").join(",");
     excludeSql = `AND (p.membership_type IS NULL OR p.membership_type NOT IN (${ph}))`;
-    args.push(...excluded);
+    excludeArgs.push(...excluded);
   }
+  const hasSnapshot =
+    db
+      .prepare(`SELECT 1 FROM person_activity WHERE org_id = ? LIMIT 1`)
+      .get(orgId) != null;
+  if (hasSnapshot) {
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS n
+           FROM person_activity pa
+           JOIN pco_people p
+             ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
+          WHERE pa.org_id = ?
+            AND pa.classification IN ('active','present')
+            AND p.is_minor = 0
+            ${excludeSql}`,
+      )
+      .get(orgId, ...excludeArgs) as { n: number };
+    return row.n;
+  }
+  // Cold-start fallback.
+  populateShepherdedTempTable(orgId);
+  const cutoff = activityCutoff(orgId);
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n
@@ -265,6 +325,6 @@ export function countActiveNotShepherded(orgId: number): number {
             OR (p.pco_updated_at IS NOT NULL AND p.pco_updated_at >= ?))
           ${excludeSql}`,
     )
-    .get(...args) as { n: number };
+    .get(orgId, cutoff, cutoff, cutoff, ...excludeArgs) as { n: number };
   return row.n;
 }
