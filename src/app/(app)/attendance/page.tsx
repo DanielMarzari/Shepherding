@@ -12,6 +12,7 @@ import { analyzeSeasonalTrends } from "@/lib/attendance-seasonal";
 import {
   getPreacherByWeek,
   analyzePreachers,
+  analyzePreacherTrends,
 } from "@/lib/attendance-preacher";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
@@ -60,6 +61,11 @@ export default async function AttendancePage() {
     history.rows.map((r) => r.week_date),
   );
   const preacher = analyzePreachers(history.rows, preacherByWeek);
+  const preacherTrends = analyzePreacherTrends(
+    history.rows,
+    preacher.perWeek,
+    preacher.stats,
+  );
   const hasPreacher = preacher.stats.length > 0;
 
   const expected = counts.shepherded + counts.active + counts.present;
@@ -299,11 +305,46 @@ export default async function AttendancePage() {
                 perWeek={preacher.perWeek}
                 stats={preacher.stats}
               />
+              {preacherTrends.insights.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold mb-2">
+                    Does the preacher move attendance?
+                  </h3>
+                  <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {preacherTrends.insights.map((ins, i) => (
+                      <li
+                        key={i}
+                        className="rounded-lg border border-border-soft bg-bg-elev-2/40 p-3"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`inline-block w-1.5 h-1.5 rounded-full ${
+                              ins.tone === "up"
+                                ? "bg-good-soft-fg"
+                                : ins.tone === "down"
+                                  ? "bg-warn-soft-fg"
+                                  : "bg-muted"
+                            }`}
+                          />
+                          <span className="text-sm font-medium">
+                            {ins.title}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted mt-1 leading-relaxed">
+                          {ins.detail}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <p className="text-[11px] text-subtle">
                 Preacher is taken from PCO Services — the person in a
                 preaching / teaching / speaker position on each Sunday&apos;s
                 plan, preferring the LIVE service when a date has several.
-                Averages exclude weeks flagged as exceptions.
+                Averages exclude weeks flagged as exceptions. η² is the share
+                of attendance variation explained by who preached (0 = no
+                effect, 1 = entirely the preacher).
               </p>
             </div>
           </Card>
