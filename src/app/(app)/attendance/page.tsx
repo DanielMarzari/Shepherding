@@ -7,6 +7,8 @@ import {
 } from "@/lib/attendance-read";
 import { listAttendanceSources } from "@/lib/attendance-sources-read";
 import { buildAttendanceDistribution } from "@/lib/attendance-distribution";
+import { loadWeatherForWeeks } from "@/lib/weather-trexlertown";
+import { analyzeSeasonalTrends } from "@/lib/attendance-seasonal";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
 import {
@@ -16,6 +18,7 @@ import {
 } from "./actions";
 import { AttendanceUploadForm } from "./upload-form";
 import { AttendanceHistoryChart } from "./history-chart";
+import { AttendanceWeatherChart } from "./weather-chart";
 import { DistributionChart } from "./distribution-chart";
 
 export default async function AttendancePage() {
@@ -29,6 +32,22 @@ export default async function AttendancePage() {
   // average (last 12 mo) — no longer a manually-entered number.
   const weekly = history.adult12moAvg;
   const isAdmin = session.role === "admin";
+
+  // Weather overlay + seasonal-trend analysis (second chart).
+  const weather = await loadWeatherForWeeks(
+    history.rows.map((r) => r.week_date),
+  );
+  const seasonal = analyzeSeasonalTrends(history.rows, weather);
+  const weatherPoints = history.rows.map((r) => {
+    const w = weather.get(r.week_date);
+    return {
+      date: r.week_date,
+      att: r.in_person_total,
+      tmaxF: w?.tmaxF ?? null,
+      precipIn: w?.precipIn ?? null,
+    };
+  });
+  const hasWeather = weatherPoints.some((p) => p.tmaxF != null);
 
   const expected = counts.shepherded + counts.active + counts.present;
   const ratio = weekly && expected > 0 ? expected / weekly : null;
@@ -170,6 +189,82 @@ export default async function AttendancePage() {
             )}
           </div>
         </Card>
+
+        {history.rows.length > 0 && (
+          <Card>
+            <CardHeader
+              title="Attendance vs. weather (Trexlertown, PA)"
+              badge={
+                seasonal.insights.length > 0 ? (
+                  <Pill tone="muted">
+                    {seasonal.insights.length} trend
+                    {seasonal.insights.length === 1 ? "" : "s"}
+                  </Pill>
+                ) : null
+              }
+              right={
+                !hasWeather ? (
+                  <span className="text-xs text-muted">
+                    weather backfilling…
+                  </span>
+                ) : null
+              }
+            />
+            <div className="p-5 space-y-5">
+              {!hasWeather && (
+                <p className="text-xs text-muted">
+                  Historical weather for Trexlertown is fetched from the
+                  Open-Meteo archive and cached. If the line is missing,
+                  reload in a moment — the first load backfills the full
+                  span.
+                </p>
+              )}
+              <AttendanceWeatherChart
+                points={weatherPoints}
+                markers={seasonal.markers}
+                bands={seasonal.bands}
+                baseline={seasonal.baseline}
+              />
+              {seasonal.insights.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold mb-2">
+                    Patterns we spotted
+                  </h3>
+                  <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {seasonal.insights.map((ins, i) => (
+                      <li
+                        key={i}
+                        className="rounded-lg border border-border-soft bg-bg-elev-2/40 p-3"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`inline-block w-1.5 h-1.5 rounded-full ${
+                              ins.tone === "up"
+                                ? "bg-good-soft-fg"
+                                : ins.tone === "down"
+                                  ? "bg-warn-soft-fg"
+                                  : "bg-muted"
+                            }`}
+                          />
+                          <span className="text-sm font-medium">
+                            {ins.title}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted mt-1 leading-relaxed">
+                          {ins.detail}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-[11px] text-subtle mt-2">
+                    Dashed line = typical week (median). Trends compare each
+                    pattern against that baseline.
+                  </p>
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
 
         {distribution && distribution.buckets.length > 0 && (
           <Card>

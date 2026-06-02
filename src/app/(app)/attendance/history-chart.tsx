@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { WeeklyAttendanceRow } from "@/lib/attendance-read";
+import { formatWeekDate } from "@/lib/format-date";
 
 type SeriesKey =
   | "in_person_total"
@@ -251,12 +252,7 @@ export function AttendanceHistoryChart({
         {hoverIdx != null && rows[hoverIdx] ? (
           <div className="text-xs">
             <span className="font-medium">
-              {new Date(rows[hoverIdx].week_date).toLocaleDateString(undefined, {
-                weekday: "short",
-                year: "numeric",
-                month: "short",
-                day: "numeric",
-              })}
+              {formatWeekDate(rows[hoverIdx].week_date)}
             </span>
             <span className="text-muted ml-2">
               {SERIES.filter((s) => enabled[s.key]).map((s) => {
