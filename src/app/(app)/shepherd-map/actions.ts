@@ -62,6 +62,30 @@ export async function addAssignmentAction(formData: FormData) {
   revalidatePath("/shepherd-map");
 }
 
+/** Grant or revoke whole-org access for a shepherd — the exception to
+ *  shepherd-map scoping. These people see the entire org (once scope
+ *  enforcement lands); everyone else is limited to what they oversee. */
+export async function setOrgWideAccessAction(
+  personId: string,
+  enabled: boolean,
+): Promise<{ ok: boolean }> {
+  const session = await requireOrg();
+  if (session.role !== "admin") return { ok: false };
+  if (!personId) return { ok: false };
+  const db = getDb();
+  if (enabled) {
+    db.prepare(
+      `INSERT OR IGNORE INTO org_wide_access (org_id, person_id) VALUES (?, ?)`,
+    ).run(session.orgId, personId);
+  } else {
+    db.prepare(
+      `DELETE FROM org_wide_access WHERE org_id = ? AND person_id = ?`,
+    ).run(session.orgId, personId);
+  }
+  revalidatePath("/shepherd-map");
+  return { ok: true };
+}
+
 export async function removeAssignmentAction(formData: FormData) {
   const session = await requireOrg();
   if (session.role !== "admin") throw new Error("Admin only");

@@ -68,6 +68,28 @@ export function listShepherdTeamIds(orgId: number): string[] {
   ).map((r) => r.id);
 }
 
+/** Person ids granted WHOLE-ORG access — the exception to the
+ *  shepherd-map scoping. Members here see the entire organization, not
+ *  just the ministry areas they oversee. (Enforcement of the scoping
+ *  itself is a later project; this is the designation.) */
+export function listOrgWideAccessIds(orgId: number): Set<string> {
+  const rows = getDb()
+    .prepare(`SELECT person_id AS id FROM org_wide_access WHERE org_id = ?`)
+    .all(orgId) as Array<{ id: string }>;
+  return new Set(rows.map((r) => r.id));
+}
+
+/** True when a person has the whole-org access exception. */
+export function hasOrgWideAccess(orgId: number, personId: string): boolean {
+  return (
+    getDb()
+      .prepare(
+        `SELECT 1 FROM org_wide_access WHERE org_id = ? AND person_id = ? LIMIT 1`,
+      )
+      .get(orgId, personId) != null
+  );
+}
+
 /** Person ids holding a `shepherd_team` assignment — they oversee
  *  everyone else on the shepherd team, i.e. the lead pastor at the
  *  apex of the shepherding hierarchy. Normally exactly one. */

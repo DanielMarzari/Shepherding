@@ -8,10 +8,12 @@ import {
   type TargetKind,
   type TargetOption,
   listAssignments,
+  listOrgWideAccessIds,
   listShepherds,
   listTargetOptions,
 } from "@/lib/assignments-read";
 import { AddAssignmentForm } from "./AddAssignmentForm";
+import { OrgAccessToggle } from "./OrgAccessToggle";
 import { removeAssignmentAction } from "./actions";
 
 const KIND_TONES: Record<TargetKind, "muted" | "accent" | "warn" | "good"> = {
@@ -30,6 +32,7 @@ export default async function ShepherdMapPage() {
   const session = await requireOrg();
   const shepherds = listShepherds(session.orgId);
   const assignments = listAssignments(session.orgId);
+  const orgWideAccess = listOrgWideAccessIds(session.orgId);
 
   const targetsByKind = Object.fromEntries(
     (Object.keys(TARGET_KIND_LABELS) as TargetKind[]).map((k) => [
@@ -61,6 +64,15 @@ export default async function ShepherdMapPage() {
             <span className="text-fg">REFERENCE - Shepherd Team</span>; edit
             that list in PCO to add or remove people.
           </p>
+          <p className="text-muted text-xs mt-2 max-w-2xl">
+            What a shepherd oversees here will also set what they can see
+            in the app. The{" "}
+            <span className="text-accent">Whole-org access</span> switch on
+            each card is the exception — flip it on for people who should
+            see the entire organization, not just their ministry areas.
+            (Page-by-page scope enforcement is still being built; for now
+            this records who the exceptions are.)
+          </p>
         </div>
 
         {shepherds.length === 0 ? (
@@ -78,6 +90,7 @@ export default async function ShepherdMapPage() {
                 assignments={byShepherd.get(s.personId) ?? []}
                 targetsByKind={targetsByKind}
                 isAdmin={isAdmin}
+                orgWide={orgWideAccess.has(s.personId)}
               />
             ))}
           </div>
@@ -92,11 +105,13 @@ function ShepherdCard({
   assignments,
   targetsByKind,
   isAdmin,
+  orgWide,
 }: {
   shepherd: ShepherdPerson;
   assignments: Assignment[];
   targetsByKind: Record<TargetKind, TargetOption[]>;
   isAdmin: boolean;
+  orgWide: boolean;
 }) {
   return (
     <Card className="p-5">
@@ -110,6 +125,14 @@ function ShepherdCard({
               : `${assignments.length} assignment${assignments.length === 1 ? "" : "s"}`}
           </div>
         </div>
+        {isAdmin && (
+          <div className="ml-auto shrink-0">
+            <OrgAccessToggle
+              personId={shepherd.personId}
+              initial={orgWide}
+            />
+          </div>
+        )}
       </div>
 
       {assignments.length > 0 && (
