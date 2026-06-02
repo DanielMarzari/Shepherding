@@ -128,6 +128,8 @@ export async function getIntakeSession(): Promise<IntakeSession | null> {
 export interface IntakeCandidate {
   personId: string;
   fullName: string;
+  /** Surname, for last-name sorting and the A-Z jump rail. */
+  lastName: string;
   initials: string;
   known: boolean;
 }
@@ -157,7 +159,12 @@ export function listIntakeCandidates(
         WHERE pa.org_id = ?
           AND pa.classification IN ('active','present')
           AND p.is_minor = 0
-          AND p.pco_id != ?`,
+          AND p.pco_id != ?
+          -- PCO-inactive is ALWAYS inactive for us. Checked directly
+          -- here (not just via pa.classification) so it's correct even
+          -- before the next snapshot rebuild applies the same override.
+          AND lower(coalesce(p.status,'')) != 'inactive'
+          AND p.inactivated_at IS NULL`,
     )
     .all(shepherdPersonId, orgId, shepherdPersonId) as Array<{
     personId: string;
@@ -172,15 +179,16 @@ export function listIntakeCandidates(
       personId: r.personId,
       fullName:
         [first, last].filter(Boolean).join(" ") || `(unknown #${r.personId})`,
+      lastName: (last ?? first ?? "").trim(),
       initials: ((first?.[0] ?? "") + (last?.[0] ?? "")).toUpperCase() || "??",
       known: r.known === 1,
     };
   });
-  // Marked-known first, then alphabetical — so a returning shepherd
+  // Marked-known first, then by last name — so a returning shepherd
   // sees their picks at the top.
   out.sort((a, b) => {
     if (a.known !== b.known) return a.known ? -1 : 1;
-    return a.fullName.localeCompare(b.fullName);
+    return a.lastName.localeCompare(b.lastName) || a.fullName.localeCompare(b.fullName);
   });
   return out;
 }

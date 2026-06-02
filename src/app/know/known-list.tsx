@@ -4,33 +4,20 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import type { IntakeCandidate } from "@/lib/shepherd-intake";
 import { toggleKnownAction } from "./actions";
 
-const PAGE_SIZE = 60;
+const BATCH = 50;
+const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
-/** Sort key by LAST name (then full name to break ties). Names display
- *  as-entered, but ordering follows the surname so the directory reads
- *  like a church roll. */
-function lastNameKey(full: string): string {
-  const parts = full.trim().split(/\s+/);
-  const last = parts.length > 1 ? parts[parts.length - 1] : parts[0] ?? "";
-  return `${last} ${full}`.toLowerCase();
-}
-
-/** Initial of the LAST name, for the A-Z jump rail. Non-letters bucket
- *  under "#". */
-function lastInitial(full: string): string {
-  const parts = full.trim().split(/\s+/);
-  const last = parts.length > 1 ? parts[parts.length - 1] : parts[0] ?? "";
-  const ch = last[0]?.toUpperCase() ?? "#";
+/** Surname initial for the A-Z jump rail; non-letters bucket under "#". */
+function initialOf(c: IntakeCandidate): string {
+  const ch = (c.lastName || c.fullName).trim()[0]?.toUpperCase() ?? "#";
   return /[A-Z]/.test(ch) ? ch : "#";
 }
 
-const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-
-/** "Who do you know" list. A shepherd never faces the whole ~1,400-name
- *  wall at once: search is the primary action, the roster is paged in
- *  manageable chunks (sorted by last name), and everyone they've marked
- *  collects in a side panel so their progress stays in view.
- *  Mobile-first, optimistic toggles. */
+/** "Who do you know" — a guided review rather than a wall of names.
+ *  The roster (sorted by last name) is worked through one batch at a
+ *  time with a progress bar and a "names to go" counter; everyone you
+ *  check collects in a side panel. Search jumps straight to a person;
+ *  the A-Z rail jumps the window to that letter. Optimistic toggles. */
 export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
   const [known, setKnownState] = useState<Record<string, boolean>>(() => {
     const m: Record<string, boolean> = {};
@@ -38,7 +25,7 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
     return m;
   });
   const [query, setQuery] = useState("");
-  const [page, setPage] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -48,60 +35,60 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
     return m;
   }, [initial]);
 
-  // Whole roster, sorted by last name — the stable browse order.
+  // Roster sorted by last name — the stable browse order.
   const sorted = useMemo(
     () =>
-      [...initial].sort((a, b) =>
-        lastNameKey(a.fullName).localeCompare(lastNameKey(b.fullName)),
+      [...initial].sort(
+        (a, b) =>
+          a.lastName.localeCompare(b.lastName) ||
+          a.fullName.localeCompare(b.fullName),
       ),
     [initial],
   );
+  const total = sorted.length;
 
   const q = query.trim().toLowerCase();
-  const filtered = useMemo(
-    () => (q ? sorted.filter((c) => c.fullName.toLowerCase().includes(q)) : sorted),
+  const matches = useMemo(
+    () => (q ? sorted.filter((c) => c.fullName.toLowerCase().includes(q)) : []),
     [sorted, q],
   );
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  // Reset to page 1 whenever the query changes.
-  useEffect(() => setPage(0), [q]);
-  const safePage = Math.min(page, pageCount - 1);
-  const pageRows = filtered.slice(
-    safePage * PAGE_SIZE,
-    safePage * PAGE_SIZE + PAGE_SIZE,
-  );
-
-  // A-Z jump rail: which page each surname-initial first appears on (in
-  // the current, possibly-filtered, ordering). Clicking a letter pages
-  // to that slice instead of hiding the rest.
-  const letterPage = useMemo(() => {
+  // First index in `sorted` for each surname-initial — powers the rail.
+  const letterIndex = useMemo(() => {
     const m: Record<string, number> = {};
-    filtered.forEach((c, i) => {
-      const L = lastInitial(c.fullName);
-      if (m[L] === undefined) m[L] = Math.floor(i / PAGE_SIZE);
+    sorted.forEach((c, i) => {
+      const L = initialOf(c);
+      if (m[L] === undefined) m[L] = i;
     });
     return m;
-  }, [filtered]);
-  const activeLetter = pageRows[0] ? lastInitial(pageRows[0].fullName) : null;
+  }, [sorted]);
 
-  function goToPage(p: number) {
-    setPage(p);
-    if (typeof window !== "undefined")
-      window.scrollTo({ top: 0, behavior: "smooth" });
-  }
+  const start = Math.min(offset, Math.max(0, total - 1));
+  const windowRows = sorted.slice(start, start + BATCH);
+  const end = start + windowRows.length; // exclusive
+  const toGo = total - end;
+  const pct = total === 0 ? 0 : Math.round((end / total) * 100);
+  const activeLetter = windowRows[0] ? initialOf(windowRows[0]) : null;
 
   const markedIds = useMemo(
     () =>
       Object.keys(known)
         .filter((id) => known[id])
-        .sort((a, b) =>
-          lastNameKey(byId.get(a)?.fullName ?? "").localeCompare(
-            lastNameKey(byId.get(b)?.fullName ?? ""),
-          ),
-        ),
+        .sort((a, b) => {
+          const ca = byId.get(a);
+          const cb = byId.get(b);
+          return (
+            (ca?.lastName ?? "").localeCompare(cb?.lastName ?? "") ||
+            (ca?.fullName ?? "").localeCompare(cb?.fullName ?? "")
+          );
+        }),
     [known, byId],
   );
+  const markedCount = markedIds.length;
+
+  useEffect(() => {
+    if (q) setOffset(0);
+  }, [q]);
 
   function toggle(personId: string) {
     const next = !known[personId];
@@ -116,9 +103,15 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
     });
   }
 
+  function moveTo(next: number) {
+    setOffset(Math.max(0, Math.min(next, Math.max(0, total - 1))));
+    if (typeof window !== "undefined")
+      window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
-      {/* ── Main: search + paged roster ───────────────────────────── */}
+      {/* ── Main column ───────────────────────────────────────────── */}
       <div className="space-y-4 order-last lg:order-first">
         <div className="relative">
           <SearchIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-subtle pointer-events-none" />
@@ -133,54 +126,107 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
         </div>
         {error && <p className="text-sm text-warn-soft-fg">{error}</p>}
 
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-xs uppercase tracking-wider text-subtle font-medium">
-            {q ? `Matches for “${query.trim()}”` : "Everyone"}
-          </h2>
-          <span className="text-xs text-subtle tnum">
-            {filtered.length} {filtered.length === 1 ? "person" : "people"}
-          </span>
-        </div>
-
-        {/* A-Z jump rail — jumps to that part of the list, doesn't hide
-            the rest. Letters with no one are dimmed. */}
-        {!q && filtered.length > PAGE_SIZE && (
-          <div className="flex flex-wrap gap-1" role="group" aria-label="Jump to letter">
-            {ALPHABET.map((L) => {
-              const target = letterPage[L];
-              const enabled = target !== undefined;
-              const active = enabled && L === activeLetter;
-              return (
-                <button
-                  key={L}
-                  type="button"
-                  disabled={!enabled}
-                  onClick={() => enabled && goToPage(target)}
-                  aria-label={`Jump to ${L}`}
-                  className={`w-7 h-7 rounded-md text-xs font-medium transition-colors ${
-                    active
-                      ? "bg-accent/20 text-fg"
-                      : enabled
-                        ? "text-muted hover:text-fg hover:bg-bg-elev-2 cursor-pointer"
-                        : "text-subtle/40 cursor-default"
-                  }`}
-                >
-                  {L}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {filtered.length === 0 ? (
-          <p className="text-sm text-muted py-10 text-center">
-            No one matches <span className="text-fg">“{query.trim()}”</span>.
-            Try a last name, or a different spelling.
-          </p>
+        {q ? (
+          /* ── Search results ─────────────────────────────────────── */
+          <section className="space-y-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-xs uppercase tracking-wider text-subtle font-medium">
+                Matches for “{query.trim()}”
+              </h2>
+              <span className="text-xs text-subtle tnum">
+                {matches.length} found
+              </span>
+            </div>
+            {matches.length === 0 ? (
+              <p className="text-sm text-muted py-10 text-center">
+                No one matches{" "}
+                <span className="text-fg">“{query.trim()}”</span>. Try a last
+                name, or a different spelling.
+              </p>
+            ) : (
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {matches.slice(0, 100).map((c) => (
+                  <PersonRow
+                    key={c.personId}
+                    candidate={c}
+                    known={!!known[c.personId]}
+                    onToggle={() => toggle(c.personId)}
+                  />
+                ))}
+              </ul>
+            )}
+          </section>
         ) : (
+          /* ── Guided review ──────────────────────────────────────── */
           <>
+            {/* Progress */}
+            <div className="space-y-2">
+              <div className="flex items-baseline justify-between gap-3 text-sm">
+                <span className="font-medium text-fg">
+                  {markedCount > 0
+                    ? `${markedCount} marked so far`
+                    : "Tap everyone you know"}
+                </span>
+                <span className="text-xs text-muted tnum">
+                  {toGo > 0 ? `${toGo.toLocaleString()} to go` : "End of list"}
+                </span>
+              </div>
+              <div
+                className="h-2 rounded-full bg-bg-elev-2 overflow-hidden"
+                role="progressbar"
+                aria-valuenow={pct}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Progress through the directory"
+              >
+                <div
+                  className="h-full bg-accent rounded-full transition-[width] duration-300"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <p className="text-xs text-subtle tnum">
+                {total === 0
+                  ? "No one to show"
+                  : `Showing ${start + 1}–${end} of ${total.toLocaleString()}`}
+              </p>
+            </div>
+
+            {/* A-Z jump rail */}
+            {total > BATCH && (
+              <div
+                className="flex flex-wrap gap-1"
+                role="group"
+                aria-label="Jump to letter"
+              >
+                {ALPHABET.map((L) => {
+                  const idx = letterIndex[L];
+                  const enabled = idx !== undefined;
+                  const active = enabled && L === activeLetter;
+                  return (
+                    <button
+                      key={L}
+                      type="button"
+                      disabled={!enabled}
+                      onClick={() => enabled && moveTo(idx)}
+                      aria-label={`Jump to ${L}`}
+                      className={`w-7 h-7 rounded-md text-xs font-medium transition-colors ${
+                        active
+                          ? "bg-accent/20 text-fg"
+                          : enabled
+                            ? "text-muted hover:text-fg hover:bg-bg-elev-2 cursor-pointer"
+                            : "text-subtle/40 cursor-default"
+                      }`}
+                    >
+                      {L}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Current batch */}
             <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {pageRows.map((c) => (
+              {windowRows.map((c) => (
                 <PersonRow
                   key={c.personId}
                   candidate={c}
@@ -189,12 +235,32 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
                 />
               ))}
             </ul>
-            {pageCount > 1 && (
-              <Pager
-                page={safePage}
-                pageCount={pageCount}
-                onChange={goToPage}
-              />
+
+            {/* Back / Next */}
+            {total > BATCH && (
+              <div className="flex items-center justify-between gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => moveTo(start - BATCH)}
+                  disabled={start === 0}
+                  className="px-4 h-11 rounded-xl border border-border-soft text-sm text-muted hover:text-fg hover:border-accent transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                >
+                  ‹ Back
+                </button>
+                {toGo > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => moveTo(start + BATCH)}
+                    className="flex-1 sm:flex-none px-6 h-11 rounded-xl bg-accent text-[var(--accent-fg)] text-sm font-semibold hover:opacity-90 transition-opacity cursor-pointer"
+                  >
+                    Next {Math.min(BATCH, toGo)} ›
+                  </button>
+                ) : (
+                  <span className="text-sm text-muted">
+                    That&apos;s everyone — thank you.
+                  </span>
+                )}
+              </div>
             )}
           </>
         )}
@@ -205,14 +271,12 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
         <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4 space-y-3">
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="text-sm font-semibold">People you know</h2>
-            <span className="text-xs text-muted tnum">
-              {markedIds.length} marked
-            </span>
+            <span className="text-xs text-muted tnum">{markedCount} marked</span>
           </div>
-          {markedIds.length === 0 ? (
+          {markedCount === 0 ? (
             <p className="text-sm text-muted leading-relaxed">
-              Nobody yet. Search or scroll the list and tap the people you
-              personally know — they&apos;ll collect here.
+              Nobody yet. Work through the list (or search) and tap the people
+              you personally know — they&apos;ll collect here.
             </p>
           ) : (
             <ul className="space-y-1.5 max-h-[60vh] overflow-y-auto pr-1">
@@ -221,7 +285,7 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
                 if (!c) return null;
                 return (
                   <li key={id}>
-                    <div className="flex items-center gap-2 group">
+                    <div className="flex items-center gap-2">
                       <span className="flex-1 text-sm text-fg truncate">
                         {c.fullName}
                       </span>
@@ -242,78 +306,6 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
         </div>
       </aside>
     </div>
-  );
-}
-
-/** Windowed segmented pager: « ‹ 1 … 7 8 9 … 24 › ». */
-function Pager({
-  page,
-  pageCount,
-  onChange,
-}: {
-  page: number;
-  pageCount: number;
-  onChange: (p: number) => void;
-}) {
-  const items: (number | "…")[] = [];
-  const push = (n: number) => items.push(n);
-  const window = 1; // pages on each side of current
-  const lo = Math.max(0, page - window);
-  const hi = Math.min(pageCount - 1, page + window);
-  push(0);
-  if (lo > 1) items.push("…");
-  for (let i = Math.max(1, lo); i <= Math.min(pageCount - 2, hi); i++) push(i);
-  if (hi < pageCount - 2) items.push("…");
-  if (pageCount > 1) push(pageCount - 1);
-
-  const btn =
-    "min-w-9 h-9 px-2 rounded-lg border text-sm transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default";
-
-  return (
-    <nav
-      className="flex flex-wrap items-center justify-center gap-1.5 pt-2"
-      aria-label="Pagination"
-    >
-      <button
-        type="button"
-        onClick={() => onChange(page - 1)}
-        disabled={page === 0}
-        aria-label="Previous page"
-        className={`${btn} border-border-soft text-muted hover:text-fg hover:border-accent`}
-      >
-        ‹
-      </button>
-      {items.map((it, i) =>
-        it === "…" ? (
-          <span key={`e${i}`} className="px-1 text-subtle select-none">
-            …
-          </span>
-        ) : (
-          <button
-            key={it}
-            type="button"
-            onClick={() => onChange(it)}
-            aria-current={it === page ? "page" : undefined}
-            className={`${btn} ${
-              it === page
-                ? "border-accent bg-accent/15 text-fg font-medium"
-                : "border-border-soft text-muted hover:text-fg hover:border-accent"
-            }`}
-          >
-            {it + 1}
-          </button>
-        ),
-      )}
-      <button
-        type="button"
-        onClick={() => onChange(page + 1)}
-        disabled={page === pageCount - 1}
-        aria-label="Next page"
-        className={`${btn} border-border-soft text-muted hover:text-fg hover:border-accent`}
-      >
-        ›
-      </button>
-    </nav>
   );
 }
 
@@ -339,14 +331,14 @@ function PersonRow({
         }`}
       >
         <span
-          className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+          className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors ${
             known
               ? "bg-accent border-accent text-[var(--accent-fg)]"
               : "border-border-soft text-transparent"
           }`}
           aria-hidden
         >
-          <CheckIcon className="w-3.5 h-3.5" />
+          <CheckIcon className="w-3 h-3" />
         </span>
         <span
           className={`flex-1 text-sm truncate ${
@@ -355,9 +347,6 @@ function PersonRow({
         >
           {candidate.fullName}
         </span>
-        {known && (
-          <span className="text-[11px] text-accent shrink-0">Known</span>
-        )}
       </button>
     </li>
   );
@@ -388,7 +377,7 @@ function CheckIcon({ className }: { className?: string }) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="3"
+      strokeWidth="3.5"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
