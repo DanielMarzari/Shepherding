@@ -1,113 +1,171 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import type { WeeklyAttendanceRow } from "@/lib/attendance-read";
 import { formatWeekDate } from "@/lib/format-date";
+import { ATTENDANCE_SERIES, type SeriesKey } from "./history-chart";
 
-export interface WeatherPoint {
-  date: string;
-  att: number | null;
+export interface WeatherCell {
   tmaxF: number | null;
-  precipIn: number | null;
+  tminF: number | null;
+  rainIn: number | null;
+  snowIn: number | null;
 }
 export interface ChartMarker {
   date: string;
   kind: "easter" | "christmas";
   label: string;
 }
-export interface ChartBand {
-  startDate: string;
-  endDate: string;
-  kind: "post-easter" | "summer";
-  label: string;
-}
 
 const TEMP_COLOR = "var(--lane-care, #f59e0b)";
-const ATT_COLOR = "var(--accent)";
-const BAND_FILL: Record<ChartBand["kind"], string> = {
-  "post-easter": "rgba(245,158,11,0.10)",
-  summer: "rgba(56,138,210,0.10)",
-};
+const RAIN_COLOR = "#3b82f6";
+const SNOW_COLOR = "#cbd5e1";
 
-/** Sunday in-person attendance (left axis) lined up against the daily
- *  high temperature in Trexlertown, PA (right axis), with seasonal
- *  markers (Easter ✝, Christmas ✦) and shaded bands (post-Easter lull,
- *  summer). Hover snaps to the nearest Sunday. */
+/** Sunday attendance (every series, toggleable — left axis) lined up
+ *  against Trexlertown weather: a daily high/low temperature band
+ *  (right axis) and a rain-vs-snow precipitation strip along the
+ *  bottom. Holiday markers optional. Hover snaps to the nearest Sunday. */
 export function AttendanceWeatherChart({
-  points,
+  rows,
+  weather,
   markers,
-  bands,
-  baseline,
 }: {
-  points: WeatherPoint[];
+  rows: WeeklyAttendanceRow[];
+  weather: WeatherCell[];
   markers: ChartMarker[];
-  bands: ChartBand[];
-  baseline: number | null;
 }) {
+  const [enabled, setEnabled] = useState<Record<SeriesKey, boolean>>({
+    in_person_total: true,
+    adult_total: false,
+    kids_total: false,
+    student_total: false,
+    online_live: false,
+    abfs: false,
+  });
   const [showTemp, setShowTemp] = useState(true);
-  const [showBands, setShowBands] = useState(true);
-  const [showMarkers, setShowMarkers] = useState(true);
+  const [showPrecip, setShowPrecip] = useState(true);
+  const [showMarkers, setShowMarkers] = useState(false);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
   const idxByDate = useMemo(() => {
     const m = new Map<string, number>();
-    points.forEach((p, i) => m.set(p.date, i));
+    rows.forEach((r, i) => m.set(r.week_date, i));
     return m;
-  }, [points]);
-
+  }, [rows]);
   function nearestIdx(date: string): number {
     const exact = idxByDate.get(date);
     if (exact != null) return exact;
     let best = 0;
-    for (let i = 0; i < points.length; i++) {
-      if (points[i].date <= date) best = i;
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].week_date <= date) best = i;
       else break;
     }
     return best;
   }
 
+  const activeKeys = useMemo(
+    () => ATTENDANCE_SERIES.filter((s) => enabled[s.key]).map((s) => s.key),
+    [enabled],
+  );
+
   const attMax = useMemo(() => {
     let m = 0;
-    for (const p of points) if (p.att != null && p.att > m) m = p.att;
+    for (const r of rows)
+      for (const k of activeKeys) {
+        const v = r[k];
+        if (v != null && v > m) m = v;
+      }
     return Math.max(1, m);
-  }, [points]);
+  }, [rows, activeKeys]);
 
   const [tMin, tMax] = useMemo(() => {
     let lo = Infinity;
     let hi = -Infinity;
-    for (const p of points) {
-      if (p.tmaxF == null) continue;
-      if (p.tmaxF < lo) lo = p.tmaxF;
-      if (p.tmaxF > hi) hi = p.tmaxF;
+    for (const w of weather) {
+      if (w?.tminF != null && w.tminF < lo) lo = w.tminF;
+      if (w?.tmaxF != null && w.tmaxF > hi) hi = w.tmaxF;
     }
-    if (!Number.isFinite(lo)) return [0, 100];
-    return [Math.floor(lo - 5), Math.ceil(hi + 5)];
-  }, [points]);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [0, 100];
+    return [Math.floor(lo - 4), Math.ceil(hi + 4)];
+  }, [weather]);
+
+  const precipMax = useMemo(() => {
+    let m = 0;
+    for (const w of weather) {
+      const t = (w?.rainIn ?? 0) + (w?.snowIn ?? 0);
+      if (t > m) m = t;
+    }
+    return Math.max(0.5, m);
+  }, [weather]);
 
   const width = 1000;
-  const height = 320;
+  const height = 380;
   const padL = 48;
   const padR = 44;
   const padT = 14;
-  const padB = 32;
+  const padB = 26;
+  const precipH = 46;
+  const linesBottom = height - padB - precipH - 10;
+  const precipTop = linesBottom + 10;
+  const precipBottom = height - padB;
   const innerW = width - padL - padR;
-  const innerH = height - padT - padB;
-  const stepX = points.length > 1 ? innerW / (points.length - 1) : innerW;
+  const innerH = linesBottom - padT;
+  const stepX = rows.length > 1 ? innerW / (rows.length - 1) : innerW;
 
   const xFor = (i: number) => padL + i * stepX;
   const yAtt = (v: number) => padT + innerH - (v / attMax) * innerH;
   const yTemp = (t: number) =>
     padT + innerH - ((t - tMin) / Math.max(1, tMax - tMin)) * innerH;
 
-  function pathFor(get: (p: WeatherPoint) => number | null, y: (v: number) => number) {
+  function attPath(key: SeriesKey): string {
     let d = "";
     let pen = false;
-    for (let i = 0; i < points.length; i++) {
-      const v = get(points[i]);
+    for (let i = 0; i < rows.length; i++) {
+      const v = rows[i][key];
       if (v == null) {
         pen = false;
         continue;
       }
-      d += `${pen ? "L" : "M"} ${xFor(i).toFixed(1)} ${y(v).toFixed(1)} `;
+      d += `${pen ? "L" : "M"} ${xFor(i).toFixed(1)} ${yAtt(v).toFixed(1)} `;
+      pen = true;
+    }
+    return d;
+  }
+
+  // Contiguous runs where both hi & lo exist → filled temp band polygons.
+  const tempBands = useMemo(() => {
+    const polys: string[] = [];
+    let run: number[] = [];
+    const flush = () => {
+      if (run.length >= 2) {
+        const top = run.map((i) => `${xFor(i).toFixed(1)} ${yTemp(weather[i]!.tmaxF!).toFixed(1)}`);
+        const bot = [...run]
+          .reverse()
+          .map((i) => `${xFor(i).toFixed(1)} ${yTemp(weather[i]!.tminF!).toFixed(1)}`);
+        polys.push(`M ${top.join(" L ")} L ${bot.join(" L ")} Z`);
+      }
+      run = [];
+    };
+    for (let i = 0; i < rows.length; i++) {
+      const w = weather[i];
+      if (w?.tmaxF != null && w.tminF != null) run.push(i);
+      else flush();
+    }
+    flush();
+    return polys;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, weather, tMin, tMax, attMax, activeKeys]);
+
+  function tempHighPath(): string {
+    let d = "";
+    let pen = false;
+    for (let i = 0; i < rows.length; i++) {
+      const v = weather[i]?.tmaxF;
+      if (v == null) {
+        pen = false;
+        continue;
+      }
+      d += `${pen ? "L" : "M"} ${xFor(i).toFixed(1)} ${yTemp(v).toFixed(1)} `;
       pen = true;
     }
     return d;
@@ -115,8 +173,8 @@ export function AttendanceWeatherChart({
 
   const yearTicks: Array<{ i: number; label: string }> = [];
   let lastYear: string | null = null;
-  points.forEach((p, i) => {
-    const y = p.date.slice(0, 4);
+  rows.forEach((r, i) => {
+    const y = r.week_date.slice(0, 4);
     if (y !== lastYear) {
       yearTicks.push({ i, label: y });
       lastYear = y;
@@ -125,86 +183,51 @@ export function AttendanceWeatherChart({
 
   const attTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(attMax * f));
   const tempTicks = [0, 0.5, 1].map((f) => Math.round(tMin + (tMax - tMin) * f));
+  const barW = Math.max(1, Math.min(6, stepX * 0.7));
 
   function handleMove(e: React.MouseEvent<SVGSVGElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
     const vx = ((e.clientX - rect.left) / rect.width) * width;
-    if (vx < padL - 6 || vx > width - padR + 6 || points.length === 0) {
+    if (vx < padL - 6 || vx > width - padR + 6 || rows.length === 0) {
       setHoverIdx(null);
       return;
     }
-    setHoverIdx(
-      Math.max(0, Math.min(points.length - 1, Math.round((vx - padL) / stepX))),
-    );
+    setHoverIdx(Math.max(0, Math.min(rows.length - 1, Math.round((vx - padL) / stepX))));
   }
 
-  const hp = hoverIdx != null ? points[hoverIdx] : null;
+  const hr = hoverIdx != null ? rows[hoverIdx] : null;
+  const hw = hoverIdx != null ? weather[hoverIdx] : null;
 
   return (
     <div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-3">
-        <Toggle on color={ATT_COLOR} label="In-person attendance" onClick={() => {}} locked />
-        <Toggle
-          on={showTemp}
-          color={TEMP_COLOR}
-          label="High temp °F"
-          onClick={() => setShowTemp((v) => !v)}
-        />
-        <Toggle
-          on={showBands}
-          color="rgba(245,158,11,0.5)"
-          label="Seasonal bands"
-          onClick={() => setShowBands((v) => !v)}
-        />
-        <Toggle
-          on={showMarkers}
-          color="var(--good-soft-fg)"
-          label="Holiday markers"
-          onClick={() => setShowMarkers((v) => !v)}
-        />
+        {ATTENDANCE_SERIES.map((s) => (
+          <Chip
+            key={s.key}
+            on={enabled[s.key]}
+            color={s.color}
+            label={s.label}
+            onClick={() => setEnabled((e) => ({ ...e, [s.key]: !e[s.key] }))}
+          />
+        ))}
+        <span className="w-px h-4 bg-border-soft mx-1" />
+        <Chip on={showTemp} color={TEMP_COLOR} label="Temp hi/lo °F" onClick={() => setShowTemp((v) => !v)} />
+        <Chip on={showPrecip} color={RAIN_COLOR} label="Rain / snow" onClick={() => setShowPrecip((v) => !v)} />
+        <Chip on={showMarkers} color="var(--good-soft-fg)" label="Holiday markers" onClick={() => setShowMarkers((v) => !v)} />
       </div>
 
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        width="100%"
-        height={height}
-        preserveAspectRatio="none"
         onMouseMove={handleMove}
         onMouseLeave={() => setHoverIdx(null)}
-        style={{ cursor: "crosshair" }}
+        style={{ width: "100%", height: "auto", display: "block", cursor: "crosshair" }}
       >
-        {/* Bands */}
-        {showBands &&
-          bands.map((b, i) => {
-            const x1 = xFor(nearestIdx(b.startDate));
-            const x2 = xFor(nearestIdx(b.endDate));
-            if (x2 <= x1) return null;
-            return (
-              <rect
-                key={`b${i}`}
-                x={x1}
-                y={padT}
-                width={x2 - x1}
-                height={innerH}
-                fill={BAND_FILL[b.kind]}
-              />
-            );
-          })}
-
         {/* Attendance gridlines + left axis */}
         {attTicks.map((tick, i) => {
           const y = yAtt(tick);
           return (
             <g key={`a${i}`}>
-              <line
-                x1={padL}
-                x2={width - padR}
-                y1={y}
-                y2={y}
-                stroke="rgba(140,150,170,0.18)"
-                strokeWidth={0.5}
-                strokeDasharray="2 3"
-              />
+              <line x1={padL} x2={width - padR} y1={y} y2={y} stroke="rgba(140,150,170,0.18)" strokeWidth={0.5} strokeDasharray="2 3" />
               <text x={padL - 6} y={y + 3} textAnchor="end" fontSize={10} fill="#7c879c">
                 {tick.toLocaleString()}
               </text>
@@ -215,14 +238,7 @@ export function AttendanceWeatherChart({
         {/* Right temp axis labels */}
         {showTemp &&
           tempTicks.map((t, i) => (
-            <text
-              key={`t${i}`}
-              x={width - padR + 6}
-              y={yTemp(t) + 3}
-              textAnchor="start"
-              fontSize={10}
-              fill={TEMP_COLOR}
-            >
+            <text key={`t${i}`} x={width - padR + 6} y={yTemp(t) + 3} textAnchor="start" fontSize={10} fill={TEMP_COLOR}>
               {t}°
             </text>
           ))}
@@ -230,59 +246,53 @@ export function AttendanceWeatherChart({
         {/* Year ticks */}
         {yearTicks.map((t) => (
           <g key={`y${t.i}`}>
-            <line
-              x1={xFor(t.i)}
-              x2={xFor(t.i)}
-              y1={padT}
-              y2={padT + innerH}
-              stroke="rgba(140,150,170,0.12)"
-              strokeWidth={0.5}
-            />
-            <text
-              x={xFor(t.i)}
-              y={height - padB + 14}
-              textAnchor="middle"
-              fontSize={10}
-              fill="#7c879c"
-            >
+            <line x1={xFor(t.i)} x2={xFor(t.i)} y1={padT} y2={precipBottom} stroke="rgba(140,150,170,0.12)" strokeWidth={0.5} />
+            <text x={xFor(t.i)} y={height - padB + 13} textAnchor="middle" fontSize={10} fill="#7c879c">
               {t.label}
             </text>
           </g>
         ))}
 
-        {/* Baseline */}
-        {baseline != null && (
-          <line
-            x1={padL}
-            x2={width - padR}
-            y1={yAtt(baseline)}
-            y2={yAtt(baseline)}
-            stroke="rgba(168,178,198,0.5)"
-            strokeWidth={1}
-            strokeDasharray="5 4"
-          />
-        )}
-
-        {/* Temp line */}
+        {/* Temperature band + high line */}
         {showTemp && (
-          <path
-            d={pathFor((p) => p.tmaxF, yTemp)}
-            fill="none"
-            stroke={TEMP_COLOR}
-            strokeWidth={1.25}
-            strokeLinejoin="round"
-            opacity={0.85}
-          />
+          <>
+            {tempBands.map((d, i) => (
+              <path key={`tb${i}`} d={d} fill={TEMP_COLOR} opacity={0.13} stroke="none" />
+            ))}
+            <path d={tempHighPath()} fill="none" stroke={TEMP_COLOR} strokeWidth={1.1} opacity={0.8} strokeLinejoin="round" />
+          </>
         )}
 
-        {/* Attendance line */}
-        <path
-          d={pathFor((p) => p.att, yAtt)}
-          fill="none"
-          stroke={ATT_COLOR}
-          strokeWidth={1.75}
-          strokeLinejoin="round"
-        />
+        {/* Attendance lines */}
+        {ATTENDANCE_SERIES.filter((s) => enabled[s.key]).map((s) => (
+          <path key={s.key} d={attPath(s.key)} fill="none" stroke={s.color} strokeWidth={1.6} strokeLinejoin="round" />
+        ))}
+
+        {/* Precipitation strip */}
+        {showPrecip && (
+          <>
+            <line x1={padL} x2={width - padR} y1={precipBottom} y2={precipBottom} stroke="rgba(140,150,170,0.25)" strokeWidth={0.5} />
+            <text x={padL - 6} y={precipTop + 8} textAnchor="end" fontSize={9} fill="#7c879c">
+              {precipMax.toFixed(1)}&quot;
+            </text>
+            {rows.map((_, i) => {
+              const w = weather[i];
+              if (!w) return null;
+              const rain = w.rainIn ?? 0;
+              const snow = w.snowIn ?? 0;
+              if (rain <= 0 && snow <= 0) return null;
+              const rH = (rain / precipMax) * precipH;
+              const sH = (snow / precipMax) * precipH;
+              const x = xFor(i) - barW / 2;
+              return (
+                <g key={`p${i}`}>
+                  {rain > 0 && <rect x={x} y={precipBottom - rH} width={barW} height={rH} fill={RAIN_COLOR} opacity={0.8} />}
+                  {snow > 0 && <rect x={x} y={precipBottom - rH - sH} width={barW} height={sH} fill={SNOW_COLOR} opacity={0.9} />}
+                </g>
+              );
+            })}
+          </>
+        )}
 
         {/* Markers */}
         {showMarkers &&
@@ -292,16 +302,7 @@ export function AttendanceWeatherChart({
             const color = m.kind === "easter" ? "var(--good-soft-fg)" : "var(--warn-soft-fg)";
             return (
               <g key={`m${i}`}>
-                <line
-                  x1={x}
-                  x2={x}
-                  y1={padT}
-                  y2={padT + innerH}
-                  stroke={color}
-                  strokeWidth={0.75}
-                  strokeDasharray="1 3"
-                  opacity={0.6}
-                />
+                <line x1={x} x2={x} y1={padT} y2={linesBottom} stroke={color} strokeWidth={0.75} strokeDasharray="1 3" opacity={0.6} />
                 <text x={x} y={padT + 9} textAnchor="middle" fontSize={11} fill={color}>
                   {glyph}
                 </text>
@@ -310,48 +311,50 @@ export function AttendanceWeatherChart({
           })}
 
         {/* Hover */}
-        {hoverIdx != null && hp && (
+        {hoverIdx != null && (
           <g pointerEvents="none">
-            <line
-              x1={xFor(hoverIdx)}
-              x2={xFor(hoverIdx)}
-              y1={padT}
-              y2={padT + innerH}
-              stroke="rgba(168,178,198,0.5)"
-              strokeWidth={1}
-            />
-            {hp.att != null && (
-              <circle cx={xFor(hoverIdx)} cy={yAtt(hp.att)} r={3.5} fill={ATT_COLOR} stroke="var(--bg)" strokeWidth={1.5} />
+            <line x1={xFor(hoverIdx)} x2={xFor(hoverIdx)} y1={padT} y2={precipBottom} stroke="rgba(168,178,198,0.5)" strokeWidth={1} />
+            {ATTENDANCE_SERIES.filter((s) => enabled[s.key]).map((s) => {
+              const v = hr?.[s.key];
+              if (v == null) return null;
+              return <circle key={s.key} cx={xFor(hoverIdx)} cy={yAtt(v)} r={3.5} fill={s.color} stroke="var(--bg)" strokeWidth={1.5} />;
+            })}
+            {showTemp && hw?.tmaxF != null && (
+              <circle cx={xFor(hoverIdx)} cy={yTemp(hw.tmaxF)} r={3} fill={TEMP_COLOR} stroke="var(--bg)" strokeWidth={1.5} />
             )}
-            {showTemp && hp.tmaxF != null && (
-              <circle cx={xFor(hoverIdx)} cy={yTemp(hp.tmaxF)} r={3} fill={TEMP_COLOR} stroke="var(--bg)" strokeWidth={1.5} />
+            {showTemp && hw?.tminF != null && (
+              <circle cx={xFor(hoverIdx)} cy={yTemp(hw.tminF)} r={3} fill={TEMP_COLOR} stroke="var(--bg)" strokeWidth={1.5} opacity={0.6} />
             )}
           </g>
         )}
       </svg>
 
       <div className="min-h-[44px] mt-2">
-        {hp ? (
-          <div className="text-xs">
-            <span className="font-medium">{formatWeekDate(hp.date)}</span>
-            <span className="text-muted ml-3">
-              <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ background: ATT_COLOR }} />
-              In-person:{" "}
-              <span className="text-fg tnum">{hp.att == null ? "—" : hp.att.toLocaleString()}</span>
-            </span>
-            <span className="text-muted ml-3">
+        {hr ? (
+          <div className="text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-medium">{formatWeekDate(hr.week_date)}</span>
+            {ATTENDANCE_SERIES.filter((s) => enabled[s.key]).map((s) => (
+              <span key={s.key} className="text-muted">
+                <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ background: s.color }} />
+                {s.label}: <span className="text-fg tnum">{hr[s.key] == null ? "—" : hr[s.key]!.toLocaleString()}</span>
+              </span>
+            ))}
+            <span className="text-muted">
               <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ background: TEMP_COLOR }} />
-              High:{" "}
-              <span className="text-fg tnum">{hp.tmaxF == null ? "—" : `${Math.round(hp.tmaxF)}°F`}</span>
+              Temp: <span className="text-fg tnum">{hw?.tmaxF == null ? "—" : `${Math.round(hw.tmaxF)}°`} / {hw?.tminF == null ? "—" : `${Math.round(hw.tminF)}°`}</span>
             </span>
-            <span className="text-muted ml-3">
-              Precip:{" "}
-              <span className="text-fg tnum">{hp.precipIn == null ? "—" : `${hp.precipIn.toFixed(2)}in`}</span>
+            <span className="text-muted">
+              <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ background: RAIN_COLOR }} />
+              Rain: <span className="text-fg tnum">{hw?.rainIn == null ? "—" : `${hw.rainIn.toFixed(2)}"`}</span>
+            </span>
+            <span className="text-muted">
+              <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ background: SNOW_COLOR }} />
+              Snow: <span className="text-fg tnum">{hw?.snowIn == null ? "—" : `${hw.snowIn.toFixed(1)}"`}</span>
             </span>
           </div>
         ) : (
           <p className="text-xs text-subtle">
-            Hover for the week&apos;s attendance and Trexlertown weather. ✝ Easter · ✦ Christmas.
+            Hover for the week&apos;s attendance and Trexlertown weather. Shaded band = daily high/low; bottom bars = rain (blue) &amp; snow (white).
           </p>
         )}
       </div>
@@ -359,31 +362,26 @@ export function AttendanceWeatherChart({
   );
 }
 
-function Toggle({
+function Chip({
   on,
   color,
   label,
   onClick,
-  locked,
 }: {
   on: boolean;
   color: string;
   label: string;
   onClick: () => void;
-  locked?: boolean;
 }) {
   return (
     <button
       type="button"
-      onClick={locked ? undefined : onClick}
-      className={`text-[11px] px-2 py-1 rounded-full border transition-colors ${
-        locked ? "cursor-default" : "cursor-pointer"
-      } ${on ? "border-border-soft text-fg bg-bg-elev-2" : "border-border-softer text-muted hover:text-fg"}`}
+      onClick={onClick}
+      className={`text-[11px] px-2 py-1 rounded-full border transition-colors cursor-pointer ${
+        on ? "border-border-soft text-fg bg-bg-elev-2" : "border-border-softer text-muted hover:text-fg"
+      }`}
     >
-      <span
-        className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle"
-        style={{ background: color, opacity: on ? 1 : 0.4 }}
-      />
+      <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle" style={{ background: color, opacity: on ? 1 : 0.4 }} />
       {label}
     </button>
   );

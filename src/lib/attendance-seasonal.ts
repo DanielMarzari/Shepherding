@@ -8,12 +8,6 @@ export interface SeasonalMarker {
   kind: "easter" | "christmas";
   label: string;
 }
-export interface SeasonalBand {
-  startDate: string;
-  endDate: string;
-  kind: "post-easter" | "summer";
-  label: string;
-}
 export interface SeasonalInsight {
   title: string;
   detail: string;
@@ -21,7 +15,6 @@ export interface SeasonalInsight {
 }
 export interface SeasonalAnalysis {
   markers: SeasonalMarker[];
-  bands: SeasonalBand[];
   insights: SeasonalInsight[];
   baseline: number | null;
 }
@@ -89,10 +82,9 @@ export function analyzeSeasonalTrends(
   const allVals = [...att.values()].sort((a, b) => a - b);
   const insights: SeasonalInsight[] = [];
   const markers: SeasonalMarker[] = [];
-  const bands: SeasonalBand[] = [];
 
   if (allVals.length < 8) {
-    return { markers, bands, insights, baseline: null };
+    return { markers, insights, baseline: null };
   }
 
   // Baseline = median of all weeks (robust to holiday spikes).
@@ -119,12 +111,6 @@ export function analyzeSeasonalTrends(
     }
     if (windowVals.length >= 4) {
       postEasterVals.push(...windowVals);
-      bands.push({
-        startDate: addDays(e, 7),
-        endDate: addDays(e, 70),
-        kind: "post-easter",
-        label: `Post-Easter lull ${y}`,
-      });
     }
   }
   if (easterVals.length > 0) {
@@ -185,14 +171,6 @@ export function analyzeSeasonalTrends(
         tone: "down",
       });
     }
-    for (const y of sortedYears) {
-      bands.push({
-        startDate: `${y}-06-01`,
-        endDate: `${y}-08-31`,
-        kind: "summer",
-        label: `Summer ${y}`,
-      });
-    }
   }
 
   // ── Holiday-weekend lows (Memorial / July 4 / Labor / Thanksgiving) ─
@@ -219,16 +197,27 @@ export function analyzeSeasonalTrends(
   const wAtt: number[] = [];
   const rainy: number[] = [];
   const dry: number[] = [];
+  const snowy: number[] = [];
+  const noSnow: number[] = [];
+  const cold: number[] = [];
+  const mild: number[] = [];
   for (const [d, v] of att) {
     const w = weather.get(d);
     if (!w) continue;
     if (w.tmaxF != null) {
       wTemps.push(w.tmaxF);
       wAtt.push(v);
+      if (w.tmaxF < 32) cold.push(v);
+      else mild.push(v);
     }
-    if (w.precipIn != null) {
-      if (w.precipIn >= 0.1) rainy.push(v);
+    const rain = w.rainIn ?? w.precipIn;
+    if (rain != null) {
+      if (rain >= 0.1) rainy.push(v);
       else dry.push(v);
+    }
+    if (w.snowIn != null) {
+      if (w.snowIn >= 0.25) snowy.push(v);
+      else noSnow.push(v);
     }
   }
   const corr = pearson(wTemps, wAtt);
@@ -238,7 +227,11 @@ export function analyzeSeasonalTrends(
         corr > 0
           ? "Warmer Sundays trend higher"
           : "Colder Sundays trend higher",
-      detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}) across ${wTemps.length} matched Sundays.`,
+      detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}) across ${wTemps.length} matched Sundays. ${
+        corr > 0
+          ? "Warm, pleasant Sundays draw more people."
+          : "Counter-intuitively, colder Sundays see more people (likely winter/holiday season)."
+      }`,
       tone: "neutral",
     });
   }
@@ -254,8 +247,30 @@ export function analyzeSeasonalTrends(
       });
     }
   }
+  if (snowy.length >= 3 && noSnow.length >= 4) {
+    const sm = mean(snowy);
+    const nm = mean(noSnow);
+    const delta = pct(sm, nm);
+    insights.push({
+      title: "Snowy Sundays cut attendance",
+      detail: `On the ${snowy.length} Sundays with measurable snow, attendance averaged ${Math.round(sm).toLocaleString()} vs ${Math.round(nm).toLocaleString()} on snow-free Sundays — about ${Math.abs(delta)}% ${delta < 0 ? "lower" : "higher"}.`,
+      tone: delta < 0 ? "down" : "neutral",
+    });
+  }
+  if (cold.length >= 4 && mild.length >= 4) {
+    const cm = mean(cold);
+    const mm = mean(mild);
+    const delta = pct(cm, mm);
+    if (Math.abs(delta) >= 3) {
+      insights.push({
+        title: delta < 0 ? "Freezing Sundays run lighter" : "Freezing Sundays run heavier",
+        detail: `Sub-freezing Sundays (high < 32°F) average ${Math.round(cm).toLocaleString()} vs ${Math.round(mm).toLocaleString()} on warmer days — about ${Math.abs(delta)}% ${delta < 0 ? "lower" : "higher"}.`,
+        tone: delta < 0 ? "down" : "neutral",
+      });
+    }
+  }
 
-  return { markers, bands, insights, baseline };
+  return { markers, insights, baseline };
 }
 
 /** Sundays adjacent to the big travel holidays for a given year. */

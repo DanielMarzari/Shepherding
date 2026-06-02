@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { WeeklyAttendanceRow } from "@/lib/attendance-read";
 import { formatWeekDate } from "@/lib/format-date";
 
-type SeriesKey =
+export type SeriesKey =
   | "in_person_total"
   | "adult_total"
   | "kids_total"
@@ -18,7 +18,7 @@ interface SeriesDef {
   color: string;
 }
 
-const SERIES: SeriesDef[] = [
+export const ATTENDANCE_SERIES: SeriesDef[] = [
   { key: "in_person_total", label: "In-person total", color: "var(--accent)" },
   { key: "adult_total", label: "Adult worship", color: "var(--good-soft-fg)" },
   { key: "kids_total", label: "Kids worship", color: "var(--warn-soft-fg)" },
@@ -26,6 +26,7 @@ const SERIES: SeriesDef[] = [
   { key: "online_live", label: "Online live", color: "var(--lane-care, #f59e0b)" },
   { key: "abfs", label: "ABFs", color: "var(--muted)" },
 ];
+const SERIES = ATTENDANCE_SERIES;
 
 /** Weekly attendance line chart. Each series is toggleable so the
  *  reader can isolate (e.g.) Sundays only or the online-stream curve.
@@ -156,12 +157,9 @@ export function AttendanceHistoryChart({
 
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        width="100%"
-        height={height}
-        preserveAspectRatio="none"
         onMouseMove={handleMove}
         onMouseLeave={() => setHoverIdx(null)}
-        style={{ cursor: "crosshair" }}
+        style={{ width: "100%", height: "auto", display: "block", cursor: "crosshair" }}
       >
         {yTicks.map((tick, i) => {
           const y = padT + innerH - (tick / yMax) * innerH;

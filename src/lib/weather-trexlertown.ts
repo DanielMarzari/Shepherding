@@ -10,6 +10,9 @@ export interface DayWeather {
   tmaxF: number | null;
   tminF: number | null;
   precipIn: number | null;
+  rainIn: number | null;
+  /** Snowfall depth in inches (converted from the archive's cm). */
+  snowIn: number | null;
 }
 
 /** Ensure the weather cache covers every Sunday in `weekDates`, then
@@ -53,7 +56,7 @@ export async function loadWeatherForWeeks(
     const placeholders = weekDates.map(() => "?").join(",");
     const rows = db
       .prepare(
-        `SELECT date, tmax_f, tmin_f, precip_in
+        `SELECT date, tmax_f, tmin_f, precip_in, rain_in, snow_in
            FROM weather_daily WHERE date IN (${placeholders})`,
       )
       .all(...weekDates) as Array<{
@@ -61,12 +64,16 @@ export async function loadWeatherForWeeks(
       tmax_f: number | null;
       tmin_f: number | null;
       precip_in: number | null;
+      rain_in: number | null;
+      snow_in: number | null;
     }>;
     for (const r of rows) {
       out.set(r.date, {
         tmaxF: r.tmax_f,
         tminF: r.tmin_f,
         precipIn: r.precip_in,
+        rainIn: r.rain_in,
+        snowIn: r.snow_in,
       });
     }
   }
@@ -77,7 +84,7 @@ async function fetchAndStore(startDate: string, endDate: string): Promise<void> 
   const url =
     `https://archive-api.open-meteo.com/v1/archive?latitude=${LAT}&longitude=${LON}` +
     `&start_date=${startDate}&end_date=${endDate}` +
-    `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum` +
+    `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,rain_sum,snowfall_sum` +
     `&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=${encodeURIComponent(TZ)}`;
 
   const res = await fetch(url, { next: { revalidate: 43_200 } }); // 12h
@@ -88,6 +95,8 @@ async function fetchAndStore(startDate: string, endDate: string): Promise<void> 
       temperature_2m_max?: (number | null)[];
       temperature_2m_min?: (number | null)[];
       precipitation_sum?: (number | null)[];
+      rain_sum?: (number | null)[];
+      snowfall_sum?: (number | null)[];
     };
   };
   const d = json.daily;
@@ -95,21 +104,27 @@ async function fetchAndStore(startDate: string, endDate: string): Promise<void> 
 
   const db = getDb();
   const upsert = db.prepare(
-    `INSERT INTO weather_daily (date, tmax_f, tmin_f, precip_in)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO weather_daily (date, tmax_f, tmin_f, precip_in, rain_in, snow_in)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(date) DO UPDATE SET
        tmax_f = excluded.tmax_f,
        tmin_f = excluded.tmin_f,
        precip_in = excluded.precip_in,
+       rain_in = excluded.rain_in,
+       snow_in = excluded.snow_in,
        fetched_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
   );
   const tx = db.transaction((rows: string[]) => {
     rows.forEach((date, i) => {
+      // With precipitation_unit=inch the archive returns snowfall in
+      // inches too, so store it directly (no cm conversion).
       upsert.run(
         date,
         d.temperature_2m_max?.[i] ?? null,
         d.temperature_2m_min?.[i] ?? null,
         d.precipitation_sum?.[i] ?? null,
+        d.rain_sum?.[i] ?? null,
+        d.snowfall_sum?.[i] ?? null,
       );
     });
   });

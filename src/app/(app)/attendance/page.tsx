@@ -38,16 +38,16 @@ export default async function AttendancePage() {
     history.rows.map((r) => r.week_date),
   );
   const seasonal = analyzeSeasonalTrends(history.rows, weather);
-  const weatherPoints = history.rows.map((r) => {
+  const weatherCells = history.rows.map((r) => {
     const w = weather.get(r.week_date);
     return {
-      date: r.week_date,
-      att: r.in_person_total,
       tmaxF: w?.tmaxF ?? null,
-      precipIn: w?.precipIn ?? null,
+      tminF: w?.tminF ?? null,
+      rainIn: w?.rainIn ?? null,
+      snowIn: w?.snowIn ?? null,
     };
   });
-  const hasWeather = weatherPoints.some((p) => p.tmaxF != null);
+  const hasWeather = weatherCells.some((w) => w.tmaxF != null);
 
   const expected = counts.shepherded + counts.active + counts.present;
   const ratio = weekly && expected > 0 ? expected / weekly : null;
@@ -220,10 +220,9 @@ export default async function AttendancePage() {
                 </p>
               )}
               <AttendanceWeatherChart
-                points={weatherPoints}
+                rows={history.rows}
+                weather={weatherCells}
                 markers={seasonal.markers}
-                bands={seasonal.bands}
-                baseline={seasonal.baseline}
               />
               {seasonal.insights.length > 0 && (
                 <div>
@@ -257,8 +256,12 @@ export default async function AttendancePage() {
                     ))}
                   </ul>
                   <p className="text-[11px] text-subtle mt-2">
-                    Dashed line = typical week (median). Trends compare each
-                    pattern against that baseline.
+                    Trends compare each pattern against the typical week
+                    (median ={" "}
+                    {seasonal.baseline != null
+                      ? seasonal.baseline.toLocaleString()
+                      : "—"}{" "}
+                    in person).
                   </p>
                 </div>
               )}
