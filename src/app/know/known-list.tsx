@@ -15,6 +15,17 @@ function lastNameKey(full: string): string {
   return `${last} ${full}`.toLowerCase();
 }
 
+/** Initial of the LAST name, for the A-Z jump rail. Non-letters bucket
+ *  under "#". */
+function lastInitial(full: string): string {
+  const parts = full.trim().split(/\s+/);
+  const last = parts.length > 1 ? parts[parts.length - 1] : parts[0] ?? "";
+  const ch = last[0]?.toUpperCase() ?? "#";
+  return /[A-Z]/.test(ch) ? ch : "#";
+}
+
+const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
 /** "Who do you know" list. A shepherd never faces the whole ~1,400-name
  *  wall at once: search is the primary action, the roster is paged in
  *  manageable chunks (sorted by last name), and everyone they've marked
@@ -60,6 +71,25 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
     safePage * PAGE_SIZE,
     safePage * PAGE_SIZE + PAGE_SIZE,
   );
+
+  // A-Z jump rail: which page each surname-initial first appears on (in
+  // the current, possibly-filtered, ordering). Clicking a letter pages
+  // to that slice instead of hiding the rest.
+  const letterPage = useMemo(() => {
+    const m: Record<string, number> = {};
+    filtered.forEach((c, i) => {
+      const L = lastInitial(c.fullName);
+      if (m[L] === undefined) m[L] = Math.floor(i / PAGE_SIZE);
+    });
+    return m;
+  }, [filtered]);
+  const activeLetter = pageRows[0] ? lastInitial(pageRows[0].fullName) : null;
+
+  function goToPage(p: number) {
+    setPage(p);
+    if (typeof window !== "undefined")
+      window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   const markedIds = useMemo(
     () =>
@@ -112,6 +142,36 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
           </span>
         </div>
 
+        {/* A-Z jump rail — jumps to that part of the list, doesn't hide
+            the rest. Letters with no one are dimmed. */}
+        {!q && filtered.length > PAGE_SIZE && (
+          <div className="flex flex-wrap gap-1" role="group" aria-label="Jump to letter">
+            {ALPHABET.map((L) => {
+              const target = letterPage[L];
+              const enabled = target !== undefined;
+              const active = enabled && L === activeLetter;
+              return (
+                <button
+                  key={L}
+                  type="button"
+                  disabled={!enabled}
+                  onClick={() => enabled && goToPage(target)}
+                  aria-label={`Jump to ${L}`}
+                  className={`w-7 h-7 rounded-md text-xs font-medium transition-colors ${
+                    active
+                      ? "bg-accent/20 text-fg"
+                      : enabled
+                        ? "text-muted hover:text-fg hover:bg-bg-elev-2 cursor-pointer"
+                        : "text-subtle/40 cursor-default"
+                  }`}
+                >
+                  {L}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {filtered.length === 0 ? (
           <p className="text-sm text-muted py-10 text-center">
             No one matches <span className="text-fg">“{query.trim()}”</span>.
@@ -133,11 +193,7 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
               <Pager
                 page={safePage}
                 pageCount={pageCount}
-                onChange={(p) => {
-                  setPage(p);
-                  if (typeof window !== "undefined")
-                    window.scrollTo({ top: 0, behavior: "smooth" });
-                }}
+                onChange={goToPage}
               />
             )}
           </>
