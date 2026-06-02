@@ -557,28 +557,39 @@ function getClassificationCountsImpl(
   // Precompute shepherded set into a TEMP TABLE (with PRIMARY KEY) so the
   // LEFT JOIN below is indexed instead of a full scan per pco_people row.
   populateShepherdedTempTable(orgId);
+  // Hard rule: anyone PCO marks inactive is ALWAYS inactive in our
+  // system, regardless of groups/check-ins/forms — PCO owns membership
+  // status. This predicate wins over shepherded/active/present below
+  // and mirrors the snapshot override in
+  // dashboard-refresh.classifyPersonActivity, so the live and
+  // snapshot paths agree.
+  const pcoInactive =
+    "(lower(coalesce(pco_people.status,'')) = 'inactive' OR pco_people.inactivated_at IS NOT NULL)";
   // "Active" = NOT shepherded AND (form submission OR check-in role) in window.
   // "Present" = NOT shepherded, NOT active, but PCO record edited in window.
-  // "Inactive" = NOT shepherded AND nothing in window.
+  // "Inactive" = PCO-inactive, OR NOT shepherded AND nothing in window.
   const row = db
     .prepare(
       `SELECT
          COUNT(*) AS total,
-         SUM(CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END) AS shepherded,
-         SUM(CASE WHEN s.person_id IS NOT NULL AND is_minor = 1 THEN 1 ELSE 0 END) AS shepherdedKids,
+         SUM(CASE WHEN s.person_id IS NOT NULL AND NOT ${pcoInactive} THEN 1 ELSE 0 END) AS shepherded,
+         SUM(CASE WHEN s.person_id IS NOT NULL AND NOT ${pcoInactive} AND is_minor = 1 THEN 1 ELSE 0 END) AS shepherdedKids,
          SUM(CASE
                WHEN s.person_id IS NULL
+                AND NOT ${pcoInactive}
                 AND ((last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
                   OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?))
                THEN 1 ELSE 0 END) AS active,
          SUM(CASE
                WHEN s.person_id IS NULL
+                AND NOT ${pcoInactive}
                 AND is_minor = 1
                 AND ((last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
                   OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?))
                THEN 1 ELSE 0 END) AS activeKids,
          SUM(CASE
                WHEN s.person_id IS NULL
+                AND NOT ${pcoInactive}
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
                 AND (last_check_in_at IS NULL OR last_check_in_at < ?)
                 AND pco_updated_at IS NOT NULL
@@ -586,6 +597,7 @@ function getClassificationCountsImpl(
                THEN 1 ELSE 0 END) AS present,
          SUM(CASE
                WHEN s.person_id IS NULL
+                AND NOT ${pcoInactive}
                 AND is_minor = 1
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
                 AND (last_check_in_at IS NULL OR last_check_in_at < ?)
@@ -593,12 +605,14 @@ function getClassificationCountsImpl(
                 AND pco_updated_at >= ?
                THEN 1 ELSE 0 END) AS presentKids,
          SUM(CASE
+               WHEN ${pcoInactive} THEN 1
                WHEN s.person_id IS NULL
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
                 AND (last_check_in_at IS NULL OR last_check_in_at < ?)
                 AND (pco_updated_at IS NULL OR pco_updated_at < ?)
                THEN 1 ELSE 0 END) AS inactive,
          SUM(CASE
+               WHEN ${pcoInactive} AND is_minor = 1 THEN 1
                WHEN s.person_id IS NULL
                 AND is_minor = 1
                 AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)

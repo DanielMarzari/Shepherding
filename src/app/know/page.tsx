@@ -45,31 +45,31 @@ export default async function KnowPage() {
   const candidates = listIntakeCandidates(session.orgId, session.personId);
 
   return (
-    <main className="min-h-screen bg-bg text-fg px-5 md:px-8 py-8">
-      <div className="max-w-6xl mx-auto space-y-6">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
+    <main className="min-h-screen bg-bg text-fg px-5 py-8">
+      <div className="max-w-3xl mx-auto space-y-6">
+        <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
-              Hi, {session.fullName.split(" ")[0]} 👋
+              Hi, {session.fullName.split(" ")[0]}
             </h1>
-            <p className="text-muted text-sm mt-1 max-w-xl">
-              Tap everyone you personally know. This just tells your church
-              who you have a relationship with — your admin decides who gets
-              formally assigned to you for shepherding.
+            <p className="text-muted text-sm mt-1.5 leading-relaxed max-w-prose">
+              Mark the people you personally know — no rush, a few at a time
+              is fine. It just tells your church who you have a relationship
+              with; your admin decides who&apos;s formally assigned to you.
             </p>
           </div>
-          <form action={intakeLogoutAction}>
+          <form action={intakeLogoutAction} className="shrink-0">
             <button
               type="submit"
               className="text-xs text-muted hover:text-fg underline underline-offset-2 cursor-pointer"
             >
-              Not you? Sign out
+              Sign out
             </button>
           </form>
         </div>
 
         {candidates.length === 0 ? (
-          <div className="rounded-lg border border-border-soft p-8 text-center text-sm text-muted">
+          <div className="rounded-xl border border-border-soft p-8 text-center text-sm text-muted">
             No active members to show yet. Check back after your church&apos;s
             next data sync.
           </div>
@@ -77,8 +77,8 @@ export default async function KnowPage() {
           <KnownList initial={candidates} />
         )}
 
-        <p className="text-xs text-subtle">
-          Your selections save automatically.
+        <p className="text-xs text-subtle text-center pt-2">
+          Your selections save automatically as you tap.
         </p>
       </div>
     </main>

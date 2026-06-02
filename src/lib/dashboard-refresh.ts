@@ -829,6 +829,25 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
             refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE org_id = ?`,
   ).run(cutoffActivity, cutoffActivity, cutoffActivity, orgId);
+
+  // Hard override: anyone PCO marks inactive is ALWAYS inactive in our
+  // system, no matter what other signals say (groups, check-ins,
+  // forms). PCO is the source of truth for membership status, so this
+  // wins even over 'shepherded'. Run as a second pass so it can't be
+  // undone by the CASE above. Mirrors the live classification in
+  // people-read.getClassificationCountsImpl.
+  db.prepare(
+    `UPDATE person_activity
+        SET classification = 'inactive',
+            refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE org_id = ?
+        AND person_id IN (
+          SELECT pco_id FROM pco_people
+           WHERE org_id = ?
+             AND (lower(coalesce(status,'')) = 'inactive'
+                  OR inactivated_at IS NOT NULL)
+        )`,
+  ).run(orgId, orgId);
 }
 
 function rebuildGroupSummary(
