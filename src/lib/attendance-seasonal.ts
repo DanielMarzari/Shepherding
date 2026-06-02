@@ -1,7 +1,22 @@
 import "server-only";
 import type { WeeklyAttendanceRow } from "./attendance-read";
 import type { DayWeather } from "./weather-trexlertown";
-import { parseLocalDate } from "./format-date";
+import { parseLocalDate, formatWeekDate } from "./format-date";
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
 export interface SeasonalMarker {
   date: string;
@@ -94,6 +109,72 @@ export function analyzeSeasonalTrends(
   for (const d of att.keys()) years.add(Number(d.slice(0, 4)));
   const sortedYears = [...years].sort();
 
+  // ── Year-over-year trend ───────────────────────────────────────────
+  const byYear = new Map<number, number[]>();
+  for (const [d, v] of att) {
+    const y = Number(d.slice(0, 4));
+    if (!byYear.has(y)) byYear.set(y, []);
+    byYear.get(y)!.push(v);
+  }
+  // Only count years with enough Sundays to be representative.
+  const yearAvgs = [...byYear.entries()]
+    .filter(([, vals]) => vals.length >= 10)
+    .map(([y, vals]) => ({ y, avg: mean(vals) }))
+    .sort((a, b) => a.y - b.y);
+  if (yearAvgs.length >= 2) {
+    const first = yearAvgs[0];
+    const last = yearAvgs[yearAvgs.length - 1];
+    const span = last.y - first.y;
+    const totalPct = pct(last.avg, first.avg);
+    const perYear = span > 0 ? Math.round(totalPct / span) : totalPct;
+    insights.push({
+      title:
+        perYear > 0
+          ? "Attendance is growing year over year"
+          : perYear < 0
+            ? "Attendance is declining year over year"
+            : "Attendance is flat year over year",
+      detail: `Average in-person attendance went from ${Math.round(first.avg).toLocaleString()} (${first.y}) to ${Math.round(last.avg).toLocaleString()} (${last.y}) — about ${perYear >= 0 ? "+" : ""}${perYear}% per year.`,
+      tone: perYear > 0 ? "up" : perYear < 0 ? "down" : "neutral",
+    });
+  }
+
+  // ── Biggest Sundays ────────────────────────────────────────────────
+  const topSundays = [...att.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+  if (topSundays.length >= 1) {
+    insights.push({
+      title: "Your biggest Sundays",
+      detail: topSundays
+        .map(([d, v]) => `${formatWeekDate(d)} (${v.toLocaleString()})`)
+        .join("; "),
+      tone: "up",
+    });
+  }
+
+  // ── Strongest / weakest month ──────────────────────────────────────
+  const byMonth = new Map<string, number[]>();
+  for (const [d, v] of att) {
+    const mm = d.slice(5, 7);
+    if (!byMonth.has(mm)) byMonth.set(mm, []);
+    byMonth.get(mm)!.push(v);
+  }
+  const monthAvgs = [...byMonth.entries()]
+    .filter(([, vals]) => vals.length >= 3)
+    .map(([mm, vals]) => ({ mm, avg: mean(vals) }))
+    .sort((a, b) => b.avg - a.avg);
+  if (monthAvgs.length >= 3) {
+    const hi = monthAvgs[0];
+    const lo = monthAvgs[monthAvgs.length - 1];
+    const monthName = (mm: string) => MONTH_NAMES[Number(mm) - 1] ?? mm;
+    insights.push({
+      title: "Strongest and weakest months",
+      detail: `${monthName(hi.mm)} is the highest-attendance month (avg ${Math.round(hi.avg).toLocaleString()}); ${monthName(lo.mm)} is the lowest (avg ${Math.round(lo.avg).toLocaleString()}).`,
+      tone: "neutral",
+    });
+  }
+
   // ── Easter peak + post-Easter dip + markers/bands ──────────────────
   const easterVals: number[] = [];
   const postEasterVals: number[] = [];
@@ -116,7 +197,7 @@ export function analyzeSeasonalTrends(
   if (easterVals.length > 0) {
     const m = mean(easterVals);
     insights.push({
-      title: "Easter is the biggest Sunday",
+      title: "Easter has the highest attendance",
       detail: `Easter averages ${Math.round(m).toLocaleString()} in person — about ${pct(m, baseline)}% above the typical week (${baseline.toLocaleString()}).`,
       tone: "up",
     });
@@ -124,8 +205,8 @@ export function analyzeSeasonalTrends(
   if (postEasterVals.length >= 4) {
     const m = mean(postEasterVals);
     insights.push({
-      title: "~10-week dip after Easter",
-      detail: `In the 10 Sundays following Easter, attendance averages ${Math.round(m).toLocaleString()} — roughly ${Math.abs(pct(m, baseline))}% below the typical week before it climbs back.`,
+      title: "Attendance drops for ~10 weeks after Easter",
+      detail: `In the 10 Sundays following Easter, attendance averages ${Math.round(m).toLocaleString()} — about ${Math.abs(pct(m, baseline))}% below the typical week before it recovers.`,
       tone: "down",
     });
   }
@@ -146,7 +227,7 @@ export function analyzeSeasonalTrends(
   if (christmasVals.length > 0) {
     const m = mean(christmasVals);
     insights.push({
-      title: "Christmas Sundays spike",
+      title: "Christmas Sundays have higher attendance",
       detail: `Sundays around Christmas average ${Math.round(m).toLocaleString()} — about ${pct(m, baseline)}% above a typical week.`,
       tone: "up",
     });
@@ -166,7 +247,7 @@ export function analyzeSeasonalTrends(
     const delta = pct(sm, nm);
     if (delta <= -3) {
       insights.push({
-        title: "Summer slump (Jun–Aug)",
+        title: "Summer attendance is lower (Jun–Aug)",
         detail: `Summer Sundays average ${Math.round(sm).toLocaleString()} vs ${Math.round(nm).toLocaleString()} the rest of the year — about ${Math.abs(delta)}% lower.`,
         tone: "down",
       });
@@ -185,8 +266,8 @@ export function analyzeSeasonalTrends(
     const delta = pct(m, baseline);
     if (delta <= -3) {
       insights.push({
-        title: "Holiday weekends run light",
-        detail: `Memorial Day, July 4th, Labor Day and Thanksgiving Sundays average ${Math.round(m).toLocaleString()} — about ${Math.abs(delta)}% below a typical week (people travel).`,
+        title: "Holiday weekends have lower attendance",
+        detail: `Memorial Day, July 4th, Labor Day and Thanksgiving Sundays average ${Math.round(m).toLocaleString()} — about ${Math.abs(delta)}% below a typical week.`,
         tone: "down",
       });
     }
@@ -225,13 +306,9 @@ export function analyzeSeasonalTrends(
     insights.push({
       title:
         corr > 0
-          ? "Warmer Sundays trend higher"
-          : "Colder Sundays trend higher",
-      detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}) across ${wTemps.length} matched Sundays. ${
-        corr > 0
-          ? "Warm, pleasant Sundays draw more people."
-          : "Counter-intuitively, colder Sundays see more people (likely winter/holiday season)."
-      }`,
+          ? "Warmer Sundays have higher attendance"
+          : "Colder Sundays have higher attendance",
+      detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}) across ${wTemps.length} matched Sundays.`,
       tone: "neutral",
     });
   }
@@ -241,7 +318,7 @@ export function analyzeSeasonalTrends(
     const delta = pct(rm, dm);
     if (Math.abs(delta) >= 3) {
       insights.push({
-        title: delta < 0 ? "Rain dampens turnout" : "Rainy Sundays hold up",
+        title: delta < 0 ? "Rain lowers attendance" : "Rain raises attendance",
         detail: `Rainy Sundays (≥0.1in) average ${Math.round(rm).toLocaleString()} vs ${Math.round(dm).toLocaleString()} on dry Sundays — about ${Math.abs(delta)}% ${delta < 0 ? "lower" : "higher"}.`,
         tone: delta < 0 ? "down" : "neutral",
       });
@@ -252,7 +329,7 @@ export function analyzeSeasonalTrends(
     const nm = mean(noSnow);
     const delta = pct(sm, nm);
     insights.push({
-      title: "Snowy Sundays cut attendance",
+      title: delta < 0 ? "Snow lowers attendance" : "Snow raises attendance",
       detail: `On the ${snowy.length} Sundays with measurable snow, attendance averaged ${Math.round(sm).toLocaleString()} vs ${Math.round(nm).toLocaleString()} on snow-free Sundays — about ${Math.abs(delta)}% ${delta < 0 ? "lower" : "higher"}.`,
       tone: delta < 0 ? "down" : "neutral",
     });
@@ -263,7 +340,7 @@ export function analyzeSeasonalTrends(
     const delta = pct(cm, mm);
     if (Math.abs(delta) >= 3) {
       insights.push({
-        title: delta < 0 ? "Freezing Sundays run lighter" : "Freezing Sundays run heavier",
+        title: delta < 0 ? "Cold lowers attendance" : "Cold raises attendance",
         detail: `Sub-freezing Sundays (high < 32°F) average ${Math.round(cm).toLocaleString()} vs ${Math.round(mm).toLocaleString()} on warmer days — about ${Math.abs(delta)}% ${delta < 0 ? "lower" : "higher"}.`,
         tone: delta < 0 ? "down" : "neutral",
       });
