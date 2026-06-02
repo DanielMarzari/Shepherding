@@ -7,35 +7,6 @@ import {
   type AttendanceImportResult,
   importAttendanceFile,
 } from "@/lib/attendance-import";
-import { saveWeeklyAttendance } from "@/lib/pco";
-
-export interface AttendanceSaveState {
-  status: "idle" | "saved" | "error";
-  message?: string;
-}
-
-export async function saveAttendanceAction(
-  _prev: AttendanceSaveState | null,
-  formData: FormData,
-): Promise<AttendanceSaveState> {
-  const s = await requireOrg();
-  if (s.role !== "admin") {
-    return { status: "error", message: "Only admins can change this." };
-  }
-  const raw = formData.get("weekly");
-  if (raw == null || raw === "") {
-    saveWeeklyAttendance(s.orgId, null);
-    revalidatePath("/attendance");
-    return { status: "saved", message: "Cleared." };
-  }
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) {
-    return { status: "error", message: "Enter a positive number." };
-  }
-  saveWeeklyAttendance(s.orgId, Math.floor(n));
-  revalidatePath("/attendance");
-  return { status: "saved", message: `Saved · ${Math.floor(n).toLocaleString()} weekly.` };
-}
 
 /** Add a reference to a spreadsheet / doc that holds historical
  *  attendance data. We just store the link + a label so admins can
@@ -71,6 +42,23 @@ export async function removeAttendanceSourceAction(formData: FormData) {
   getDb()
     .prepare(`DELETE FROM attendance_sources WHERE id = ? AND org_id = ?`)
     .run(id, session.orgId);
+  revalidatePath("/attendance");
+}
+
+/** Remove all imported weekly rows that came from one .xlsx file
+ *  (matched by source_file). Lets an admin undo a bad import — the
+ *  history chart and the derived adult-attendance average recompute on
+ *  the next render. */
+export async function removeAttendanceImportAction(formData: FormData) {
+  const session = await requireOrg();
+  if (session.role !== "admin") throw new Error("Admin only");
+  const sourceFile = String(formData.get("sourceFile") ?? "").trim();
+  if (!sourceFile) throw new Error("Missing source file");
+  getDb()
+    .prepare(
+      `DELETE FROM attendance_weekly WHERE org_id = ? AND source_file = ?`,
+    )
+    .run(session.orgId, sourceFile);
   revalidatePath("/attendance");
 }
 

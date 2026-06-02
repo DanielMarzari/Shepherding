@@ -19,7 +19,37 @@ export interface WeeklyAttendanceSummary {
   inPerson12moAvg: number | null;
   inPerson12moPeak: number | null;
   inPersonTrend12moDelta: number | null;
+  /** Avg of the ADULT in-person subtotal over the last 12 months —
+   *  the number /attendance now uses as "weekly attendance" instead of
+   *  a manually-entered figure. */
+  adult12moAvg: number | null;
   totalSourceFiles: number;
+}
+
+export interface ImportedAttendanceFile {
+  sourceFile: string;
+  weeks: number;
+  earliest: string;
+  latest: string;
+}
+
+/** Imported .xlsx files, one row per distinct source_file, so the UI
+ *  can list and remove a bad import. */
+export function listImportedAttendanceFiles(
+  orgId: number,
+): ImportedAttendanceFile[] {
+  return getDb()
+    .prepare(
+      `SELECT source_file AS sourceFile,
+              COUNT(*) AS weeks,
+              MIN(week_date) AS earliest,
+              MAX(week_date) AS latest
+         FROM attendance_weekly
+        WHERE org_id = ? AND source_file IS NOT NULL
+        GROUP BY source_file
+        ORDER BY MAX(week_date) DESC`,
+    )
+    .all(orgId) as ImportedAttendanceFile[];
 }
 
 export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
@@ -51,17 +81,21 @@ export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
   let avg: number | null = null;
   let peak: number | null = null;
   let delta: number | null = null;
+  let adultAvg: number | null = null;
   if (latest) {
     const latestMs = new Date(latest).valueOf();
     const cutoffMs = latestMs - 365 * 86_400_000;
     const prevCutoffMs = cutoffMs - 365 * 86_400_000;
     const recent: number[] = [];
     const prior: number[] = [];
+    const recentAdult: number[] = [];
     for (const r of rows) {
-      if (r.in_person_total == null) continue;
       const t = new Date(r.week_date).valueOf();
-      if (t > cutoffMs) recent.push(r.in_person_total);
-      else if (t > prevCutoffMs) prior.push(r.in_person_total);
+      if (r.in_person_total != null) {
+        if (t > cutoffMs) recent.push(r.in_person_total);
+        else if (t > prevCutoffMs) prior.push(r.in_person_total);
+      }
+      if (r.adult_total != null && t > cutoffMs) recentAdult.push(r.adult_total);
     }
     if (recent.length > 0) {
       avg = Math.round(recent.reduce((a, b) => a + b, 0) / recent.length);
@@ -72,6 +106,11 @@ export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
         delta = Math.round(((avg - priorAvg) / priorAvg) * 100);
       }
     }
+    if (recentAdult.length > 0) {
+      adultAvg = Math.round(
+        recentAdult.reduce((a, b) => a + b, 0) / recentAdult.length,
+      );
+    }
   }
 
   return {
@@ -81,6 +120,7 @@ export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
     inPerson12moAvg: avg,
     inPerson12moPeak: peak,
     inPersonTrend12moDelta: delta,
+    adult12moAvg: adultAvg,
     totalSourceFiles: filesCount,
   };
 }

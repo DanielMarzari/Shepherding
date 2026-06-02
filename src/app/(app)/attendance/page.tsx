@@ -1,7 +1,10 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { getWeeklyAttendance } from "@/lib/attendance-read";
+import {
+  getWeeklyAttendance,
+  listImportedAttendanceFiles,
+} from "@/lib/attendance-read";
 import { listAttendanceSources } from "@/lib/attendance-sources-read";
 import { buildAttendanceDistribution } from "@/lib/attendance-distribution";
 import { getSyncSettings } from "@/lib/pco";
@@ -9,8 +12,8 @@ import { getClassificationCounts } from "@/lib/people-read";
 import {
   addAttendanceSourceAction,
   removeAttendanceSourceAction,
+  removeAttendanceImportAction,
 } from "./actions";
-import { AttendanceForm } from "./form";
 import { AttendanceUploadForm } from "./upload-form";
 import { AttendanceHistoryChart } from "./history-chart";
 import { DistributionChart } from "./distribution-chart";
@@ -19,9 +22,12 @@ export default async function AttendancePage() {
   const session = await requireOrg();
   const settings = getSyncSettings(session.orgId);
   const counts = getClassificationCounts(session.orgId, settings.activityMonths);
-  const weekly = settings.weeklyAttendance;
   const sources = listAttendanceSources(session.orgId);
   const history = getWeeklyAttendance(session.orgId);
+  const importedFiles = listImportedAttendanceFiles(session.orgId);
+  // Weekly attendance is now DERIVED from the imported adult in-person
+  // average (last 12 mo) — no longer a manually-entered number.
+  const weekly = history.adult12moAvg;
   const isAdmin = session.role === "admin";
 
   const expected = counts.shepherded + counts.active + counts.present;
@@ -35,9 +41,10 @@ export default async function AttendancePage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Attendance</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
-            Tell Shepherding your average weekly Sunday attendance. We use it to compute
-            the average attendance frequency and simulate the distribution across your
-            people.
+            Weekly attendance is taken straight from your imported in-person
+            numbers — the average adult Sunday attendance over the last 12
+            months. We use it to compute the average attendance frequency and
+            simulate the distribution across your people.
           </p>
         </div>
 
@@ -47,7 +54,7 @@ export default async function AttendancePage() {
             <div className="tnum text-2xl font-semibold">
               {weekly == null ? <span className="text-subtle">—</span> : weekly.toLocaleString()}
             </div>
-            <div className="text-xs text-muted mt-1">people / week</div>
+            <div className="text-xs text-muted mt-1">adults / week · in-person, 12 mo avg</div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Expected attenders</div>
@@ -164,13 +171,6 @@ export default async function AttendancePage() {
           </div>
         </Card>
 
-        <Card>
-          <CardHeader title="Set weekly attendance" />
-          <div className="p-5">
-            <AttendanceForm initial={weekly} isAdmin={session.role === "admin"} />
-          </div>
-        </Card>
-
         {distribution && distribution.buckets.length > 0 && (
           <Card>
             <CardHeader
@@ -206,7 +206,7 @@ export default async function AttendancePage() {
             With <span className="text-fg tnum">{expected.toLocaleString()}</span> expected
             attenders and{" "}
             <span className="text-fg tnum">
-              {weekly != null ? weekly.toLocaleString() : "(not set)"}
+              {weekly != null ? weekly.toLocaleString() : "(no imported data yet)"}
             </span>{" "}
             actual weekly attenders, the average person attends about{" "}
             <span className="text-fg">
@@ -256,6 +256,48 @@ export default async function AttendancePage() {
                 <AttendanceUploadForm />
               </div>
             )}
+
+            {importedFiles.length > 0 && (
+              <div>
+                <div className="text-xs font-medium mb-2">
+                  Imported files ({importedFiles.length})
+                </div>
+                <ul className="divide-y divide-border-softer rounded-lg border border-border-soft">
+                  {importedFiles.map((f) => (
+                    <li
+                      key={f.sourceFile}
+                      className="flex items-center gap-3 px-3.5 py-2.5 text-sm"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium break-words">
+                          {f.sourceFile}
+                        </div>
+                        <div className="text-[11px] text-subtle tnum">
+                          {f.weeks} week{f.weeks === 1 ? "" : "s"} · {f.earliest} → {f.latest}
+                        </div>
+                      </div>
+                      {isAdmin && (
+                        <form action={removeAttendanceImportAction}>
+                          <input
+                            type="hidden"
+                            name="sourceFile"
+                            value={f.sourceFile}
+                          />
+                          <button
+                            type="submit"
+                            className="text-xs text-muted hover:text-warn-soft-fg cursor-pointer"
+                            title={`Remove all ${f.weeks} weeks imported from this file`}
+                          >
+                            Remove
+                          </button>
+                        </form>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {sources.length > 0 && (
               <ul className="divide-y divide-border-softer rounded-lg border border-border-soft">
                 {sources.map((s) => (
