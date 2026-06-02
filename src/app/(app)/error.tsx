@@ -21,13 +21,19 @@ export default function AppError({
     // eslint-disable-next-line no-console
     console.error("App route error:", error);
 
-    // Stale-chunk recovery after a redeploy: the browser asked for a JS
-    // chunk that no longer exists. Hard-reload to the current build,
-    // guarded so a truly-missing chunk can't reload-loop.
-    const isChunkError =
-      error?.name === "ChunkLoadError" ||
-      /loading chunk|ChunkLoadError|failed to load/i.test(error?.message ?? "");
-    if (isChunkError && typeof window !== "undefined") {
+    // Stale-build recovery after a redeploy. Two flavors:
+    //  - ChunkLoadError: the browser asked for a JS chunk that no
+    //    longer exists in the new build.
+    //  - UnrecognizedActionError: a Server Action id from the old
+    //    build that the new server doesn't recognize.
+    // Both mean "this tab is running stale code" — hard-reload once to
+    // pull the current build, guarded so a real failure can't loop.
+    const msg = `${error?.name ?? ""} ${error?.message ?? ""}`;
+    const isStaleBuild =
+      /ChunkLoadError|loading chunk|failed to load|UnrecognizedActionError|Server Action .* was not found|failed-to-find-server-action/i.test(
+        msg,
+      );
+    if (isStaleBuild && typeof window !== "undefined") {
       const KEY = "chunk-reload-at";
       const last = Number(sessionStorage.getItem(KEY) ?? 0);
       if (Date.now() - last > 10_000) {

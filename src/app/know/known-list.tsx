@@ -46,7 +46,8 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-center justify-between gap-3 flex-wrap sticky top-0 z-10 bg-bg py-2 -my-2">
+
         <input
           type="search"
           value={query}
@@ -60,23 +61,27 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
         </span>
       </div>
       {error && <p className="text-sm text-warn-soft-fg">{error}</p>}
-      <ul className="rounded-lg border border-border-soft divide-y divide-border-softer max-h-[60vh] overflow-y-auto">
-        {filtered.length === 0 ? (
-          <li className="px-4 py-6 text-sm text-muted text-center">
-            No one matches &ldquo;{query}&rdquo;.
-          </li>
-        ) : (
-          filtered.map((c) => {
+      {filtered.length === 0 ? (
+        <p className="px-4 py-10 text-sm text-muted text-center">
+          No one matches &ldquo;{query}&rdquo;.
+        </p>
+      ) : (
+        <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+          {filtered.map((c) => {
             const isKnown = !!known[c.personId];
             return (
               <li key={c.personId}>
                 <button
                   type="button"
                   onClick={() => toggle(c.personId)}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-bg-elev-2/60 cursor-pointer transition-colors"
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border text-left transition-colors cursor-pointer ${
+                    isKnown
+                      ? "border-accent/50 bg-accent/5"
+                      : "border-border-soft hover:bg-bg-elev-2/60"
+                  }`}
                 >
                   <span
-                    className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 ${
+                    className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 text-xs ${
                       isKnown
                         ? "bg-accent border-accent text-[var(--accent-fg)]"
                         : "border-border-soft"
@@ -86,16 +91,16 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
                     {isKnown ? "✓" : ""}
                   </span>
                   <span
-                    className={`flex-1 text-sm ${isKnown ? "text-fg font-medium" : "text-muted"}`}
+                    className={`flex-1 text-sm truncate ${isKnown ? "text-fg font-medium" : "text-muted"}`}
                   >
                     {c.fullName}
                   </span>
                 </button>
               </li>
             );
-          })
-        )}
-      </ul>
+          })}
+        </ul>
+      )}
     </div>
   );
 }

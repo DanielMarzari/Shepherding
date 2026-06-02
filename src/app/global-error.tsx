@@ -18,14 +18,17 @@ export default function GlobalError({
     // eslint-disable-next-line no-console
     console.error("Global error:", error);
 
-    // ChunkLoadError = the browser is holding an old build's HTML and
-    // asking for JS chunks that no longer exist after a redeploy. A
-    // hard reload pulls the current build. Guard with sessionStorage
-    // so a genuinely-broken chunk doesn't reload-loop forever.
-    const isChunkError =
-      error?.name === "ChunkLoadError" ||
-      /loading chunk|ChunkLoadError|failed to load/i.test(error?.message ?? "");
-    if (isChunkError && typeof window !== "undefined") {
+    // Stale-build recovery after a redeploy: either a JS chunk that no
+    // longer exists (ChunkLoadError) or a Server Action id the new
+    // server doesn't recognize (UnrecognizedActionError). Both mean
+    // the tab is running old code — hard-reload to the current build.
+    // Guard with sessionStorage so a genuine failure can't loop.
+    const msg = `${error?.name ?? ""} ${error?.message ?? ""}`;
+    const isStaleBuild =
+      /ChunkLoadError|loading chunk|failed to load|UnrecognizedActionError|Server Action .* was not found|failed-to-find-server-action/i.test(
+        msg,
+      );
+    if (isStaleBuild && typeof window !== "undefined") {
       const KEY = "chunk-reload-at";
       const last = Number(sessionStorage.getItem(KEY) ?? 0);
       // Only auto-reload if we haven't already done so in the last 10s.

@@ -45,8 +45,8 @@ export default async function KnowPage() {
   const candidates = listIntakeCandidates(session.orgId, session.personId);
 
   return (
-    <main className="min-h-screen bg-bg text-fg px-5 py-8">
-      <div className="max-w-2xl mx-auto space-y-6">
+    <main className="min-h-screen bg-bg text-fg px-5 md:px-8 py-8">
+      <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
