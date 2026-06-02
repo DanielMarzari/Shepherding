@@ -17,6 +17,23 @@ export default function GlobalError({
   useEffect(() => {
     // eslint-disable-next-line no-console
     console.error("Global error:", error);
+
+    // ChunkLoadError = the browser is holding an old build's HTML and
+    // asking for JS chunks that no longer exist after a redeploy. A
+    // hard reload pulls the current build. Guard with sessionStorage
+    // so a genuinely-broken chunk doesn't reload-loop forever.
+    const isChunkError =
+      error?.name === "ChunkLoadError" ||
+      /loading chunk|ChunkLoadError|failed to load/i.test(error?.message ?? "");
+    if (isChunkError && typeof window !== "undefined") {
+      const KEY = "chunk-reload-at";
+      const last = Number(sessionStorage.getItem(KEY) ?? 0);
+      // Only auto-reload if we haven't already done so in the last 10s.
+      if (Date.now() - last > 10_000) {
+        sessionStorage.setItem(KEY, String(Date.now()));
+        window.location.reload();
+      }
+    }
   }, [error]);
 
   return (

@@ -20,6 +20,21 @@ export default function AppError({
     // client-visible details too so they show up in the browser console.
     // eslint-disable-next-line no-console
     console.error("App route error:", error);
+
+    // Stale-chunk recovery after a redeploy: the browser asked for a JS
+    // chunk that no longer exists. Hard-reload to the current build,
+    // guarded so a truly-missing chunk can't reload-loop.
+    const isChunkError =
+      error?.name === "ChunkLoadError" ||
+      /loading chunk|ChunkLoadError|failed to load/i.test(error?.message ?? "");
+    if (isChunkError && typeof window !== "undefined") {
+      const KEY = "chunk-reload-at";
+      const last = Number(sessionStorage.getItem(KEY) ?? 0);
+      if (Date.now() - last > 10_000) {
+        sessionStorage.setItem(KEY, String(Date.now()));
+        window.location.reload();
+      }
+    }
   }, [error]);
 
   return (

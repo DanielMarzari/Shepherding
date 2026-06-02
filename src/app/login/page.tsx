@@ -18,6 +18,17 @@ export default async function LoginPage() {
           Create an account
         </Link>
       </p>
+      <div className="mt-6 pt-5 border-t border-border-soft text-center">
+        <p className="text-sm text-muted">
+          On your church&apos;s shepherd team? No account needed —
+        </p>
+        <Link
+          href="/know"
+          className="text-accent hover:underline text-sm font-medium"
+        >
+          Flag the people you know →
+        </Link>
+      </div>
     </AuthLayout>
   );
 }
