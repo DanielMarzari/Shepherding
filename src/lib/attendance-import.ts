@@ -22,12 +22,22 @@ interface WeeklyRow {
   online_live: number | null;
   online_on_demand: number | null;
   abfs: number | null;
+  exception_reason: string | null;
 }
 
 // Label aliases — case-insensitive substring matching is too loose
 // (e.g. "Kids Worship" appears as a category header AND a row), so we
 // hard-code exact label sets per metric. Keep in lowercase.
-const LABEL_ALIASES: Record<keyof Omit<WeeklyRow, "week_date">, string[]> = {
+type NumericMetric =
+  | "in_person_total"
+  | "kids_total"
+  | "student_total"
+  | "adult_total"
+  | "online_live"
+  | "online_on_demand"
+  | "abfs";
+
+const LABEL_ALIASES: Record<NumericMetric, string[]> = {
   in_person_total: [
     "total in-person worship",
     "total in person worship",
@@ -97,6 +107,15 @@ function labelKey(s: unknown): string {
   return s.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/** Free-text exception reason from a cell (e.g. "snow closure"). Blanks
+ *  and the "x"/"-" not-run markers count as no exception. */
+function toReason(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const s = value.replace(/\s+/g, " ").trim();
+  if (!s || /^[x\-–—]+$/i.test(s)) return null;
+  return s.slice(0, 200);
+}
+
 /** Scan rows for the first one whose middle cells are mostly dates —
  *  that's the date-header row. Returns the row index and an array of
  *  per-column ISO dates (or null when the column isn't a date). */
@@ -161,6 +180,7 @@ export function parseAttendanceWorkbook(
         online_live: null,
         online_on_demand: null,
         abfs: null,
+        exception_reason: null,
       });
     }
   }
@@ -168,7 +188,7 @@ export function parseAttendanceWorkbook(
   // For each metric, find the FIRST matching row below the header and
   // assign its date-column values. "First match" wins so duplicate
   // "Totals" rows further down don't overwrite the right one.
-  const metrics: Array<keyof Omit<WeeklyRow, "week_date">> = [
+  const metrics: NumericMetric[] = [
     "in_person_total",
     "kids_total",
     "student_total",
@@ -222,8 +242,25 @@ export function parseAttendanceWorkbook(
     }
   }
 
+  // Exceptions row — free-text reason per date ("snow closure", etc.)
+  // that marks the week as excluded from averages. First match wins.
+  for (let i = header.rowIdx + 1; i < rows.length; i++) {
+    if (!labelKey(rows[i][0]).includes("exception")) continue;
+    const row = rows[i];
+    for (let col = 1; col < header.dates.length; col++) {
+      const d = header.dates[col];
+      if (!d) continue;
+      const reason = toReason(row[col]);
+      if (!reason) continue;
+      const w = byDate.get(d);
+      if (w) w.exception_reason = reason;
+    }
+    break;
+  }
+
   // Drop weeks that have ZERO data for every metric (empty trailing
-  // columns from spreadsheet padding).
+  // columns from spreadsheet padding) — but KEEP weeks flagged with an
+  // exception even if the counts are blank (a closure still happened).
   const out: WeeklyRow[] = [];
   for (const w of byDate.values()) {
     const hasAny =
@@ -233,7 +270,8 @@ export function parseAttendanceWorkbook(
       w.adult_total !== null ||
       w.online_live !== null ||
       w.online_on_demand !== null ||
-      w.abfs !== null;
+      w.abfs !== null ||
+      w.exception_reason !== null;
     if (hasAny) out.push(w);
   }
   out.sort((a, b) => a.week_date.localeCompare(b.week_date));
@@ -255,9 +293,9 @@ export function importAttendanceFile(
   const stmt = db.prepare(
     `INSERT INTO attendance_weekly
        (org_id, week_date, in_person_total, kids_total, student_total,
-        adult_total, online_live, online_on_demand, abfs, source_file,
-        imported_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        adult_total, online_live, online_on_demand, abfs, exception_reason,
+        source_file, imported_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, week_date) DO UPDATE SET
        in_person_total = excluded.in_person_total,
@@ -267,6 +305,7 @@ export function importAttendanceFile(
        online_live = excluded.online_live,
        online_on_demand = excluded.online_on_demand,
        abfs = excluded.abfs,
+       exception_reason = excluded.exception_reason,
        source_file = excluded.source_file,
        imported_at = excluded.imported_at`,
   );
@@ -282,6 +321,7 @@ export function importAttendanceFile(
         r.online_live,
         r.online_on_demand,
         r.abfs,
+        r.exception_reason,
         filename,
       );
     }

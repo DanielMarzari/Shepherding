@@ -10,6 +10,9 @@ export interface WeeklyAttendanceRow {
   online_live: number | null;
   online_on_demand: number | null;
   abfs: number | null;
+  /** Free-text reason this week is excluded from averages (e.g. "snow
+   *  closure"), or null for a normal week. */
+  exception_reason: string | null;
 }
 
 export interface WeeklyAttendanceSummary {
@@ -57,7 +60,8 @@ export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
   const rows = db
     .prepare(
       `SELECT week_date, in_person_total, kids_total, student_total,
-              adult_total, online_live, online_on_demand, abfs
+              adult_total, online_live, online_on_demand, abfs,
+              exception_reason
          FROM attendance_weekly
         WHERE org_id = ?
         ORDER BY week_date ASC`,
@@ -90,6 +94,9 @@ export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
     const prior: number[] = [];
     const recentAdult: number[] = [];
     for (const r of rows) {
+      // Excluded weeks (snow closures, cancellations) never count toward
+      // any average.
+      if (r.exception_reason) continue;
       const t = new Date(r.week_date).valueOf();
       if (r.in_person_total != null) {
         if (t > cutoffMs) recent.push(r.in_person_total);

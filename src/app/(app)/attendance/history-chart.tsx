@@ -207,6 +207,25 @@ export function AttendanceHistoryChart({
             </text>
           </g>
         ))}
+        {/* Excluded weeks (snow closures, cancellations). */}
+        {rows.map((r, i) =>
+          r.exception_reason ? (
+            <g key={`ex${i}`} pointerEvents="none">
+              <line
+                x1={xFor(i)}
+                x2={xFor(i)}
+                y1={padT}
+                y2={padT + innerH}
+                stroke="rgba(148,163,184,0.30)"
+                strokeWidth={0.75}
+                strokeDasharray="2 2"
+              />
+              <text x={xFor(i)} y={padT + 9} textAnchor="middle" fontSize={9} fill="#94a3b8">
+                ✕
+              </text>
+            </g>
+          ) : null,
+        )}
         {SERIES.filter((s) => enabled[s.key]).map((s) => (
           <path
             key={s.key}
@@ -252,6 +271,11 @@ export function AttendanceHistoryChart({
             <span className="font-medium">
               {formatWeekDate(rows[hoverIdx].week_date)}
             </span>
+            {rows[hoverIdx].exception_reason && (
+              <span className="text-warn-soft-fg ml-2">
+                Excluded: {rows[hoverIdx].exception_reason}
+              </span>
+            )}
             <span className="text-muted ml-2">
               {SERIES.filter((s) => enabled[s.key]).map((s) => {
                 const v = rows[hoverIdx][s.key];

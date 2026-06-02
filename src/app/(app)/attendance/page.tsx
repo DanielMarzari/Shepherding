@@ -9,6 +9,10 @@ import { listAttendanceSources } from "@/lib/attendance-sources-read";
 import { buildAttendanceDistribution } from "@/lib/attendance-distribution";
 import { loadWeatherForWeeks } from "@/lib/weather-trexlertown";
 import { analyzeSeasonalTrends } from "@/lib/attendance-seasonal";
+import {
+  getPreacherByWeek,
+  analyzePreachers,
+} from "@/lib/attendance-preacher";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
 import {
@@ -19,6 +23,7 @@ import {
 import { AttendanceUploadForm } from "./upload-form";
 import { AttendanceHistoryChart } from "./history-chart";
 import { AttendanceWeatherChart } from "./weather-chart";
+import { PreacherChart } from "./preacher-chart";
 import { DistributionChart } from "./distribution-chart";
 
 export default async function AttendancePage() {
@@ -48,6 +53,14 @@ export default async function AttendancePage() {
     };
   });
   const hasWeather = weatherCells.some((w) => w.tmaxF != null);
+
+  // Preacher overlay (LIVE service) — third chart.
+  const preacherByWeek = getPreacherByWeek(
+    session.orgId,
+    history.rows.map((r) => r.week_date),
+  );
+  const preacher = analyzePreachers(history.rows, preacherByWeek);
+  const hasPreacher = preacher.stats.length > 0;
 
   const expected = counts.shepherded + counts.active + counts.present;
   const ratio = weekly && expected > 0 ? expected / weekly : null;
@@ -265,6 +278,33 @@ export default async function AttendancePage() {
                   </p>
                 </div>
               )}
+            </div>
+          </Card>
+        )}
+
+        {hasPreacher && (
+          <Card>
+            <CardHeader
+              title="Attendance by preacher (LIVE service)"
+              badge={
+                <Pill tone="muted">
+                  {preacher.stats.length} preacher
+                  {preacher.stats.length === 1 ? "" : "s"}
+                </Pill>
+              }
+            />
+            <div className="p-5 space-y-4">
+              <PreacherChart
+                rows={history.rows}
+                perWeek={preacher.perWeek}
+                stats={preacher.stats}
+              />
+              <p className="text-[11px] text-subtle">
+                Preacher is taken from PCO Services — the person in a
+                preaching / teaching / speaker position on each Sunday&apos;s
+                plan, preferring the LIVE service when a date has several.
+                Averages exclude weeks flagged as exceptions.
+              </p>
             </div>
           </Card>
         )}

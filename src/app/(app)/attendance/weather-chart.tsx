@@ -263,6 +263,18 @@ export function AttendanceWeatherChart({
           </>
         )}
 
+        {/* Excluded weeks (snow closures, cancellations). */}
+        {rows.map((r, i) =>
+          r.exception_reason ? (
+            <g key={`ex${i}`} pointerEvents="none">
+              <line x1={xFor(i)} x2={xFor(i)} y1={padT} y2={linesBottom} stroke="rgba(148,163,184,0.30)" strokeWidth={0.75} strokeDasharray="2 2" />
+              <text x={xFor(i)} y={padT + 9} textAnchor="middle" fontSize={9} fill="#94a3b8">
+                ✕
+              </text>
+            </g>
+          ) : null,
+        )}
+
         {/* Attendance lines */}
         {ATTENDANCE_SERIES.filter((s) => enabled[s.key]).map((s) => (
           <path key={s.key} d={attPath(s.key)} fill="none" stroke={s.color} strokeWidth={1.6} strokeLinejoin="round" />
@@ -333,6 +345,11 @@ export function AttendanceWeatherChart({
         {hr ? (
           <div className="text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-medium">{formatWeekDate(hr.week_date)}</span>
+            {hr.exception_reason && (
+              <span className="text-warn-soft-fg">
+                Excluded: {hr.exception_reason}
+              </span>
+            )}
             {ATTENDANCE_SERIES.filter((s) => enabled[s.key]).map((s) => (
               <span key={s.key} className="text-muted">
                 <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ background: s.color }} />

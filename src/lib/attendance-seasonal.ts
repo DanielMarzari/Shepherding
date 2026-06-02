@@ -89,9 +89,12 @@ export function analyzeSeasonalTrends(
   rows: WeeklyAttendanceRow[],
   weather: Map<string, DayWeather>,
 ): SeasonalAnalysis {
-  // Map of Sunday → in-person attendance (skip null weeks).
+  // Map of Sunday → in-person attendance (skip null weeks and weeks
+  // flagged as exceptions — snow closures, cancellations — so they
+  // don't pollute the trend math).
   const att = new Map<string, number>();
   for (const r of rows) {
+    if (r.exception_reason) continue;
     if (r.in_person_total != null) att.set(r.week_date, r.in_person_total);
   }
   const allVals = [...att.values()].sort((a, b) => a - b);
