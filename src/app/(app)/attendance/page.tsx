@@ -61,11 +61,7 @@ export default async function AttendancePage() {
     history.rows.map((r) => r.week_date),
   );
   const preacher = analyzePreachers(history.rows, preacherByWeek);
-  const preacherTrends = analyzePreacherTrends(
-    history.rows,
-    preacher.perWeek,
-    preacher.stats,
-  );
+  const preacherTrends = analyzePreacherTrends(history.rows, preacher.perWeek);
   const hasPreacher = preacher.stats.length > 0;
 
   const expected = counts.shepherded + counts.active + counts.present;

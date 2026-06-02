@@ -4,10 +4,34 @@ import { decryptJson } from "./encryption";
 import type { WeeklyAttendanceRow } from "./attendance-read";
 import type { SeasonalInsight } from "./attendance-seasonal";
 
-// This church's lead pastors. Everyone else who preaches regularly is
-// "teaching team"; anyone who preaches < GUEST_MAX Sundays is a "guest".
-const LEAD_RE = /\b(joe|joseph|joey|brad|bradley)\b/i;
-const GUEST_MAX = 8;
+// Preacher categorization for this church:
+//  - Joe is the sole lead pastor (keeps his own name as the label).
+//  - Brad left the rotation (~2022) → excluded from all analysis.
+//  - Teaching team = Sam Chen, Dave Peters, Tim Azevedo, (occ.) Claudio.
+//  - Summer cohort = the biennial summer teaching cohort — one-off
+//    preachers in Jun–Aug of even years (2020, 2022, 2024, 2026, …).
+//  - Anyone else = Guest.
+const LEAD_RE = /\b(joe|joseph|joey)\b/i;
+const EXCLUDE_RE = /\b(brad|bradley)\b/i;
+const TEAM_RES = [/chen/i, /(dave|david)\s+peters/i, /azevedo/i, /claudio/i];
+
+const TEAM_LABEL = "Teaching team";
+const COHORT_LABEL = "Summer cohort";
+const GUEST_LABEL = "Guest";
+const GROUP_LABELS = new Set([TEAM_LABEL, COHORT_LABEL, GUEST_LABEL]);
+
+/** Map a raw preacher name + Sunday to a category label, or null to
+ *  exclude the week from all preacher analysis (e.g. Brad). The lead
+ *  keeps his real name so he shows individually. */
+function categorize(name: string, date: string): string | null {
+  if (EXCLUDE_RE.test(name)) return null;
+  if (LEAD_RE.test(name)) return name;
+  if (TEAM_RES.some((re) => re.test(name))) return TEAM_LABEL;
+  const y = Number(date.slice(0, 4));
+  const m = Number(date.slice(5, 7));
+  if (m >= 6 && m <= 8 && y % 2 === 0) return COHORT_LABEL;
+  return GUEST_LABEL;
+}
 
 interface PIIBlob {
   first_name?: string | null;
@@ -103,7 +127,12 @@ export function analyzePreachers(
   rows: WeeklyAttendanceRow[],
   preacherByDate: Map<string, string>,
 ): PreacherAnalysis {
-  const perWeek = rows.map((r) => preacherByDate.get(r.week_date) ?? null);
+  // perWeek holds the CATEGORY label (lead's name, "Teaching team",
+  // "Summer cohort", "Guest"), or null when unknown / excluded (Brad).
+  const perWeek = rows.map((r) => {
+    const name = preacherByDate.get(r.week_date);
+    return name ? categorize(name, r.week_date) : null;
+  });
   const byName = new Map<string, number[]>();
   rows.forEach((r, i) => {
     const name = perWeek[i];
@@ -129,45 +158,72 @@ function pctDiff(part: number, base: number): number {
 }
 
 /** Does WHO preaches actually move attendance, or is turnout consistent
- *  regardless? Compares guest speakers vs the teaching team vs the lead
- *  pastors, calls out the leads individually, and reports a one-way
- *  ANOVA η² — the share of week-to-week attendance variation explained
- *  by the preacher. Exception weeks and blanks are excluded. */
+ *  regardless? Works off the category labels (lead's name, "Teaching
+ *  team", "Summer cohort", "Guest"); Brad is already excluded upstream.
+ *  Compares each group against the lead and reports a one-way ANOVA η² —
+ *  the share of week-to-week attendance variation explained by who
+ *  preached. Exception weeks and blanks are excluded. */
 export function analyzePreacherTrends(
   rows: WeeklyAttendanceRow[],
   perWeek: (string | null)[],
-  stats: PreacherStat[],
 ): { insights: SeasonalInsight[] } {
   const insights: SeasonalInsight[] = [];
-  const samplesByName = new Map<string, number[]>();
+  const byCat = new Map<string, number[]>();
   const all: number[] = [];
   rows.forEach((r, i) => {
-    const name = perWeek[i];
-    if (!name || r.exception_reason || r.in_person_total == null) return;
-    if (!samplesByName.has(name)) samplesByName.set(name, []);
-    samplesByName.get(name)!.push(r.in_person_total);
+    const label = perWeek[i];
+    if (!label || r.exception_reason || r.in_person_total == null) return;
+    if (!byCat.has(label)) byCat.set(label, []);
+    byCat.get(label)!.push(r.in_person_total);
     all.push(r.in_person_total);
   });
-  if (all.length < 10 || stats.length < 2) return { insights };
+  if (all.length < 10 || byCat.size < 2) return { insights };
 
   const grand = mean(all);
-  const weeksOf = (name: string) =>
-    stats.find((s) => s.name === name)?.weeks ?? 0;
-  const leadNames = stats.filter((s) => LEAD_RE.test(s.name)).map((s) => s.name);
-  const isLead = (name: string) => leadNames.includes(name);
-  const isGuest = (name: string) => !isLead(name) && weeksOf(name) < GUEST_MAX;
-
-  const lead: number[] = [];
-  const team: number[] = [];
-  const guest: number[] = [];
-  for (const [name, vals] of samplesByName) {
-    if (isLead(name)) lead.push(...vals);
-    else if (isGuest(name)) guest.push(...vals);
-    else team.push(...vals);
-  }
+  // The lead is the only label that isn't one of the group labels.
+  const leadLabel =
+    [...byCat.keys()].find((l) => !GROUP_LABELS.has(l)) ?? null;
+  const lead = leadLabel ? (byCat.get(leadLabel) ?? []) : [];
+  const team = byCat.get(TEAM_LABEL) ?? [];
+  const cohort = byCat.get(COHORT_LABEL) ?? [];
+  const guest = byCat.get(GUEST_LABEL) ?? [];
   const regular = [...lead, ...team];
 
-  // Guest speakers vs regular preachers.
+  // Lead vs teaching team.
+  if (lead.length >= 5 && team.length >= 3 && leadLabel) {
+    const l = mean(lead);
+    const t = mean(team);
+    const d = pctDiff(l, t);
+    insights.push({
+      title:
+        Math.abs(d) < 3
+          ? `${leadLabel} and the teaching team draw the same`
+          : d > 0
+            ? `Higher when ${leadLabel} preaches`
+            : "Higher when the teaching team preaches",
+      detail: `${leadLabel} averages ${Math.round(l).toLocaleString()} over ${lead.length} Sundays; the teaching team (Sam Chen, Dave Peters, Tim Azevedo, Claudio) averages ${Math.round(t).toLocaleString()} over ${team.length} — about ${Math.abs(d)}% ${d >= 0 ? "higher" : "lower"} for ${leadLabel}.`,
+      tone: "neutral",
+    });
+  }
+
+  // Summer cohort (biennial one-offs) vs regular preachers.
+  if (cohort.length >= 3 && regular.length >= 5) {
+    const c = mean(cohort);
+    const r = mean(regular);
+    const d = pctDiff(c, r);
+    insights.push({
+      title:
+        Math.abs(d) < 3
+          ? "Summer cohort draws about the same"
+          : d > 0
+            ? "Summer cohort draws more"
+            : "Summer cohort draws fewer",
+      detail: `On the ${cohort.length} summer-cohort Sundays (biennial one-off preachers), attendance averaged ${Math.round(c).toLocaleString()} vs ${Math.round(r).toLocaleString()} with the regular preachers — about ${Math.abs(d)}% ${d >= 0 ? "higher" : "lower"}. Note these fall in summer, which runs lower on its own.`,
+      tone: Math.abs(d) < 3 ? "neutral" : d > 0 ? "up" : "down",
+    });
+  }
+
+  // Other guests vs regular preachers (only if there are enough).
   if (guest.length >= 3 && regular.length >= 5) {
     const g = mean(guest);
     const r = mean(regular);
@@ -179,61 +235,18 @@ export function analyzePreacherTrends(
           : d > 0
             ? "Guest speakers draw more"
             : "Guest speakers draw fewer",
-      detail: `On the ${guest.length} Sundays with a guest speaker (< ${GUEST_MAX} appearances), attendance averaged ${Math.round(g).toLocaleString()} vs ${Math.round(r).toLocaleString()} with regular preachers — about ${Math.abs(d)}% ${d >= 0 ? "higher" : "lower"}.`,
+      detail: `On the ${guest.length} other guest-speaker Sundays, attendance averaged ${Math.round(g).toLocaleString()} vs ${Math.round(r).toLocaleString()} with the regular preachers — about ${Math.abs(d)}% ${d >= 0 ? "higher" : "lower"}.`,
       tone: Math.abs(d) < 3 ? "neutral" : d > 0 ? "up" : "down",
     });
   }
 
-  // Lead pastors vs teaching team.
-  if (lead.length >= 5 && team.length >= 3) {
-    const l = mean(lead);
-    const t = mean(team);
-    const d = pctDiff(l, t);
-    insights.push({
-      title:
-        Math.abs(d) < 3
-          ? "Lead pastors and teaching team draw the same"
-          : d > 0
-            ? "Higher when a lead pastor preaches"
-            : "Higher when the teaching team preaches",
-      detail: `When ${leadNames.join(" or ")} preach, attendance averages ${Math.round(l).toLocaleString()}; the rest of the teaching team averages ${Math.round(t).toLocaleString()} — about ${Math.abs(d)}% ${d >= 0 ? "higher" : "lower"} for the lead pastors.`,
-      tone: "neutral",
-    });
-  }
-
-  // The two leads head-to-head.
-  if (leadNames.length >= 2) {
-    const [a, b] = leadNames
-      .map((n) => ({ name: n, avg: mean(samplesByName.get(n) ?? [grand]), weeks: weeksOf(n) }))
-      .sort((x, y) => y.weeks - x.weeks);
-    const d = pctDiff(a.avg, b.avg);
-    insights.push({
-      title:
-        Math.abs(d) < 2
-          ? `${a.name} and ${b.name} draw about the same`
-          : `${(d > 0 ? a : b).name} draws slightly more`,
-      detail: `${a.name} averages ${Math.round(a.avg).toLocaleString()} over ${a.weeks} Sundays; ${b.name} averages ${Math.round(b.avg).toLocaleString()} over ${b.weeks} — a ${Math.abs(d)}% difference.`,
-      tone: "neutral",
-    });
-  }
-
-  // One-way ANOVA η² — share of variance explained by the preacher.
-  // Groups: each preacher with ≥8 Sundays is its own group; all guests
-  // are pooled into one "guest" group.
-  const groups: number[][] = [];
-  const guestPool: number[] = [];
-  for (const [name, vals] of samplesByName) {
-    if (weeksOf(name) >= GUEST_MAX || isLead(name)) groups.push(vals);
-    else guestPool.push(...vals);
-  }
-  if (guestPool.length) groups.push(guestPool);
+  // One-way ANOVA η² across the categories — share of attendance
+  // variation explained by who preached.
+  const groups = [...byCat.values()].filter((g) => g.length > 0);
   let ssTotal = 0;
   for (const x of all) ssTotal += (x - grand) ** 2;
   let ssBetween = 0;
-  for (const g of groups) {
-    if (g.length === 0) continue;
-    ssBetween += g.length * (mean(g) - grand) ** 2;
-  }
+  for (const g of groups) ssBetween += g.length * (mean(g) - grand) ** 2;
   const eta2 = ssTotal > 0 ? ssBetween / ssTotal : 0;
   const explained = Math.round(eta2 * 100);
   insights.push({
@@ -243,11 +256,11 @@ export function analyzePreacherTrends(
         : explained < 25
           ? "The preacher has a modest effect on attendance"
           : "The preacher has a strong effect on attendance",
-    detail: `Who preaches explains about ${explained}% of the week-to-week variation in attendance (one-way ANOVA η² = ${eta2.toFixed(2)}, across ${groups.length} preacher groups and ${all.length} Sundays). ${
+    detail: `Who preaches explains about ${explained}% of the week-to-week variation in attendance (one-way ANOVA η² = ${eta2.toFixed(2)}, across ${groups.length} groups and ${all.length} Sundays). ${
       explained < 10
         ? "Turnout is largely the same no matter who's in the pulpit — seasonality and weather matter more."
-        : "Some preachers are associated with measurably different crowds."
-    }`,
+        : "Some groups are associated with measurably different crowds."
+    } Brad is excluded (left the rotation ~2022).`,
     tone: "neutral",
   });
 
