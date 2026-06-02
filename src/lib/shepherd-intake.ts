@@ -157,7 +157,10 @@ export function listIntakeCandidates(
           AND k.shepherd_person_id = ?
           AND k.person_id = pa.person_id
         WHERE pa.org_id = ?
-          AND pa.classification IN ('active','present')
+          -- JUST 'active' — matches the "Active" count on /people.
+          -- Not 'present' (PCO record merely edited) and not
+          -- 'shepherded' (already in a group/team).
+          AND pa.classification = 'active'
           AND p.is_minor = 0
           AND p.pco_id != ?
           -- PCO-inactive is ALWAYS inactive for us. Checked directly
