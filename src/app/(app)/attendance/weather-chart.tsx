@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { WeeklyAttendanceRow } from "@/lib/attendance-read";
 import { formatWeekDate } from "@/lib/format-date";
+import { isExcludingReason } from "@/lib/attendance-exclusion";
 import { ATTENDANCE_SERIES, type SeriesKey } from "./history-chart";
 
 export interface WeatherCell {
@@ -265,7 +266,7 @@ export function AttendanceWeatherChart({
 
         {/* Excluded weeks (snow closures, cancellations). */}
         {rows.map((r, i) =>
-          r.exception_reason ? (
+          isExcludingReason(r.exception_reason) ? (
             <g key={`ex${i}`} pointerEvents="none">
               <line x1={xFor(i)} x2={xFor(i)} y1={padT} y2={linesBottom} stroke="rgba(148,163,184,0.30)" strokeWidth={0.75} strokeDasharray="2 2" />
               <text x={xFor(i)} y={padT + 9} textAnchor="middle" fontSize={9} fill="#94a3b8">
@@ -346,8 +347,15 @@ export function AttendanceWeatherChart({
           <div className="text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-medium">{formatWeekDate(hr.week_date)}</span>
             {hr.exception_reason && (
-              <span className="text-warn-soft-fg">
-                Excluded: {hr.exception_reason}
+              <span
+                className={
+                  isExcludingReason(hr.exception_reason)
+                    ? "text-warn-soft-fg"
+                    : "text-subtle"
+                }
+              >
+                {isExcludingReason(hr.exception_reason) ? "Excluded" : "Note"}:{" "}
+                {hr.exception_reason}
               </span>
             )}
             {ATTENDANCE_SERIES.filter((s) => enabled[s.key]).map((s) => (

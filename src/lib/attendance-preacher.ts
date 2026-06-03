@@ -3,6 +3,7 @@ import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 import type { WeeklyAttendanceRow } from "./attendance-read";
 import type { SeasonalInsight } from "./attendance-seasonal";
+import { isExcludingReason } from "./attendance-exclusion";
 
 // Preacher categorization for this church:
 //  - Joe is the sole lead pastor (keeps his own name as the label).
@@ -136,7 +137,8 @@ export function analyzePreachers(
   const byName = new Map<string, number[]>();
   rows.forEach((r, i) => {
     const name = perWeek[i];
-    if (!name || r.exception_reason || r.in_person_total == null) return;
+    if (!name || isExcludingReason(r.exception_reason) || r.in_person_total == null)
+      return;
     if (!byName.has(name)) byName.set(name, []);
     byName.get(name)!.push(r.in_person_total);
   });
@@ -172,7 +174,8 @@ export function analyzePreacherTrends(
   const all: number[] = [];
   rows.forEach((r, i) => {
     const label = perWeek[i];
-    if (!label || r.exception_reason || r.in_person_total == null) return;
+    if (!label || isExcludingReason(r.exception_reason) || r.in_person_total == null)
+      return;
     if (!byCat.has(label)) byCat.set(label, []);
     byCat.get(label)!.push(r.in_person_total);
     all.push(r.in_person_total);
@@ -260,7 +263,7 @@ export function analyzePreacherTrends(
       explained < 10
         ? "Turnout is largely the same no matter who's in the pulpit — seasonality and weather matter more."
         : "Some groups are associated with measurably different crowds."
-    } Brad is excluded (left the rotation ~2022).`,
+    }`,
     tone: "neutral",
   });
 

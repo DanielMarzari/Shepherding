@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { WeeklyAttendanceRow } from "@/lib/attendance-read";
 import { formatWeekDate } from "@/lib/format-date";
+import { isExcludingReason } from "@/lib/attendance-exclusion";
 
 export type SeriesKey =
   | "in_person_total"
@@ -209,7 +210,7 @@ export function AttendanceHistoryChart({
         ))}
         {/* Excluded weeks (snow closures, cancellations). */}
         {rows.map((r, i) =>
-          r.exception_reason ? (
+          isExcludingReason(r.exception_reason) ? (
             <g key={`ex${i}`} pointerEvents="none">
               <line
                 x1={xFor(i)}
@@ -272,8 +273,17 @@ export function AttendanceHistoryChart({
               {formatWeekDate(rows[hoverIdx].week_date)}
             </span>
             {rows[hoverIdx].exception_reason && (
-              <span className="text-warn-soft-fg ml-2">
-                Excluded: {rows[hoverIdx].exception_reason}
+              <span
+                className={`ml-2 ${
+                  isExcludingReason(rows[hoverIdx].exception_reason)
+                    ? "text-warn-soft-fg"
+                    : "text-subtle"
+                }`}
+              >
+                {isExcludingReason(rows[hoverIdx].exception_reason)
+                  ? "Excluded"
+                  : "Note"}
+                : {rows[hoverIdx].exception_reason}
               </span>
             )}
             <span className="text-muted ml-2">

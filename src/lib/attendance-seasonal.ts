@@ -2,6 +2,7 @@ import "server-only";
 import type { WeeklyAttendanceRow } from "./attendance-read";
 import type { DayWeather } from "./weather-trexlertown";
 import { parseLocalDate, formatWeekDate } from "./format-date";
+import { isExcludingReason } from "./attendance-exclusion";
 
 const MONTH_NAMES = [
   "January",
@@ -94,7 +95,7 @@ export function analyzeSeasonalTrends(
   // don't pollute the trend math).
   const att = new Map<string, number>();
   for (const r of rows) {
-    if (r.exception_reason) continue;
+    if (isExcludingReason(r.exception_reason)) continue;
     if (r.in_person_total != null) att.set(r.week_date, r.in_person_total);
   }
   const allVals = [...att.values()].sort((a, b) => a - b);
@@ -305,13 +306,17 @@ export function analyzeSeasonalTrends(
     }
   }
   const corr = pearson(wTemps, wAtt);
-  if (corr != null && Math.abs(corr) >= 0.15) {
+  if (corr != null && wTemps.length >= 8) {
+    const r2 = corr * corr;
+    const explained = Math.round(r2 * 100);
     insights.push({
       title:
-        corr > 0
-          ? "Warmer Sundays have higher attendance"
-          : "Colder Sundays have higher attendance",
-      detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}) across ${wTemps.length} matched Sundays.`,
+        Math.abs(corr) < 0.15
+          ? "Temperature barely affects attendance"
+          : corr > 0
+            ? "Warmer Sundays have higher attendance"
+            : "Colder Sundays have higher attendance",
+      detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}), so temperature accounts for about ${explained}% of the week-to-week variation (R² = ${r2.toFixed(2)}) across ${wTemps.length} matched Sundays.`,
       tone: "neutral",
     });
   }

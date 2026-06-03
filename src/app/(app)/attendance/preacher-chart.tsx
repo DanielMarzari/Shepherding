@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { WeeklyAttendanceRow } from "@/lib/attendance-read";
 import type { PreacherStat } from "@/lib/attendance-preacher";
 import { formatWeekDate } from "@/lib/format-date";
+import { isExcludingReason } from "@/lib/attendance-exclusion";
 
 const PALETTE = [
   "var(--accent)",
@@ -66,7 +67,7 @@ export function PreacherChart({
     let pen = false;
     for (let i = 0; i < rows.length; i++) {
       const v = rows[i].in_person_total;
-      if (v == null || rows[i].exception_reason) {
+      if (v == null || isExcludingReason(rows[i].exception_reason)) {
         pen = false;
         continue;
       }
@@ -158,7 +159,7 @@ export function PreacherChart({
         {/* Attendance line (muted) + per-week preacher dots */}
         <path d={linePath} fill="none" stroke="rgba(140,150,170,0.45)" strokeWidth={1.25} strokeLinejoin="round" />
         {rows.map((r, i) => {
-          if (r.in_person_total == null || r.exception_reason) return null;
+          if (r.in_person_total == null || isExcludingReason(r.exception_reason)) return null;
           const name = perWeek[i];
           const dim = focus !== null && name !== focus;
           return (
@@ -176,7 +177,7 @@ export function PreacherChart({
         {hoverIdx != null && hr && (
           <g pointerEvents="none">
             <line x1={xFor(hoverIdx)} x2={xFor(hoverIdx)} y1={padT} y2={padT + innerH} stroke="rgba(168,178,198,0.5)" strokeWidth={1} />
-            {hr.in_person_total != null && !hr.exception_reason && (
+            {hr.in_person_total != null && !isExcludingReason(hr.exception_reason) && (
               <circle cx={xFor(hoverIdx)} cy={yFor(hr.in_person_total)} r={4} fill={colorFor(hName)} stroke="var(--bg)" strokeWidth={1.5} />
             )}
           </g>
@@ -187,10 +188,13 @@ export function PreacherChart({
         {hr ? (
           <div className="text-xs flex flex-wrap items-center gap-x-3">
             <span className="font-medium">{formatWeekDate(hr.week_date)}</span>
-            {hr.exception_reason ? (
+            {isExcludingReason(hr.exception_reason) ? (
               <span className="text-warn-soft-fg">Excluded: {hr.exception_reason}</span>
             ) : (
               <>
+                {hr.exception_reason && (
+                  <span className="text-subtle">Note: {hr.exception_reason}</span>
+                )}
                 <span className="text-muted">
                   In-person:{" "}
                   <span className="text-fg tnum">

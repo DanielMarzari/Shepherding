@@ -1,5 +1,6 @@
 import "server-only";
 import { getDb } from "./db";
+import { isExcludingReason } from "./attendance-exclusion";
 
 export interface WeeklyAttendanceRow {
   week_date: string;
@@ -94,9 +95,9 @@ export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
     const prior: number[] = [];
     const recentAdult: number[] = [];
     for (const r of rows) {
-      // Excluded weeks (snow closures, cancellations) never count toward
-      // any average.
-      if (r.exception_reason) continue;
+      // Genuine exclusions (snow closures, cancellations) never count
+      // toward any average; informational notes still count.
+      if (isExcludingReason(r.exception_reason)) continue;
       const t = new Date(r.week_date).valueOf();
       if (r.in_person_total != null) {
         if (t > cutoffMs) recent.push(r.in_person_total);
