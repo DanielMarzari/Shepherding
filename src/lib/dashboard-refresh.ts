@@ -2,6 +2,7 @@ import "server-only";
 import { getDb } from "./db";
 import { getExcludedMembershipTypes, getSyncSettings } from "./pco";
 import { populateShepherdedTempTable } from "./people-read";
+import { rebuildDuplicatePairs } from "./audit-read";
 
 const MS_PER_DAY = 86_400_000;
 const MS_PER_MONTH = 30 * MS_PER_DAY;
@@ -43,6 +44,10 @@ const REFRESH_PHASES: Array<{
   {
     label: "Computing lane transitions",
     run: (orgId) => rebuildLaneTransitions(orgId),
+  },
+  {
+    label: "Scanning for duplicate records",
+    run: (orgId) => rebuildDuplicatePairs(orgId),
   },
 ];
 

@@ -355,6 +355,329 @@ export function findDuplicatesAcrossOrg(orgId: number): DuplicateGroup[] {
   return groups;
 }
 
+// ─── Materialized duplicate PAIRS (with match reasons) ────────────────
+
+interface DupPerson {
+  pcoId: string;
+  first: string | null;
+  last: string | null;
+  birthdate: string | null;
+  birthYear: number | null;
+  addr: string | null;
+  gender: string | null;
+  inactive: boolean;
+  suffix: string | null;
+}
+
+export interface DupPersonView {
+  pcoId: string;
+  fullName: string;
+  initials: string;
+  inactive: boolean;
+}
+export interface DuplicatePairView {
+  confidence: DuplicateConfidence;
+  reasons: string[];
+  oneActiveOneInactive: boolean;
+  a: DupPersonView;
+  b: DupPersonView;
+}
+
+function normAddr(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const n = s
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return n || null;
+}
+
+function loadDupPeople(orgId: number): DupPerson[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT pco_id, enc_pii, gender, status, inactivated_at, birth_year
+         FROM pco_people WHERE org_id = ?`,
+    )
+    .all(orgId) as Array<{
+    pco_id: string;
+    enc_pii: string | null;
+    gender: string | null;
+    status: string | null;
+    inactivated_at: string | null;
+    birth_year: number | null;
+  }>;
+  return rows.map((r) => {
+    const pii = r.enc_pii ? decryptJson<PIIBlob>(r.enc_pii) : null;
+    const bd = pii?.birthdate?.trim() || null;
+    const inactive =
+      (r.status ?? "").toLowerCase() === "inactive" || !!r.inactivated_at;
+    return {
+      pcoId: r.pco_id,
+      first: pii?.first_name?.trim() ?? null,
+      last: pii?.last_name?.trim() ?? null,
+      birthdate: bd,
+      birthYear: r.birth_year ?? (bd ? Number(bd.slice(0, 4)) || null : null),
+      addr: normAddr(pii?.address),
+      gender: r.gender,
+      inactive,
+      suffix: null,
+    };
+  });
+}
+
+function loadEmailHashes(orgId: number): Map<string, Set<string>> {
+  const rows = getDb()
+    .prepare(
+      `SELECT person_id, email_hash FROM pco_person_emails WHERE org_id = ?`,
+    )
+    .all(orgId) as Array<{ person_id: string; email_hash: string }>;
+  const m = new Map<string, Set<string>>();
+  for (const r of rows) {
+    let s = m.get(r.person_id);
+    if (!s) {
+      s = new Set();
+      m.set(r.person_id, s);
+    }
+    s.add(r.email_hash);
+  }
+  return m;
+}
+
+/** Score one same-name pair: build the human reasons that explain why
+ *  this is (or isn't) the same person, and a high/low confidence. Strong
+ *  "different person" signals (suffix mismatch, different birthdate or
+ *  gender) force low and flag the likely parent/child / household case. */
+function scorePair(
+  a: DupPerson,
+  b: DupPerson,
+  emails: Map<string, Set<string>>,
+): { score: number; reasons: string[]; confidence: DuplicateConfidence } {
+  const reasons: string[] = [];
+  let score = 0;
+  let disqualified = false;
+
+  const ea = emails.get(a.pcoId);
+  const eb = emails.get(b.pcoId);
+  const emailMatch = !!ea && !!eb && [...ea].some((h) => eb.has(h));
+  if (emailMatch) {
+    reasons.push("Shares an email address");
+    score += 5;
+  }
+
+  let sameBirthdate = false;
+  if (a.birthdate && b.birthdate) {
+    if (a.birthdate === b.birthdate) {
+      reasons.push(`Same birthdate (${a.birthdate})`);
+      score += 4;
+      sameBirthdate = true;
+    } else {
+      reasons.push(
+        `Different birthdates (${a.birthdate} vs ${b.birthdate}) — likely different people`,
+      );
+      score -= 4;
+      disqualified = true;
+    }
+  } else if (a.birthYear && b.birthYear) {
+    if (a.birthYear === b.birthYear) {
+      reasons.push(`Same birth year (${a.birthYear})`);
+      score += 2;
+    } else {
+      reasons.push(`Different birth years (${a.birthYear} vs ${b.birthYear})`);
+      score -= 3;
+      disqualified = true;
+    }
+  }
+
+  if (a.gender && b.gender && a.gender.toLowerCase() !== b.gender.toLowerCase()) {
+    reasons.push("Different gender on record — likely different people");
+    score -= 3;
+    disqualified = true;
+  }
+
+  if (a.addr && b.addr && a.addr === b.addr) {
+    reasons.push("Same home address");
+    score += 1;
+  }
+
+  const sa = a.suffix ?? "";
+  const sb = b.suffix ?? "";
+  if (sa !== sb) {
+    const suf = (a.suffix || b.suffix || "").toUpperCase();
+    reasons.push(
+      `Different generational suffix (${suf}) — likely a parent / child in the same household`,
+    );
+    score -= 5;
+    disqualified = true;
+  }
+
+  if (a.inactive !== b.inactive) {
+    reasons.push(
+      "One record active, one inactive — possibly the same person returning",
+    );
+  }
+
+  if (reasons.length === 0) reasons.push("Same first and last name");
+
+  const confidence: DuplicateConfidence =
+    !disqualified && (emailMatch || sameBirthdate || score >= 4)
+      ? "high"
+      : "low";
+  return { score, reasons, confidence };
+}
+
+/** Rebuild the duplicate_pairs cache for one org. Pairs every two people
+ *  who share a suffix-stripped name; drops inactive↔inactive pairs (we
+ *  only act on active↔active dupes and active↔inactive "returning"
+ *  cases). Called from the dashboard refresh and lazily on first view. */
+export function rebuildDuplicatePairs(orgId: number): void {
+  const db = getDb();
+  const people = loadDupPeople(orgId);
+  const emails = loadEmailHashes(orgId);
+
+  const byKey = new Map<string, DupPerson[]>();
+  for (const p of people) {
+    if (!p.first || !p.last) continue;
+    const { core, suffix } = splitGenerationalSuffix(`${p.first} ${p.last}`.trim());
+    p.suffix = suffix;
+    const key = core.toLowerCase();
+    if (!key) continue;
+    const arr = byKey.get(key);
+    if (arr) arr.push(p);
+    else byKey.set(key, [p]);
+  }
+
+  const out: Array<{
+    a: string;
+    b: string;
+    key: string;
+    confidence: DuplicateConfidence;
+    score: number;
+    reasons: string[];
+    oai: number;
+  }> = [];
+  for (const [key, members] of byKey) {
+    if (members.length < 2) continue;
+    for (let i = 0; i < members.length; i++) {
+      for (let j = i + 1; j < members.length; j++) {
+        const a = members[i];
+        const b = members[j];
+        if (a.inactive && b.inactive) continue; // not interesting
+        const { score, reasons, confidence } = scorePair(a, b, emails);
+        out.push({
+          a: a.pcoId,
+          b: b.pcoId,
+          key,
+          confidence,
+          score,
+          reasons,
+          oai: a.inactive !== b.inactive ? 1 : 0,
+        });
+      }
+    }
+  }
+
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM duplicate_pairs WHERE org_id = ?`).run(orgId);
+    const ins = db.prepare(
+      `INSERT OR REPLACE INTO duplicate_pairs
+         (org_id, person_a, person_b, name_key, confidence, score, reasons,
+          one_active_one_inactive)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const p of out) {
+      ins.run(orgId, p.a, p.b, p.key, p.confidence, p.score, JSON.stringify(p.reasons), p.oai);
+    }
+    db.prepare(
+      `INSERT OR REPLACE INTO duplicate_pairs_meta (org_id, built_at)
+       VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+    ).run(orgId);
+  });
+  tx();
+}
+
+/** Build the cache on first view if it's never run for this org. */
+export function ensureDuplicatePairs(orgId: number): void {
+  const built = getDb()
+    .prepare(`SELECT 1 FROM duplicate_pairs_meta WHERE org_id = ?`)
+    .get(orgId);
+  if (!built) rebuildDuplicatePairs(orgId);
+}
+
+/** Read materialized duplicate pairs, decrypting names only for the
+ *  people that appear in a pair. */
+export function listDuplicatePairs(
+  orgId: number,
+  confidence?: DuplicateConfidence,
+): DuplicatePairView[] {
+  ensureDuplicatePairs(orgId);
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT person_a, person_b, confidence, reasons, one_active_one_inactive
+         FROM duplicate_pairs
+        WHERE org_id = ?${confidence ? " AND confidence = ?" : ""}
+        ORDER BY (confidence = 'high') DESC, score DESC`,
+    )
+    .all(...(confidence ? [orgId, confidence] : [orgId])) as Array<{
+    person_a: string;
+    person_b: string;
+    confidence: DuplicateConfidence;
+    reasons: string;
+    one_active_one_inactive: number;
+  }>;
+  if (rows.length === 0) return [];
+
+  const ids = new Set<string>();
+  for (const r of rows) {
+    ids.add(r.person_a);
+    ids.add(r.person_b);
+  }
+  const idList = [...ids];
+  const ph = idList.map(() => "?").join(",");
+  const peopleRows = db
+    .prepare(
+      `SELECT pco_id, enc_pii, status, inactivated_at
+         FROM pco_people WHERE org_id = ? AND pco_id IN (${ph})`,
+    )
+    .all(orgId, ...idList) as Array<{
+    pco_id: string;
+    enc_pii: string | null;
+    status: string | null;
+    inactivated_at: string | null;
+  }>;
+  const view = new Map<string, DupPersonView>();
+  for (const r of peopleRows) {
+    const pii = r.enc_pii ? decryptJson<PIIBlob>(r.enc_pii) : null;
+    const first = pii?.first_name?.trim() ?? null;
+    const last = pii?.last_name?.trim() ?? null;
+    view.set(r.pco_id, {
+      pcoId: r.pco_id,
+      fullName:
+        [first, last].filter(Boolean).join(" ") || `(unknown #${r.pco_id})`,
+      initials: ((first?.[0] ?? "") + (last?.[0] ?? "")).toUpperCase() || "??",
+      inactive:
+        (r.status ?? "").toLowerCase() === "inactive" || !!r.inactivated_at,
+    });
+  }
+
+  const out: DuplicatePairView[] = [];
+  for (const r of rows) {
+    const a = view.get(r.person_a);
+    const b = view.get(r.person_b);
+    if (!a || !b) continue;
+    out.push({
+      confidence: r.confidence,
+      reasons: JSON.parse(r.reasons) as string[],
+      oneActiveOneInactive: r.one_active_one_inactive === 1,
+      a,
+      b,
+    });
+  }
+  return out;
+}
+
 export type NameFlag = "junk-name" | "weird-name";
 
 export interface NameIssueRow extends CrossAuditRow {
