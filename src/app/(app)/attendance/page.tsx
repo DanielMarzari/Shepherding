@@ -68,6 +68,11 @@ export default async function AttendancePage() {
   const ratio = weekly && expected > 0 ? expected / weekly : null;
   const distribution =
     weekly != null ? buildAttendanceDistribution(expected, weekly) : null;
+  // Variability as a % of the mean (the normal week-to-week swing).
+  const stdDevPct =
+    seasonal.weeklyMean && seasonal.weeklyStdDev != null
+      ? Math.round((seasonal.weeklyStdDev / seasonal.weeklyMean) * 100)
+      : null;
 
   return (
     <AppShell active="See more" breadcrumb="See more › Attendance">
@@ -91,20 +96,40 @@ export default async function AttendancePage() {
             <div className="text-xs text-muted mt-1">adults / week · in-person, 12 mo avg</div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Expected attenders</div>
-            <div className="tnum text-2xl font-semibold">{expected.toLocaleString()}</div>
-            <div className="text-xs text-muted mt-1">shepherded + active + present</div>
-          </Card>
-          <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Avg attendance ratio</div>
-            <div className="tnum text-2xl font-semibold">
-              {ratio == null ? (
+            <div className="text-xs text-muted mb-1.5">Avg increase / year</div>
+            <div
+              className={`tnum text-2xl font-semibold ${
+                seasonal.yearlyGrowthPct == null
+                  ? ""
+                  : seasonal.yearlyGrowthPct > 0
+                    ? "text-good-soft-fg"
+                    : seasonal.yearlyGrowthPct < 0
+                      ? "text-warn-soft-fg"
+                      : ""
+              }`}
+            >
+              {seasonal.yearlyGrowthPct == null ? (
                 <span className="text-subtle">—</span>
               ) : (
-                `1 / ${ratio.toFixed(1)}`
+                `${seasonal.yearlyGrowthPct >= 0 ? "+" : ""}${seasonal.yearlyGrowthPct}%`
               )}
             </div>
-            <div className="text-xs text-muted mt-1">expected ÷ weekly</div>
+            <div className="text-xs text-muted mt-1">5-year trend</div>
+          </Card>
+          <Card className="p-4">
+            <div className="text-xs text-muted mb-1.5">Avg variability</div>
+            <div className="tnum text-2xl font-semibold">
+              {seasonal.weeklyStdDev == null ? (
+                <span className="text-subtle">—</span>
+              ) : (
+                `±${Math.round(seasonal.weeklyStdDev).toLocaleString()}`
+              )}
+            </div>
+            <div className="text-xs text-muted mt-1">
+              {stdDevPct == null
+                ? "normal weekly swing (1σ)"
+                : `±${stdDevPct}% · normal weekly swing (1σ)`}
+            </div>
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Avg interval</div>
@@ -200,6 +225,39 @@ export default async function AttendancePage() {
                   </div>
                 )}
                 <AttendanceHistoryChart rows={history.rows} />
+                {seasonal.seasonalInsights.length > 0 && (
+                  <div className="pt-1">
+                    <h3 className="text-sm font-semibold mb-2">
+                      Patterns we spotted
+                    </h3>
+                    <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {seasonal.seasonalInsights.map((ins, i) => (
+                        <li
+                          key={i}
+                          className="rounded-lg border border-border-soft bg-bg-elev-2/40 p-3"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`inline-block w-1.5 h-1.5 rounded-full ${
+                                ins.tone === "up"
+                                  ? "bg-good-soft-fg"
+                                  : ins.tone === "down"
+                                    ? "bg-warn-soft-fg"
+                                    : "bg-muted"
+                              }`}
+                            />
+                            <span className="text-sm font-medium">
+                              {ins.title}
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted mt-1 leading-relaxed">
+                            {ins.detail}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -210,10 +268,10 @@ export default async function AttendancePage() {
             <CardHeader
               title="Attendance vs. Weather (Trexlertown, PA)"
               badge={
-                seasonal.insights.length > 0 ? (
+                seasonal.weatherInsights.length > 0 ? (
                   <Pill tone="muted">
-                    {seasonal.insights.length} trend
-                    {seasonal.insights.length === 1 ? "" : "s"}
+                    {seasonal.weatherInsights.length} trend
+                    {seasonal.weatherInsights.length === 1 ? "" : "s"}
                   </Pill>
                 ) : null
               }
@@ -239,13 +297,13 @@ export default async function AttendancePage() {
                 weather={weatherCells}
                 markers={seasonal.markers}
               />
-              {seasonal.insights.length > 0 && (
+              {seasonal.weatherInsights.length > 0 && (
                 <div>
                   <h3 className="text-sm font-semibold mb-2">
-                    Patterns we spotted
+                    What the weather accounts for
                   </h3>
                   <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {seasonal.insights.map((ins, i) => (
+                    {seasonal.weatherInsights.map((ins, i) => (
                       <li
                         key={i}
                         className="rounded-lg border border-border-soft bg-bg-elev-2/40 p-3"

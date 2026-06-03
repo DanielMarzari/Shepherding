@@ -31,8 +31,19 @@ export interface SeasonalInsight {
 }
 export interface SeasonalAnalysis {
   markers: SeasonalMarker[];
-  insights: SeasonalInsight[];
+  /** Non-weather patterns (year-over-year, holidays, months, online) —
+   *  shown under the first chart. */
+  seasonalInsights: SeasonalInsight[];
+  /** Weather patterns (temperature hi/lo, rain, snow, cancellations) —
+   *  shown under the weather chart. */
+  weatherInsights: SeasonalInsight[];
   baseline: number | null;
+  /** Avg %/year change over the last ~5 qualifying years. */
+  yearlyGrowthPct: number | null;
+  /** Mean weekly in-person attendance (non-excluded weeks). */
+  weeklyMean: number | null;
+  /** Std deviation of weekly in-person attendance — the normal ± swing. */
+  weeklyStdDev: number | null;
 }
 
 /** Anonymous Gregorian computus → Easter Sunday "YYYY-MM-DD". */
@@ -99,15 +110,30 @@ export function analyzeSeasonalTrends(
     if (r.in_person_total != null) att.set(r.week_date, r.in_person_total);
   }
   const allVals = [...att.values()].sort((a, b) => a - b);
-  const insights: SeasonalInsight[] = [];
+  const insights: SeasonalInsight[] = []; // non-weather → first chart
+  const weatherInsights: SeasonalInsight[] = []; // weather → second chart
   const markers: SeasonalMarker[] = [];
+  let yearlyGrowthPct: number | null = null;
 
   if (allVals.length < 8) {
-    return { markers, insights, baseline: null };
+    return {
+      markers,
+      seasonalInsights: insights,
+      weatherInsights,
+      baseline: null,
+      yearlyGrowthPct: null,
+      weeklyMean: null,
+      weeklyStdDev: null,
+    };
   }
 
   // Baseline = median of all weeks (robust to holiday spikes).
   const baseline = allVals[Math.floor(allVals.length / 2)];
+  // Mean + standard deviation = the "normal" week-to-week swing.
+  const weeklyMean = mean(allVals);
+  const weeklyStdDev = Math.sqrt(
+    mean(allVals.map((v) => (v - weeklyMean) ** 2)),
+  );
 
   const years = new Set<number>();
   for (const d of att.keys()) years.add(Number(d.slice(0, 4)));
@@ -126,11 +152,13 @@ export function analyzeSeasonalTrends(
     .map(([y, vals]) => ({ y, avg: mean(vals) }))
     .sort((a, b) => a.y - b.y);
   if (yearAvgs.length >= 2) {
-    const first = yearAvgs[0];
-    const last = yearAvgs[yearAvgs.length - 1];
+    const recent = yearAvgs.slice(-5); // 5-year trend
+    const first = recent[0];
+    const last = recent[recent.length - 1];
     const span = last.y - first.y;
     const totalPct = pct(last.avg, first.avg);
     const perYear = span > 0 ? Math.round(totalPct / span) : totalPct;
+    yearlyGrowthPct = perYear;
     insights.push({
       title:
         perYear > 0
@@ -277,9 +305,35 @@ export function analyzeSeasonalTrends(
     }
   }
 
+  // ── Online vs in-person (substitution?) ────────────────────────────
+  const ip: number[] = [];
+  const onl: number[] = [];
+  for (const r of rows) {
+    if (isExcludingReason(r.exception_reason)) continue;
+    if (r.in_person_total != null && r.online_live != null) {
+      ip.push(r.in_person_total);
+      onl.push(r.online_live);
+    }
+  }
+  const onlineCorr = pearson(onl, ip);
+  if (onlineCorr != null && ip.length >= 8) {
+    insights.push({
+      title:
+        onlineCorr < -0.15
+          ? "Online viewing rises when in-person dips"
+          : onlineCorr > 0.15
+            ? "Online and in-person rise together"
+            : "Online viewing is independent of in-person",
+      detail: `In-person and online-live attendance correlate ${onlineCorr > 0 ? "positively" : "negatively"} (r = ${onlineCorr.toFixed(2)}) across ${ip.length} weeks${onlineCorr < -0.15 ? " — some people watch online on the weeks they can't make it in person." : "."}`,
+      tone: "neutral",
+    });
+  }
+
   // ── Weather correlation ────────────────────────────────────────────
   const wTemps: number[] = [];
   const wAtt: number[] = [];
+  const wLowTemps: number[] = [];
+  const wLowAtt: number[] = [];
   const rainy: number[] = [];
   const dry: number[] = [];
   const snowy: number[] = [];
@@ -295,6 +349,10 @@ export function analyzeSeasonalTrends(
       if (w.tmaxF < 32) cold.push(v);
       else mild.push(v);
     }
+    if (w.tminF != null) {
+      wLowTemps.push(w.tminF);
+      wLowAtt.push(v);
+    }
     const rain = w.rainIn ?? w.precipIn;
     if (rain != null) {
       if (rain >= 0.1) rainy.push(v);
@@ -309,14 +367,29 @@ export function analyzeSeasonalTrends(
   if (corr != null && wTemps.length >= 8) {
     const r2 = corr * corr;
     const explained = Math.round(r2 * 100);
-    insights.push({
+    weatherInsights.push({
       title:
         Math.abs(corr) < 0.15
-          ? "Temperature barely affects attendance"
+          ? "Daytime high barely affects attendance"
           : corr > 0
             ? "Warmer Sundays have higher attendance"
             : "Colder Sundays have higher attendance",
-      detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}), so temperature accounts for about ${explained}% of the week-to-week variation (R² = ${r2.toFixed(2)}) across ${wTemps.length} matched Sundays.`,
+      detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}), so the high accounts for about ${explained}% of the week-to-week variation (R² = ${r2.toFixed(2)}) across ${wTemps.length} matched Sundays.`,
+      tone: "neutral",
+    });
+  }
+  const corrLow = pearson(wLowTemps, wLowAtt);
+  if (corrLow != null && wLowTemps.length >= 8) {
+    const r2 = corrLow * corrLow;
+    const explained = Math.round(r2 * 100);
+    weatherInsights.push({
+      title:
+        Math.abs(corrLow) < 0.15
+          ? "Overnight low barely affects attendance"
+          : corrLow > 0
+            ? "Milder overnight lows have higher attendance"
+            : "Colder overnight lows have higher attendance",
+      detail: `Attendance and the overnight low correlate ${corrLow > 0 ? "positively" : "negatively"} (r = ${corrLow.toFixed(2)}), accounting for about ${explained}% of the variation (R² = ${r2.toFixed(2)}) across ${wLowTemps.length} matched Sundays.`,
       tone: "neutral",
     });
   }
@@ -325,7 +398,7 @@ export function analyzeSeasonalTrends(
     const dm = mean(dry);
     const delta = pct(rm, dm);
     if (Math.abs(delta) >= 3) {
-      insights.push({
+      weatherInsights.push({
         title: delta < 0 ? "Rain lowers attendance" : "Rain raises attendance",
         detail: `Rainy Sundays (≥0.1in) average ${Math.round(rm).toLocaleString()} vs ${Math.round(dm).toLocaleString()} on dry Sundays — about ${Math.abs(delta)}% ${delta < 0 ? "lower" : "higher"}.`,
         tone: delta < 0 ? "down" : "neutral",
@@ -336,7 +409,7 @@ export function analyzeSeasonalTrends(
     const sm = mean(snowy);
     const nm = mean(noSnow);
     const delta = pct(sm, nm);
-    insights.push({
+    weatherInsights.push({
       title: delta < 0 ? "Snow lowers attendance" : "Snow raises attendance",
       detail: `On the ${snowy.length} Sundays with measurable snow, attendance averaged ${Math.round(sm).toLocaleString()} vs ${Math.round(nm).toLocaleString()} on snow-free Sundays — about ${Math.abs(delta)}% ${delta < 0 ? "lower" : "higher"}.`,
       tone: delta < 0 ? "down" : "neutral",
@@ -347,15 +420,38 @@ export function analyzeSeasonalTrends(
     const mm = mean(mild);
     const delta = pct(cm, mm);
     if (Math.abs(delta) >= 3) {
-      insights.push({
+      weatherInsights.push({
         title: delta < 0 ? "Cold lowers attendance" : "Cold raises attendance",
         detail: `Sub-freezing Sundays (high < 32°F) average ${Math.round(cm).toLocaleString()} vs ${Math.round(mm).toLocaleString()} on warmer days — about ${Math.abs(delta)}% ${delta < 0 ? "lower" : "higher"}.`,
         tone: delta < 0 ? "down" : "neutral",
       });
     }
   }
+  // Weather cancellations — the most extreme weather effect (attendance
+  // dropped to ~0 / the service didn't happen), so they're excluded from
+  // the correlations above; surface the count so weather isn't understated.
+  const WEATHER_CANCEL = /\b(snow|sleet|ice|icy|storm|blizzard|weather|freez|wind|hurricane|flood)\b/i;
+  let weatherCancels = 0;
+  for (const r of rows) {
+    if (r.exception_reason && WEATHER_CANCEL.test(r.exception_reason)) weatherCancels++;
+  }
+  if (weatherCancels > 0) {
+    weatherInsights.push({
+      title: "Weather has forced full cancellations",
+      detail: `${weatherCancels} Sunday${weatherCancels === 1 ? "" : "s"} ${weatherCancels === 1 ? "was" : "were"} cancelled or closed for weather (excluded from the averages) — the most extreme weather effect, so the temperature correlations above understate weather's true impact.`,
+      tone: "down",
+    });
+  }
 
-  return { markers, insights, baseline };
+  return {
+    markers,
+    baseline,
+    seasonalInsights: insights,
+    weatherInsights,
+    yearlyGrowthPct,
+    weeklyMean,
+    weeklyStdDev,
+  };
 }
 
 /** Sundays adjacent to the big travel holidays for a given year. */
