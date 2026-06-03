@@ -56,19 +56,19 @@ async function CheckinSummaryCards({ orgId }: { orgId: number }) {
       <Card className="p-4">
         <div className="text-xs text-muted mb-1.5">This week</div>
         <div className="tnum text-2xl font-semibold text-good-soft-fg">
-          {summary.checkinsLastWeek.toLocaleString()}
+          {summary.peopleLastWeek.toLocaleString()}
         </div>
         <div className="text-xs text-muted mt-1">
-          {summary.peopleLastWeek.toLocaleString()} distinct people
+          distinct people · {summary.checkinsLastWeek.toLocaleString()} check-ins
         </div>
       </Card>
       <Card className="p-4">
         <div className="text-xs text-muted mb-1.5">Last 30 days</div>
         <div className="tnum text-2xl font-semibold">
-          {summary.checkinsLastMonth.toLocaleString()}
+          {summary.peopleLastMonth.toLocaleString()}
         </div>
         <div className="text-xs text-muted mt-1">
-          {summary.peopleLastMonth.toLocaleString()} distinct people
+          distinct people · {summary.checkinsLastMonth.toLocaleString()} check-ins
         </div>
       </Card>
       <Card className="p-4">
@@ -77,7 +77,7 @@ async function CheckinSummaryCards({ orgId }: { orgId: number }) {
           {summary.totalPeopleEver.toLocaleString()}
         </div>
         <div className="text-xs text-muted mt-1">
-          ever checked in (kid events)
+          distinct people ever checked in
         </div>
       </Card>
       <Card className="p-4">
