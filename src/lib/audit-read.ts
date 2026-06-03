@@ -367,6 +367,9 @@ interface DupPerson {
   gender: string | null;
   inactive: boolean;
   suffix: string | null;
+  /** Suffix-stripped, lowercased name parts (for fuzzy comparison). */
+  coreFirst: string;
+  coreLast: string;
 }
 
 export interface DupPersonView {
@@ -427,6 +430,8 @@ function loadDupPeople(orgId: number): DupPerson[] {
       gender: r.gender,
       inactive,
       suffix: null,
+      coreFirst: "",
+      coreLast: "",
     };
   });
 }
@@ -449,18 +454,98 @@ function loadEmailHashes(orgId: number): Map<string, Set<string>> {
   return m;
 }
 
-/** Score one same-name pair: build the human reasons that explain why
+/** Levenshtein edit distance, capped early — only used on short first
+ *  names so it's cheap. */
+function editDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (Math.abs(m - n) > 2) return 3;
+  const dp = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[m][n];
+}
+
+const NICKNAMES: Record<string, string[]> = {
+  jon: ["john", "jonathan"],
+  john: ["jon", "jonathan"],
+  bob: ["robert", "rob"],
+  rob: ["robert", "bob"],
+  bill: ["william", "will"],
+  will: ["william", "bill"],
+  jim: ["james", "jimmy"],
+  mike: ["michael"],
+  tom: ["thomas"],
+  dave: ["david"],
+  dan: ["daniel", "danny"],
+  chris: ["christopher", "christina", "christine"],
+  matt: ["matthew"],
+  joe: ["joseph"],
+  steve: ["steven", "stephen"],
+  ben: ["benjamin"],
+  sam: ["samuel", "samantha"],
+  kate: ["katherine", "kathryn", "katelyn"],
+  liz: ["elizabeth"],
+  beth: ["elizabeth"],
+  becca: ["rebecca"],
+};
+
+/** Are two first names plausibly the same person (typo / nickname /
+ *  one a prefix of the other)? */
+function firstNameSimilar(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a[0] === b[0] && (a.startsWith(b) || b.startsWith(a))) return true; // Jonathan / Jon
+  if ((NICKNAMES[a] ?? []).includes(b) || (NICKNAMES[b] ?? []).includes(a)) return true;
+  if (editDistance(a, b) <= 1) return true; // Jon / John, Sara / Sarah
+  return false;
+}
+
+/** Score one candidate pair: build the human reasons that explain why
  *  this is (or isn't) the same person, and a high/low confidence. Strong
- *  "different person" signals (suffix mismatch, different birthdate or
- *  gender) force low and flag the likely parent/child / household case. */
+ *  "different person" signals (suffix mismatch, different birthdate /
+ *  gender / first name) force low and flag the likely parent/child,
+ *  household, or couple-sharing-an-inbox case. */
 function scorePair(
   a: DupPerson,
   b: DupPerson,
   emails: Map<string, Set<string>>,
-): { score: number; reasons: string[]; confidence: DuplicateConfidence } {
+): {
+  score: number;
+  reasons: string[];
+  confidence: DuplicateConfidence;
+  keep: boolean;
+} {
   const reasons: string[] = [];
   let score = 0;
   let disqualified = false;
+
+  // Name relationship (drives fuzzy matches — same-name pairs are
+  // identical on the suffix-stripped core).
+  const fa = a.coreFirst;
+  const fb = b.coreFirst;
+  const la = a.coreLast;
+  const lb = b.coreLast;
+  const sameName = fa === fb && la === lb;
+  if (!sameName) {
+    if (la === lb && firstNameSimilar(fa, fb)) {
+      reasons.push(
+        `Name spelled differently (${a.first} ${a.last} vs ${b.first} ${b.last})`,
+      );
+      score += 1;
+    } else {
+      reasons.push(
+        `Different name (${a.first} ${a.last} vs ${b.first} ${b.last}) — may be a couple / family sharing details, not a duplicate`,
+      );
+      score -= 4;
+      disqualified = true;
+    }
+  }
 
   const ea = emails.get(a.pcoId);
   const eb = emails.get(b.pcoId);
@@ -528,7 +613,12 @@ function scorePair(
     !disqualified && (emailMatch || sameBirthdate || score >= 4)
       ? "high"
       : "low";
-  return { score, reasons, confidence };
+  // Keep all same-name pairs (incl. suffix/household lows). For fuzzy
+  // pairs (different names) only keep plausible same-person matches or
+  // shared-email pairs — drop different-name coincidences (twins, two
+  // people who just share a birthdate).
+  const keep = sameName || !disqualified || emailMatch;
+  return { score, reasons, confidence, keep };
 }
 
 /** Rebuild the duplicate_pairs cache for one org. Pairs every two people
@@ -540,17 +630,54 @@ export function rebuildDuplicatePairs(orgId: number): void {
   const people = loadDupPeople(orgId);
   const emails = loadEmailHashes(orgId);
 
-  const byKey = new Map<string, DupPerson[]>();
+  const byId = new Map<string, DupPerson>();
+  const byKey = new Map<string, string[]>(); // exact: suffix-stripped name
+  const byHash = new Map<string, string[]>(); // fuzzy: shared email
+  const byBdLast = new Map<string, string[]>(); // fuzzy: birthdate + last name
+  const byAddrBd = new Map<string, string[]>(); // fuzzy: address + birthdate
+  const push = (m: Map<string, string[]>, k: string, id: string) => {
+    const a = m.get(k);
+    if (a) a.push(id);
+    else m.set(k, [id]);
+  };
+
   for (const p of people) {
     if (!p.first || !p.last) continue;
     const { core, suffix } = splitGenerationalSuffix(`${p.first} ${p.last}`.trim());
     p.suffix = suffix;
     const key = core.toLowerCase();
     if (!key) continue;
-    const arr = byKey.get(key);
-    if (arr) arr.push(p);
-    else byKey.set(key, [p]);
+    const toks = key.split(/\s+/);
+    p.coreFirst = toks[0] ?? "";
+    p.coreLast = toks.slice(1).join(" ");
+    byId.set(p.pcoId, p);
+    push(byKey, key, p.pcoId);
+    if (p.birthdate && p.coreLast)
+      push(byBdLast, `${p.birthdate}|${p.coreLast}`, p.pcoId);
+    if (p.addr && p.birthdate) push(byAddrBd, `${p.addr}|${p.birthdate}`, p.pcoId);
+    const hs = emails.get(p.pcoId);
+    if (hs) for (const h of hs) push(byHash, h, p.pcoId);
   }
+
+  // Collect unique candidate pairs across every bucket.
+  const seen = new Set<string>();
+  const candidates: Array<{ a: string; b: string; key: string }> = [];
+  const addBucket = (ids: string[], key: string) => {
+    if (ids.length < 2 || ids.length > 50) return; // skip giant buckets (junk)
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const [a, b] = ids[i] < ids[j] ? [ids[i], ids[j]] : [ids[j], ids[i]];
+        const pk = `${a}|${b}`;
+        if (seen.has(pk)) continue;
+        seen.add(pk);
+        candidates.push({ a, b, key });
+      }
+    }
+  };
+  for (const [key, ids] of byKey) addBucket(ids, key);
+  for (const [, ids] of byHash) addBucket(ids, "fuzzy:email");
+  for (const [, ids] of byBdLast) addBucket(ids, "fuzzy:bd-last");
+  for (const [, ids] of byAddrBd) addBucket(ids, "fuzzy:addr-bd");
 
   const out: Array<{
     a: string;
@@ -561,25 +688,22 @@ export function rebuildDuplicatePairs(orgId: number): void {
     reasons: string[];
     oai: number;
   }> = [];
-  for (const [key, members] of byKey) {
-    if (members.length < 2) continue;
-    for (let i = 0; i < members.length; i++) {
-      for (let j = i + 1; j < members.length; j++) {
-        const a = members[i];
-        const b = members[j];
-        if (a.inactive && b.inactive) continue; // not interesting
-        const { score, reasons, confidence } = scorePair(a, b, emails);
-        out.push({
-          a: a.pcoId,
-          b: b.pcoId,
-          key,
-          confidence,
-          score,
-          reasons,
-          oai: a.inactive !== b.inactive ? 1 : 0,
-        });
-      }
-    }
+  for (const cand of candidates) {
+    const a = byId.get(cand.a);
+    const b = byId.get(cand.b);
+    if (!a || !b) continue;
+    if (a.inactive && b.inactive) continue; // not interesting
+    const { score, reasons, confidence, keep } = scorePair(a, b, emails);
+    if (!keep) continue;
+    out.push({
+      a: a.pcoId,
+      b: b.pcoId,
+      key: cand.key,
+      confidence,
+      score,
+      reasons,
+      oai: a.inactive !== b.inactive ? 1 : 0,
+    });
   }
 
   const tx = db.transaction(() => {

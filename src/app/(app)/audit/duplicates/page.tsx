@@ -57,10 +57,13 @@ export default async function DuplicateAuditPage({
             Duplicate audit
           </h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
-            People who share a name (suffixes like Jr/III stripped before
-            matching), paired up with the reasons we think they&apos;re the
-            same person — matching email, birthdate, address, and so on. We
-            skip inactive-only pairs (nothing to act on) and call out{" "}
+            People who likely appear twice — matched on an exact name (Jr/III
+            suffixes stripped) <span className="text-fg">and</span> fuzzily,
+            across misspelled or nickname names (Jon ↔ John) when a shared
+            email, birthdate, or address ties them together. Each pair lists
+            the reasons — matching email, birthdate, address — so you can tell
+            a real duplicate from a parent/child or a couple sharing an inbox.
+            We skip inactive-only pairs (nothing to act on) and call out{" "}
             <span className="text-fg">active + inactive</span> pairs, which
             often mean someone is coming back. Built during sync, so this
             page loads instantly.
