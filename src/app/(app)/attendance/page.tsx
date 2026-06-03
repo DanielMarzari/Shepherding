@@ -14,6 +14,7 @@ import {
   analyzePreachers,
   analyzePreacherTrends,
 } from "@/lib/attendance-preacher";
+import { analyzeFamilyTrends } from "@/lib/attendance-family";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
 import {
@@ -25,6 +26,7 @@ import { AttendanceUploadForm } from "./upload-form";
 import { AttendanceHistoryChart } from "./history-chart";
 import { AttendanceWeatherChart } from "./weather-chart";
 import { PreacherChart } from "./preacher-chart";
+import { FamilyChart } from "./family-chart";
 import { DistributionChart } from "./distribution-chart";
 
 export default async function AttendancePage() {
@@ -63,6 +65,12 @@ export default async function AttendancePage() {
   const preacher = analyzePreachers(history.rows, preacherByWeek);
   const preacherTrends = analyzePreacherTrends(history.rows, preacher.perWeek);
   const hasPreacher = preacher.stats.length > 0;
+
+  // Adults vs. kids (family) chart + trends.
+  const family = analyzeFamilyTrends(history.rows);
+  const hasFamily = history.rows.some(
+    (r) => r.kids_total != null || r.adult_total != null,
+  );
 
   const expected = counts.shepherded + counts.active + counts.present;
   const ratio = weekly && expected > 0 ? expected / weekly : null;
@@ -337,6 +345,51 @@ export default async function AttendancePage() {
                     in person).
                   </p>
                 </div>
+              )}
+            </div>
+          </Card>
+        )}
+
+        {hasFamily && (
+          <Card>
+            <CardHeader
+              title="Adults vs. Kids"
+              badge={
+                family.insights.length > 0 ? (
+                  <Pill tone="muted">
+                    {family.insights.length} trend
+                    {family.insights.length === 1 ? "" : "s"}
+                  </Pill>
+                ) : null
+              }
+            />
+            <div className="p-5 space-y-4">
+              <FamilyChart rows={history.rows} kidsShare={family.kidsShare} />
+              {family.insights.length > 0 && (
+                <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {family.insights.map((ins, i) => (
+                    <li
+                      key={i}
+                      className="rounded-lg border border-border-soft bg-bg-elev-2/40 p-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block w-1.5 h-1.5 rounded-full ${
+                            ins.tone === "up"
+                              ? "bg-good-soft-fg"
+                              : ins.tone === "down"
+                                ? "bg-warn-soft-fg"
+                                : "bg-muted"
+                          }`}
+                        />
+                        <span className="text-sm font-medium">{ins.title}</span>
+                      </div>
+                      <p className="text-xs text-muted mt-1 leading-relaxed">
+                        {ins.detail}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           </Card>

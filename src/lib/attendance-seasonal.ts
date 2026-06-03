@@ -363,35 +363,46 @@ export function analyzeSeasonalTrends(
       else noSnow.push(v);
     }
   }
-  const corr = pearson(wTemps, wAtt);
-  if (corr != null && wTemps.length >= 8) {
-    const r2 = corr * corr;
-    const explained = Math.round(r2 * 100);
+  const corr = wTemps.length >= 8 ? pearson(wTemps, wAtt) : null;
+  const corrLow = wLowTemps.length >= 8 ? pearson(wLowTemps, wLowAtt) : null;
+  const highWeak = corr != null && Math.abs(corr) < 0.15;
+  const lowWeak = corrLow != null && Math.abs(corrLow) < 0.15;
+  if (corr != null && corrLow != null && highWeak && lowWeak) {
+    // Both the high AND the low are uncorrelated — say it once.
     weatherInsights.push({
-      title:
-        Math.abs(corr) < 0.15
-          ? "Daytime high barely affects attendance"
-          : corr > 0
-            ? "Warmer Sundays have higher attendance"
-            : "Colder Sundays have higher attendance",
-      detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}), so the high accounts for about ${explained}% of the week-to-week variation (R² = ${r2.toFixed(2)}) across ${wTemps.length} matched Sundays.`,
+      title: "Temperature doesn't affect attendance",
+      detail: `Neither the daytime high (r = ${corr.toFixed(2)}) nor the overnight low (r = ${corrLow.toFixed(2)}) tracks with attendance across ${wTemps.length} matched Sundays — temperature explains almost none of the week-to-week variation.`,
       tone: "neutral",
     });
-  }
-  const corrLow = pearson(wLowTemps, wLowAtt);
-  if (corrLow != null && wLowTemps.length >= 8) {
-    const r2 = corrLow * corrLow;
-    const explained = Math.round(r2 * 100);
-    weatherInsights.push({
-      title:
-        Math.abs(corrLow) < 0.15
-          ? "Overnight low barely affects attendance"
-          : corrLow > 0
-            ? "Milder overnight lows have higher attendance"
-            : "Colder overnight lows have higher attendance",
-      detail: `Attendance and the overnight low correlate ${corrLow > 0 ? "positively" : "negatively"} (r = ${corrLow.toFixed(2)}), accounting for about ${explained}% of the variation (R² = ${r2.toFixed(2)}) across ${wLowTemps.length} matched Sundays.`,
-      tone: "neutral",
-    });
+  } else {
+    if (corr != null) {
+      const r2 = corr * corr;
+      const explained = Math.round(r2 * 100);
+      weatherInsights.push({
+        title:
+          Math.abs(corr) < 0.15
+            ? "Daytime high barely affects attendance"
+            : corr > 0
+              ? "Warmer Sundays have higher attendance"
+              : "Colder Sundays have higher attendance",
+        detail: `Attendance and the day's high temperature correlate ${corr > 0 ? "positively" : "negatively"} (r = ${corr.toFixed(2)}), so the high accounts for about ${explained}% of the week-to-week variation (R² = ${r2.toFixed(2)}) across ${wTemps.length} matched Sundays.`,
+        tone: "neutral",
+      });
+    }
+    if (corrLow != null) {
+      const r2 = corrLow * corrLow;
+      const explained = Math.round(r2 * 100);
+      weatherInsights.push({
+        title:
+          Math.abs(corrLow) < 0.15
+            ? "Overnight low barely affects attendance"
+            : corrLow > 0
+              ? "Milder overnight lows have higher attendance"
+              : "Colder overnight lows have higher attendance",
+        detail: `Attendance and the overnight low correlate ${corrLow > 0 ? "positively" : "negatively"} (r = ${corrLow.toFixed(2)}), accounting for about ${explained}% of the variation (R² = ${r2.toFixed(2)}) across ${wLowTemps.length} matched Sundays.`,
+        tone: "neutral",
+      });
+    }
   }
   if (rainy.length >= 4 && dry.length >= 4) {
     const rm = mean(rainy);
