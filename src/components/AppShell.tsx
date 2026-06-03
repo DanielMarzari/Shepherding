@@ -335,8 +335,11 @@ export function AppShellSkeleton({
             { title: "Leadership", items: SHELL_NAV.leadership },
             { title: "PCO data", items: SHELL_NAV.pcoData },
             { title: "Activity", items: SHELL_NAV.nextSteps },
-            { title: "Settings", items: SHELL_NAV.settings },
+            // Order must match the real AppShell nav (Other before
+            // Settings) or "See more" flickers to the bottom while a
+            // page's loading skeleton is shown.
             { title: "Other", items: SHELL_NAV.other },
+            { title: "Settings", items: SHELL_NAV.settings },
           ] as const
         ).map((group) => (
           <div key={group.title} className="mb-4">

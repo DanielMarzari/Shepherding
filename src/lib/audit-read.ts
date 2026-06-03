@@ -398,7 +398,11 @@ function loadDupPeople(orgId: number): DupPerson[] {
   const rows = db
     .prepare(
       `SELECT pco_id, enc_pii, gender, status, inactivated_at, birth_year
-         FROM pco_people WHERE org_id = ?`,
+         FROM pco_people
+        WHERE org_id = ?
+          AND (membership_type IS NULL
+               OR (lower(membership_type) NOT LIKE '%system use%'
+                   AND lower(membership_type) NOT LIKE '%do not delete%'))`,
     )
     .all(orgId) as Array<{
     pco_id: string;
@@ -688,10 +692,17 @@ export interface NameIssueRow extends CrossAuditRow {
  *  (leading non-letter, all punctuation) or weird shapes (digits,
  *  single-letter, repeated chars). Cross-org, so we catch admin /
  *  staff / inactive accounts with bad data too. */
+/** PCO placeholder accounts (e.g. membership type "SYSTEM USE - Do Not
+ *  Delete") aren't real people — skip them in audits. */
+function isSystemUseType(t: string | null): boolean {
+  return !!t && /system use|do not delete/i.test(t);
+}
+
 export function findNameIssuesAcrossOrg(orgId: number): NameIssueRow[] {
   const rows = loadAllPeopleForAudit(orgId);
   const out: NameIssueRow[] = [];
   for (const r of rows) {
+    if (isSystemUseType(r.membershipType)) continue;
     const flags = nameFlagsFor(r._first, r._last);
     if (flags.length === 0) continue;
     out.push({ ...toCross(r), flags });
