@@ -10,7 +10,7 @@ import {
   DemographicChartsSkeleton,
 } from "@/components/ChartsLoading";
 import { requireOrg } from "@/lib/auth";
-import { listGroups } from "@/lib/community-lane";
+import { getDistinctGroupPeople, listGroups } from "@/lib/community-lane";
 import { getGroupTypeStats, getSyncSettings } from "@/lib/pco";
 import type { DemographicScope } from "@/lib/demographics";
 import { GroupsExplorer } from "./groups-explorer";
@@ -28,6 +28,7 @@ export default async function GroupsPage({
     settings.activityTrackingMonths,
     settings.lapsedWeeks,
   );
+  const uniquePeople = getDistinctGroupPeople(session.orgId);
 
   const { scope, scopeLabel, options } = resolveScope(
     params.chart,
@@ -51,6 +52,7 @@ export default async function GroupsPage({
           <GroupsExplorer
             groups={groups}
             activityMonths={settings.activityTrackingMonths}
+            unique={uniquePeople}
           />
         )}
         {groups.length > 0 && (

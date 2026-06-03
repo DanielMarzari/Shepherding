@@ -263,6 +263,87 @@ export interface SyncedGroupRow {
   state: "growing" | "shrinking" | "steady" | "paused";
 }
 
+export interface GroupRosterUnique {
+  people: number;
+  kids: number;
+  leaders: number;
+}
+export interface GroupRosterUniqueTotals {
+  /** Unique people across ALL active, non-excluded groups. */
+  all: GroupRosterUnique;
+  /** Unique people within each group-type name ("" = no type). A person
+   *  in two groups of the same type counts once for that type. */
+  byType: Record<string, GroupRosterUnique>;
+}
+
+/** Org-wide UNIQUE headcounts for group rosters. The per-group `members`
+ *  counts are correct individually, but summing them double-counts
+ *  anyone in multiple groups — wrong for a "people in groups" headline.
+ *  This dedups each person across the active, non-excluded groups,
+ *  overall and per group type (to match the explorer's type filter). */
+export function getDistinctGroupPeople(orgId: number): GroupRosterUniqueTotals {
+  const db = getDb();
+  const excluded = getExcludedGroupTypes(orgId);
+  const excl = excluded.length
+    ? `AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${excluded
+        .map(() => "?")
+        .join(",")}))`
+    : "";
+  const rows = db
+    .prepare(
+      `SELECT coalesce(gt.name, '') AS typeName,
+              m.person_id AS personId,
+              coalesce(p.is_minor, 0) AS isMinor,
+              CASE WHEN lower(coalesce(m.role, '')) LIKE '%leader%'
+                   THEN 1 ELSE 0 END AS isLeader
+         FROM pco_group_memberships m
+         JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
+         LEFT JOIN pco_group_types gt
+           ON gt.org_id = g.org_id AND gt.pco_id = g.group_type_id
+         LEFT JOIN pco_people p
+           ON p.org_id = m.org_id AND p.pco_id = m.person_id
+        WHERE m.org_id = ?
+          AND m.archived_at IS NULL
+          AND m.person_id != ''
+          AND g.archived_at IS NULL
+          ${excl}`,
+    )
+    .all(orgId, ...excluded) as Array<{
+    typeName: string;
+    personId: string;
+    isMinor: number;
+    isLeader: number;
+  }>;
+
+  const allP = new Set<string>();
+  const allK = new Set<string>();
+  const allL = new Set<string>();
+  const byType = new Map<
+    string,
+    { p: Set<string>; k: Set<string>; l: Set<string> }
+  >();
+  for (const r of rows) {
+    allP.add(r.personId);
+    if (r.isMinor) allK.add(r.personId);
+    if (r.isLeader) allL.add(r.personId);
+    let b = byType.get(r.typeName);
+    if (!b) {
+      b = { p: new Set(), k: new Set(), l: new Set() };
+      byType.set(r.typeName, b);
+    }
+    b.p.add(r.personId);
+    if (r.isMinor) b.k.add(r.personId);
+    if (r.isLeader) b.l.add(r.personId);
+  }
+  const byTypeObj: Record<string, GroupRosterUnique> = {};
+  for (const [t, b] of byType)
+    byTypeObj[t] = { people: b.p.size, kids: b.k.size, leaders: b.l.size };
+  return {
+    all: { people: allP.size, kids: allK.size, leaders: allL.size },
+    byType: byTypeObj,
+  };
+}
+
 export function listGroups(
   orgId: number,
   trackingMonths: number,

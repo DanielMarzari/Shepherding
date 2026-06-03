@@ -208,7 +208,7 @@ export default async function AttendancePage() {
         {history.rows.length > 0 && (
           <Card>
             <CardHeader
-              title="Attendance vs. weather (Trexlertown, PA)"
+              title="Attendance vs. Weather (Trexlertown, PA)"
               badge={
                 seasonal.insights.length > 0 ? (
                   <Pill tone="muted">

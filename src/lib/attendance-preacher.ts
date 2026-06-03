@@ -16,17 +16,46 @@ const LEAD_RE = /\b(joe|joseph|joey)\b/i;
 const EXCLUDE_RE = /\b(brad|bradley)\b/i;
 const TEAM_RES = [/chen/i, /(dave|david)\s+peters/i, /azevedo/i, /claudio/i];
 
+const LEAD_LABEL = "Joe";
 const TEAM_LABEL = "Teaching team";
 const COHORT_LABEL = "Summer cohort";
 const GUEST_LABEL = "Guest";
 const GROUP_LABELS = new Set([TEAM_LABEL, COHORT_LABEL, GUEST_LABEL]);
 
+/** The lead pastor's exact name = the most-frequent "Joe…" preacher.
+ *  Pinning to one identity stops a one-off guest who happens to have
+ *  "Joe" in their name (or a stray spelling) from polluting the lead
+ *  bucket. */
+function findLeadName(
+  rows: WeeklyAttendanceRow[],
+  preacherByDate: Map<string, string>,
+): string | null {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const nm = preacherByDate.get(r.week_date);
+    if (!nm || EXCLUDE_RE.test(nm) || !LEAD_RE.test(nm)) continue;
+    counts.set(nm, (counts.get(nm) ?? 0) + 1);
+  }
+  let lead: string | null = null;
+  let max = 0;
+  for (const [nm, c] of counts)
+    if (c > max) {
+      max = c;
+      lead = nm;
+    }
+  return lead;
+}
+
 /** Map a raw preacher name + Sunday to a category label, or null to
- *  exclude the week from all preacher analysis (e.g. Brad). The lead
- *  keeps his real name so he shows individually. */
-function categorize(name: string, date: string): string | null {
+ *  exclude the week (Brad). Only the pinned lead → "Joe"; everyone else
+ *  falls to team / summer cohort / guest. */
+function categorize(
+  name: string,
+  date: string,
+  leadName: string | null,
+): string | null {
   if (EXCLUDE_RE.test(name)) return null;
-  if (LEAD_RE.test(name)) return name;
+  if (leadName && name === leadName) return LEAD_LABEL;
   if (TEAM_RES.some((re) => re.test(name))) return TEAM_LABEL;
   const y = Number(date.slice(0, 4));
   const m = Number(date.slice(5, 7));
@@ -128,11 +157,12 @@ export function analyzePreachers(
   rows: WeeklyAttendanceRow[],
   preacherByDate: Map<string, string>,
 ): PreacherAnalysis {
-  // perWeek holds the CATEGORY label (lead's name, "Teaching team",
-  // "Summer cohort", "Guest"), or null when unknown / excluded (Brad).
+  // perWeek holds the CATEGORY label ("Joe", "Teaching team", "Summer
+  // cohort", "Guest"), or null when unknown / excluded (Brad).
+  const leadName = findLeadName(rows, preacherByDate);
   const perWeek = rows.map((r) => {
     const name = preacherByDate.get(r.week_date);
-    return name ? categorize(name, r.week_date) : null;
+    return name ? categorize(name, r.week_date, leadName) : null;
   });
   const byName = new Map<string, number[]>();
   rows.forEach((r, i) => {

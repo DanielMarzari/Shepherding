@@ -13,7 +13,11 @@ import {
 import { requireOrg } from "@/lib/auth";
 import type { DemographicScope } from "@/lib/demographics";
 import { getServiceTypeStats, getSyncSettings } from "@/lib/pco";
-import { getTeamTotals, listTeams } from "@/lib/serve-lane";
+import {
+  getDistinctRosterPeople,
+  getTeamTotals,
+  listTeams,
+} from "@/lib/serve-lane";
 import { TeamsTable } from "./teams-table";
 
 export default async function TeamsPage({
@@ -31,15 +35,14 @@ export default async function TeamsPage({
     settings.lapsedFromTeamEvents,
   );
   const totals = getTeamTotals(teams);
+  // Unique people across all rosters (a person on N teams counts once).
+  const roster = getDistinctRosterPeople(session.orgId);
   const { scope, scopeLabel, options } = resolveTeamScope(
     params.chart,
     teams,
     getServiceTypeStats(session.orgId),
   );
-  const ratio =
-    totals.totalLeaders > 0
-      ? totals.totalMembers / totals.totalLeaders
-      : null;
+  const ratio = roster.leaders > 0 ? roster.people / roster.leaders : null;
 
   return (
     <AppShell active="Teams" breadcrumb="Teams">
@@ -61,22 +64,22 @@ export default async function TeamsPage({
               <div className="text-xs text-muted mb-1.5">Roster size</div>
               <div className="flex items-baseline gap-2">
                 <div className="tnum text-2xl font-semibold">
-                  {(totals.totalMembers - totals.totalMembersKids).toLocaleString()}
+                  {(roster.people - roster.kids).toLocaleString()}
                 </div>
-                {totals.totalMembersKids > 0 && (
+                {roster.kids > 0 && (
                   <div className="tnum text-xs text-muted">
-                    +{totals.totalMembersKids.toLocaleString()} kids
+                    +{roster.kids.toLocaleString()} kids
                   </div>
                 )}
               </div>
-              <div className="text-xs text-muted mt-1">adults on team rosters</div>
+              <div className="text-xs text-muted mt-1">unique adults on team rosters</div>
             </Card>
             <Card className="p-4">
               <div className="text-xs text-muted mb-1.5">Leaders</div>
               <div className="tnum text-2xl font-semibold text-accent">
-                {totals.totalLeaders}
+                {roster.leaders}
               </div>
-              <div className="text-xs text-muted mt-1">flagged as team leader</div>
+              <div className="text-xs text-muted mt-1">unique team leaders</div>
             </Card>
             <Card className="p-4">
               <div className="text-xs text-muted mb-1.5">Leader : member ratio</div>
@@ -128,7 +131,7 @@ export default async function TeamsPage({
           <div className="px-5 py-3 border-b border-border-soft flex items-center justify-between">
             <h2 className="text-sm font-semibold">All teams</h2>
             <span className="text-xs text-muted">
-              {totals.totalMembers.toLocaleString()} distinct people on roster
+              {roster.people.toLocaleString()} unique people across all teams
             </span>
           </div>
           {teams.length === 0 ? (

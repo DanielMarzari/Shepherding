@@ -234,6 +234,54 @@ function classifyState(
   return "steady";
 }
 
+export interface RosterUniqueTotals {
+  /** Distinct people across ALL active, non-excluded team rosters. */
+  people: number;
+  /** Distinct minors among them. */
+  kids: number;
+  /** Distinct people flagged as a team leader on any team. */
+  leaders: number;
+}
+
+/** Org-wide UNIQUE headcount across team rosters. getTeamTotals sums
+ *  each team's distinct count, so a person on several teams is counted
+ *  once per team — wrong for a "people on roster" headline. This counts
+ *  each person once across the same active/non-excluded teams the list
+ *  shows. */
+export function getDistinctRosterPeople(orgId: number): RosterUniqueTotals {
+  const db = getDb();
+  const excludedTypes = getExcludedTeamTypes(orgId);
+  const excl = excludedTypes.length
+    ? `AND coalesce(t.service_type_id, '') NOT IN (${excludedTypes.map(() => "?").join(",")})`
+    : "";
+  const row = db
+    .prepare(
+      `SELECT
+         COUNT(DISTINCT m.person_id) AS people,
+         COUNT(DISTINCT CASE WHEN p.is_minor = 1 THEN m.person_id END) AS kids,
+         COUNT(DISTINCT CASE WHEN m.is_team_leader = 1 THEN m.person_id END) AS leaders
+       FROM pco_team_memberships m
+       JOIN pco_teams t ON t.org_id = m.org_id AND t.pco_id = m.team_id
+       LEFT JOIN pco_people p ON p.org_id = m.org_id AND p.pco_id = m.person_id
+       WHERE m.org_id = ?
+         AND m.archived_at IS NULL
+         AND m.person_id != ''
+         AND t.deleted_at IS NULL
+         AND t.archived_at IS NULL
+         ${excl}`,
+    )
+    .get(orgId, ...excludedTypes) as {
+    people: number | null;
+    kids: number | null;
+    leaders: number | null;
+  };
+  return {
+    people: row.people ?? 0,
+    kids: row.kids ?? 0,
+    leaders: row.leaders ?? 0,
+  };
+}
+
 export function getTeamTotals(rows: SyncedTeamRow[]): TeamTotals {
   const t: TeamTotals = {
     totalTeams: rows.length,

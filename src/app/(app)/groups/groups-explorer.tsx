@@ -2,7 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { Card } from "@/components/ui";
-import type { SyncedGroupRow } from "@/lib/community-lane";
+import type {
+  GroupRosterUniqueTotals,
+  SyncedGroupRow,
+} from "@/lib/community-lane";
 import { GroupsTable } from "./groups-table";
 
 interface Totals {
@@ -51,9 +54,11 @@ const ALL = "__all__";
 export function GroupsExplorer({
   groups,
   activityMonths,
+  unique,
 }: {
   groups: SyncedGroupRow[];
   activityMonths: number;
+  unique: GroupRosterUniqueTotals;
 }) {
   const [typeFilter, setTypeFilter] = useState<string>(ALL);
 
@@ -71,10 +76,14 @@ export function GroupsExplorer({
 
   const totals = useMemo(() => computeTotals(filtered), [filtered]);
 
-  const ratio =
-    totals.totalLeaders > 0
-      ? totals.totalMembers / totals.totalLeaders
-      : null;
+  // Unique-people headcount for the current scope (overall, or the
+  // selected group type) — dedups anyone in multiple groups.
+  const uniq =
+    typeFilter === ALL
+      ? unique.all
+      : (unique.byType[typeFilter] ?? { people: 0, kids: 0, leaders: 0 });
+
+  const ratio = uniq.leaders > 0 ? uniq.people / uniq.leaders : null;
 
   return (
     <div className="space-y-6">
@@ -112,22 +121,22 @@ export function GroupsExplorer({
           <div className="text-xs text-muted mb-1.5">Active members</div>
           <div className="flex items-baseline gap-2">
             <div className="tnum text-2xl font-semibold">
-              {(totals.totalMembers - totals.totalMembersKids).toLocaleString()}
+              {(uniq.people - uniq.kids).toLocaleString()}
             </div>
-            {totals.totalMembersKids > 0 && (
+            {uniq.kids > 0 && (
               <div className="tnum text-xs text-muted">
-                +{totals.totalMembersKids.toLocaleString()} kids
+                +{uniq.kids.toLocaleString()} kids
               </div>
             )}
           </div>
-          <div className="text-xs text-muted mt-1">adults across active groups</div>
+          <div className="text-xs text-muted mt-1">unique adults in groups</div>
         </Card>
         <Card className="p-4">
           <div className="text-xs text-muted mb-1.5">Leaders</div>
           <div className="tnum text-2xl font-semibold text-accent">
-            {totals.totalLeaders}
+            {uniq.leaders}
           </div>
-          <div className="text-xs text-muted mt-1">flagged as leader role</div>
+          <div className="text-xs text-muted mt-1">unique leaders</div>
         </Card>
         <Card className="p-4">
           <div className="text-xs text-muted mb-1.5">Leader : member ratio</div>
@@ -183,7 +192,8 @@ export function GroupsExplorer({
                 : typeFilter}
           </h2>
           <span className="text-xs text-muted">
-            {totals.totalMembers.toLocaleString()} active memberships
+            {uniq.people.toLocaleString()} unique people ·{" "}
+            {totals.totalMembers.toLocaleString()} memberships
           </span>
         </div>
         {filtered.length === 0 ? (
