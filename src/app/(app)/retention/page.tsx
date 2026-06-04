@@ -2,15 +2,15 @@ import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { getRetention } from "@/lib/retention-read";
-import { RetentionLayouts } from "./retention-layouts";
+import { RetentionChart } from "./retention-chart";
 
 export default async function RetentionPage() {
   const session = await requireOrg();
-  const { years, overallJoined, overallRetained, activityMonths, startYear } =
+  const { byYear, byMonth, overallJoined, overallRetained, activityMonths, startYear } =
     getRetention(session.orgId);
   const overallPct =
     overallJoined > 0 ? Math.round((overallRetained / overallJoined) * 100) : 0;
-  const pendingYears = years.filter((y) => y.pending).length;
+  const pendingYears = byYear.filter((y) => y.pending).length;
 
   return (
     <AppShell active="Retention" breadcrumb="Retention">
@@ -44,19 +44,19 @@ export default async function RetentionPage() {
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Years tracked</div>
-            <div className="tnum text-2xl font-semibold">{years.length}</div>
+            <div className="tnum text-2xl font-semibold">{byYear.length}</div>
             <div className="text-xs text-muted mt-1">since {startYear}</div>
           </Card>
         </div>
 
         <Card className="p-5">
-          {years.length === 0 ? (
+          {byYear.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted">
               No profiles with a created date since {startYear} yet — run a PCO
               sync.
             </div>
           ) : (
-            <RetentionLayouts years={years} />
+            <RetentionChart byYear={byYear} byMonth={byMonth} />
           )}
         </Card>
 

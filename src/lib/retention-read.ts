@@ -7,27 +7,20 @@ import { getSyncSettings } from "./pco";
 const RETENTION_START_YEAR = 2017;
 const MS_PER_MONTH = 30.4375 * 86_400_000;
 
-export interface MonthCell {
-  month: number; // 1-12
+export interface RetentionPoint {
+  /** "2021" for yearly, "2021-03" for monthly. */
+  key: string;
+  label: string;
   joined: number;
   retained: number;
   pct: number;
+  /** Inside the activity window → not yet measurable ("ongoing"). */
   pending: boolean;
-  hasData: boolean;
-}
-export interface RetentionYear {
-  year: number;
-  joined: number;
-  retained: number;
-  pct: number;
-  /** Whole year still inside the activity window → not yet measurable. */
-  pending: boolean;
-  /** Always 12 cells (Jan..Dec); cells with no joins have hasData=false. */
-  months: MonthCell[];
 }
 export interface RetentionSummary {
-  years: RetentionYear[];
-  /** Settled cohorts only (excludes pending years). */
+  byYear: RetentionPoint[];
+  byMonth: RetentionPoint[];
+  /** Settled cohorts only (excludes pending). */
   overallJoined: number;
   overallRetained: number;
   activityMonths: number;
@@ -39,10 +32,10 @@ interface RawRow {
   retained: number;
 }
 
-/** Retention by join-cohort, grouped by year with each year's 12 monthly
- *  sub-cohorts. A cohort is "pending" until the activity window has
- *  elapsed past the end of the period — before then everyone still reads
- *  as active by recency, so the % would be a meaningless ~100%. */
+/** Retention by join-cohort (yearly + monthly series for a line chart).
+ *  A cohort is "pending" until the activity window has elapsed past the
+ *  end of the period — before then everyone still reads as active by
+ *  recency, so the % would be a meaningless ~100%. */
 export function getRetention(orgId: number): RetentionSummary {
   const activityMonths = getSyncSettings(orgId).activityMonths;
   const rows = getDb()
@@ -61,59 +54,38 @@ export function getRetention(orgId: number): RetentionSummary {
     )
     .all(orgId) as RawRow[];
 
-  // Aggregate joined/retained per (year) and per (year, month).
-  const yearAgg = new Map<number, { joined: number; retained: number }>();
+  const yearAgg = new Map<string, { joined: number; retained: number }>();
   const monthAgg = new Map<string, { joined: number; retained: number }>();
   for (const r of rows) {
     const y = Number(r.created.slice(0, 4));
     if (!y || y < RETENTION_START_YEAR) continue;
-    const mo = Number(r.created.slice(5, 7));
-    if (!mo) continue;
-    bump(yearAgg, y, r.retained);
-    bumpStr(monthAgg, `${y}-${mo}`, r.retained);
+    bump(yearAgg, String(y), r.retained);
+    bump(monthAgg, r.created.slice(0, 7), r.retained);
   }
 
   const now = Date.now();
-  const yearPending = (y: number) =>
-    (now - Date.UTC(y + 1, 0, 1)) / MS_PER_MONTH < activityMonths;
-  const monthPending = (y: number, mo: number) =>
-    (now - Date.UTC(y, mo, 1)) / MS_PER_MONTH < activityMonths;
+  const yearPending = (key: string) =>
+    (now - Date.UTC(Number(key) + 1, 0, 1)) / MS_PER_MONTH < activityMonths;
+  const monthPending = (key: string) => {
+    const yr = Number(key.slice(0, 4));
+    const mo = Number(key.slice(5, 7)); // 1-indexed → next-month start
+    return (now - Date.UTC(yr, mo, 1)) / MS_PER_MONTH < activityMonths;
+  };
 
-  const years: RetentionYear[] = [...yearAgg.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([y, v]) => {
-      const months: MonthCell[] = [];
-      for (let mo = 1; mo <= 12; mo++) {
-        const m = monthAgg.get(`${y}-${mo}`);
-        months.push({
-          month: mo,
-          joined: m?.joined ?? 0,
-          retained: m?.retained ?? 0,
-          pct: m && m.joined > 0 ? Math.round((m.retained / m.joined) * 100) : 0,
-          pending: monthPending(y, mo),
-          hasData: !!m && m.joined > 0,
-        });
-      }
-      return {
-        year: y,
-        joined: v.joined,
-        retained: v.retained,
-        pct: v.joined > 0 ? Math.round((v.retained / v.joined) * 100) : 0,
-        pending: yearPending(y),
-        months,
-      };
-    });
+  const byYear = toPoints(yearAgg, (k) => k, yearPending);
+  const byMonth = toPoints(monthAgg, monthLabel, monthPending);
 
   let overallJoined = 0;
   let overallRetained = 0;
-  for (const yr of years) {
-    if (yr.pending) continue;
-    overallJoined += yr.joined;
-    overallRetained += yr.retained;
+  for (const c of byYear) {
+    if (c.pending) continue;
+    overallJoined += c.joined;
+    overallRetained += c.retained;
   }
 
   return {
-    years,
+    byYear,
+    byMonth,
     overallJoined,
     overallRetained,
     activityMonths,
@@ -122,16 +94,6 @@ export function getRetention(orgId: number): RetentionSummary {
 }
 
 function bump(
-  m: Map<number, { joined: number; retained: number }>,
-  key: number,
-  retained: number,
-) {
-  const e = m.get(key) ?? { joined: 0, retained: 0 };
-  e.joined += 1;
-  e.retained += retained;
-  m.set(key, e);
-}
-function bumpStr(
   m: Map<string, { joined: number; retained: number }>,
   key: string,
   retained: number,
@@ -140,4 +102,30 @@ function bumpStr(
   e.joined += 1;
   e.retained += retained;
   m.set(key, e);
+}
+
+function toPoints(
+  agg: Map<string, { joined: number; retained: number }>,
+  label: (key: string) => string,
+  pending: (key: string) => boolean,
+): RetentionPoint[] {
+  return [...agg.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([key, v]) => ({
+      key,
+      label: label(key),
+      joined: v.joined,
+      retained: v.retained,
+      pct: v.joined > 0 ? Math.round((v.retained / v.joined) * 100) : 0,
+      pending: pending(key),
+    }));
+}
+
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+function monthLabel(key: string): string {
+  const mo = Number(key.slice(5, 7));
+  return `${MONTHS[mo - 1] ?? key.slice(5, 7)} ${key.slice(0, 4)}`;
 }
