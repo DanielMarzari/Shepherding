@@ -137,7 +137,7 @@ export function analyzeFamilyTrends(rows: WeeklyAttendanceRow[]): FamilyAnalysis
     const delta = Math.round(l.avg - f.avg); // percentage points
     if (delta < 0) {
       insights.push({
-        title: "But kids are a shrinking share of the room",
+        title: "Kids are a shrinking share of the room",
         detail: `Kids went from ${f.avg.toFixed(0)}% of attendance (${f.y}) to ${l.avg.toFixed(0)}% (${l.y}) — ${delta} points — so adult attendance is growing faster than kids'.`,
         tone: "neutral",
       });
