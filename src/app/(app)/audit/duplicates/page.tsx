@@ -7,7 +7,7 @@ import {
   type DupPersonView,
   listDuplicatePairs,
 } from "@/lib/audit-read";
-import { DownloadCsvButton } from "../download-csv";
+import { DownloadPairsCsv } from "./download-pairs-csv";
 
 interface SearchParams {
   confidence?: string;
@@ -38,17 +38,6 @@ export default async function DuplicateAuditPage({
       (!returningOnly || p.oneActiveOneInactive),
   );
 
-  // The CSV export is a flat name + PCO-link list of everyone in a pair.
-  const csvSeen = new Set<string>();
-  const csvRows: Array<{ pcoId: string; fullName: string }> = [];
-  for (const p of pairs) {
-    for (const person of [p.a, p.b]) {
-      if (csvSeen.has(person.pcoId)) continue;
-      csvSeen.add(person.pcoId);
-      csvRows.push({ pcoId: person.pcoId, fullName: person.fullName });
-    }
-  }
-
   return (
     <AppShell active="Duplicate audit" breadcrumb="Duplicate audit">
       <div className="px-5 md:px-7 py-7 space-y-6">
@@ -76,9 +65,9 @@ export default async function DuplicateAuditPage({
             {conf ? ` · ${conf} confidence` : ""}
             {returningOnly ? " · possibly returning" : ""}
           </span>
-          <DownloadCsvButton
-            rows={csvRows}
-            filename={`audit-duplicates${conf ? `-${conf}` : ""}.csv`}
+          <DownloadPairsCsv
+            pairs={pairs}
+            filename={`audit-duplicates${conf ? `-${conf}` : ""}${returningOnly ? "-returning" : ""}.csv`}
           />
         </div>
 
@@ -97,7 +86,7 @@ export default async function DuplicateAuditPage({
             tone="warn"
           />
           <FilterChip
-            label="Low (likely household)"
+            label="Low confidence"
             count={lowCount}
             href="/audit/duplicates?confidence=low"
             active={conf === "low" && !returningOnly}
@@ -145,7 +134,7 @@ function PairCard({ p }: { p: DuplicatePairView }) {
             </span>
           )}
           <Pill tone={p.confidence === "high" ? "warn" : "muted"}>
-            {p.confidence === "high" ? "high confidence" : "low — likely household"}
+            {p.confidence === "high" ? "high confidence" : "low confidence"}
           </Pill>
         </div>
       </div>

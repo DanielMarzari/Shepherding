@@ -585,9 +585,11 @@ function scorePair(
     disqualified = true;
   }
 
+  let sameAddress = false;
   if (a.addr && b.addr && a.addr === b.addr) {
-    reasons.push("Same home address");
-    score += 1;
+    reasons.push("Same home address — strong signal it's the same person");
+    score += 3;
+    sameAddress = true;
   }
 
   const sa = a.suffix ?? "";
@@ -609,8 +611,11 @@ function scorePair(
 
   if (reasons.length === 0) reasons.push("Same first and last name");
 
+  // Same address (with a matching/similar name and no disqualifier) is a
+  // strong tell it's the same person — a household member would be a Jr/Sr
+  // (suffix) or a different first name, both of which disqualify above.
   const confidence: DuplicateConfidence =
-    !disqualified && (emailMatch || sameBirthdate || score >= 4)
+    !disqualified && (emailMatch || sameBirthdate || sameAddress || score >= 4)
       ? "high"
       : "low";
   // Keep all same-name pairs (incl. suffix/household lows). For fuzzy
@@ -718,19 +723,24 @@ export function rebuildDuplicatePairs(orgId: number): void {
       ins.run(orgId, p.a, p.b, p.key, p.confidence, p.score, JSON.stringify(p.reasons), p.oai);
     }
     db.prepare(
-      `INSERT OR REPLACE INTO duplicate_pairs_meta (org_id, built_at)
-       VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
-    ).run(orgId);
+      `INSERT OR REPLACE INTO duplicate_pairs_meta (org_id, built_at, version)
+       VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?)`,
+    ).run(orgId, CURRENT_DUP_VERSION);
   });
   tx();
 }
 
-/** Build the cache on first view if it's never run for this org. */
+/** Bump when the matching/scoring logic changes so the cache rebuilds on
+ *  next view instead of waiting for the next sync. */
+const CURRENT_DUP_VERSION = 2;
+
+/** Build the cache on first view if it's never run for this org, or if
+ *  the scoring logic version changed since it was last built. */
 export function ensureDuplicatePairs(orgId: number): void {
-  const built = getDb()
-    .prepare(`SELECT 1 FROM duplicate_pairs_meta WHERE org_id = ?`)
-    .get(orgId);
-  if (!built) rebuildDuplicatePairs(orgId);
+  const meta = getDb()
+    .prepare(`SELECT version FROM duplicate_pairs_meta WHERE org_id = ?`)
+    .get(orgId) as { version: number } | undefined;
+  if (!meta || meta.version !== CURRENT_DUP_VERSION) rebuildDuplicatePairs(orgId);
 }
 
 /** Read materialized duplicate pairs, decrypting names only for the
