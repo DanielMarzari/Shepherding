@@ -31,6 +31,7 @@ export const SHELL_NAV = {
   ],
   settings: [
     { href: "/pco", label: "Sync" },
+    { href: "/pushpay", label: "PushPay" },
     { href: "/pco/filters", label: "Filters" },
     { href: "/metrics", label: "Metrics" },
     { href: "/shepherd-map", label: "Shepherd map" },
@@ -62,6 +63,7 @@ const OTHER_NAV_ITEMS = [
 
 const SETTINGS_NAV_ITEMS = [
   { href: "/pco", label: "Sync" },
+  { href: "/pushpay", label: "PushPay" },
   { href: "/pco/filters", label: "Filters" },
   { href: "/metrics", label: "Metrics" },
   { href: "/shepherd-map", label: "Shepherd map" },
