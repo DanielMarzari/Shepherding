@@ -10,7 +10,7 @@ export default async function PushpayPage() {
   const isAdmin = session.role === "admin";
 
   return (
-    <AppShell active="PushPay" breadcrumb="Settings › PushPay">
+    <AppShell active="PushPay" breadcrumb="Credentials › PushPay">
       <div className="px-5 md:px-7 py-7 space-y-6 max-w-3xl">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">PushPay</h1>

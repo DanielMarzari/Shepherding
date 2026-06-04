@@ -4,8 +4,8 @@ export default function PcoLoading() {
   return (
     <PageSkeleton
       title="PCO sync"
-      active="Sync"
-      breadcrumb="Settings › Sync"
+      active="PCO"
+      breadcrumb="Credentials › PCO"
       statCount={0}
       contentRows={4}
     />

@@ -29,13 +29,17 @@ export const SHELL_NAV = {
     { href: "/lanes/list", label: "Lanes" },
     { href: "/retention", label: "Retention" },
   ],
-  settings: [
-    { href: "/pco", label: "Sync" },
+  credentials: [
+    { href: "/pco", label: "PCO" },
     { href: "/pushpay", label: "PushPay" },
-    { href: "/pco/filters", label: "Filters" },
-    { href: "/metrics", label: "Metrics" },
+  ],
+  dataMappings: [
     { href: "/shepherd-map", label: "Shepherd map" },
     { href: "/care-map", label: "Care map" },
+  ],
+  settings: [
+    { href: "/pco/filters", label: "Filters" },
+    { href: "/metrics", label: "Metrics" },
   ],
   other: [{ href: "/more", label: "See more" }],
 };
@@ -61,13 +65,19 @@ const OTHER_NAV_ITEMS = [
   { href: "/more", label: "See more" },
 ];
 
-const SETTINGS_NAV_ITEMS = [
-  { href: "/pco", label: "Sync" },
+const CREDENTIALS_NAV_ITEMS = [
+  { href: "/pco", label: "PCO" },
   { href: "/pushpay", label: "PushPay" },
-  { href: "/pco/filters", label: "Filters" },
-  { href: "/metrics", label: "Metrics" },
+];
+
+const DATA_MAPPING_NAV_ITEMS = [
   { href: "/shepherd-map", label: "Shepherd map" },
   { href: "/care-map", label: "Care map" },
+];
+
+const SETTINGS_NAV_ITEMS = [
+  { href: "/pco/filters", label: "Filters" },
+  { href: "/metrics", label: "Metrics" },
 ];
 
 const NEXT_STEPS_NAV_ITEMS = [
@@ -218,6 +228,18 @@ export async function AppShell({
           })}
         </ul>
 
+        <CollapsibleNavGroup
+          label="Credentials"
+          items={CREDENTIALS_NAV_ITEMS}
+          active={active}
+        />
+
+        <CollapsibleNavGroup
+          label="Data Mappings"
+          items={DATA_MAPPING_NAV_ITEMS}
+          active={active}
+        />
+
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Settings</div>
         <ul className="space-y-0.5">
           {SETTINGS_NAV_ITEMS.map((item) => {
@@ -339,10 +361,11 @@ export function AppShellSkeleton({
             { title: "Leadership", items: SHELL_NAV.leadership },
             { title: "PCO data", items: SHELL_NAV.pcoData },
             { title: "Activity", items: SHELL_NAV.nextSteps },
-            // Order must match the real AppShell nav (Other before
-            // Settings) or "See more" flickers to the bottom while a
-            // page's loading skeleton is shown.
+            // Order must match the real AppShell nav or items flicker
+            // while a page's loading skeleton is shown.
             { title: "Other", items: SHELL_NAV.other },
+            { title: "Credentials", items: SHELL_NAV.credentials },
+            { title: "Data Mappings", items: SHELL_NAV.dataMappings },
             { title: "Settings", items: SHELL_NAV.settings },
           ] as const
         ).map((group) => (

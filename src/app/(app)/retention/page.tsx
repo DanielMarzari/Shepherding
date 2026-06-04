@@ -2,16 +2,21 @@ import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { getRetentionCohorts } from "@/lib/retention-read";
+import { RetentionChart } from "./retention-chart";
 
 export default async function RetentionPage() {
   const session = await requireOrg();
-  const { cohorts, overallJoined, overallRetained } = getRetentionCohorts(
-    session.orgId,
-  );
+  const {
+    byYear,
+    byMonth,
+    overallJoined,
+    overallRetained,
+    activityMonths,
+    startYear,
+  } = getRetentionCohorts(session.orgId);
   const overallPct =
     overallJoined > 0 ? Math.round((overallRetained / overallJoined) * 100) : 0;
-  // Newest cohorts first for the table.
-  const rows = [...cohorts].reverse();
+  const pendingYears = byYear.filter((c) => c.pending).length;
 
   return (
     <AppShell active="Retention" breadcrumb="Retention">
@@ -19,77 +24,54 @@ export default async function RetentionPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Retention</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
-            Of the people whose PCO profile was created in a given year, how
-            many are still active today (in a group/team, or active/present by
-            recent activity). A rough read on how well each year&apos;s
-            newcomers stuck — newer years naturally trend higher since they
-            haven&apos;t had as long to drift.
+            Of the people whose PCO profile was created in a given period, how
+            many are still active today (in a group/team, or active by recent
+            activity). Data starts in {startYear} — the {startYear - 1} import
+            was the PCO transition and isn&apos;t treated as live.
           </p>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Overall retained</div>
+            <div className="text-xs text-muted mb-1.5">Retained (settled)</div>
             <div className="tnum text-2xl font-semibold">{overallPct}%</div>
             <div className="text-xs text-muted mt-1">
               {overallRetained.toLocaleString()} of{" "}
-              {overallJoined.toLocaleString()} ever added
+              {overallJoined.toLocaleString()} from settled years
             </div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Cohorts</div>
-            <div className="tnum text-2xl font-semibold">{cohorts.length}</div>
-            <div className="text-xs text-muted mt-1">years with new profiles</div>
+            <div className="text-xs text-muted mb-1.5">Ongoing cohorts</div>
+            <div className="tnum text-2xl font-semibold">{pendingYears}</div>
+            <div className="text-xs text-muted mt-1">
+              still inside the {activityMonths}-mo activity window
+            </div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">People tracked</div>
-            <div className="tnum text-2xl font-semibold">
-              {overallJoined.toLocaleString()}
-            </div>
-            <div className="text-xs text-muted mt-1">profiles with a created date</div>
+            <div className="text-xs text-muted mb-1.5">Years tracked</div>
+            <div className="tnum text-2xl font-semibold">{byYear.length}</div>
+            <div className="text-xs text-muted mt-1">since {startYear}</div>
           </Card>
         </div>
 
-        <Card className="overflow-hidden">
-          <div className="px-5 py-3 border-b border-border-soft flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Retention by join year</h2>
-            <span className="text-xs text-muted">retained ÷ joined</span>
-          </div>
-          {rows.length === 0 ? (
-            <div className="px-5 py-12 text-center text-sm text-muted">
-              No profiles with a created date yet — run a PCO sync.
+        <Card className="p-5">
+          {byYear.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted">
+              No profiles with a created date since {startYear} yet — run a PCO
+              sync.
             </div>
           ) : (
-            <ul className="divide-y divide-border-softer">
-              {rows.map((c) => (
-                <li key={c.year} className="px-5 py-3 flex items-center gap-4">
-                  <span className="tnum text-sm font-medium w-12 shrink-0">
-                    {c.year}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="h-3 rounded-full bg-bg-elev-2 overflow-hidden">
-                      <div
-                        className="h-full bg-accent rounded-full"
-                        style={{ width: `${c.pct}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className="tnum text-sm font-medium w-12 text-right shrink-0">
-                    {c.pct}%
-                  </span>
-                  <span className="tnum text-xs text-muted w-28 text-right shrink-0">
-                    {c.retained.toLocaleString()} / {c.joined.toLocaleString()}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <RetentionChart byYear={byYear} byMonth={byMonth} />
           )}
         </Card>
 
-        <p className="text-xs text-subtle max-w-2xl">
-          &ldquo;Joined&rdquo; uses the PCO profile creation date as a proxy —
-          when someone first entered your system, which isn&apos;t always when
-          they first showed up. A truer cohort (first attendance / first form)
+        <p className="text-xs text-subtle max-w-2xl leading-relaxed">
+          &ldquo;Ongoing&rdquo; cohorts are too recent to score: within the{" "}
+          {activityMonths}-month activity window everyone still counts as
+          active just by having joined recently, so a real retention rate
+          isn&apos;t meaningful until the window has passed. &ldquo;Joined&rdquo;
+          uses the PCO profile creation date as a proxy for when someone
+          entered the system — a truer cohort (first attendance / first form)
           is a future enhancement.
         </p>
       </div>

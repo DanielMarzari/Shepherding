@@ -5,7 +5,7 @@ export default function ShepherdMapLoading() {
     <PageSkeleton
       title="Shepherd map"
       active="Shepherd map"
-      breadcrumb="Settings › Shepherd map"
+      breadcrumb="Data Mappings › Shepherd map"
       statCount={0}
       contentRows={1}
     >

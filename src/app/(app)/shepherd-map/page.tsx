@@ -51,7 +51,7 @@ export default async function ShepherdMapPage() {
   const isAdmin = session.role === "admin";
 
   return (
-    <AppShell active="Shepherd map" breadcrumb="Shepherd map">
+    <AppShell active="Shepherd map" breadcrumb="Data Mappings › Shepherd map">
       <div className="px-5 md:px-7 py-7 space-y-6 max-w-5xl">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Shepherd map</h1>

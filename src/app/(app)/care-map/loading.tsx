@@ -5,7 +5,7 @@ export default function CareMapLoading() {
     <PageSkeleton
       title="Care map"
       active="Care map"
-      breadcrumb="Settings › Care map"
+      breadcrumb="Data Mappings › Care map"
       statCount={0}
       contentRows={1}
     >

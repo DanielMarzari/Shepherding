@@ -67,7 +67,7 @@ export default async function CareMapPage({
     shepherds.length > 0 ? Math.ceil(activeTotal / shepherds.length) : null;
 
   return (
-    <AppShell active="Care map" breadcrumb="Care map">
+    <AppShell active="Care map" breadcrumb="Data Mappings › Care map">
       <div className="px-5 md:px-7 py-7 space-y-6 max-w-5xl">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Care map</h1>
