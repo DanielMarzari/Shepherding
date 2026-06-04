@@ -48,6 +48,36 @@ Dates fields as Touchpoints — **not synced**, partly missing.
 
 **Blocker:** same as Touchpoints — sync + clean the Notable Dates fields.
 
+## Member map — driving routes & road highlighting  (→ /map)
+
+**Goal:** True driving distance/time from each home to Faith Church
+(not straight-line), the average commute, and the actual roads taken
+highlighted on the map. Plus isochrones (drive-time rings).
+
+**Status:** straight-line (great-circle) distance, an estimated drive
+time, distance↔shepherding correlation, and a 2-median second-campus
+suggestion are LIVE (map-analysis.ts). Real road routing is the gap.
+
+**Blocker:** routing for thousands of homes needs a routing backend —
+self-hosted OSRM (free, best for volume) or Mapbox/Google Directions
+(API cost + rate limits). Rendering thousands of route polylines also
+needs aggregation (e.g., road-segment heat by usage). Pick a routing
+engine, then: per-home route → segment usage heat + avg drive time;
+isochrone layer for coverage.
+
+## Member map — ZIP view / polygons  (→ /map)
+
+**Goal:** Toggle the map between per-home pins and a ZIP-aggregated view
+(counts per ZIP shown as choropleth polygons or proportional symbols).
+
+**Status:** per-home pins + color-by (shepherding / membership) are LIVE.
+ZIP is parsed per person already (used for the 2nd-campus label).
+
+**Blocker:** true ZCTA polygons need the Census ZCTA boundary GeoJSON
+(large). Lighter interim: proportional circles at each ZIP's member
+centroid sized by count — buildable now from data on hand if we want it
+before full polygons.
+
 ## Giving vs. attendance  (→ Attendance page)
 
 **Goal:** Correlate weekly giving against weekly attendance, and

@@ -24,6 +24,16 @@ export interface MemberPoint {
   lng: number;
   name: string;
   classification: string;
+  /** True when their PCO membership type marks them an actual member
+   *  (vs. attender / visitor / non-member). */
+  isMember: boolean;
+}
+
+/** Heuristic: a "member" membership type (not non-/former-member). */
+export function isMemberType(mt: string | null): boolean {
+  if (!mt) return false;
+  const l = mt.toLowerCase();
+  return l.includes("member") && !l.includes("non") && !l.includes("former");
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -166,7 +176,7 @@ export function countPendingGeo(orgId: number): number {
 export function getMemberGeoPoints(orgId: number): MemberPoint[] {
   const rows = getDb()
     .prepare(
-      `SELECT g.lat, g.lng, p.enc_pii AS encPii,
+      `SELECT g.lat, g.lng, p.enc_pii AS encPii, p.membership_type AS mt,
               COALESCE(pa.classification, 'inactive') AS classification
          FROM person_geo g
          JOIN pco_people p
@@ -179,12 +189,19 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
     lat: number;
     lng: number;
     encPii: string | null;
+    mt: string | null;
     classification: string;
   }>;
   return rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
     const name =
       [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") || "Member";
-    return { lat: r.lat, lng: r.lng, name, classification: r.classification };
+    return {
+      lat: r.lat,
+      lng: r.lng,
+      name,
+      classification: r.classification,
+      isMember: isMemberType(r.mt),
+    };
   });
 }
