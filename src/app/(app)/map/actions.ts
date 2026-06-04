@@ -1,32 +1,33 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
-import { geocodePending } from "@/lib/geocode";
+import {
+  type GeocodeStatus,
+  getGeocodeStatus,
+  startGeocodeRun,
+} from "@/lib/geocode-runner";
 
-export interface GeocodeState {
-  status: "idle" | "done" | "error";
-  message?: string;
-  remaining?: number;
-}
-
-export async function geocodeBatchAction(): Promise<GeocodeState> {
+/** Kick off the background geocode run (admin only). Returns immediately;
+ *  it continues on its own until the whole directory is geocoded. */
+export async function startGeocodeAction(): Promise<
+  GeocodeStatus & { forbidden?: boolean }
+> {
   const s = await requireOrg();
   if (s.role !== "admin") {
-    return { status: "error", message: "Only admins can geocode addresses." };
-  }
-  try {
-    const { processed, matched, remaining } = await geocodePending(s.orgId, 150);
-    revalidatePath("/map");
     return {
-      status: "done",
-      message: `Processed ${processed} (${matched} placed). ${remaining} left.`,
-      remaining,
-    };
-  } catch (e) {
-    return {
-      status: "error",
-      message: e instanceof Error ? e.message : "Geocoding failed.",
+      forbidden: true,
+      running: false,
+      processed: 0,
+      matched: 0,
+      total: 0,
+      remaining: 0,
     };
   }
+  return startGeocodeRun(s.orgId);
+}
+
+/** Poll current progress. */
+export async function geocodeStatusAction(): Promise<GeocodeStatus> {
+  const s = await requireOrg();
+  return getGeocodeStatus(s.orgId);
 }

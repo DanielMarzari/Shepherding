@@ -16,6 +16,9 @@ export const CHURCH = {
   lng: -75.584432833772,
 };
 
+/** Polite delay between live geocoder calls (cache hits don't wait). */
+export const GEOCODE_DELAY_MS = 120;
+
 export interface MemberPoint {
   lat: number;
   lng: number;
@@ -23,27 +26,33 @@ export interface MemberPoint {
   classification: string;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 function normAddr(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 /** Geocode one address via the free US Census geocoder (no API key),
- *  cached by the address HMAC so each distinct address is fetched once.
- *  Returns null when the geocoder can't place it. */
+ *  cached by the address HMAC. `cached` is true when we answered from
+ *  the cache (so the caller can skip the rate-limit delay). */
 async function geocodeAddress(
   address: string,
-): Promise<{ lat: number; lng: number } | null> {
+): Promise<{ coords: { lat: number; lng: number } | null; cached: boolean }> {
   const norm = normAddr(address);
-  if (!norm) return null;
+  if (!norm) return { coords: null, cached: true };
   const key = hmac(norm);
   const db = getDb();
   const cached = db
     .prepare(`SELECT lat, lng, ok FROM geocode_cache WHERE addr_hash = ?`)
     .get(key) as { lat: number | null; lng: number | null; ok: number } | undefined;
   if (cached) {
-    return cached.ok && cached.lat != null && cached.lng != null
-      ? { lat: cached.lat, lng: cached.lng }
-      : null;
+    return {
+      coords:
+        cached.ok && cached.lat != null && cached.lng != null
+          ? { lat: cached.lat, lng: cached.lng }
+          : null,
+      cached: true,
+    };
   }
 
   let lat: number | null = null;
@@ -65,9 +74,9 @@ async function geocodeAddress(
       }
     }
   } catch {
-    // Network/parse failure — treat as no match for now (not cached as a
-    // permanent failure so a later run can retry).
-    return null;
+    // Network/parse failure — caller marks nomatch so the run terminates;
+    // a later re-geocode (address change) can retry. Don't cache it.
+    return { coords: null, cached: false };
   }
 
   const ok = lat != null && lng != null;
@@ -75,7 +84,7 @@ async function geocodeAddress(
     `INSERT OR REPLACE INTO geocode_cache (addr_hash, lat, lng, ok)
      VALUES (?, ?, ?, ?)`,
   ).run(key, lat, lng, ok ? 1 : 0);
-  return ok ? { lat: lat!, lng: lng! } : null;
+  return { coords: ok ? { lat: lat!, lng: lng! } : null, cached: false };
 }
 
 interface PendingRow {
@@ -83,26 +92,25 @@ interface PendingRow {
   enc_pii: string | null;
 }
 
-/** Geocode a batch of not-yet-located, non-inactive adults. Returns how
- *  many were processed/matched and how many remain, so an admin can run
- *  it repeatedly until the map is filled in. */
+/** Geocode a batch of not-yet-located people across the WHOLE directory
+ *  (anyone with no person_geo row, minus PCO placeholder accounts).
+ *  Rate-limited: waits `delayMs` after each live geocoder call. */
 export async function geocodePending(
   orgId: number,
-  limit = 150,
+  limit = 50,
+  delayMs = GEOCODE_DELAY_MS,
 ): Promise<{ processed: number; matched: number; remaining: number }> {
   const db = getDb();
   const rows = db
     .prepare(
       `SELECT p.pco_id, p.enc_pii
          FROM pco_people p
-         JOIN person_activity pa
-           ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
          LEFT JOIN person_geo g
            ON g.org_id = p.org_id AND g.person_id = p.pco_id
         WHERE p.org_id = ?
-          AND pa.classification != 'inactive'
-          AND p.is_minor = 0
           AND g.person_id IS NULL
+          AND (p.membership_type IS NULL
+               OR lower(p.membership_type) NOT LIKE '%system use%')
         LIMIT ?`,
     )
     .all(orgId, limit) as PendingRow[];
@@ -123,32 +131,31 @@ export async function geocodePending(
       upsert.run(orgId, r.pco_id, null, null, null, "noaddr");
       continue;
     }
-    const coords = await geocodeAddress(address);
+    const { coords, cached } = await geocodeAddress(address);
     if (coords) {
       upsert.run(orgId, r.pco_id, hmac(normAddr(address)), coords.lat, coords.lng, "ok");
       matched++;
     } else {
       upsert.run(orgId, r.pco_id, hmac(normAddr(address)), null, null, "nomatch");
     }
+    if (!cached && delayMs > 0) await sleep(delayMs);
   }
 
   return { processed: rows.length, matched, remaining: countPendingGeo(orgId) };
 }
 
-/** Active adults not yet geocoded (no person_geo row). */
+/** Everyone in the directory not yet geocoded (no person_geo row). */
 export function countPendingGeo(orgId: number): number {
   const row = getDb()
     .prepare(
       `SELECT COUNT(*) AS n
          FROM pco_people p
-         JOIN person_activity pa
-           ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
          LEFT JOIN person_geo g
            ON g.org_id = p.org_id AND g.person_id = p.pco_id
         WHERE p.org_id = ?
-          AND pa.classification != 'inactive'
-          AND p.is_minor = 0
-          AND g.person_id IS NULL`,
+          AND g.person_id IS NULL
+          AND (p.membership_type IS NULL
+               OR lower(p.membership_type) NOT LIKE '%system use%')`,
     )
     .get(orgId) as { n: number };
   return row.n;

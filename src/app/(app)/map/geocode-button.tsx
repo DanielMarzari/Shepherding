@@ -1,35 +1,100 @@
 "use client";
 
-import { useActionState } from "react";
-import { geocodeBatchAction, type GeocodeState } from "./actions";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { geocodeStatusAction, startGeocodeAction } from "./actions";
 
-export function GeocodeButton({ pending }: { pending: number }) {
-  const [state, action, running] = useActionState<GeocodeState | null, FormData>(
-    () => geocodeBatchAction(),
-    null,
-  );
+interface Status {
+  running: boolean;
+  processed: number;
+  matched: number;
+  total: number;
+  remaining: number;
+  error?: string;
+}
+
+export function GeocodeButton({
+  pending,
+  isAdmin,
+}: {
+  pending: number;
+  isAdmin: boolean;
+}) {
+  const router = useRouter();
+  const [status, setStatus] = useState<Status | null>(null);
+  const [busy, setBusy] = useState(false);
+  const wasRunning = useRef(false);
+
+  // Poll while a run is active (and once on mount to pick up a run that's
+  // already going from a previous visit / the cron).
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const s = await geocodeStatusAction();
+        if (cancelled) return;
+        setStatus(s);
+        if (s.running) {
+          wasRunning.current = true;
+          timer = setTimeout(poll, 3000);
+        } else if (wasRunning.current) {
+          // Just finished — pull in the newly-plotted points.
+          wasRunning.current = false;
+          router.refresh();
+        }
+      } catch {
+        /* ignore transient poll errors */
+      }
+    }
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [router]);
+
+  if (!isAdmin) return null;
+
+  async function start() {
+    setBusy(true);
+    try {
+      const s = await startGeocodeAction();
+      setStatus(s);
+      wasRunning.current = s.running;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const running = status?.running ?? false;
+  const remaining = status?.remaining ?? pending;
+
   return (
-    <form action={action} className="flex items-center gap-3 flex-wrap">
+    <div className="flex items-center gap-3 flex-wrap">
       <button
-        type="submit"
-        disabled={running || pending === 0}
+        type="button"
+        onClick={start}
+        disabled={busy || running || remaining === 0}
         className="px-3.5 py-1.5 rounded-lg border border-accent text-accent hover:bg-accent hover:text-bg text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
       >
         {running
           ? "Geocoding…"
-          : pending === 0
+          : remaining === 0
             ? "All addresses geocoded"
-            : `Geocode next ${Math.min(150, pending)}`}
+            : "Geocode all addresses"}
       </button>
-      {state?.message && (
-        <span
-          className={`text-xs ${
-            state.status === "error" ? "text-warn-soft-fg" : "text-muted"
-          }`}
-        >
-          {state.message}
+      {running && status && (
+        <span className="text-xs text-muted tnum">
+          {status.processed.toLocaleString()} done ·{" "}
+          {status.matched.toLocaleString()} placed ·{" "}
+          {status.remaining.toLocaleString()} left
         </span>
       )}
-    </form>
+      {!running && status?.error && (
+        <span className="text-xs text-warn-soft-fg">{status.error}</span>
+      )}
+    </div>
   );
 }

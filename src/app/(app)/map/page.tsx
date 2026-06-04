@@ -10,6 +10,7 @@ const LEGEND: Array<{ label: string; color: string }> = [
   { label: "Shepherded", color: "#5dc8a8" },
   { label: "Active", color: "#3b82f6" },
   { label: "Present", color: "#f59e0b" },
+  { label: "Inactive", color: "#94a3b8" },
 ];
 
 export default async function MapPage() {
@@ -50,14 +51,14 @@ export default async function MapPage() {
               </span>
             ))}
           </div>
-          {isAdmin && <GeocodeButton pending={pending} />}
+          <GeocodeButton pending={pending} isAdmin={isAdmin} />
         </div>
 
         {points.length === 0 ? (
           <Card className="p-10 text-center text-sm text-muted">
             No addresses geocoded yet.{" "}
             {isAdmin
-              ? "Click “Geocode” above to start placing your active members on the map."
+              ? "Click “Geocode all addresses” above — it runs in the background through the whole directory; come back and the map fills in."
               : "An admin needs to run geocoding first."}
           </Card>
         ) : (
@@ -66,9 +67,10 @@ export default async function MapPage() {
 
         {pending > 0 && isAdmin && (
           <p className="text-xs text-subtle max-w-2xl">
-            Geocoding runs in batches of 150 to stay friendly to the free
-            Census API — click again to keep going until everyone&apos;s
-            placed. Only active adults are geocoded.
+            Geocoding everyone in the directory with a real address (placeholder
+            and address-less records are skipped). It runs in the background in
+            rate-limited batches and continues on its own — you only start it
+            once, and it also tops up automatically after each sync.
           </p>
         )}
       </div>
