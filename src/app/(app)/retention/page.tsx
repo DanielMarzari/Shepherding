@@ -1,22 +1,16 @@
 import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { getRetentionCohorts } from "@/lib/retention-read";
-import { RetentionChart } from "./retention-chart";
+import { getRetention } from "@/lib/retention-read";
+import { RetentionLayouts } from "./retention-layouts";
 
 export default async function RetentionPage() {
   const session = await requireOrg();
-  const {
-    byYear,
-    byMonth,
-    overallJoined,
-    overallRetained,
-    activityMonths,
-    startYear,
-  } = getRetentionCohorts(session.orgId);
+  const { years, overallJoined, overallRetained, activityMonths, startYear } =
+    getRetention(session.orgId);
   const overallPct =
     overallJoined > 0 ? Math.round((overallRetained / overallJoined) * 100) : 0;
-  const pendingYears = byYear.filter((c) => c.pending).length;
+  const pendingYears = years.filter((y) => y.pending).length;
 
   return (
     <AppShell active="Retention" breadcrumb="Retention">
@@ -24,10 +18,11 @@ export default async function RetentionPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Retention</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
-            Of the people whose PCO profile was created in a given period, how
+            Of the people whose PCO profile was created in a given year, how
             many are still active today (in a group/team, or active by recent
-            activity). Data starts in {startYear} — the {startYear - 1} import
-            was the PCO transition and isn&apos;t treated as live.
+            activity). Each year breaks down into its 12 monthly cohorts. Data
+            starts in {startYear} — the {startYear - 1} import was the PCO
+            transition and isn&apos;t treated as live.
           </p>
         </div>
 
@@ -49,19 +44,19 @@ export default async function RetentionPage() {
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Years tracked</div>
-            <div className="tnum text-2xl font-semibold">{byYear.length}</div>
+            <div className="tnum text-2xl font-semibold">{years.length}</div>
             <div className="text-xs text-muted mt-1">since {startYear}</div>
           </Card>
         </div>
 
         <Card className="p-5">
-          {byYear.length === 0 ? (
+          {years.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted">
               No profiles with a created date since {startYear} yet — run a PCO
               sync.
             </div>
           ) : (
-            <RetentionChart byYear={byYear} byMonth={byMonth} />
+            <RetentionLayouts years={years} />
           )}
         </Card>
 
@@ -71,8 +66,7 @@ export default async function RetentionPage() {
           active just by having joined recently, so a real retention rate
           isn&apos;t meaningful until the window has passed. &ldquo;Joined&rdquo;
           uses the PCO profile creation date as a proxy for when someone
-          entered the system — a truer cohort (first attendance / first form)
-          is a future enhancement.
+          entered the system.
         </p>
       </div>
     </AppShell>
