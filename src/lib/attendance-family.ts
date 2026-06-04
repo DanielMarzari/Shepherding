@@ -101,15 +101,15 @@ export function analyzeFamilyTrends(rows: WeeklyAttendanceRow[]): FamilyAnalysis
     }
   }
 
-  // (2) Kids COUNT over time — the absolute number in worship (5-year).
+  // (2) Kids COUNT over time — the absolute number in worship, across
+  //     every year we have data for.
   const kidsYearAvgs = [...kidsByYear.entries()]
-    .filter(([, v]) => v.length >= 10)
+    .filter(([, v]) => v.length >= 6)
     .map(([y, v]) => ({ y, avg: mean(v) }))
     .sort((a, b) => a.y - b.y);
   if (kidsYearAvgs.length >= 2) {
-    const recent = kidsYearAvgs.slice(-5);
-    const f = recent[0];
-    const l = recent[recent.length - 1];
+    const f = kidsYearAvgs[0];
+    const l = kidsYearAvgs[kidsYearAvgs.length - 1];
     const span = l.y - f.y;
     const totalPct = f.avg > 0 ? Math.round(((l.avg - f.avg) / f.avg) * 100) : 0;
     const perYear = span > 0 ? Math.round(totalPct / span) : totalPct;
@@ -128,13 +128,12 @@ export function analyzeFamilyTrends(rows: WeeklyAttendanceRow[]): FamilyAnalysis
   // (3) Kids' SHARE of the room over time — kids relative to adults.
   //     Can fall even while the count rises (adults growing faster).
   const shareYearAvgs = [...shareByYear.entries()]
-    .filter(([, v]) => v.length >= 10)
+    .filter(([, v]) => v.length >= 6)
     .map(([y, v]) => ({ y, avg: mean(v) }))
     .sort((a, b) => a.y - b.y);
   if (shareYearAvgs.length >= 2) {
-    const recent = shareYearAvgs.slice(-5);
-    const f = recent[0];
-    const l = recent[recent.length - 1];
+    const f = shareYearAvgs[0];
+    const l = shareYearAvgs[shareYearAvgs.length - 1];
     const delta = Math.round(l.avg - f.avg); // percentage points
     if (delta < 0) {
       insights.push({
