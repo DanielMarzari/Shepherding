@@ -66,6 +66,12 @@ const SECTIONS: MoreSection[] = [
         description:
           "An interactive node-web of everyone in the church. Lines connect people who shepherd one another through group / team leadership or a care roster.",
       },
+      {
+        href: "/map",
+        title: "Member map",
+        description:
+          "Where your people live, plotted around Faith Church. Addresses are geocoded (free US Census geocoder) and colored by classification — useful for spotting clusters and coverage gaps.",
+      },
     ],
   },
   {
