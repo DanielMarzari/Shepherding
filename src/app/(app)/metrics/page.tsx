@@ -2,15 +2,18 @@ import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { getSyncSettings, listForms } from "@/lib/pco";
+import { getMapSettings } from "@/lib/map-settings";
 import { getClassificationCounts } from "@/lib/people-read";
 import { ServingFormPicker } from "./ServingFormPicker";
 import { ThresholdForm } from "./threshold-form";
+import { MapRadiusForm } from "./map-radius-form";
 
 export default async function MetricsPage() {
   const session = await requireOrg();
   const settings = getSyncSettings(session.orgId);
   const counts = getClassificationCounts(session.orgId, settings.activityMonths);
   const forms = listForms(session.orgId);
+  const mapSettings = getMapSettings(session.orgId);
 
   return (
     <AppShell active="Metrics" breadcrumb="Settings › Metrics">
@@ -163,6 +166,21 @@ export default async function MetricsPage() {
             window slides forward but never narrows past the threshold. Lower the threshold
             for cheaper syncs; raise it if PCO admins commonly edit older records.
           </p>
+        </Card>
+
+        <Card className="p-5">
+          <h2 className="text-sm font-semibold mb-1">Member map · second campus</h2>
+          <p className="text-xs text-muted mb-3 max-w-2xl">
+            Homes farther than this (driving) from Faith Church are excluded
+            from the second-campus siting on the{" "}
+            <a href="/map" className="text-accent hover:underline">Member map</a>
+            {" "}— they&apos;re likely out-of-area and shouldn&apos;t pull a
+            campus toward them.
+          </p>
+          <MapRadiusForm
+            initialHours={mapSettings.secondCampusMaxHours}
+            isAdmin={session.role === "admin"}
+          />
         </Card>
       </div>
     </AppShell>

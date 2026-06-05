@@ -16,12 +16,10 @@ import {
   getKidCheckinEvents,
   getTeamPositionStats,
 } from "@/lib/pco";
-import { getMapSettings } from "@/lib/map-settings";
 import { CheckinEventsForm } from "./checkin-events-form";
 import { FiltersForm } from "./form";
 import { GroupTypeFiltersForm } from "./group-types-form";
 import { TeamTypeFiltersForm } from "./team-types-form";
-import { MapRadiusForm } from "./map-radius-form";
 
 const TABS = [
   { key: "people", label: "Membership types" },
@@ -247,21 +245,6 @@ export default async function FiltersPage({
             )}
           </Card>
         )}
-
-        <Card>
-          <CardHeader
-            title="Member map · second campus"
-            right={
-              <span className="text-xs text-muted">
-                radius used by the second-campus planner
-              </span>
-            }
-          />
-          <MapRadiusForm
-            initialHours={getMapSettings(session.orgId).secondCampusMaxHours}
-            isAdmin={session.role === "admin"}
-          />
-        </Card>
       </div>
     </AppShell>
   );

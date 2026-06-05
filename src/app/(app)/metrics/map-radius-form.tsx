@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { type FilterSaveState, saveMapRadiusAction } from "./actions";
+import { type MetricsSaveState, saveMapRadiusAction } from "./actions";
 
 export function MapRadiusForm({
   initialHours,
@@ -11,12 +11,12 @@ export function MapRadiusForm({
   isAdmin: boolean;
 }) {
   const [hours, setHours] = useState(String(initialHours));
-  const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
+  const [state, action, pending] = useActionState<MetricsSaveState | null, FormData>(
     saveMapRadiusAction,
     null,
   );
   return (
-    <form action={action} className="p-5 space-y-3">
+    <form action={action} className="space-y-3">
       <div>
         <label htmlFor="hours" className="text-xs text-muted block mb-1.5">
           Max distance from Faith Church (hours)
@@ -36,11 +36,6 @@ export function MapRadiusForm({
           />
           <span className="text-xs text-muted">hours (driving)</span>
         </div>
-        <p className="text-xs text-subtle mt-1.5 max-w-prose">
-          Homes farther than this from Faith Church are excluded from the
-          second-campus siting on the Member map — they&apos;re likely
-          out-of-area and shouldn&apos;t pull a campus toward them.
-        </p>
       </div>
       {state?.status === "saved" && (
         <p className="text-xs text-good-soft-fg">{state.message}</p>
