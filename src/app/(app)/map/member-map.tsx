@@ -8,10 +8,10 @@ import type { MeshSegment } from "@/lib/road-mesh";
 const LEAFLET_VERSION = "1.9.4";
 // Colors tuned for a pale (muted) basemap.
 const CLASS_COLOR: Record<string, string> = {
-  shepherded: "#0d9488",
-  active: "#2563eb",
-  present: "#d97706",
-  inactive: "#64748b",
+  shepherded: "#eab308", // yellow
+  active: "#2563eb", // blue
+  present: "#9ca3af", // grey
+  inactive: "#64748b", // darker grey (distinct from "present")
 };
 const MEMBER_COLOR = "#0d9488";
 const NONMEMBER_COLOR = "#64748b";
@@ -53,15 +53,6 @@ const BASEMAPS: Basemap[] = [
     dark: false,
   },
   {
-    id: "positron",
-    label: "Positron (muted)",
-    url: "https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-    subdomains: "abcd",
-    maxZoom: 19,
-    attribution: "&copy; OpenStreetMap &copy; CARTO",
-    dark: false,
-  },
-  {
     id: "osm",
     label: "Standard",
     url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -84,15 +75,6 @@ const BASEMAPS: Basemap[] = [
     maxZoom: 19,
     attribution: "&copy; Esri",
     dark: false,
-  },
-  {
-    id: "dark",
-    label: "Dark",
-    url: "https://{s}.basemap.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-    subdomains: "abcd",
-    maxZoom: 19,
-    attribution: "&copy; OpenStreetMap &copy; CARTO",
-    dark: true,
   },
 ];
 const DEFAULT_BASEMAP = "gray";
@@ -172,6 +154,7 @@ export function MemberMap({
   const secondRef = useRef<any>(null);
   const meshRef = useRef<any>(null);
   const tileRef = useRef<any>(null);
+  const churchRef = useRef<any>(null);
 
   const showDotControls = mode !== "roads";
   const [colorBy, setColorBy] = useState<ColorBy>("shepherding");
@@ -223,9 +206,10 @@ export function MemberMap({
         layerRef.current = L.layerGroup().addTo(map);
         draw();
 
-        L.circleMarker([church.lat, church.lng], {
+        churchRef.current = L.circleMarker([church.lat, church.lng], {
           radius: 8, color: "#fff", weight: 2, fillColor: CHURCH_COLOR, fillOpacity: 1,
         }).bindTooltip(`${church.name} — ${church.address}`).addTo(map);
+        churchRef.current.bringToFront();
 
         if (mode === "campus") drawSecond();
       })
@@ -235,11 +219,14 @@ export function MemberMap({
     return () => {
       cancelled = true;
       if (mapRef.current) mapRef.current.remove();
-      mapRef.current = layerRef.current = secondRef.current = meshRef.current = tileRef.current = null;
+      mapRef.current = layerRef.current = secondRef.current = meshRef.current = tileRef.current = churchRef.current = null;
       if (el) delete el.dataset.init;
     };
+    // Only re-init the whole map when the underlying data/mode changes —
+    // NOT on filter toggles. (secondCampuses/mesh are referentially
+    // unstable props; their redraws are handled by dedicated effects.)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [points, church, secondCampuses, mesh, mode]);
+  }, [points, church, mode]);
 
   // Swap the basemap tiles when the user picks a different provider.
   useEffect(() => {
@@ -277,6 +264,7 @@ export function MemberMap({
         interactive: false,
       }).addTo(layer);
     });
+    churchRef.current?.bringToFront();
   }
 
   function draw() {
@@ -299,9 +287,10 @@ export function MemberMap({
       if (hideSet.has(cat)) continue;
       const c = colorOfCat(cat, colorBy);
       L.circleMarker([p.lat, p.lng], {
-        radius: 4, color: c, weight: 1, fillColor: c, fillOpacity: 0.7,
+        radius: 4, color: "#1f2937", weight: 0.6, fillColor: c, fillOpacity: 0.9,
       }).bindTooltip(`${p.name} · ${cat}`).addTo(layer);
     }
+    churchRef.current?.bringToFront();
   }
 
   function drawSecond() {
@@ -328,7 +317,13 @@ export function MemberMap({
   useEffect(() => {
     if (mode === "campus") drawSecond();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secondCohort]);
+  }, [secondCohort, secondCampuses.length]);
+  // Redraw the web only when the mesh data actually changes (stable key),
+  // not on every render — keeps filter/basemap changes from rebuilding it.
+  useEffect(() => {
+    if (mode === "roads") drawMesh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mesh?.segments.length, mesh?.maxUsage]);
 
   function toggleCat(cat: string) {
     if (colorBy === "membership") {
