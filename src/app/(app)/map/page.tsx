@@ -3,14 +3,18 @@ import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { CHURCH, countPendingGeo, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
+import { countPendingDrive, isRoutingConfigured } from "@/lib/drive-routing";
 import { MemberMap } from "./member-map";
 import { GeocodeButton } from "./geocode-button";
+import { DriveButton } from "./drive-button";
 
 export default async function MapPage() {
   const session = await requireOrg();
   const points = getMemberGeoPoints(session.orgId);
   const pending = countPendingGeo(session.orgId);
   const reach = analyzeReach(session.orgId);
+  const routingOn = isRoutingConfigured();
+  const drivePending = routingOn ? countPendingDrive(session.orgId) : 0;
   const isAdmin = session.role === "admin";
 
   return (
@@ -33,7 +37,10 @@ export default async function MapPage() {
               <span className="text-subtle"> · {pending.toLocaleString()} not geocoded yet</span>
             )}
           </span>
-          <GeocodeButton pending={pending} isAdmin={isAdmin} />
+          <div className="flex items-center gap-3 flex-wrap">
+            {routingOn && <DriveButton pending={drivePending} isAdmin={isAdmin} />}
+            <GeocodeButton pending={pending} isAdmin={isAdmin} />
+          </div>
         </div>
 
         {points.length === 0 ? (
@@ -58,7 +65,11 @@ export default async function MapPage() {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <Stat label="Avg distance" value={`${reach.avgMiles.toFixed(1)} mi`} sub={`median ${reach.medianMiles.toFixed(1)} mi`} />
-              <Stat label="Est. drive" value={`~${reach.estDriveMin} min`} sub="rough, not road routing" />
+              <Stat
+                label={reach.usingDrive ? "Avg drive" : "Est. drive"}
+                value={`~${reach.estDriveMin} min`}
+                sub={reach.usingDrive ? "real road routing" : "rough, not road routing"}
+              />
               <Stat
                 label="Distance ↔ shepherded"
                 value={reach.shepherdedCorr == null ? "—" : `r ${reach.shepherdedCorr.toFixed(2)}`}
@@ -108,8 +119,11 @@ export default async function MapPage() {
               </ul>
             )}
             <p className="text-[11px] text-subtle">
-              Distances are straight-line (great-circle), not road routes —
-              true driving distance / commute routing is a planned add-on.
+              {reach.usingDrive
+                ? "Distances and times are real driving routes from a local OSRM instance (Pennsylvania road data). The second-campus siting uses straight-line distance."
+                : routingOn
+                  ? "Distances are straight-line for now — click “Compute driving distances” to switch to real road routing."
+                  : "Distances are straight-line (great-circle). Set OSRM_URL to a local routing instance (see docs/osrm-setup.md) for real driving distance and time."}
             </p>
           </Card>
         )}

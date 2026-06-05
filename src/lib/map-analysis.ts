@@ -2,15 +2,19 @@ import "server-only";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 import { CHURCH } from "./geocode";
+import { getDriveMap } from "./drive-routing";
 
 interface PIIBlob {
   address?: string | null;
 }
 interface Pt {
+  personId: string;
   lat: number;
   lng: number;
   shepherded: boolean;
   zip: string | null;
+  driveMiles?: number;
+  driveMinutes?: number;
 }
 
 const LOCAL_MPH = 28; // rough average for local/suburban driving
@@ -73,8 +77,12 @@ export interface SecondCampus {
 }
 export interface ReachAnalysis {
   count: number;
+  /** True when ≥ half the homes have real OSRM driving distances (so the
+   *  numbers below are driving, not straight-line). */
+  usingDrive: boolean;
   avgMiles: number;
   medianMiles: number;
+  /** Avg minutes: real driving time when usingDrive, else an estimate. */
   estDriveMin: number;
   shepherdedCorr: number | null;
   bands: DistanceBand[];
@@ -85,7 +93,7 @@ export interface ReachAnalysis {
 function loadPoints(orgId: number): Pt[] {
   const rows = getDb()
     .prepare(
-      `SELECT g.lat, g.lng, p.enc_pii AS encPii,
+      `SELECT g.person_id AS personId, g.lat, g.lng, p.enc_pii AS encPii,
               CASE WHEN pa.classification = 'shepherded' THEN 1 ELSE 0 END AS shep
          FROM person_geo g
          JOIN pco_people p ON p.org_id = g.org_id AND p.pco_id = g.person_id
@@ -94,15 +102,26 @@ function loadPoints(orgId: number): Pt[] {
         WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL`,
     )
     .all(orgId) as Array<{
+    personId: string;
     lat: number;
     lng: number;
     encPii: string | null;
     shep: number;
   }>;
+  const drive = getDriveMap(orgId);
   return rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
     const zip = pii?.address?.match(/\b(\d{5})(?:-\d{4})?\b/)?.[1] ?? null;
-    return { lat: r.lat, lng: r.lng, shepherded: r.shep === 1, zip };
+    const d = drive.get(r.personId);
+    return {
+      personId: r.personId,
+      lat: r.lat,
+      lng: r.lng,
+      shepherded: r.shep === 1,
+      zip,
+      driveMiles: d?.miles,
+      driveMinutes: d?.minutes,
+    };
   });
 }
 
@@ -137,6 +156,7 @@ export function analyzeReach(orgId: number): ReachAnalysis {
   if (pts.length < 8) {
     return {
       count: pts.length,
+      usingDrive: false,
       avgMiles: 0,
       medianMiles: 0,
       estDriveMin: 0,
@@ -147,10 +167,23 @@ export function analyzeReach(orgId: number): ReachAnalysis {
     };
   }
 
-  const dists = pts.map((p) => haversineMiles(CHURCH.lat, CHURCH.lng, p.lat, p.lng));
+  // Straight-line distances (always) — used for the second-campus siting.
+  const hav = pts.map((p) => haversineMiles(CHURCH.lat, CHURCH.lng, p.lat, p.lng));
+  // Prefer real driving distances when we have them for most homes.
+  const driveCount = pts.filter((p) => p.driveMiles != null).length;
+  const usingDrive = driveCount >= 8 && driveCount >= pts.length * 0.5;
+  const dists = pts.map((p, i) =>
+    usingDrive && p.driveMiles != null ? p.driveMiles : hav[i],
+  );
   const avgMiles = mean(dists);
   const medianMiles = median(dists);
-  const estDriveMin = Math.round((avgMiles / LOCAL_MPH) * 60);
+  const driveMins = pts
+    .filter((p) => p.driveMinutes != null)
+    .map((p) => p.driveMinutes!);
+  const estDriveMin =
+    usingDrive && driveMins.length > 0
+      ? Math.round(mean(driveMins))
+      : Math.round((avgMiles / LOCAL_MPH) * 60);
 
   // Distance vs shepherding (point-biserial correlation).
   const shepBin = pts.map((p) => (p.shepherded ? 1 : 0));
@@ -183,7 +216,7 @@ export function analyzeReach(orgId: number): ReachAnalysis {
   let secondCampus: SecondCampus | null = null;
   if (pts.length >= 30) {
     // Seed the 2nd center at the geometric median of the farther half.
-    const sorted = [...pts.map((p, i) => ({ p, d: dists[i] }))].sort(
+    const sorted = [...pts.map((p, i) => ({ p, d: hav[i] }))].sort(
       (a, b) => b.d - a.d,
     );
     const far = sorted.slice(0, Math.ceil(sorted.length / 2)).map((x) => x.p);
@@ -217,7 +250,7 @@ export function analyzeReach(orgId: number): ReachAnalysis {
         lat: c2.lat,
         lng: c2.lng,
         label: topZip ? `near ${topZip}` : "see marker",
-        avgMilesBefore: avgMiles,
+        avgMilesBefore: mean(hav),
         avgMilesAfter: avgAfter,
         served: served.length,
       };
@@ -227,7 +260,9 @@ export function analyzeReach(orgId: number): ReachAnalysis {
   // ── Insights ───────────────────────────────────────────────────────
   insights.push({
     title: "Average reach",
-    detail: `Homes sit about ${avgMiles.toFixed(1)} mi from Faith Church on average (median ${medianMiles.toFixed(1)} mi) — roughly a ${estDriveMin}-minute drive (straight-line estimate, not road routing).`,
+    detail: usingDrive
+      ? `Homes are about ${avgMiles.toFixed(1)} mi / ~${estDriveMin} min from Faith Church by road (median ${medianMiles.toFixed(1)} mi), from real OSRM driving routes.`
+      : `Homes sit about ${avgMiles.toFixed(1)} mi from Faith Church on average (median ${medianMiles.toFixed(1)} mi) — roughly a ${estDriveMin}-minute drive (straight-line estimate, not road routing).`,
     tone: "neutral",
   });
   if (corr != null) {
@@ -268,6 +303,7 @@ export function analyzeReach(orgId: number): ReachAnalysis {
 
   return {
     count: pts.length,
+    usingDrive,
     avgMiles,
     medianMiles,
     estDriveMin,

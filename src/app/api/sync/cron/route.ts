@@ -4,6 +4,7 @@ import { getSyncSettings } from "@/lib/pco";
 import { isSyncDue } from "@/lib/pco-schedule";
 import { runSync } from "@/lib/pco-sync";
 import { startGeocodeRun } from "@/lib/geocode-runner";
+import { startDriveRun } from "@/lib/drive-runner";
 
 /**
  * Cron-tickable endpoint. The Oracle host runs a system crontab every
@@ -57,9 +58,13 @@ export async function GET(req: Request) {
         warning: r.warning,
         error: r.error,
       });
-      // Hands-off top-up: geocode any newly-added addresses in the
-      // background (no-op if a run is already going or nothing's pending).
-      if (r.ok) startGeocodeRun(id);
+      // Hands-off top-up: geocode any newly-added addresses, then compute
+      // driving distances for geocoded homes — both background, both
+      // no-op if already running / nothing pending / not configured.
+      if (r.ok) {
+        startGeocodeRun(id);
+        startDriveRun(id);
+      }
     } catch (e) {
       results.push({
         orgId: id,
