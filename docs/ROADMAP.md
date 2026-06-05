@@ -54,16 +54,19 @@ Dates fields as Touchpoints — **not synced**, partly missing.
 (not straight-line), the average commute, and the actual roads taken
 highlighted on the map. Plus isochrones (drive-time rings).
 
-**Status:** straight-line (great-circle) distance, an estimated drive
-time, distance↔shepherding correlation, and a 2-median second-campus
-suggestion are LIVE (map-analysis.ts). Real road routing is the gap.
+**Status:** LIVE now — real driving distance + time via a local OSRM
+instance (table service, person_drive), distance↔shepherding correlation,
+engagement-vs-drive-time curve, and per-cohort second-campus siting
+(map-analysis.ts; OSRM setup in osrm-setup.md). The remaining gap is
+**highlighting the actual roads** people drive (a road-usage heat layer).
 
-**Blocker:** routing for thousands of homes needs a routing backend —
-self-hosted OSRM (free, best for volume) or Mapbox/Google Directions
-(API cost + rate limits). Rendering thousands of route polylines also
-needs aggregation (e.g., road-segment heat by usage). Pick a routing
-engine, then: per-home route → segment usage heat + avg drive time;
-isochrone layer for coverage.
+**Blocker (road highlighting only):** needs per-home route GEOMETRY from
+OSRM `/route` (not just the table distances), decomposed into shared road
+segments and counted, then rendered as a weighted polyline layer. Heavier
+on storage/compute than the distance cache. Build once OSRM is running so
+it's testable: store a `road_usage(segment, count)` aggregate (not
+per-home geometry) and draw segments weighted by usage. An isochrone
+(drive-time rings) layer is a natural companion.
 
 ## Member map — ZIP view / polygons  (→ /map)
 

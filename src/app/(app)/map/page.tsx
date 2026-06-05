@@ -3,16 +3,19 @@ import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { CHURCH, countPendingGeo, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
+import { getMapSettings } from "@/lib/map-settings";
 import { countPendingDrive, isRoutingConfigured } from "@/lib/drive-routing";
 import { MemberMap } from "./member-map";
 import { GeocodeButton } from "./geocode-button";
 import { DriveButton } from "./drive-button";
+import { EngagementChart } from "./engagement-chart";
 
 export default async function MapPage() {
   const session = await requireOrg();
   const points = getMemberGeoPoints(session.orgId);
   const pending = countPendingGeo(session.orgId);
-  const reach = analyzeReach(session.orgId);
+  const mapSettings = getMapSettings(session.orgId);
+  const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
   const routingOn = isRoutingConfigured();
   const drivePending = routingOn ? countPendingDrive(session.orgId) : 0;
   const isAdmin = session.role === "admin";
@@ -51,7 +54,7 @@ export default async function MapPage() {
               : "An admin needs to run geocoding first."}
           </Card>
         ) : (
-          <MemberMap church={CHURCH} points={points} secondCampus={reach.secondCampus} />
+          <MemberMap church={CHURCH} points={points} secondCampuses={reach.secondCampuses} />
         )}
 
         {/* ── Reach & distance analysis ──────────────────────────────── */}
@@ -125,6 +128,68 @@ export default async function MapPage() {
                   ? "Distances are straight-line for now — click “Compute driving distances” to switch to real road routing."
                   : "Distances are straight-line (great-circle). Set OSRM_URL to a local routing instance (see docs/osrm-setup.md) for real driving distance and time."}
             </p>
+          </Card>
+        )}
+
+        {/* ── Second-campus planner ──────────────────────────────────── */}
+        {reach.secondCampuses.length > 0 && (
+          <Card className="p-5 space-y-3">
+            <div className="flex items-baseline justify-between gap-3 flex-wrap">
+              <h2 className="text-sm font-semibold">Second-campus planner</h2>
+              <span className="text-xs text-subtle">
+                excludes homes &gt; {mapSettings.secondCampusMaxHours}h away ·{" "}
+                <a href="/pco/filters" className="text-accent hover:underline">
+                  change in Filters
+                </a>
+              </span>
+            </div>
+            <p className="text-xs text-muted max-w-2xl">
+              The best spot for a second location to serve each group (picked
+              on the map above). The <span className="text-fg">inactive</span>{" "}
+              option is weighted toward people who live farther out — the
+              hypothesis being distance is part of why they drifted.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-xs text-muted">
+                  <tr className="border-b border-border-soft">
+                    <th className="text-left font-medium py-1.5 pr-4">Serves</th>
+                    <th className="text-left font-medium py-1.5 pr-4">Near</th>
+                    <th className="text-right font-medium py-1.5 pr-4">Closer for</th>
+                    <th className="text-right font-medium py-1.5">Avg distance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reach.secondCampuses.map((sc) => (
+                    <tr key={sc.cohort} className="border-b border-border-softer">
+                      <td className="py-2 pr-4 capitalize">
+                        {sc.cohort === "all" ? "Everyone" : sc.cohort}
+                      </td>
+                      <td className="py-2 pr-4 text-muted">{sc.label}</td>
+                      <td className="py-2 pr-4 text-right tnum">
+                        {sc.served.toLocaleString()} homes
+                      </td>
+                      <td className="py-2 text-right tnum">
+                        {sc.avgMilesBefore.toFixed(1)} → {sc.avgMilesAfter.toFixed(1)} mi
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
+        {/* ── Engagement vs travel time ──────────────────────────────── */}
+        {reach.engagementBins.length >= 2 && (
+          <Card className="p-5 space-y-2">
+            <h2 className="text-sm font-semibold">Engagement vs. travel time</h2>
+            <p className="text-xs text-muted max-w-2xl">
+              Does living farther from Faith Church make people less likely to
+              get connected? Each band is the share of homes at that drive time
+              who are shepherded (in a group/team) or engaged at all.
+            </p>
+            <EngagementChart bins={reach.engagementBins} />
           </Card>
         )}
 

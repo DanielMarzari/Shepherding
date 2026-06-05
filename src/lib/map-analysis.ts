@@ -11,13 +11,15 @@ interface Pt {
   personId: string;
   lat: number;
   lng: number;
-  shepherded: boolean;
+  classification: string; // shepherded | active | present | inactive
   zip: string | null;
   driveMiles?: number;
   driveMinutes?: number;
+  dFc: number; // straight-line miles to FC
+  travelMin: number; // drive minutes (real) or estimate
 }
 
-const LOCAL_MPH = 28; // rough average for local/suburban driving
+const LOCAL_MPH = 28;
 
 function haversineMiles(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const R = 3958.8;
@@ -25,42 +27,42 @@ function haversineMiles(aLat: number, aLng: number, bLat: number, bLng: number):
   const dLng = ((bLng - aLng) * Math.PI) / 180;
   const la1 = (aLat * Math.PI) / 180;
   const la2 = (bLat * Math.PI) / 180;
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
 }
-function mean(xs: number[]): number {
-  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
-}
-function median(xs: number[]): number {
+const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+const median = (xs: number[]) => {
   if (!xs.length) return 0;
   const s = [...xs].sort((a, b) => a - b);
   return s[Math.floor(s.length / 2)];
-}
+};
 function pearson(xs: number[], ys: number[]): number | null {
   const n = xs.length;
   if (n < 8) return null;
   const mx = mean(xs);
   const my = mean(ys);
-  let num = 0;
-  let dx = 0;
-  let dy = 0;
+  let num = 0, dx = 0, dy = 0;
   for (let i = 0; i < n; i++) {
-    const a = xs[i] - mx;
-    const b = ys[i] - my;
-    num += a * b;
-    dx += a * a;
-    dy += b * b;
+    const a = xs[i] - mx, b = ys[i] - my;
+    num += a * b; dx += a * a; dy += b * b;
   }
   if (dx === 0 || dy === 0) return null;
   return num / Math.sqrt(dx * dy);
 }
 
+export type Cohort = "all" | "shepherded" | "active" | "present" | "inactive";
+
 export interface DistanceBand {
   label: string;
   count: number;
   shepherdedPct: number;
+}
+export interface EngagementBin {
+  label: string;
+  midMinutes: number;
+  count: number;
+  shepherdedPct: number;
+  engagedPct: number; // not inactive
 }
 export interface Insight {
   title: string;
@@ -68,6 +70,7 @@ export interface Insight {
   tone: "up" | "down" | "neutral";
 }
 export interface SecondCampus {
+  cohort: Cohort;
   lat: number;
   lng: number;
   label: string;
@@ -77,16 +80,15 @@ export interface SecondCampus {
 }
 export interface ReachAnalysis {
   count: number;
-  /** True when ≥ half the homes have real OSRM driving distances (so the
-   *  numbers below are driving, not straight-line). */
   usingDrive: boolean;
   avgMiles: number;
   medianMiles: number;
-  /** Avg minutes: real driving time when usingDrive, else an estimate. */
   estDriveMin: number;
   shepherdedCorr: number | null;
   bands: DistanceBand[];
-  secondCampus: SecondCampus | null;
+  secondCampuses: SecondCampus[]; // one per cohort that qualifies
+  engagementBins: EngagementBin[];
+  maxHours: number;
   insights: Insight[];
 }
 
@@ -94,7 +96,7 @@ function loadPoints(orgId: number): Pt[] {
   const rows = getDb()
     .prepare(
       `SELECT g.person_id AS personId, g.lat, g.lng, p.enc_pii AS encPii,
-              CASE WHEN pa.classification = 'shepherded' THEN 1 ELSE 0 END AS shep
+              COALESCE(pa.classification, 'inactive') AS classification
          FROM person_geo g
          JOIN pco_people p ON p.org_id = g.org_id AND p.pco_id = g.person_id
          LEFT JOIN person_activity pa
@@ -106,167 +108,176 @@ function loadPoints(orgId: number): Pt[] {
     lat: number;
     lng: number;
     encPii: string | null;
-    shep: number;
+    classification: string;
   }>;
   const drive = getDriveMap(orgId);
   return rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
     const zip = pii?.address?.match(/\b(\d{5})(?:-\d{4})?\b/)?.[1] ?? null;
     const d = drive.get(r.personId);
+    const dFc = haversineMiles(CHURCH.lat, CHURCH.lng, r.lat, r.lng);
     return {
       personId: r.personId,
       lat: r.lat,
       lng: r.lng,
-      shepherded: r.shep === 1,
+      classification: r.classification,
       zip,
       driveMiles: d?.miles,
       driveMinutes: d?.minutes,
+      dFc,
+      travelMin: d?.minutes ?? (dFc / LOCAL_MPH) * 60,
     };
   });
 }
 
-/** Geometric median (Weiszfeld) in lat/lng degrees — fine over a metro
- *  area. Used to site a hypothetical second campus. */
-function geometricMedian(pts: Pt[]): { lat: number; lng: number } {
+/** Weighted geometric median (Weiszfeld) in lat/lng degrees. */
+function weightedMedian(pts: Pt[], weight: (p: Pt) => number): { lat: number; lng: number } {
   let lat = mean(pts.map((p) => p.lat));
   let lng = mean(pts.map((p) => p.lng));
-  for (let iter = 0; iter < 40; iter++) {
-    let nLat = 0;
-    let nLng = 0;
-    let wsum = 0;
+  for (let iter = 0; iter < 50; iter++) {
+    let nLat = 0, nLng = 0, wsum = 0;
     for (const p of pts) {
-      const d = Math.hypot(p.lat - lat, p.lng - lng) || 1e-9;
-      const w = 1 / d;
-      nLat += p.lat * w;
-      nLng += p.lng * w;
-      wsum += w;
+      const w = weight(p) / (Math.hypot(p.lat - lat, p.lng - lng) || 1e-9);
+      nLat += p.lat * w; nLng += p.lng * w; wsum += w;
     }
-    const newLat = nLat / wsum;
-    const newLng = nLng / wsum;
+    const newLat = nLat / wsum, newLng = nLng / wsum;
     if (Math.hypot(newLat - lat, newLng - lng) < 1e-7) break;
-    lat = newLat;
-    lng = newLng;
+    lat = newLat; lng = newLng;
   }
   return { lat, lng };
 }
 
-export function analyzeReach(orgId: number): ReachAnalysis {
+/** Site a second campus for one cohort, within the radius. Inactive
+ *  people are weighted toward those who live FARTHER from Faith Church
+ *  (the hypothesis: distance is why they drifted). */
+function siteSecondCampus(
+  cohortPts: Pt[],
+  cohort: Cohort,
+): SecondCampus | null {
+  if (cohortPts.length < 10) return null;
+  const weight =
+    cohort === "inactive" ? (p: Pt) => Math.max(0.5, p.dFc) : () => 1;
+  // Seed at the weighted median of the farther half so it doesn't collapse
+  // onto Faith Church.
+  const sortedFar = [...cohortPts].sort((a, b) => b.dFc - a.dFc);
+  const seed = sortedFar.slice(0, Math.ceil(cohortPts.length / 2));
+  let c2 = weightedMedian(seed, weight);
+  let served: Pt[] = [];
+  for (let iter = 0; iter < 12; iter++) {
+    served = cohortPts.filter(
+      (p) =>
+        haversineMiles(c2.lat, c2.lng, p.lat, p.lng) <
+        haversineMiles(CHURCH.lat, CHURCH.lng, p.lat, p.lng),
+    );
+    if (served.length < 5) break;
+    c2 = weightedMedian(served, weight);
+  }
+  if (served.length < 5) return null;
+  const avgAfter = mean(
+    cohortPts.map((p) =>
+      Math.min(p.dFc, haversineMiles(c2.lat, c2.lng, p.lat, p.lng)),
+    ),
+  );
+  const zc = new Map<string, number>();
+  for (const p of served) if (p.zip) zc.set(p.zip, (zc.get(p.zip) ?? 0) + 1);
+  const topZip = [...zc.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  return {
+    cohort,
+    lat: c2.lat,
+    lng: c2.lng,
+    label: topZip ? `near ${topZip}` : "see marker",
+    avgMilesBefore: mean(cohortPts.map((p) => p.dFc)),
+    avgMilesAfter: avgAfter,
+    served: served.length,
+  };
+}
+
+export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
   const pts = loadPoints(orgId);
   const insights: Insight[] = [];
-  if (pts.length < 8) {
-    return {
-      count: pts.length,
-      usingDrive: false,
-      avgMiles: 0,
-      medianMiles: 0,
-      estDriveMin: 0,
-      shepherdedCorr: null,
-      bands: [],
-      secondCampus: null,
-      insights,
-    };
-  }
+  const base: ReachAnalysis = {
+    count: pts.length,
+    usingDrive: false,
+    avgMiles: 0,
+    medianMiles: 0,
+    estDriveMin: 0,
+    shepherdedCorr: null,
+    bands: [],
+    secondCampuses: [],
+    engagementBins: [],
+    maxHours,
+    insights,
+  };
+  if (pts.length < 8) return base;
 
-  // Straight-line distances (always) — used for the second-campus siting.
-  const hav = pts.map((p) => haversineMiles(CHURCH.lat, CHURCH.lng, p.lat, p.lng));
-  // Prefer real driving distances when we have them for most homes.
   const driveCount = pts.filter((p) => p.driveMiles != null).length;
   const usingDrive = driveCount >= 8 && driveCount >= pts.length * 0.5;
-  const dists = pts.map((p, i) =>
-    usingDrive && p.driveMiles != null ? p.driveMiles : hav[i],
-  );
-  const avgMiles = mean(dists);
-  const medianMiles = median(dists);
-  const driveMins = pts
-    .filter((p) => p.driveMinutes != null)
-    .map((p) => p.driveMinutes!);
+  const metric = pts.map((p) => (usingDrive && p.driveMiles != null ? p.driveMiles : p.dFc));
+  const avgMiles = mean(metric);
+  const medianMiles = median(metric);
+  const driveMins = pts.filter((p) => p.driveMinutes != null).map((p) => p.driveMinutes!);
   const estDriveMin =
     usingDrive && driveMins.length > 0
       ? Math.round(mean(driveMins))
       : Math.round((avgMiles / LOCAL_MPH) * 60);
 
-  // Distance vs shepherding (point-biserial correlation).
-  const shepBin = pts.map((p) => (p.shepherded ? 1 : 0));
-  const corr = pearson(dists, shepBin);
+  const shepBin = pts.map((p) => (p.classification === "shepherded" ? 1 : 0));
+  const corr = pearson(metric, shepBin);
 
-  // Shepherded rate by distance band.
+  // Shepherded by distance band (miles).
   const bandDefs: Array<[string, number, number]> = [
-    ["0–2 mi", 0, 2],
-    ["2–5 mi", 2, 5],
-    ["5–10 mi", 5, 10],
-    ["10–20 mi", 10, 20],
-    ["20+ mi", 20, Infinity],
+    ["0–2 mi", 0, 2], ["2–5 mi", 2, 5], ["5–10 mi", 5, 10],
+    ["10–20 mi", 10, 20], ["20+ mi", 20, Infinity],
   ];
   const bands: DistanceBand[] = bandDefs
     .map(([label, lo, hi]) => {
-      const idx = dists
-        .map((d, i) => ({ d, i }))
-        .filter((x) => x.d >= lo && x.d < hi);
-      const count = idx.length;
-      const shep = idx.filter((x) => pts[x.i].shepherded).length;
-      return {
-        label,
-        count,
-        shepherdedPct: count ? Math.round((shep / count) * 100) : 0,
-      };
+      const sub = pts.filter((_, i) => metric[i] >= lo && metric[i] < hi);
+      const shep = sub.filter((p) => p.classification === "shepherded").length;
+      return { label, count: sub.length, shepherdedPct: sub.length ? Math.round((shep / sub.length) * 100) : 0 };
     })
     .filter((b) => b.count > 0);
 
-  // ── Second-campus suggestion: a 2-median with FC fixed. ────────────
-  let secondCampus: SecondCampus | null = null;
-  if (pts.length >= 30) {
-    // Seed the 2nd center at the geometric median of the farther half.
-    const sorted = [...pts.map((p, i) => ({ p, d: hav[i] }))].sort(
-      (a, b) => b.d - a.d,
-    );
-    const far = sorted.slice(0, Math.ceil(sorted.length / 2)).map((x) => x.p);
-    let c2 = geometricMedian(far);
-    let served: Pt[] = [];
-    for (let iter = 0; iter < 12; iter++) {
-      served = pts.filter((p) => {
-        const dFc = haversineMiles(CHURCH.lat, CHURCH.lng, p.lat, p.lng);
-        const d2 = haversineMiles(c2.lat, c2.lng, p.lat, p.lng);
-        return d2 < dFc;
-      });
-      if (served.length < 5) break;
-      c2 = geometricMedian(served);
-    }
-    if (served.length >= 5) {
-      const avgAfter = mean(
-        pts.map((p) =>
-          Math.min(
-            haversineMiles(CHURCH.lat, CHURCH.lng, p.lat, p.lng),
-            haversineMiles(c2.lat, c2.lng, p.lat, p.lng),
-          ),
-        ),
-      );
-      // Human label = the most common zip among the served homes.
-      const zipCount = new Map<string, number>();
-      for (const p of served)
-        if (p.zip) zipCount.set(p.zip, (zipCount.get(p.zip) ?? 0) + 1);
-      const topZip =
-        [...zipCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-      secondCampus = {
-        lat: c2.lat,
-        lng: c2.lng,
-        label: topZip ? `near ${topZip}` : "see marker",
-        avgMilesBefore: mean(hav),
-        avgMilesAfter: avgAfter,
-        served: served.length,
+  // ── Engagement vs travel time (minutes). ──────────────────────────
+  const binDefs: Array<[string, number, number]> = [
+    ["0–10", 0, 10], ["10–20", 10, 20], ["20–30", 20, 30],
+    ["30–45", 30, 45], ["45–60", 45, 60], ["60–90", 60, 90], ["90+", 90, Infinity],
+  ];
+  const engagementBins: EngagementBin[] = binDefs
+    .map(([label, lo, hi]) => {
+      const sub = pts.filter((p) => p.travelMin >= lo && p.travelMin < hi);
+      const shep = sub.filter((p) => p.classification === "shepherded").length;
+      const eng = sub.filter((p) => p.classification !== "inactive").length;
+      return {
+        label,
+        midMinutes: hi === Infinity ? 100 : (lo + hi) / 2,
+        count: sub.length,
+        shepherdedPct: sub.length ? Math.round((shep / sub.length) * 100) : 0,
+        engagedPct: sub.length ? Math.round((eng / sub.length) * 100) : 0,
       };
-    }
+    })
+    .filter((b) => b.count >= 3);
+
+  // ── Second-campus siting per cohort, within the radius. ───────────
+  const maxMin = maxHours * 60;
+  const inRadius = pts.filter((p) => p.travelMin <= maxMin);
+  const cohorts: Cohort[] = ["all", "shepherded", "active", "present", "inactive"];
+  const secondCampuses: SecondCampus[] = [];
+  for (const c of cohorts) {
+    const cohortPts =
+      c === "all" ? inRadius : inRadius.filter((p) => p.classification === c);
+    const sc = siteSecondCampus(cohortPts, c);
+    if (sc) secondCampuses.push(sc);
   }
 
   // ── Insights ───────────────────────────────────────────────────────
   insights.push({
     title: "Average reach",
     detail: usingDrive
-      ? `Homes are about ${avgMiles.toFixed(1)} mi / ~${estDriveMin} min from Faith Church by road (median ${medianMiles.toFixed(1)} mi), from real OSRM driving routes.`
-      : `Homes sit about ${avgMiles.toFixed(1)} mi from Faith Church on average (median ${medianMiles.toFixed(1)} mi) — roughly a ${estDriveMin}-minute drive (straight-line estimate, not road routing).`,
+      ? `Homes are about ${avgMiles.toFixed(1)} mi / ~${estDriveMin} min from Faith Church by road (median ${medianMiles.toFixed(1)} mi), from real OSRM routing.`
+      : `Homes sit about ${avgMiles.toFixed(1)} mi from Faith Church on average (median ${medianMiles.toFixed(1)} mi) — ~${estDriveMin}-min drive (straight-line estimate).`,
     tone: "neutral",
   });
   if (corr != null) {
-    const r2 = Math.round(corr * corr * 100);
     insights.push({
       title:
         Math.abs(corr) < 0.1
@@ -274,42 +285,28 @@ export function analyzeReach(orgId: number): ReachAnalysis {
           : corr < 0
             ? "Closer homes are more likely to be shepherded"
             : "Farther homes are more likely to be shepherded",
-      detail: `Distance-from-church and being shepherded correlate ${corr < 0 ? "negatively" : "positively"} (r = ${corr.toFixed(2)}), so distance accounts for about ${r2}% of the variation. ${
-        corr < 0
-          ? "People who live closer tend to be more connected."
-          : Math.abs(corr) < 0.1
-            ? "Where someone lives has little to do with whether they're shepherded."
-            : ""
-      }`,
+      detail: `Distance and being shepherded correlate ${corr < 0 ? "negatively" : "positively"} (r = ${corr.toFixed(2)}), ~${Math.round(corr * corr * 100)}% of the variation.`,
       tone: "neutral",
     });
   }
-  if (bands.length >= 2) {
-    const near = bands[0];
-    const far = bands[bands.length - 1];
+  const inactiveSc = secondCampuses.find((s) => s.cohort === "inactive");
+  if (inactiveSc) {
     insights.push({
-      title: "Shepherding by distance",
-      detail: `${near.shepherdedPct}% of homes within ${near.label.replace(" mi", " miles")} are shepherded vs ${far.shepherdedPct}% of those ${far.label.replace(" mi", " miles")} out.`,
-      tone: "neutral",
-    });
-  }
-  if (secondCampus) {
-    insights.push({
-      title: "Possible second campus",
-      detail: `A second location ${secondCampus.label} would be closer than Faith Church for ${secondCampus.served.toLocaleString()} homes, cutting the average distance from ${secondCampus.avgMilesBefore.toFixed(1)} mi to ${secondCampus.avgMilesAfter.toFixed(1)} mi. Marked on the map.`,
+      title: "Second campus could re-reach inactive folks",
+      detail: `Weighting toward distant (still in-area) inactive homes, a campus ${inactiveSc.label} would be closer than Faith Church for ${inactiveSc.served.toLocaleString()} of them — average distance ${inactiveSc.avgMilesBefore.toFixed(1)} → ${inactiveSc.avgMilesAfter.toFixed(1)} mi. They may have drifted partly because of the drive.`,
       tone: "up",
     });
   }
 
   return {
-    count: pts.length,
+    ...base,
     usingDrive,
     avgMiles,
     medianMiles,
     estDriveMin,
     shepherdedCorr: corr,
     bands,
-    secondCampus,
-    insights,
+    secondCampuses,
+    engagementBins,
   };
 }

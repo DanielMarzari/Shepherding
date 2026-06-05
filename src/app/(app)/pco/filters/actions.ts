@@ -11,10 +11,29 @@ import {
   saveExcludedTeamTypes,
   saveKidCheckinEvents,
 } from "@/lib/pco";
+import { saveSecondCampusMaxHours } from "@/lib/map-settings";
 
 export interface FilterSaveState {
   status: "idle" | "saved" | "error";
   message?: string;
+}
+
+export async function saveMapRadiusAction(
+  _prev: FilterSaveState | null,
+  formData: FormData,
+): Promise<FilterSaveState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") {
+    return { status: "error", message: "Only admins can change this." };
+  }
+  const hours = Number(formData.get("hours"));
+  if (!Number.isFinite(hours) || hours <= 0) {
+    return { status: "error", message: "Enter a positive number of hours." };
+  }
+  saveSecondCampusMaxHours(s.orgId, hours);
+  revalidatePath("/pco/filters");
+  revalidatePath("/map");
+  return { status: "saved", message: `Excluding homes over ${hours}h away.` };
 }
 
 export async function saveFiltersAction(
