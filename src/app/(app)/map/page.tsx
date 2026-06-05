@@ -5,9 +5,11 @@ import { CHURCH, countPendingGeo, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { countPendingDrive, isRoutingConfigured } from "@/lib/drive-routing";
+import { countPendingMesh, getRoadMesh } from "@/lib/road-mesh";
 import { MemberMap } from "./member-map";
 import { GeocodeButton } from "./geocode-button";
 import { DriveButton } from "./drive-button";
+import { MeshButton } from "./mesh-button";
 import { EngagementChart } from "./engagement-chart";
 
 export default async function MapPage() {
@@ -18,6 +20,8 @@ export default async function MapPage() {
   const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
   const routingOn = isRoutingConfigured();
   const drivePending = routingOn ? countPendingDrive(session.orgId) : 0;
+  const meshPending = routingOn ? countPendingMesh(session.orgId) : 0;
+  const mesh = getRoadMesh(session.orgId);
   const isAdmin = session.role === "admin";
 
   return (
@@ -41,6 +45,7 @@ export default async function MapPage() {
             )}
           </span>
           <div className="flex items-center gap-3 flex-wrap">
+            {routingOn && <MeshButton pending={meshPending} isAdmin={isAdmin} />}
             {routingOn && <DriveButton pending={drivePending} isAdmin={isAdmin} />}
             <GeocodeButton pending={pending} isAdmin={isAdmin} />
           </div>
@@ -54,7 +59,12 @@ export default async function MapPage() {
               : "An admin needs to run geocoding first."}
           </Card>
         ) : (
-          <MemberMap church={CHURCH} points={points} secondCampuses={reach.secondCampuses} />
+          <MemberMap
+            church={CHURCH}
+            points={points}
+            secondCampuses={reach.secondCampuses}
+            mesh={mesh.segments.length > 0 ? { segments: mesh.segments, maxUsage: mesh.maxUsage } : undefined}
+          />
         )}
 
         {/* ── Reach & distance analysis ──────────────────────────────── */}

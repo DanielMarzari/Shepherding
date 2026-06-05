@@ -5,6 +5,7 @@ import { isSyncDue } from "@/lib/pco-schedule";
 import { runSync } from "@/lib/pco-sync";
 import { startGeocodeRun } from "@/lib/geocode-runner";
 import { startDriveRun } from "@/lib/drive-runner";
+import { startMeshRun } from "@/lib/mesh-runner";
 
 /**
  * Cron-tickable endpoint. The Oracle host runs a system crontab every
@@ -64,6 +65,7 @@ export async function GET(req: Request) {
       if (r.ok) {
         startGeocodeRun(id);
         startDriveRun(id);
+        startMeshRun(id);
       }
     } catch (e) {
       results.push({

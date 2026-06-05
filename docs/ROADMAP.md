@@ -54,19 +54,18 @@ Dates fields as Touchpoints — **not synced**, partly missing.
 (not straight-line), the average commute, and the actual roads taken
 highlighted on the map. Plus isochrones (drive-time rings).
 
-**Status:** LIVE now — real driving distance + time via a local OSRM
-instance (table service, person_drive), distance↔shepherding correlation,
-engagement-vs-drive-time curve, and per-cohort second-campus siting
-(map-analysis.ts; OSRM setup in osrm-setup.md). The remaining gap is
-**highlighting the actual roads** people drive (a road-usage heat layer).
+**Status:** DONE. Real driving distance + time (OSRM table service,
+person_drive), distance↔shepherding correlation, engagement-vs-drive-time
+curve, per-cohort second-campus siting (map-analysis.ts), AND the **road
+web** — a single deduplicated, usage-weighted mesh of the segments homes
+drive from Faith Church (road-mesh.ts, road_mesh table, "Build road web"
+button + canvas layer). Built incrementally: each home is routed once and
+folded in; shared roads accumulate usage (thick trunks near FC, thin
+neighborhood tips). Recomputed for new homes on the nightly cron.
 
-**Blocker (road highlighting only):** needs per-home route GEOMETRY from
-OSRM `/route` (not just the table distances), decomposed into shared road
-segments and counted, then rendered as a weighted polyline layer. Heavier
-on storage/compute than the distance cache. Build once OSRM is running so
-it's testable: store a `road_usage(segment, count)` aggregate (not
-per-home geometry) and draw segments weighted by usage. An isochrone
-(drive-time rings) layer is a natural companion.
+**Possible follow-on:** drive-time isochrone (coverage rings) layer, and
+decrementing mesh usage when a home's address changes (today stale
+segments linger with slightly inflated counts — negligible).
 
 ## Member map — ZIP view / polygons  (→ /map)
 

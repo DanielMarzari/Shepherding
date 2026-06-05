@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MemberPoint } from "@/lib/geocode";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
+import type { MeshSegment } from "@/lib/road-mesh";
 
 const LEAFLET_VERSION = "1.9.4";
 const CLASS_COLOR: Record<string, string> = {
@@ -15,6 +16,14 @@ const MEMBER_COLOR = "#5dc8a8";
 const NONMEMBER_COLOR = "#94a3b8";
 const CHURCH_COLOR = "#ef4444";
 const SECOND_COLOR = "#a855f7";
+const MESH_COLOR = "#38bdf8";
+// Weight/opacity tiers for the road web, low→high usage.
+const MESH_TIERS = [
+  { weight: 0.7, opacity: 0.3 },
+  { weight: 1.3, opacity: 0.45 },
+  { weight: 2.2, opacity: 0.6 },
+  { weight: 3.6, opacity: 0.85 },
+];
 
 type ColorBy = "shepherding" | "membership";
 const SHEP_CATS = ["shepherded", "active", "present", "inactive"];
@@ -75,22 +84,27 @@ export function MemberMap({
   church,
   points,
   secondCampuses,
+  mesh,
 }: {
   church: { lat: number; lng: number; name: string; address: string };
   points: MemberPoint[];
   secondCampuses: SecondCampus[];
+  mesh?: { segments: MeshSegment[]; maxUsage: number };
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const LRef = useRef<any>(null);
   const layerRef = useRef<any>(null);
   const secondRef = useRef<any>(null);
+  const meshRef = useRef<any>(null);
 
   const [colorBy, setColorBy] = useState<ColorBy>("shepherding");
   const [hiddenShep, setHiddenShep] = useState<string[]>([]);
   const [hiddenMem, setHiddenMem] = useState<string[]>([]);
   const [secondCohort, setSecondCohort] = useState<Cohort | "none">("all");
+  const [showMesh, setShowMesh] = useState(true);
   const [loaded, setLoaded] = useState(false);
+  const hasMesh = !!mesh && mesh.segments.length > 0;
 
   // Restore saved preferences once (after mount → avoids SSR/hydration
   // mismatch from reading localStorage during render).
@@ -100,6 +114,7 @@ export function MemberMap({
     setHiddenShep(lsGet("shepherdly.map.hidden.shepherding", []));
     setHiddenMem(lsGet("shepherdly.map.hidden.membership", []));
     setSecondCohort(lsGet("shepherdly.map.secondCohort", "all"));
+    setShowMesh(lsGet("shepherdly.map.showMesh", true));
     setLoaded(true);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
@@ -116,12 +131,16 @@ export function MemberMap({
         if (cancelled || !el || el.dataset.init) return;
         el.dataset.init = "1";
         LRef.current = L;
-        const map = L.map(el, { scrollWheelZoom: true }).setView([church.lat, church.lng], 11);
+        const map = L.map(el, { scrollWheelZoom: true, preferCanvas: true }).setView([church.lat, church.lng], 11);
         mapRef.current = map;
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
           maxZoom: 18,
           attribution: "&copy; OpenStreetMap contributors",
         }).addTo(map);
+        // Road web first (under the dots).
+        meshRef.current = L.layerGroup();
+        if (showMesh) meshRef.current.addTo(map);
+        drawMesh();
         layerRef.current = L.layerGroup().addTo(map);
         draw();
         L.circleMarker([church.lat, church.lng], {
@@ -135,11 +154,42 @@ export function MemberMap({
     return () => {
       cancelled = true;
       if (mapRef.current) mapRef.current.remove();
-      mapRef.current = layerRef.current = secondRef.current = null;
+      mapRef.current = layerRef.current = secondRef.current = meshRef.current = null;
       if (el) delete el.dataset.init;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [points, church, secondCampuses]);
+  }, [points, church, secondCampuses, mesh]);
+
+  // Render the road web as a few multi-polylines bucketed by usage —
+  // a handful of layer objects instead of thousands, so it stays fast.
+  function drawMesh() {
+    const L = LRef.current;
+    const layer = meshRef.current;
+    if (!L || !layer || !mesh || mesh.segments.length === 0) return;
+    layer.clearLayers();
+    const maxU = Math.max(1, mesh.maxUsage);
+    const tiers: Array<Array<[number, number][]>> = [[], [], [], []];
+    for (const s of mesh.segments) {
+      // log-scaled tier 0..3
+      const t = Math.min(
+        3,
+        Math.floor((Math.log(s.usage) / Math.log(maxU + 1)) * 4),
+      );
+      tiers[t].push([
+        [s.ay, s.ax],
+        [s.by, s.bx],
+      ]);
+    }
+    tiers.forEach((segs, i) => {
+      if (segs.length === 0) return;
+      L.polyline(segs, {
+        color: MESH_COLOR,
+        weight: MESH_TIERS[i].weight,
+        opacity: MESH_TIERS[i].opacity,
+        interactive: false,
+      }).addTo(layer);
+    });
+  }
 
   function draw() {
     const L = LRef.current;
@@ -183,6 +233,20 @@ export function MemberMap({
     drawSecond();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [secondCohort]);
+  // Toggle the road web on/off.
+  useEffect(() => {
+    const map = mapRef.current;
+    const m = meshRef.current;
+    if (!map || !m) return;
+    if (showMesh) m.addTo(map);
+    else map.removeLayer(m);
+  }, [showMesh]);
+
+  function toggleMesh() {
+    const next = !showMesh;
+    setShowMesh(next);
+    lsSet("shepherdly.map.showMesh", next);
+  }
 
   function toggleCat(cat: string) {
     if (colorBy === "membership") {
@@ -239,6 +303,18 @@ export function MemberMap({
                 ))}
               </select>
             </>
+          )}
+          {hasMesh && (
+            <button
+              type="button"
+              onClick={toggleMesh}
+              className={`ml-2 px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${
+                showMesh ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"
+              }`}
+            >
+              <span className="inline-block w-2.5 h-2.5 rounded-full mr-1.5 align-middle" style={{ background: MESH_COLOR, opacity: showMesh ? 1 : 0.4 }} />
+              Road web
+            </button>
           )}
         </div>
         <div className="flex items-center gap-3 flex-wrap">

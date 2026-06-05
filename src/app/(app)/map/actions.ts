@@ -11,6 +11,11 @@ import {
   getDriveStatus,
   startDriveRun,
 } from "@/lib/drive-runner";
+import {
+  type MeshRunStatus,
+  getMeshStatus,
+  startMeshRun,
+} from "@/lib/mesh-runner";
 
 /** Kick off the background geocode run (admin only). Returns immediately;
  *  it continues on its own until the whole directory is geocoded. */
@@ -48,4 +53,16 @@ export async function startDriveAction(): Promise<DriveRunStatus> {
 export async function driveStatusAction(): Promise<DriveRunStatus> {
   const s = await requireOrg();
   return getDriveStatus(s.orgId);
+}
+
+/** Kick off road-mesh building (admin only, no-op if OSRM not set). */
+export async function startMeshAction(): Promise<MeshRunStatus> {
+  const s = await requireOrg();
+  if (s.role !== "admin") return getMeshStatus(s.orgId);
+  return startMeshRun(s.orgId);
+}
+
+export async function meshStatusAction(): Promise<MeshRunStatus> {
+  const s = await requireOrg();
+  return getMeshStatus(s.orgId);
 }
