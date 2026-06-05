@@ -31,6 +31,71 @@ const MESH_TIERS = [
 
 type ColorBy = "shepherding" | "membership";
 type MapMode = "members" | "roads" | "campus";
+
+interface Basemap {
+  id: string;
+  label: string;
+  url: string;
+  subdomains?: string;
+  maxZoom: number;
+  attribution: string;
+  dark: boolean;
+}
+// Keyless tile providers on different CDNs, so at least some resolve on
+// any network (CARTO's cartocdn.com was failing DNS for the user).
+const BASEMAPS: Basemap[] = [
+  {
+    id: "gray",
+    label: "Gray (muted)",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    maxZoom: 16,
+    attribution: "&copy; Esri",
+    dark: false,
+  },
+  {
+    id: "positron",
+    label: "Positron (muted)",
+    url: "https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+    subdomains: "abcd",
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap &copy; CARTO",
+    dark: false,
+  },
+  {
+    id: "osm",
+    label: "Standard",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap",
+    dark: false,
+  },
+  {
+    id: "streets",
+    label: "Streets",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    maxZoom: 19,
+    attribution: "&copy; Esri",
+    dark: false,
+  },
+  {
+    id: "topo",
+    label: "Topographic",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    maxZoom: 19,
+    attribution: "&copy; Esri",
+    dark: false,
+  },
+  {
+    id: "dark",
+    label: "Dark",
+    url: "https://{s}.basemap.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    subdomains: "abcd",
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap &copy; CARTO",
+    dark: true,
+  },
+];
+const DEFAULT_BASEMAP = "gray";
 const SHEP_CATS = ["shepherded", "active", "present", "inactive"];
 const MEM_CATS = ["member", "non-member"];
 
@@ -106,12 +171,14 @@ export function MemberMap({
   const layerRef = useRef<any>(null);
   const secondRef = useRef<any>(null);
   const meshRef = useRef<any>(null);
+  const tileRef = useRef<any>(null);
 
   const showDotControls = mode !== "roads";
   const [colorBy, setColorBy] = useState<ColorBy>("shepherding");
   const [hiddenShep, setHiddenShep] = useState<string[]>([]);
   const [hiddenMem, setHiddenMem] = useState<string[]>([]);
   const [secondCohort, setSecondCohort] = useState<Cohort | "none">("all");
+  const [basemapId, setBasemapId] = useState(DEFAULT_BASEMAP);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -120,9 +187,12 @@ export function MemberMap({
     setHiddenShep(lsGet("shepherdly.map.hidden.shepherding", []));
     setHiddenMem(lsGet("shepherdly.map.hidden.membership", []));
     setSecondCohort(lsGet("shepherdly.map.secondCohort", "all"));
+    setBasemapId(lsGet("shepherdly.map.basemap", DEFAULT_BASEMAP));
     setLoaded(true);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
+
+  const basemap = BASEMAPS.find((b) => b.id === basemapId) ?? BASEMAPS[0];
 
   const hidden = colorBy === "membership" ? hiddenMem : hiddenShep;
   const cats = colorBy === "membership" ? MEM_CATS : SHEP_CATS;
@@ -140,12 +210,10 @@ export function MemberMap({
           11,
         );
         mapRef.current = map;
-        // Pale, muted basemap (CARTO Positron) — subdued so the dots/web
-        // pop, with English labels across the US.
-        L.tileLayer("https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-          subdomains: "abcd",
-          maxZoom: 19,
-          attribution: "&copy; OpenStreetMap &copy; CARTO",
+        tileRef.current = L.tileLayer(basemap.url, {
+          subdomains: basemap.subdomains ?? "abc",
+          maxZoom: basemap.maxZoom,
+          attribution: basemap.attribution,
         }).addTo(map);
 
         if (mode === "roads") {
@@ -167,11 +235,26 @@ export function MemberMap({
     return () => {
       cancelled = true;
       if (mapRef.current) mapRef.current.remove();
-      mapRef.current = layerRef.current = secondRef.current = meshRef.current = null;
+      mapRef.current = layerRef.current = secondRef.current = meshRef.current = tileRef.current = null;
       if (el) delete el.dataset.init;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, church, secondCampuses, mesh, mode]);
+
+  // Swap the basemap tiles when the user picks a different provider.
+  useEffect(() => {
+    const L = LRef.current;
+    const map = mapRef.current;
+    if (!L || !map) return;
+    if (tileRef.current) map.removeLayer(tileRef.current);
+    tileRef.current = L.tileLayer(basemap.url, {
+      subdomains: basemap.subdomains ?? "abc",
+      maxZoom: basemap.maxZoom,
+      attribution: basemap.attribution,
+    }).addTo(map);
+    tileRef.current.bringToBack();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basemapId]);
 
   function drawMesh() {
     const L = LRef.current;
@@ -266,11 +349,32 @@ export function MemberMap({
     setSecondCohort(c);
     lsSet("shepherdly.map.secondCohort", c);
   }
+  function pickBasemap(id: string) {
+    setBasemapId(id);
+    lsSet("shepherdly.map.basemap", id);
+  }
 
   const cohortOptions = secondCampuses.map((s) => s.cohort);
 
   return (
     <div className="space-y-2">
+      <div className="flex items-center gap-1.5 text-xs">
+        <span className="text-muted mr-1">Basemap:</span>
+        <select
+          value={basemapId}
+          onChange={(e) => pickBasemap(e.target.value)}
+          className="bg-bg-elev-2 border border-border-soft rounded px-2 py-1 text-fg text-xs cursor-pointer"
+        >
+          {BASEMAPS.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.label}
+            </option>
+          ))}
+        </select>
+        <span className="text-subtle ml-1">
+          if tiles don&apos;t load, try another provider
+        </span>
+      </div>
       {showDotControls && (
         <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
           <div className="flex items-center gap-1.5">
@@ -353,7 +457,7 @@ export function MemberMap({
       <div
         ref={ref}
         className="w-full rounded-xl overflow-hidden border border-border-soft"
-        style={{ height, minHeight: 360, background: "#e5e7eb" }}
+        style={{ height, minHeight: 360, background: basemap.dark ? "#0b1220" : "#e5e7eb" }}
       />
     </div>
   );
