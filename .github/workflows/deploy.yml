@@ -59,7 +59,10 @@ jobs:
           # Write env file the standalone server reads at startup. ENCRYPTION_KEY
           # must persist across deploys so encrypted PCO creds remain decryptable.
           # GH Actions masks the secret in logs.
-          printf 'ENCRYPTION_KEY=%s\n' '${{ secrets.ENCRYPTION_KEY }}' \
+          # OSRM_URL points at the local routing daemon (data lives in
+          # /home/ubuntu/osrm, outside the deploy target). Constant, not a
+          # secret. Persisted here so it survives every deploy's env rewrite.
+          printf 'ENCRYPTION_KEY=%s\nOSRM_URL=http://localhost:5000\n' '${{ secrets.ENCRYPTION_KEY }}' \
             | ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
               "umask 077 && cat > /var/www/apps/shepherdly/.env.production"
 
