@@ -6,22 +6,27 @@ import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { MeshSegment } from "@/lib/road-mesh";
 
 const LEAFLET_VERSION = "1.9.4";
+// Colors tuned for a pale (muted) basemap.
 const CLASS_COLOR: Record<string, string> = {
-  shepherded: "#5dc8a8",
-  active: "#3b82f6",
-  present: "#f59e0b",
-  inactive: "#94a3b8",
+  shepherded: "#0d9488",
+  active: "#2563eb",
+  present: "#d97706",
+  inactive: "#64748b",
 };
-const MEMBER_COLOR = "#5dc8a8";
-const NONMEMBER_COLOR = "#94a3b8";
-const CHURCH_COLOR = "#ef4444";
-const SECOND_COLOR = "#a855f7";
-const MESH_COLOR = "#38bdf8";
+const MEMBER_COLOR = "#0d9488";
+const NONMEMBER_COLOR = "#64748b";
+const CHURCH_COLOR = "#dc2626";
+const SECOND_COLOR = "#9333ea";
+const MESH_COLOR = "#1d4ed8";
+// Thickness/opacity hierarchy for the web: thin residential streets →
+// thick arterials/highways (the segments the most households funnel onto).
 const MESH_TIERS = [
-  { weight: 0.7, opacity: 0.35 },
-  { weight: 1.4, opacity: 0.5 },
-  { weight: 2.4, opacity: 0.7 },
-  { weight: 3.8, opacity: 0.95 },
+  { weight: 0.5, opacity: 0.35 },
+  { weight: 1.0, opacity: 0.45 },
+  { weight: 1.7, opacity: 0.55 },
+  { weight: 2.6, opacity: 0.68 },
+  { weight: 3.8, opacity: 0.82 },
+  { weight: 5.2, opacity: 1.0 },
 ];
 
 type ColorBy = "shepherding" | "membership";
@@ -135,9 +140,9 @@ export function MemberMap({
           11,
         );
         mapRef.current = map;
-        // Muted dark basemap (CARTO) — subdued so the dots/web pop, and
-        // labels stay in English across the US.
-        L.tileLayer("https://{s}.basemap.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+        // Pale, muted basemap (CARTO Positron) — subdued so the dots/web
+        // pop, with English labels across the US.
+        L.tileLayer("https://{s}.basemap.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
           subdomains: "abcd",
           maxZoom: 19,
           attribution: "&copy; OpenStreetMap &copy; CARTO",
@@ -174,9 +179,10 @@ export function MemberMap({
     if (!L || !layer || !mesh || mesh.segments.length === 0) return;
     layer.clearLayers();
     const maxU = Math.max(1, mesh.maxUsage);
-    const tiers: Array<Array<[number, number][]>> = [[], [], [], []];
+    const N = MESH_TIERS.length;
+    const tiers: Array<Array<[number, number][]>> = MESH_TIERS.map(() => []);
     for (const s of mesh.segments) {
-      const t = Math.min(3, Math.floor((Math.log(s.usage) / Math.log(maxU + 1)) * 4));
+      const t = Math.min(N - 1, Math.floor((Math.log(s.usage) / Math.log(maxU + 1)) * N));
       tiers[t].push([[s.ay, s.ax], [s.by, s.bx]]);
     }
     tiers.forEach((segs, i) => {
@@ -199,7 +205,7 @@ export function MemberMap({
     if (mode === "roads") {
       for (const p of points) {
         L.circleMarker([p.lat, p.lng], {
-          radius: 2, color: "#cbd5e1", weight: 0, fillColor: "#cbd5e1", fillOpacity: 0.5,
+          radius: 2, color: "#475569", weight: 0, fillColor: "#475569", fillOpacity: 0.45,
         }).addTo(layer);
       }
       return;
@@ -347,7 +353,7 @@ export function MemberMap({
       <div
         ref={ref}
         className="w-full rounded-xl overflow-hidden border border-border-soft"
-        style={{ height, minHeight: 360, background: "#0b1220" }}
+        style={{ height, minHeight: 360, background: "#e5e7eb" }}
       />
     </div>
   );
