@@ -51,21 +51,20 @@ export default async function MapPage() {
           </div>
         </div>
 
-        {points.length === 0 ? (
-          <Card className="p-10 text-center text-sm text-muted">
-            No addresses geocoded yet.{" "}
-            {isAdmin
-              ? "Click “Geocode all addresses” above — it runs in the background through the whole directory; come back and the map fills in."
-              : "An admin needs to run geocoding first."}
-          </Card>
-        ) : (
-          <MemberMap
-            church={CHURCH}
-            points={points}
-            secondCampuses={reach.secondCampuses}
-            mesh={mesh.segments.length > 0 ? { segments: mesh.segments, maxUsage: mesh.maxUsage } : undefined}
-          />
-        )}
+        {/* ── Map 1: where people live ───────────────────────────────── */}
+        <Card className="p-5 space-y-3">
+          <h2 className="text-sm font-semibold">Where your people live</h2>
+          {points.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted">
+              No addresses geocoded yet.{" "}
+              {isAdmin
+                ? "Click “Geocode all addresses” above — it runs through the whole directory and the map fills in."
+                : "An admin needs to run geocoding first."}
+            </div>
+          ) : (
+            <MemberMap church={CHURCH} points={points} mode="members" />
+          )}
+        </Card>
 
         {/* ── Reach & distance analysis ──────────────────────────────── */}
         {reach.count >= 8 && (
@@ -141,24 +140,67 @@ export default async function MapPage() {
           </Card>
         )}
 
-        {/* ── Second-campus planner ──────────────────────────────────── */}
+        {/* ── Map 2: roads driven (the web) ──────────────────────────── */}
+        {routingOn && (
+          <Card className="p-5 space-y-3">
+            <div className="flex items-baseline justify-between gap-3 flex-wrap">
+              <h2 className="text-sm font-semibold">Roads driven to Faith Church</h2>
+              <span className="text-xs text-subtle">
+                {mesh.total > 0
+                  ? `${mesh.total.toLocaleString()} road segments`
+                  : "not built yet"}
+                {meshPending > 0 && (
+                  <span> · {meshPending.toLocaleString()} homes not added</span>
+                )}
+              </span>
+            </div>
+            <p className="text-xs text-muted max-w-2xl">
+              One shared web of the roads households take to Faith Church —
+              each home is routed once and folded in, so trunk roads near
+              church thicken as more people share them.
+            </p>
+            {mesh.segments.length > 0 ? (
+              <MemberMap
+                church={CHURCH}
+                points={points}
+                mesh={{ segments: mesh.segments, maxUsage: mesh.maxUsage }}
+                mode="roads"
+              />
+            ) : (
+              <div className="py-10 text-center text-sm text-muted">
+                {isAdmin
+                  ? "Click “Build road web” above — it routes each geocoded home and assembles the mesh (runs in the background)."
+                  : "An admin needs to build the road web first."}
+              </div>
+            )}
+          </Card>
+        )}
+
+        {/* ── Map 3 + planner: second campus ─────────────────────────── */}
         {reach.secondCampuses.length > 0 && (
           <Card className="p-5 space-y-3">
             <div className="flex items-baseline justify-between gap-3 flex-wrap">
-              <h2 className="text-sm font-semibold">Second-campus planner</h2>
+              <h2 className="text-sm font-semibold">Proposed second campus</h2>
               <span className="text-xs text-subtle">
                 excludes homes &gt; {mapSettings.secondCampusMaxHours}h away ·{" "}
-                <a href="/pco/filters" className="text-accent hover:underline">
-                  change in Filters
+                <a href="/metrics" className="text-accent hover:underline">
+                  change in Metrics
                 </a>
               </span>
             </div>
             <p className="text-xs text-muted max-w-2xl">
-              The best spot for a second location to serve each group (picked
-              on the map above). The <span className="text-fg">inactive</span>{" "}
-              option is weighted toward people who live farther out — the
-              hypothesis being distance is part of why they drifted.
+              The best spot for a second location to serve each group — switch
+              cohorts with “Plan for” on the map. The{" "}
+              <span className="text-fg">inactive</span> option is weighted
+              toward people who live farther out (the hypothesis being
+              distance is part of why they drifted).
             </p>
+            <MemberMap
+              church={CHURCH}
+              points={points}
+              secondCampuses={reach.secondCampuses}
+              mode="campus"
+            />
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-xs text-muted">

@@ -137,9 +137,10 @@ export interface RoadMesh {
   capped: boolean;
 }
 
-/** Read the mesh for rendering. Capped (highest-usage first) to protect
- *  the client; the cap mostly trims tiny single-home tips. */
-export function getRoadMesh(orgId: number, max = 14000): RoadMesh {
+/** Read the mesh for rendering. Capped (highest-usage first) only as a
+ *  safety against absurd payloads; the cap is high enough that every
+ *  home's last-mile tip still renders in normal use. */
+export function getRoadMesh(orgId: number, max = 60000): RoadMesh {
   const db = getDb();
   const total = (
     db.prepare(`SELECT COUNT(*) AS n FROM road_mesh WHERE org_id = ?`).get(orgId) as {
