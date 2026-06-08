@@ -5,7 +5,9 @@ import { CHURCH, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
 import { analyzeCensus } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
+import { getRoadMesh } from "@/lib/road-mesh";
 import { MemberMap } from "../map/member-map";
+import { CampusPlannerMap } from "../map/campus-planner-map";
 
 const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
 
@@ -15,6 +17,13 @@ export default async function NextCampusPlannerPage() {
   const mapSettings = getMapSettings(session.orgId);
   const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
   const census = analyzeCensus(session.orgId);
+  const mesh = getRoadMesh(session.orgId);
+  const allCohort = reach.secondCampuses.find((s) => s.cohort === "all");
+  const initialCampus = census.needCampus
+    ? { lat: census.needCampus.lat, lng: census.needCampus.lng }
+    : allCohort
+      ? { lat: allCohort.lat, lng: allCohort.lng }
+      : { lat: CHURCH.lat, lng: CHURCH.lng };
 
   return (
     <AppShell active="See more" breadcrumb="See more › Next campus planner">
@@ -42,11 +51,12 @@ export default async function NextCampusPlannerPage() {
             need, unchurched population, and our reach. The purple marker is
             where a cost-aware second campus would best center the unmet need.
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             <Stat label="Lehigh Valley pop." value={Math.round(census.population).toLocaleString()} sub={`${census.totalTracts} census tracts`} />
             <Stat label="Churched" value={`${census.churchedPct.toFixed(1)}%`} sub={`~${Math.round(census.unchurched).toLocaleString()} unchurched`} />
-            <Stat label="Area we reach" value={`${census.reachedPopulationPct.toFixed(0)}%`} sub={`${census.reachedTracts} of ${census.totalTracts} tracts have our people`} />
-            <Stat label="Our footprint" value={`${census.shareOfChurchedPct.toFixed(1)}%`} sub={`of churched · ${census.shareOfPopulationPct.toFixed(1)}% of all residents`} />
+            <Stat label="Area we reach" value={`${census.reachedPopulationPct.toFixed(0)}%`} sub={`${census.reachedTracts} of ${census.totalTracts} tracts`} />
+            <Stat label="Of churched" value={`${census.shareOfChurchedPct.toFixed(1)}%`} sub={`${census.ourMembers.toLocaleString()} engaged / churched pop.`} />
+            <Stat label="Of all Lehigh Valley" value={`${census.shareOfPopulationPct.toFixed(1)}%`} sub="engaged / total residents" />
           </div>
           <MemberMap
             church={CHURCH}
@@ -80,29 +90,42 @@ export default async function NextCampusPlannerPage() {
           )}
         </Card>
 
-        {/* ── People-based second-campus siting per cohort ───────────── */}
+        {/* ── Interactive: drag-to-test a campus, stack any layers ───── */}
+        <Card className="p-5 space-y-3">
+          <h2 className="text-sm font-semibold">Test a location</h2>
+          <p className="text-xs text-muted max-w-2xl">
+            Drag the blue dot anywhere in the valley to test a campus site. The
+            table updates live — homes it&rsquo;s closer to than Faith Church,
+            the average distance to whichever campus is nearest, estimated land
+            cost, unreached people it would serve, and existing churches nearby.
+            Stack any layers (our people, roads driven, and tract shading by
+            need / unchurched / reach / land price / churches) to eyeball the
+            ideal spot.
+          </p>
+          <CampusPlannerMap
+            church={CHURCH}
+            points={points}
+            tracts={census.tracts}
+            mesh={{ roads: mesh.roads }}
+            initial={initialCampus}
+          />
+        </Card>
+
+        {/* ── People-based suggested starting points (reference) ─────── */}
         {reach.secondCampuses.length > 0 && (
           <Card className="p-5 space-y-3">
             <div className="flex items-baseline justify-between gap-3 flex-wrap">
-              <h2 className="text-sm font-semibold">Second campus for your people</h2>
+              <h2 className="text-sm font-semibold">Suggested starting points</h2>
               <span className="text-xs text-subtle">
-                excludes homes &gt; {mapSettings.secondCampusMaxHours}h away ·{" "}
+                people-based · excludes homes &gt; {mapSettings.secondCampusMaxHours}h away ·{" "}
                 <a href="/metrics" className="text-accent hover:underline">change in Metrics</a>
               </span>
             </div>
             <p className="text-xs text-muted max-w-2xl">
-              The best spot for a second location to serve each group — switch
-              cohorts with “Plan for” on the map. The{" "}
-              <span className="text-fg">inactive</span> option is weighted toward
-              people who live farther out (the hypothesis being distance is part
-              of why they drifted). Estimated land cost is shown per site.
+              The geographic best spot to serve each group (and the cost-aware,
+              need-based spot for the unreached). Use these as starting points,
+              then drag the dot above to compare alternatives.
             </p>
-            <MemberMap
-              church={CHURCH}
-              points={points}
-              secondCampuses={reach.secondCampuses}
-              mode="campus"
-            />
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-xs text-muted">
@@ -128,23 +151,19 @@ export default async function NextCampusPlannerPage() {
                       <td className="py-2 text-right tnum">{usd(sc.estCost)}</td>
                     </tr>
                   ))}
+                  {census.needCampus && (
+                    <tr className="border-b border-border-softer">
+                      <td className="py-2 pr-4">Unreached (need-based)</td>
+                      <td className="py-2 pr-4 text-muted">cost-aware</td>
+                      <td className="py-2 pr-4 text-right tnum">~{Math.round(census.needCampus.servedNeed).toLocaleString()} unchurched</td>
+                      <td className="py-2 pr-4 text-right tnum">—</td>
+                      <td className="py-2 text-right tnum">{usd(census.needCampus.estCost)}</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
-            <p className="text-[11px] text-subtle">
-              Land cost is the median home value of the area each site lands in
-              (ACS, a proxy for property cost) — useful for weighing a cheaper
-              nearby alternative against the people-optimal spot.
-            </p>
           </Card>
-        )}
-
-        {reach.secondCampuses.length === 0 && (
-          <p className="text-xs text-subtle max-w-2xl">
-            Not enough geocoded people yet to suggest a campus. Geocode the
-            directory and compute driving distances on the{" "}
-            <a href="/map" className="text-accent hover:underline">Member map</a>.
-          </p>
         )}
       </div>
     </AppShell>

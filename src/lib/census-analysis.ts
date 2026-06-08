@@ -5,6 +5,11 @@ import { clampToValidArea } from "./lehigh-valley";
 import { LV_TRACTS, LV_CENSUS_META, type TractProps } from "./lv-census";
 
 const AVG_COST = LV_CENSUS_META.avgHomeValue;
+// fips ("42077") → avg congregation size, so church counts become a rough
+// "seating capacity" (count × size) when judging how saturated an area is.
+const COUNTY_SIZE: Record<string, number> = Object.fromEntries(
+  LV_CENSUS_META.counties.map((c) => [`42${c.fips}`, c.avgCongregationSize]),
+);
 
 // Census/need analysis: join our people's homes to Lehigh Valley census
 // tracts, estimate churched vs unchurched, how much of the valley we
@@ -17,7 +22,8 @@ export interface CensusTract extends TractProps {
   unchurched: number;
   ourCount: number;
   reachPct: number; // our people / tract population
-  need: number; // unchurched, discounted where we already have presence
+  need: number; // unchurched, discounted by our presence AND existing churches
+  churchSat: number; // existing-church capacity (count × avg size) / population, 0–1
 }
 
 export interface NeedCampus {
@@ -155,7 +161,12 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
     const unchurched = p.pop * (1 - p.rate);
     // Coverage saturates around reaching ~2% of a tract's population.
     const coverage = Math.min(1, ourCount / Math.max(20, p.pop * 0.02));
-    const need = unchurched * (1 - coverage);
+    // Existing-church saturation: count × county avg congregation size, vs
+    // population. Areas already well-served by other churches are less of a
+    // marginal need for us.
+    const capacity = p.churches * (COUNTY_SIZE[p.geoid.slice(0, 5)] ?? 550);
+    const churchSat = p.pop > 0 ? Math.min(1, capacity / p.pop) : 0;
+    const need = unchurched * (1 - coverage) * (1 - 0.7 * churchSat);
     return {
       ...p,
       churched,
@@ -163,6 +174,7 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
       ourCount,
       reachPct: p.pop > 0 ? (ourCount / p.pop) * 100 : 0,
       need,
+      churchSat,
     } as CensusTract;
   });
 

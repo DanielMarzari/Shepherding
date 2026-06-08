@@ -18,22 +18,29 @@ export interface CensusTractView {
   reachPct: number;
   need: number;
   cost: number;
+  churches: number;
+  churchSat: number;
 }
-type CensusMetric = "need" | "unchurched" | "reach" | "cost";
-const CENSUS_METRICS: Record<CensusMetric, { label: string; from: string; to: string; legend: string }> = {
+export type CensusMetric = "need" | "unchurched" | "reach" | "cost" | "churches";
+export const CENSUS_METRICS: Record<CensusMetric, { label: string; from: string; to: string; legend: string }> = {
   need: { label: "Need", from: "#fef3c7", to: "#b91c1c", legend: "unchurched & unreached" },
   unchurched: { label: "Unchurched", from: "#dbeafe", to: "#1e3a8a", legend: "unchurched people" },
   reach: { label: "Our reach", from: "#e5e7eb", to: "#15803d", legend: "our people per population" },
   cost: { label: "Land price", from: "#dcfce7", to: "#7f1d1d", legend: "median home value" },
+  churches: { label: "Churches", from: "#cffafe", to: "#155e75", legend: "existing-church saturation" },
 };
-function lerpHex(a: string, b: string, t: number): string {
+export function lerpHex(a: string, b: string, t: number): string {
   const pa = [parseInt(a.slice(1, 3), 16), parseInt(a.slice(3, 5), 16), parseInt(a.slice(5, 7), 16)];
   const pb = [parseInt(b.slice(1, 3), 16), parseInt(b.slice(3, 5), 16), parseInt(b.slice(5, 7), 16)];
   const c = pa.map((v, i) => Math.round(v + (pb[i] - v) * Math.max(0, Math.min(1, t))));
   return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
-const metricVal = (t: CensusTractView, m: CensusMetric) =>
-  m === "need" ? t.need : m === "unchurched" ? t.unchurched : m === "cost" ? t.cost : t.reachPct;
+export const metricVal = (t: CensusTractView, m: CensusMetric) =>
+  m === "need" ? t.need
+  : m === "unchurched" ? t.unchurched
+  : m === "cost" ? t.cost
+  : m === "churches" ? t.churchSat
+  : t.reachPct;
 
 const LEAFLET_VERSION = "1.9.4";
 // Colors tuned for a pale (muted) basemap.
@@ -109,12 +116,13 @@ const BASEMAPS: Basemap[] = [
     dark: false,
   },
 ];
-const DEFAULT_BASEMAP = "outdoor";
+// The basemap is locked to OpenFreeMap "Outdoor"; the picker was removed.
+export const OUTDOOR_BASEMAP = BASEMAPS[0];
 const SHEP_CATS = ["shepherded", "active", "present", "inactive"];
 const MEM_CATS = ["member", "non-member"];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function loadLeaflet(): Promise<any> {
+export function loadLeaflet(): Promise<any> {
   const w = window as any;
   if (w.L) return Promise.resolve(w.L);
   if (!document.getElementById("leaflet-css")) {
@@ -176,7 +184,7 @@ function loadMaplibre(): Promise<void> {
 
 /** Build a basemap layer — a MapLibre GL vector layer for vector styles,
  *  else a raster tile layer. Falls back to raster Gray if GL fails. */
-async function makeBasemapLayer(L: any, bm: Basemap): Promise<any> {
+export async function makeBasemapLayer(L: any, bm: Basemap): Promise<any> {
   if (bm.vector) {
     try {
       await loadMaplibre();
@@ -255,7 +263,6 @@ export function MemberMap({
   const [hiddenShep, setHiddenShep] = useState<string[]>([]);
   const [hiddenMem, setHiddenMem] = useState<string[]>([]);
   const [secondCohort, setSecondCohort] = useState<Cohort | "none">("all");
-  const [basemapId, setBasemapId] = useState(DEFAULT_BASEMAP);
   const [censusMetric, setCensusMetric] = useState<CensusMetric>("need");
   const [loaded, setLoaded] = useState(false);
 
@@ -265,13 +272,12 @@ export function MemberMap({
     setHiddenShep(lsGet("shepherdly.map.hidden.shepherding", []));
     setHiddenMem(lsGet("shepherdly.map.hidden.membership", []));
     setSecondCohort(lsGet("shepherdly.map.secondCohort", "all"));
-    setBasemapId(lsGet("shepherdly.map.basemap", DEFAULT_BASEMAP));
     setCensusMetric(lsGet("shepherdly.map.censusMetric", "need"));
     setLoaded(true);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
-  const basemap = BASEMAPS.find((b) => b.id === basemapId) ?? BASEMAPS[0];
+  const basemap = OUTDOOR_BASEMAP;
 
   const hidden = colorBy === "membership" ? hiddenMem : hiddenShep;
   const cats = colorBy === "membership" ? MEM_CATS : SHEP_CATS;
@@ -306,6 +312,9 @@ export function MemberMap({
           style: { color: LV_COLOR, weight: 1.5, opacity: 0.85, fillColor: LV_COLOR, fillOpacity: 0.08 },
         });
         lvRef.current = L.layerGroup([lvRegion]).addTo(map);
+        // Open framed on the whole Lehigh Valley.
+        const lvBounds = lvRegion.getBounds();
+        try { map.fitBounds(lvBounds, { padding: [12, 12] }); } catch { /* noop */ }
 
         if (mode === "roads") {
           meshRef.current = L.layerGroup().addTo(map);
@@ -326,9 +335,11 @@ export function MemberMap({
           }).bindTooltip("Need-based 2nd campus — centers the biggest unreached, unchurched areas").addTo(map);
           needCampusRef.current.bringToFront();
         }
-        // The map sits in a flex row beside the settings column — make sure
-        // Leaflet measures the final width after layout settles.
-        setTimeout(() => { try { map.invalidateSize(); } catch { /* unmounted */ } }, 120);
+        // The map sits in a flex row beside the settings column — measure the
+        // final width after layout settles, then re-frame the valley.
+        setTimeout(() => {
+          try { map.invalidateSize(); map.fitBounds(lvBounds, { padding: [12, 12] }); } catch { /* unmounted */ }
+        }, 120);
       })
       .catch(() => {
         if (el) el.innerHTML = '<div style="padding:2rem;text-align:center;color:#94a3b8;font-size:13px">Map failed to load.</div>';
@@ -344,24 +355,6 @@ export function MemberMap({
     // unstable props; their redraws are handled by dedicated effects.)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, church, mode]);
-
-  // Swap the basemap when the user picks a different provider.
-  useEffect(() => {
-    const L = LRef.current;
-    const map = mapRef.current;
-    if (!L || !map) return;
-    let stale = false;
-    const prev = tileRef.current;
-    makeBasemapLayer(L, basemap).then((layer) => {
-      if (stale || !mapRef.current) return;
-      if (prev) map.removeLayer(prev);
-      tileRef.current = layer;
-      layer.addTo(map);
-      layer.bringToBack?.();
-    });
-    return () => { stale = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [basemapId]);
 
   function drawMesh() {
     const L = LRef.current;
@@ -453,7 +446,7 @@ export function MemberMap({
       onEachFeature: (f: any, lyr: any) => {
         const t = vals.get(f.properties.geoid);
         const tip = t
-          ? `<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}%) · land $${Math.round(t.cost).toLocaleString()}`
+          ? `<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}%) · ${t.churches} churches · land $${Math.round(t.cost).toLocaleString()}`
           : f.properties.name ?? "tract";
         lyr.bindTooltip(tip, { sticky: true });
       },
@@ -502,10 +495,6 @@ export function MemberMap({
     setSecondCohort(c);
     lsSet("shepherdly.map.secondCohort", c);
   }
-  function pickBasemap(id: string) {
-    setBasemapId(id);
-    lsSet("shepherdly.map.basemap", id);
-  }
   function pickCensusMetric(m: CensusMetric) {
     setCensusMetric(m);
     lsSet("shepherdly.map.censusMetric", m);
@@ -525,21 +514,6 @@ export function MemberMap({
       </div>
       {/* SETTINGS (right) */}
       <div className="order-1 lg:order-2 lg:w-60 shrink-0 space-y-3 text-xs">
-        <div className="space-y-1">
-          <div className="text-muted font-medium">Basemap</div>
-          <select
-            value={basemapId}
-            onChange={(e) => pickBasemap(e.target.value)}
-            className="w-full bg-bg-elev-2 border border-border-soft rounded px-2 py-1 text-fg text-xs cursor-pointer"
-          >
-            {BASEMAPS.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.label}
-              </option>
-            ))}
-          </select>
-          <span className="text-subtle">if tiles don&apos;t load, try another</span>
-        </div>
       {showDotControls && (
         <>
           <div className="space-y-1.5">
