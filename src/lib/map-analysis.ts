@@ -3,6 +3,7 @@ import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 import { CHURCH } from "./geocode";
 import { getDriveMap } from "./drive-routing";
+import { clampToValidArea } from "./lehigh-valley";
 
 interface PIIBlob {
   address?: string | null;
@@ -173,6 +174,16 @@ function siteSecondCampus(
     if (served.length < 5) break;
     c2 = weightedMedian(served, weight);
   }
+  if (served.length < 5) return null;
+  // The campus must sit inside the valid area (Lehigh Valley + 5 mi). If
+  // the optimum landed outside, pull it to the nearest valid point and
+  // recompute who it serves.
+  c2 = clampToValidArea(c2.lat, c2.lng);
+  served = cohortPts.filter(
+    (p) =>
+      haversineMiles(c2.lat, c2.lng, p.lat, p.lng) <
+      haversineMiles(CHURCH.lat, CHURCH.lng, p.lat, p.lng),
+  );
   if (served.length < 5) return null;
   const avgAfter = mean(
     cohortPts.map((p) =>

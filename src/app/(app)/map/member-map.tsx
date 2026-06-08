@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { MemberPoint } from "@/lib/geocode";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { RoadLine } from "@/lib/road-mesh";
-import { LEHIGH_VALLEY } from "./lehigh-valley";
+import { LEHIGH_VALLEY_REGION, LEHIGH_VALLEY_VALID_AREA } from "@/lib/lehigh-valley";
 
-const LV_COLOR = "#7c3aed"; // Lehigh Valley target-area outline
+const LV_COLOR = "#7c3aed"; // Lehigh Valley region + its 5-mile valid area
 
 const LEAFLET_VERSION = "1.9.4";
 // Colors tuned for a pale (muted) basemap.
@@ -261,11 +261,17 @@ export function MemberMap({
         tileRef.current.addTo(map);
         tileRef.current.bringToBack?.();
 
-        // Lehigh Valley target-area outline (under the data, over the base).
-        lvRef.current = L.geoJSON(LEHIGH_VALLEY, {
+        // Lehigh Valley region (filled) + 5-mile valid 2nd-campus area
+        // (dashed). Under the data, over the basemap.
+        const lvRegion = L.geoJSON(LEHIGH_VALLEY_REGION, {
           interactive: false,
-          style: { color: LV_COLOR, weight: 2, opacity: 0.9, dashArray: "6 4", fill: false },
-        }).addTo(map);
+          style: { color: LV_COLOR, weight: 1.5, opacity: 0.85, fillColor: LV_COLOR, fillOpacity: 0.08 },
+        });
+        const lvArea = L.geoJSON(LEHIGH_VALLEY_VALID_AREA, {
+          interactive: false,
+          style: { color: LV_COLOR, weight: 1.5, opacity: 0.6, dashArray: "6 5", fill: false },
+        });
+        lvRef.current = L.layerGroup([lvRegion, lvArea]).addTo(map);
 
         if (mode === "roads") {
           meshRef.current = L.layerGroup().addTo(map);
@@ -477,8 +483,12 @@ export function MemberMap({
               Faith Church
             </span>
             <span className="inline-flex items-center gap-1.5 text-muted">
-              <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: LV_COLOR }} />
+              <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />
               Lehigh Valley
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-muted">
+              <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: LV_COLOR }} />
+              2nd-campus area (+5 mi)
             </span>
             {mode === "campus" && (
               <span className="inline-flex items-center gap-1.5 text-muted">
@@ -518,8 +528,12 @@ export function MemberMap({
             Faith Church
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: LV_COLOR }} />
+            <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />
             Lehigh Valley
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: LV_COLOR }} />
+            2nd-campus area (+5 mi)
           </span>
         </div>
       )}
