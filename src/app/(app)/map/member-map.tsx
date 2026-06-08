@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { MemberPoint } from "@/lib/geocode";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { MeshSegment } from "@/lib/road-mesh";
+import { LEHIGH_VALLEY } from "./lehigh-valley";
+
+const LV_COLOR = "#7c3aed"; // Lehigh Valley target-area outline
 
 const LEAFLET_VERSION = "1.9.4";
 // Colors tuned for a pale (muted) basemap.
@@ -13,8 +16,8 @@ const CLASS_COLOR: Record<string, string> = {
   present: "#9ca3af", // grey
   inactive: "#64748b", // darker grey (distinct from "present")
 };
-const MEMBER_COLOR = "#0d9488";
-const NONMEMBER_COLOR = "#64748b";
+const MEMBER_COLOR = "#2563eb"; // blue
+const NONMEMBER_COLOR = "#f97316"; // orange — clearly distinct from member
 const CHURCH_COLOR = "#dc2626";
 const SECOND_COLOR = "#9333ea";
 const MESH_COLOR = "#1d4ed8";
@@ -40,10 +43,22 @@ interface Basemap {
   maxZoom: number;
   attribution: string;
   dark: boolean;
+  /** Vector style (OpenFreeMap / MapLibre GL) rather than raster tiles. */
+  vector?: boolean;
 }
-// Keyless tile providers on different CDNs, so at least some resolve on
-// any network (CARTO's cartocdn.com was failing DNS for the user).
+// Keyless providers on different CDNs, so at least some resolve on any
+// network (CARTO's cartocdn.com was failing DNS for the user).
 const BASEMAPS: Basemap[] = [
+  {
+    id: "outdoor",
+    label: "Outdoor",
+    // OpenFreeMap "Liberty" — the aesthetic vector style ROAM uses.
+    url: "https://tiles.openfreemap.org/styles/liberty",
+    vector: true,
+    maxZoom: 19,
+    attribution: "&copy; OpenFreeMap &copy; OpenMapTiles &copy; OpenStreetMap",
+    dark: false,
+  },
   {
     id: "gray",
     label: "Gray (muted)",
@@ -77,7 +92,7 @@ const BASEMAPS: Basemap[] = [
     dark: false,
   },
 ];
-const DEFAULT_BASEMAP = "gray";
+const DEFAULT_BASEMAP = "outdoor";
 const SHEP_CATS = ["shepherded", "active", "present", "inactive"];
 const MEM_CATS = ["member", "non-member"];
 
@@ -104,6 +119,63 @@ function loadLeaflet(): Promise<any> {
     s.onload = () => resolve((window as any).L);
     s.onerror = () => reject(new Error("Leaflet load failed"));
     document.body.appendChild(s);
+  });
+}
+
+function loadScript(id: string, src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ex = document.getElementById(id) as HTMLScriptElement | null;
+    if (ex) {
+      if (ex.dataset.loaded) resolve();
+      else {
+        ex.addEventListener("load", () => resolve());
+        ex.addEventListener("error", () => reject(new Error(`${id} failed`)));
+      }
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = id;
+    s.src = src;
+    s.onload = () => { s.dataset.loaded = "1"; resolve(); };
+    s.onerror = () => reject(new Error(`${id} failed`));
+    document.body.appendChild(s);
+  });
+}
+
+/** Lazy-load MapLibre GL + the Leaflet bridge for vector basemaps. */
+function loadMaplibre(): Promise<void> {
+  const w = window as any;
+  if (w.maplibregl && w.L?.maplibreGL) return Promise.resolve();
+  if (!document.getElementById("maplibre-css")) {
+    const link = document.createElement("link");
+    link.id = "maplibre-css";
+    link.rel = "stylesheet";
+    link.href = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css";
+    document.head.appendChild(link);
+  }
+  return loadScript("maplibre-gl-js", "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js")
+    .then(() => loadScript("maplibre-gl-leaflet-js", "https://unpkg.com/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"));
+}
+
+/** Build a basemap layer — a MapLibre GL vector layer for vector styles,
+ *  else a raster tile layer. Falls back to raster Gray if GL fails. */
+async function makeBasemapLayer(L: any, bm: Basemap): Promise<any> {
+  if (bm.vector) {
+    try {
+      await loadMaplibre();
+      return (L as any).maplibreGL({ style: bm.url, attribution: bm.attribution });
+    } catch {
+      // fall through to a safe raster basemap
+      return L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom: 16, attribution: "&copy; Esri" },
+      );
+    }
+  }
+  return L.tileLayer(bm.url, {
+    subdomains: bm.subdomains ?? "abc",
+    maxZoom: bm.maxZoom,
+    attribution: bm.attribution,
   });
 }
 
@@ -155,6 +227,7 @@ export function MemberMap({
   const meshRef = useRef<any>(null);
   const tileRef = useRef<any>(null);
   const churchRef = useRef<any>(null);
+  const lvRef = useRef<any>(null);
 
   const showDotControls = mode !== "roads";
   const [colorBy, setColorBy] = useState<ColorBy>("shepherding");
@@ -184,7 +257,7 @@ export function MemberMap({
     const el = ref.current;
     let cancelled = false;
     loadLeaflet()
-      .then((L) => {
+      .then(async (L) => {
         if (cancelled || !el || el.dataset.init) return;
         el.dataset.init = "1";
         LRef.current = L;
@@ -193,10 +266,15 @@ export function MemberMap({
           11,
         );
         mapRef.current = map;
-        tileRef.current = L.tileLayer(basemap.url, {
-          subdomains: basemap.subdomains ?? "abc",
-          maxZoom: basemap.maxZoom,
-          attribution: basemap.attribution,
+        tileRef.current = await makeBasemapLayer(L, basemap);
+        if (cancelled) return;
+        tileRef.current.addTo(map);
+        tileRef.current.bringToBack?.();
+
+        // Lehigh Valley target-area outline (under the data, over the base).
+        lvRef.current = L.geoJSON(LEHIGH_VALLEY, {
+          interactive: false,
+          style: { color: LV_COLOR, weight: 2, opacity: 0.9, dashArray: "6 4", fill: false },
         }).addTo(map);
 
         if (mode === "roads") {
@@ -219,7 +297,7 @@ export function MemberMap({
     return () => {
       cancelled = true;
       if (mapRef.current) mapRef.current.remove();
-      mapRef.current = layerRef.current = secondRef.current = meshRef.current = tileRef.current = churchRef.current = null;
+      mapRef.current = layerRef.current = secondRef.current = meshRef.current = tileRef.current = churchRef.current = lvRef.current = null;
       if (el) delete el.dataset.init;
     };
     // Only re-init the whole map when the underlying data/mode changes —
@@ -228,18 +306,21 @@ export function MemberMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, church, mode]);
 
-  // Swap the basemap tiles when the user picks a different provider.
+  // Swap the basemap when the user picks a different provider.
   useEffect(() => {
     const L = LRef.current;
     const map = mapRef.current;
     if (!L || !map) return;
-    if (tileRef.current) map.removeLayer(tileRef.current);
-    tileRef.current = L.tileLayer(basemap.url, {
-      subdomains: basemap.subdomains ?? "abc",
-      maxZoom: basemap.maxZoom,
-      attribution: basemap.attribution,
-    }).addTo(map);
-    tileRef.current.bringToBack();
+    let stale = false;
+    const prev = tileRef.current;
+    makeBasemapLayer(L, basemap).then((layer) => {
+      if (stale || !mapRef.current) return;
+      if (prev) map.removeLayer(prev);
+      tileRef.current = layer;
+      layer.addTo(map);
+      layer.bringToBack?.();
+    });
+    return () => { stale = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basemapId]);
 
@@ -283,6 +364,9 @@ export function MemberMap({
     }
     const hideSet = new Set(hidden);
     for (const p of points) {
+      // In membership view, "non-member" excludes inactive people — they
+      // aren't a non-member we're trying to reach, just gone quiet.
+      if (colorBy === "membership" && !p.isMember && p.classification === "inactive") continue;
       const cat = catOf(p, colorBy);
       if (hideSet.has(cat)) continue;
       const c = colorOfCat(cat, colorBy);
@@ -291,6 +375,7 @@ export function MemberMap({
       }).bindTooltip(`${p.name} · ${cat}`).addTo(layer);
     }
     churchRef.current?.bringToFront();
+    secondRef.current?.bringToFront();
   }
 
   function drawSecond() {
@@ -308,6 +393,9 @@ export function MemberMap({
       radius: 11, color: "#fff", weight: 2, fillColor: SECOND_COLOR, fillOpacity: 1,
     }).bindTooltip(`2nd campus for ${sc.cohort} (${sc.label}) — serves ${sc.served}, avg ${sc.avgMilesBefore.toFixed(1)}→${sc.avgMilesAfter.toFixed(1)} mi`);
     secondRef.current.addTo(map);
+    // Both anchors stay above the dots.
+    churchRef.current?.bringToFront();
+    secondRef.current.bringToFront();
   }
 
   useEffect(() => {
@@ -409,6 +497,10 @@ export function MemberMap({
               <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: CHURCH_COLOR }} />
               Faith Church
             </span>
+            <span className="inline-flex items-center gap-1.5 text-muted">
+              <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: LV_COLOR }} />
+              Lehigh Valley
+            </span>
             {mode === "campus" && (
               <span className="inline-flex items-center gap-1.5 text-muted">
                 <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: SECOND_COLOR }} />
@@ -445,6 +537,10 @@ export function MemberMap({
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: CHURCH_COLOR }} />
             Faith Church
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: LV_COLOR }} />
+            Lehigh Valley
           </span>
         </div>
       )}

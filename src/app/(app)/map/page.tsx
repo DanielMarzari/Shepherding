@@ -11,6 +11,7 @@ import { GeocodeButton } from "./geocode-button";
 import { DriveButton } from "./drive-button";
 import { MeshButton } from "./mesh-button";
 import { EngagementChart } from "./engagement-chart";
+import { DistanceBandChart } from "./distance-band-chart";
 
 export default async function MapPage() {
   const session = await requireOrg();
@@ -87,25 +88,13 @@ export default async function MapPage() {
                 value={reach.shepherdedCorr == null ? "—" : `r ${reach.shepherdedCorr.toFixed(2)}`}
                 sub="point-biserial"
               />
-              <Stat label="Homes plotted" value={reach.count.toLocaleString()} sub="status = located" />
+              <Stat label="People analyzed" value={reach.count.toLocaleString()} sub={`shepherded/active/present · ≤${mapSettings.secondCampusMaxHours}h`} />
             </div>
 
-            {reach.bands.length > 0 && (
+            {reach.bands.length >= 2 && (
               <div>
-                <div className="text-xs text-muted mb-1.5">Shepherded by distance band</div>
-                <div className="flex flex-wrap gap-2">
-                  {reach.bands.map((b) => (
-                    <div
-                      key={b.label}
-                      className="rounded-lg border border-border-soft bg-bg-elev-2/40 px-3 py-2 text-xs"
-                    >
-                      <div className="font-medium">{b.label}</div>
-                      <div className="text-muted tnum">
-                        {b.count.toLocaleString()} homes · {b.shepherdedPct}% shepherded
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <div className="text-xs text-muted mb-1.5">Shepherded by distance</div>
+                <DistanceBandChart bands={reach.bands} />
               </div>
             )}
 

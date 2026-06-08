@@ -54,6 +54,7 @@ export type Cohort = "all" | "shepherded" | "active" | "present" | "inactive";
 
 export interface DistanceBand {
   label: string;
+  midMiles: number;
   count: number;
   shepherdedPct: number;
 }
@@ -210,30 +211,46 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
   };
   if (pts.length < 8) return base;
 
-  const driveCount = pts.filter((p) => p.driveMiles != null).length;
-  const usingDrive = driveCount >= 8 && driveCount >= pts.length * 0.5;
-  const metric = pts.map((p) => (usingDrive && p.driveMiles != null ? p.driveMiles : p.dFc));
+  // Reach & distance is about the people we actually have: shepherded /
+  // active / present, AND within the second-campus radius so far-flung
+  // outliers don't skew the averages, correlation, or the curve.
+  const maxMin = maxHours * 60;
+  const ENGAGED = new Set(["shepherded", "active", "present"]);
+  const reachPts = pts.filter(
+    (p) => ENGAGED.has(p.classification) && p.travelMin <= maxMin,
+  );
+
+  const driveCount = reachPts.filter((p) => p.driveMiles != null).length;
+  const usingDrive = driveCount >= 8 && driveCount >= reachPts.length * 0.5;
+  const metric = reachPts.map((p) => (usingDrive && p.driveMiles != null ? p.driveMiles : p.dFc));
   const avgMiles = mean(metric);
   const medianMiles = median(metric);
-  const driveMins = pts.filter((p) => p.driveMinutes != null).map((p) => p.driveMinutes!);
+  const driveMins = reachPts.filter((p) => p.driveMinutes != null).map((p) => p.driveMinutes!);
   const estDriveMin =
     usingDrive && driveMins.length > 0
       ? Math.round(mean(driveMins))
       : Math.round((avgMiles / LOCAL_MPH) * 60);
 
-  const shepBin = pts.map((p) => (p.classification === "shepherded" ? 1 : 0));
+  const shepBin = reachPts.map((p) => (p.classification === "shepherded" ? 1 : 0));
   const corr = pearson(metric, shepBin);
 
-  // Shepherded by distance band (miles).
+  // Shepherded by distance — fine bands so it reads as one continuous
+  // curve. midMiles anchors each point on a true distance axis.
   const bandDefs: Array<[string, number, number]> = [
-    ["0–2 mi", 0, 2], ["2–5 mi", 2, 5], ["5–10 mi", 5, 10],
-    ["10–20 mi", 10, 20], ["20+ mi", 20, Infinity],
+    ["0–2", 0, 2], ["2–4", 2, 4], ["4–6", 4, 6], ["6–8", 6, 8],
+    ["8–10", 8, 10], ["10–13", 10, 13], ["13–16", 13, 16],
+    ["16–20", 16, 20], ["20–25", 20, 25], ["25–30", 25, 30], ["30+", 30, Infinity],
   ];
   const bands: DistanceBand[] = bandDefs
     .map(([label, lo, hi]) => {
-      const sub = pts.filter((_, i) => metric[i] >= lo && metric[i] < hi);
+      const sub = reachPts.filter((_, i) => metric[i] >= lo && metric[i] < hi);
       const shep = sub.filter((p) => p.classification === "shepherded").length;
-      return { label, count: sub.length, shepherdedPct: sub.length ? Math.round((shep / sub.length) * 100) : 0 };
+      return {
+        label,
+        midMiles: hi === Infinity ? 33 : (lo + hi) / 2,
+        count: sub.length,
+        shepherdedPct: sub.length ? Math.round((shep / sub.length) * 100) : 0,
+      };
     })
     .filter((b) => b.count > 0);
 
@@ -258,7 +275,6 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
     .filter((b) => b.count >= 3);
 
   // ── Second-campus siting per cohort, within the radius. ───────────
-  const maxMin = maxHours * 60;
   const inRadius = pts.filter((p) => p.travelMin <= maxMin);
   const cohorts: Cohort[] = ["all", "shepherded", "active", "present", "inactive"];
   const secondCampuses: SecondCampus[] = [];
@@ -300,6 +316,7 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
 
   return {
     ...base,
+    count: reachPts.length, // engaged people within the radius (the basis for these stats)
     usingDrive,
     avgMiles,
     medianMiles,
