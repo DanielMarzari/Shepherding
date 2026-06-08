@@ -63,7 +63,7 @@ export default async function NextCampusPlannerPage() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <Stat label="Engaged people" value={census.ourMembers.toLocaleString()} sub="shepherded/active/present (located)" />
                 <Stat label="Building" value={`${FAITH_CHURCH_PROFILE.buildingSqft.toLocaleString()} ft²`} sub={FAITH_CHURCH_PROFILE.buildingNote} />
-                <Stat label="Lot size" value={FAITH_CHURCH_PROFILE.lotAcres != null ? `${FAITH_CHURCH_PROFILE.lotAcres} ac` : "—"} sub="see county records" />
+                <Stat label="Lot size" value={FAITH_CHURCH_PROFILE.lotAcres != null ? `~${FAITH_CHURCH_PROFILE.lotAcres} ac` : "—"} sub={FAITH_CHURCH_PROFILE.lotNote ?? "see county records"} />
                 <Stat label="Est. market value" value={FAITH_CHURCH_PROFILE.estMarketValue != null ? usd(FAITH_CHURCH_PROFILE.estMarketValue) : "—"} sub="tax-exempt; see records" />
               </div>
               <div className="flex flex-wrap gap-3 text-xs">
@@ -71,8 +71,9 @@ export default async function NextCampusPlannerPage() {
                 <a href={FAITH_CHURCH_PROFILE.parcelUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">Lehigh County parcel / assessment</a>
               </div>
               <p className="text-[11px] text-subtle">
-                Lot size and market value aren&rsquo;t public for tax-exempt church property — use the county
-                parcel link to confirm, then candidate sites below can target a comparable or larger lot.
+                Lot size is a satellite estimate (~{FAITH_CHURCH_PROFILE.lotAcres} ac) and market value isn&rsquo;t
+                public for tax-exempt church property — confirm via the county parcel link. The property search below
+                filters for land ≥ this lot size, so candidate sites are comparable or larger.
               </p>
             </div>
           </div>
@@ -135,6 +136,7 @@ export default async function NextCampusPlannerPage() {
             initial={initialCampus}
             model={drawModel}
             suggestions={suggestions}
+            targetLotAcres={FAITH_CHURCH_PROFILE.lotAcres ?? 2}
           />
         </Card>
 

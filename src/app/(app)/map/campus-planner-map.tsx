@@ -91,9 +91,9 @@ interface SavedCandidate {
 
 // Outbound property-search links pre-centered on the saved location (live
 // listings need a paid real-estate API; these open the provider's own map
-// search, scoped to a ~3–4 mile box and filtered for sizeable land).
-const MIN_LOT_ACRES = 2;
-function propertyLinks(lat: number, lng: number) {
+// search, scoped to a ~3–4 mile box and filtered for sizeable land at or
+// above the current campus's lot size).
+function propertyLinks(lat: number, lng: number, minAcres: number) {
   const ll = `${lat.toFixed(5)},${lng.toFixed(5)}`;
   const d = 0.06; // ~3–4 mi half-box
   const zillowState = {
@@ -109,12 +109,13 @@ function propertyLinks(lat: number, lng: number) {
       isCondo: { value: false },
       isManufactured: { value: false },
       isApartment: { value: false },
-      lotSize: { min: Math.round(MIN_LOT_ACRES * 43560) },
+      lotSize: { min: Math.round(minAcres * 43560) },
     },
   };
   const zillow = `https://www.zillow.com/homes/for_sale/?searchQueryState=${encodeURIComponent(JSON.stringify(zillowState))}`;
+  const acLabel = minAcres % 1 === 0 ? `${minAcres}` : minAcres.toFixed(1);
   return [
-    { label: `Zillow land (≥${MIN_LOT_ACRES}ac)`, url: zillow },
+    { label: `Zillow land (≥${acLabel}ac)`, url: zillow },
     { label: "LoopNet land", url: `https://www.loopnet.com/search/land/${ll},13z/` },
     { label: "LoopNet commercial", url: `https://www.loopnet.com/search/commercial-real-estate/${ll},13z/` },
     { label: "Crexi", url: `https://www.crexi.com/properties?types[]=Land&mapCenter=${ll}&mapZoom=13` },
@@ -136,6 +137,7 @@ export function CampusPlannerMap({
   initial,
   model,
   suggestions = [],
+  targetLotAcres = 2,
   height = "66vh",
 }: {
   church: { lat: number; lng: number; name: string; address: string };
@@ -145,6 +147,7 @@ export function CampusPlannerMap({
   initial: { lat: number; lng: number };
   model: { radiusMi: number; captureRate: number };
   suggestions?: Array<{ label: string; lat: number; lng: number }>;
+  targetLotAcres?: number;
   height?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -450,8 +453,8 @@ export function CampusPlannerMap({
         <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4 space-y-2">
           <div className="text-xs text-muted">
             Candidate sites — our auto-suggested spots plus any you lock in. &ldquo;Find properties&rdquo; opens each
-            provider&apos;s map search pre-centered on the spot, filtered for land ≥ {MIN_LOT_ACRES} acres (live listings
-            need a paid real-estate API). Aim for a lot comparable to or larger than Faith Church&apos;s campus.
+            provider&apos;s map search pre-centered on the spot, filtered for land ≥ {targetLotAcres % 1 === 0 ? targetLotAcres : targetLotAcres.toFixed(1)} acres
+            (Faith Church&apos;s ~lot size) — live listings need a paid real-estate API.
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -480,7 +483,7 @@ export function CampusPlannerMap({
                     <td className="py-2 pr-3 text-right tnum">{s.estCost != null ? usd(s.estCost) : "—"}</td>
                     <td className="py-2 pr-3">
                       <span className="flex flex-wrap gap-2">
-                        {propertyLinks(s.lat, s.lng).map((l) => (
+                        {propertyLinks(s.lat, s.lng, targetLotAcres).map((l) => (
                           <a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{l.label}</a>
                         ))}
                       </span>
@@ -501,7 +504,7 @@ export function CampusPlannerMap({
                     <td className="py-2 pr-3 text-right tnum">{s.cost != null ? usd(s.cost) : "—"}</td>
                     <td className="py-2 pr-3">
                       <span className="flex flex-wrap gap-2">
-                        {propertyLinks(s.lat, s.lng).map((l) => (
+                        {propertyLinks(s.lat, s.lng, targetLotAcres).map((l) => (
                           <a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{l.label}</a>
                         ))}
                       </span>

@@ -24,7 +24,10 @@ export const FAITH_CHURCH_PROFILE = {
   denomination: "Evangelical Free (EFCA)",
   buildingSqft: 50652, // 2020 three-story addition (per Beers+Hoffman); total building is larger
   buildingNote: "2020 three-story addition; total building is larger",
-  lotAcres: null as number | null,
+  // ~12.4 ac, estimated from satellite (~900 × 600 ft); used as the
+  // "comparable or larger" lot-size target for the property search.
+  lotAcres: 12.4 as number | null,
+  lotNote: "≈ estimated from satellite (~900 × 600 ft)",
   estMarketValue: null as number | null,
   parcelUrl: "https://www.lehighcounty.org/Departments/Assessment",
   satelliteUrl: `https://www.google.com/maps/search/?api=1&query=${CHURCH.lat},${CHURCH.lng}`,
