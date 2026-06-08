@@ -32,7 +32,6 @@ const CLASS_COLOR: Record<string, string> = {
 const FC_COLOR = "#dc2626";
 const LV_COLOR = "#7c3aed";
 const DOT_BLUE = "#2563eb";
-const SHEP_CATS = ["shepherded", "active", "present", "inactive"];
 
 function hav(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const R = 3958.8;
@@ -70,11 +69,34 @@ interface Stats {
   lng: number;
   closer: number;
   byClass: Record<string, number>;
+  seed: number; // engaged (shepherded/active/present) closer to the new campus
   avgNearest: number;
   baselineAvg: number;
   estCost: number | null;
-  unreached: number;
+  expectedDraw: number; // unchurched we'd expect to draw at our main-campus rate
   churches: number;
+}
+
+interface SavedCandidate {
+  id: string;
+  lat: number;
+  lng: number;
+  seed: number;
+  draw: number;
+  cost: number | null;
+  churches: number;
+}
+
+// Outbound property-search links seeded with the saved location (live
+// listings need a paid real-estate API; these open the search there).
+function propertyLinks(lat: number, lng: number) {
+  const ll = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+  return [
+    { label: "LoopNet (land)", url: `https://www.loopnet.com/search/land/${ll},13z/` },
+    { label: "LoopNet (commercial)", url: `https://www.loopnet.com/search/commercial-real-estate/${ll},13z/` },
+    { label: "Crexi", url: `https://www.crexi.com/properties?types[]=Land&mapCenter=${ll}&mapZoom=13` },
+    { label: "Maps", url: `https://www.google.com/maps/search/${encodeURIComponent("commercial land or building for sale")}/@${lat},${lng},13z` },
+  ];
 }
 
 function lsGet(k: string, f: any) {
@@ -90,6 +112,7 @@ export function CampusPlannerMap({
   tracts,
   mesh,
   initial,
+  model,
   height = "66vh",
 }: {
   church: { lat: number; lng: number; name: string; address: string };
@@ -97,6 +120,7 @@ export function CampusPlannerMap({
   tracts: PlannerTract[];
   mesh?: { roads: RoadLine[] };
   initial: { lat: number; lng: number };
+  model: { radiusMi: number; captureRate: number };
   height?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -113,6 +137,7 @@ export function CampusPlannerMap({
   const [metric, setMetric] = useState<CensusMetric | "none">("need");
   const [showRoads, setShowRoads] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [saved, setSaved] = useState<SavedCandidate[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -120,6 +145,7 @@ export function CampusPlannerMap({
     setShowDots(lsGet("shepherdly.planner.dots", true));
     setMetric(lsGet("shepherdly.planner.metric", "need"));
     setShowRoads(lsGet("shepherdly.planner.roads", false));
+    setSaved(lsGet("shepherdly.planner.saved", []));
     setLoaded(true);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
@@ -137,20 +163,24 @@ export function CampusPlannerMap({
         byClass[p.classification] = (byClass[p.classification] ?? 0) + 1;
       }
     }
-    let unreached = 0, churches = 0;
+    let unchurchedWithin = 0, churches = 0;
     for (const t of tracts) {
       const dNew = hav(t.clat, t.clng, lat, lng);
-      const dFc = hav(t.clat, t.clng, church.lat, church.lng);
-      if (dNew < dFc) unreached += t.unchurched;
+      // Catchment = our average main-campus member distance.
+      if (dNew <= model.radiusMi) unchurchedWithin += t.unchurched;
       if (dNew <= 3) churches += t.churches; // within ~3 miles
     }
     const n = points.length || 1;
+    const seed = (byClass.shepherded ?? 0) + (byClass.active ?? 0) + (byClass.present ?? 0);
     return {
-      lat, lng, closer, byClass,
+      lat, lng, closer, byClass, seed,
       avgNearest: nearestSum / n,
       baselineAvg: baseSum / n,
       estCost: tractCostAt(lat, lng, byGeoid),
-      unreached, churches,
+      // At the same rate we reach our own catchment, how many local unchurched
+      // would a campus here plausibly draw.
+      expectedDraw: unchurchedWithin * model.captureRate,
+      churches,
     };
   }
 
@@ -178,7 +208,7 @@ export function CampusPlannerMap({
         },
         onEachFeature: (f: any, ly: any) => {
           const t = byGeoid.get(f.properties.geoid);
-          if (t) ly.bindTooltip(`<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched · ${t.churches} churches<br>${t.ourCount} of our people · land $${Math.round(t.cost).toLocaleString()}`, { sticky: true });
+          if (t) ly.bindTooltip(`<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched · ${t.churches} Protestant churches<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}% of pop) · land $${Math.round(t.cost).toLocaleString()}`, { sticky: true });
         },
       }).addTo(layer);
     }
@@ -265,6 +295,28 @@ export function CampusPlannerMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDots, metric, showRoads, loaded]);
 
+  function lockIn() {
+    if (!stats) return;
+    const c: SavedCandidate = {
+      id: `${Date.now()}`, lat: stats.lat, lng: stats.lng,
+      seed: stats.seed, draw: Math.round(stats.expectedDraw), cost: stats.estCost, churches: stats.churches,
+    };
+    const next = [c, ...saved].slice(0, 12);
+    setSaved(next);
+    lsSet("shepherdly.planner.saved", next);
+  }
+  function removeSaved(id: string) {
+    const next = saved.filter((s) => s.id !== id);
+    setSaved(next);
+    lsSet("shepherdly.planner.saved", next);
+  }
+  function goTo(lat: number, lng: number) {
+    const m = markerRef.current, map = mapRef.current;
+    if (!m || !map) return;
+    m.setLatLng([lat, lng]);
+    map.panTo([lat, lng]);
+    setStats(compute(lat, lng));
+  }
   function toggleDots() { const v = !showDots; setShowDots(v); lsSet("shepherdly.planner.dots", v); }
   function toggleRoads() { const v = !showRoads; setShowRoads(v); lsSet("shepherdly.planner.roads", v); }
   function pickMetric(m: CensusMetric | "none") { setMetric(m); lsSet("shepherdly.planner.metric", m); }
@@ -325,15 +377,82 @@ export function CampusPlannerMap({
       {/* LIVE STATS */}
       {stats && (
         <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4">
-          <div className="text-xs text-muted mb-2">
-            Candidate campus at {stats.lat.toFixed(4)}, {stats.lng.toFixed(4)} — drag the blue dot to update
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+            <div className="text-xs text-muted">
+              Candidate campus at {stats.lat.toFixed(4)}, {stats.lng.toFixed(4)} — drag the blue dot to update
+            </div>
+            <button
+              type="button"
+              onClick={lockIn}
+              className="text-xs px-3 py-1.5 rounded-full border border-accent text-accent hover:bg-bg-elev-2 transition-colors cursor-pointer"
+            >
+              Lock in &amp; save this location
+            </button>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-            <Metric label="Closer than Faith Church" value={`${stats.closer.toLocaleString()} homes`} sub={SHEP_CATS.map((c) => `${stats.byClass[c] ?? 0} ${c}`).join(" · ")} />
+            <Metric
+              label="Launch seed"
+              value={`${stats.seed.toLocaleString()} people`}
+              sub={`engaged & closer than FC — ${stats.byClass.shepherded ?? 0} shep · ${stats.byClass.active ?? 0} active · ${stats.byClass.present ?? 0} present`}
+            />
             <Metric label="Avg distance to nearest campus" value={`${stats.avgNearest.toFixed(1)} mi`} sub={`vs ${stats.baselineAvg.toFixed(1)} mi to FC only`} />
             <Metric label="Est. land cost" value={stats.estCost != null ? usd(stats.estCost) : "—"} sub="median home value here" />
-            <Metric label="Unreached it would serve" value={`~${Math.round(stats.unreached).toLocaleString()}`} sub="unchurched closer to here than FC" />
-            <Metric label="Existing churches nearby" value={`${stats.churches}`} sub="within ~3 miles" />
+            <Metric
+              label="Est. people we'd draw"
+              value={`~${Math.round(stats.expectedDraw).toLocaleString()}`}
+              sub={`unchurched within ~${Math.round(model.radiusMi)} mi, at our ${(model.captureRate * 100).toFixed(1)}% main-campus rate`}
+            />
+            <Metric label="Protestant churches nearby" value={`${stats.churches}`} sub="within ~3 miles" />
+          </div>
+        </div>
+      )}
+
+      {/* Saved candidates + property search */}
+      {saved.length > 0 && (
+        <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4 space-y-2">
+          <div className="text-xs text-muted">
+            Saved candidate sites — search nearby properties (live listings open on the provider; we can&apos;t pull
+            them without a paid real-estate API). Target a lot comparable to or larger than Faith Church&apos;s campus.
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-muted">
+                <tr className="border-b border-border-soft">
+                  <th className="text-left font-medium py-1.5 pr-3">Location</th>
+                  <th className="text-right font-medium py-1.5 pr-3">Seed</th>
+                  <th className="text-right font-medium py-1.5 pr-3">Est. draw</th>
+                  <th className="text-right font-medium py-1.5 pr-3">Land cost</th>
+                  <th className="text-left font-medium py-1.5 pr-3">Find properties</th>
+                  <th className="py-1.5" />
+                </tr>
+              </thead>
+              <tbody>
+                {saved.map((s) => (
+                  <tr key={s.id} className="border-b border-border-softer">
+                    <td className="py-2 pr-3">
+                      <button type="button" onClick={() => goTo(s.lat, s.lng)} className="text-accent hover:underline cursor-pointer tnum">
+                        {s.lat.toFixed(4)}, {s.lng.toFixed(4)}
+                      </button>
+                    </td>
+                    <td className="py-2 pr-3 text-right tnum">{s.seed.toLocaleString()}</td>
+                    <td className="py-2 pr-3 text-right tnum">~{s.draw.toLocaleString()}</td>
+                    <td className="py-2 pr-3 text-right tnum">{s.cost != null ? usd(s.cost) : "—"}</td>
+                    <td className="py-2 pr-3">
+                      <span className="flex flex-wrap gap-2">
+                        {propertyLinks(s.lat, s.lng).map((l) => (
+                          <a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                            {l.label}
+                          </a>
+                        ))}
+                      </span>
+                    </td>
+                    <td className="py-2 text-right">
+                      <button type="button" onClick={() => removeSaved(s.id)} className="text-subtle hover:text-fg cursor-pointer" title="Remove">✕</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

@@ -5,11 +5,9 @@ import { clampToValidArea } from "./lehigh-valley";
 import { LV_TRACTS, LV_CENSUS_META, type TractProps } from "./lv-census";
 
 const AVG_COST = LV_CENSUS_META.avgHomeValue;
-// fips ("42077") → avg congregation size, so church counts become a rough
-// "seating capacity" (count × size) when judging how saturated an area is.
-const COUNTY_SIZE: Record<string, number> = Object.fromEntries(
-  LV_CENSUS_META.counties.map((c) => [`42${c.fips}`, c.avgCongregationSize]),
-);
+// Protestant church counts × an assumed avg congregation size → a rough
+// "seating capacity" for judging how saturated an area already is.
+const PROT_AVG = LV_CENSUS_META.protestantAvgSize;
 
 // Census/need analysis: join our people's homes to Lehigh Valley census
 // tracts, estimate churched vs unchurched, how much of the valley we
@@ -141,6 +139,28 @@ function haversineMiles(aLat: number, aLng: number, bLat: number, bLng: number):
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
+export interface DrawModel {
+  radiusMi: number; // our average member distance at the main campus
+  captureRate: number; // our engaged people / population within that radius of FC
+}
+
+/** Model how well we draw people, from the main campus: within our average
+ *  member distance, what share of the local population do we actually reach?
+ *  A new campus is assumed to draw the unreached at the same rate. */
+export function computeDrawModel(
+  tracts: Array<{ clat: number; clng: number; pop: number }>,
+  ourMembers: number,
+  radiusMi: number,
+): DrawModel {
+  const r = radiusMi > 0 ? radiusMi : 10;
+  let popWithin = 0;
+  for (const t of tracts) {
+    if (haversineMiles(CHURCH.lat, CHURCH.lng, t.clat, t.clng) <= r) popWithin += t.pop;
+  }
+  const captureRate = popWithin > 0 ? Math.min(1, ourMembers / popWithin) : 0;
+  return { radiusMi: r, captureRate };
+}
+
 export function analyzeCensus(orgId: number): CensusAnalysis {
   const prepared = getPrepared();
   const counts = new Map<string, number>();
@@ -164,7 +184,7 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
     // Existing-church saturation: count × county avg congregation size, vs
     // population. Areas already well-served by other churches are less of a
     // marginal need for us.
-    const capacity = p.churches * (COUNTY_SIZE[p.geoid.slice(0, 5)] ?? 550);
+    const capacity = p.churches * PROT_AVG;
     const churchSat = p.pop > 0 ? Math.min(1, capacity / p.pop) : 0;
     const need = unchurched * (1 - coverage) * (1 - 0.7 * churchSat);
     return {

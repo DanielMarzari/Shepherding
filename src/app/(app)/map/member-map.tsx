@@ -446,7 +446,7 @@ export function MemberMap({
       onEachFeature: (f: any, lyr: any) => {
         const t = vals.get(f.properties.geoid);
         const tip = t
-          ? `<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}%) · ${t.churches} churches · land $${Math.round(t.cost).toLocaleString()}`
+          ? `<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}% of pop) · ${t.churches} Protestant churches · land $${Math.round(t.cost).toLocaleString()}`
           : f.properties.name ?? "tract";
         lyr.bindTooltip(tip, { sticky: true });
       },

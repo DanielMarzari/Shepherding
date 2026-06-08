@@ -3,7 +3,7 @@ import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { CHURCH, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
-import { analyzeCensus } from "@/lib/census-analysis";
+import { analyzeCensus, computeDrawModel } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { getRoadMesh } from "@/lib/road-mesh";
 import { MemberMap } from "../map/member-map";
@@ -18,6 +18,7 @@ export default async function NextCampusPlannerPage() {
   const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
   const census = analyzeCensus(session.orgId);
   const mesh = getRoadMesh(session.orgId);
+  const drawModel = computeDrawModel(census.tracts, census.ourMembers, reach.avgMiles);
   const allCohort = reach.secondCampuses.find((s) => s.cohort === "all");
   const initialCampus = census.needCampus
     ? { lat: census.needCampus.lat, lng: census.needCampus.lng }
@@ -108,6 +109,7 @@ export default async function NextCampusPlannerPage() {
             tracts={census.tracts}
             mesh={{ roads: mesh.roads }}
             initial={initialCampus}
+            model={drawModel}
           />
         </Card>
 
