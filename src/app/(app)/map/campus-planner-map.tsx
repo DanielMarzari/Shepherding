@@ -167,6 +167,7 @@ export function CampusPlannerMap({
   const [stats, setStats] = useState<Stats | null>(null);
   const [saved, setSaved] = useState<SavedCandidate[]>([]);
   const [mapReady, setMapReady] = useState(false);
+  const [candPos, setCandPos] = useState(initial); // candidate location (for the drive-time layer)
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
@@ -224,9 +225,29 @@ export function CampusPlannerMap({
     layer.clearLayers();
 
     if (metric !== "none") {
+      // Drive-time shading reflects the NEAREST campus: real OSRM minutes to
+      // Faith Church, or an estimate to the dragged candidate (straight-line
+      // × the area's avg minutes-per-mile), whichever is closer.
+      const cand = markerRef.current?.getLatLng?.();
+      let mpm = 2;
+      if (metric === "driveTime") {
+        let s = 0, n = 0;
+        for (const t of tracts) {
+          if (t.driveMin == null) continue;
+          const mi = hav(church.lat, church.lng, t.clat, t.clng);
+          if (mi > 0.5) { s += t.driveMin / mi; n++; }
+        }
+        if (n) mpm = s / n;
+      }
+      const valueFor = (t: PlannerTract): number => {
+        if (metric !== "driveTime") return metricVal(t, metric);
+        const toFc = t.driveMin ?? Infinity;
+        const toCand = cand ? hav(cand.lat, cand.lng, t.clat, t.clng) * mpm : Infinity;
+        return Math.min(toFc, toCand);
+      };
       let max = -Infinity, min = Infinity;
       for (const t of tracts) {
-        const v = metricVal(t, metric);
+        const v = valueFor(t);
         if (!Number.isFinite(v)) continue;
         if (v > max) max = v;
         if (v < min) min = v;
@@ -237,7 +258,7 @@ export function CampusPlannerMap({
       L.geoJSON(LV_TRACTS, {
         style: (f: any) => {
           const t = byGeoid.get(f.properties.geoid);
-          const v = t ? metricVal(t, metric) : NaN;
+          const v = t ? valueFor(t) : NaN;
           if (!Number.isFinite(v)) return { fillColor: "#d1d5db", fillOpacity: 0.45, color: "#fff", weight: 0.4, opacity: 0.4 };
           return { fillColor: lerpHex(sch.from, sch.to, (v - lo) / span), fillOpacity: 0.6, color: "#fff", weight: 0.4, opacity: 0.4 };
         },
@@ -308,6 +329,11 @@ export function CampusPlannerMap({
         const ll = e.target.getLatLng();
         setStats(compute(ll.lat, ll.lng));
       });
+      // On drop, update candidate position so the drive-time layer re-renders.
+      markerRef.current.on("dragend", (e: any) => {
+        const ll = e.target.getLatLng();
+        setCandPos({ lat: ll.lat, lng: ll.lng });
+      });
       // Re-render overlay now that layers exist, using restored settings.
       setMapReady(true);
 
@@ -326,11 +352,12 @@ export function CampusPlannerMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // re-render overlay when layer toggles change
+  // re-render overlay when layer toggles change (and on candidate move, so
+  // the drive-time-to-nearest-campus layer follows the dragged dot).
   useEffect(() => {
     if (mapReady) renderOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDots, metric, showRoads, mapReady]);
+  }, [showDots, metric, showRoads, mapReady, candPos]);
 
   function lockIn() {
     if (!stats) return;

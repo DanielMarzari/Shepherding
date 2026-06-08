@@ -6,6 +6,8 @@ import { analyzeReach } from "@/lib/map-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { countPendingDrive, isRoutingConfigured } from "@/lib/drive-routing";
 import { countPendingMesh, getRoadMesh } from "@/lib/road-mesh";
+import { LV_CENSUS_META } from "@/lib/lv-census";
+import { getWeeklyAttendance } from "@/lib/attendance-read";
 import { MemberMap } from "./member-map";
 import { GeocodeButton } from "./geocode-button";
 import { DriveButton } from "./drive-button";
@@ -24,6 +26,14 @@ export default async function MapPage() {
   const meshPending = routingOn ? countPendingMesh(session.orgId) : 0;
   const mesh = getRoadMesh(session.orgId);
   const isAdmin = session.role === "admin";
+
+  // ── Trends ──────────────────────────────────────────────────────────
+  const valleyPop = LV_CENSUS_META.counties.reduce((a, c) => a + c.population, 0);
+  const churchesPer10k = (LV_CENSUS_META.congregations / valleyPop) * 10000;
+  const natChurchesPer10k = LV_CENSUS_META.nationalChurchesPer10k;
+  const attendance = getWeeklyAttendance(session.orgId);
+  const ourGrowthPct = attendance.inPersonTrend12moDelta; // % vs prior 12 mo (may be null)
+  const popGrowthPct = LV_CENSUS_META.lvPopGrowthPctYoY;
 
   return (
     <AppShell active="See more" breadcrumb="See more › Map">
@@ -64,6 +74,61 @@ export default async function MapPage() {
             </div>
           ) : (
             <MemberMap church={CHURCH} points={points} mode="members" />
+          )}
+        </Card>
+
+        {/* ── Trend: church density vs national ──────────────────────── */}
+        <Card className="p-5 space-y-3">
+          <h2 className="text-sm font-semibold">Church density</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="Churches per 10k" value={churchesPer10k.toFixed(1)} sub={`${LV_CENSUS_META.congregations} congregations (all faiths)`} />
+            <Stat label="National average" value={natChurchesPer10k.toFixed(1)} sub="per 10k residents (2020)" />
+            <Stat
+              label={churchesPer10k < natChurchesPer10k ? "Under-served" : "Over-served"}
+              value={`${Math.abs(Math.round(((churchesPer10k - natChurchesPer10k) / natChurchesPer10k) * 100))}%`}
+              sub={churchesPer10k < natChurchesPer10k ? "fewer per capita than the US" : "more per capita than the US"}
+            />
+            <Stat label="People per church" value={Math.round(valleyPop / LV_CENSUS_META.congregations).toLocaleString()} sub="residents per congregation" />
+          </div>
+          <p className="text-[11px] text-subtle max-w-3xl">
+            The Lehigh Valley has ~{churchesPer10k.toFixed(1)} congregations per 10,000 residents vs. roughly{" "}
+            {natChurchesPer10k.toFixed(1)} nationally — {churchesPer10k < natChurchesPer10k ? "under-served" : "over-served"} relative
+            to the US average. (Comprehensive 2020 U.S. Religion Census congregation counts, all faiths.)
+          </p>
+        </Card>
+
+        {/* ── Trend: growth vs the valley ────────────────────────────── */}
+        <Card className="p-5 space-y-3">
+          <h2 className="text-sm font-semibold">Growth vs. the valley</h2>
+          <p className="text-xs text-muted max-w-2xl">
+            Are we outpacing the Lehigh Valley&rsquo;s population growth (gaining a larger share — genuinely reaching
+            new people) or just keeping pace? Our growth is the year-over-year change in average weekly in-person
+            attendance.
+          </p>
+          {ourGrowthPct == null ? (
+            <p className="text-xs text-subtle">
+              Not enough attendance history yet — import at least ~2 years on the{" "}
+              <a href="/attendance" className="text-accent hover:underline">Attendance</a> page to see this.
+            </p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Stat label="Weekly attendance" value={(attendance.inPerson12moAvg ?? 0).toLocaleString()} sub="in-person, last 12 mo avg" />
+                <Stat label="Our growth (YoY)" value={`${ourGrowthPct > 0 ? "+" : ""}${ourGrowthPct}%`} sub="vs prior 12 months" />
+                <Stat label="Valley pop. growth" value={`+${popGrowthPct}%`} sub="Lehigh Valley, per year" />
+                <Stat
+                  label={ourGrowthPct > popGrowthPct ? "Gaining ground" : "Falling behind"}
+                  value={`${ourGrowthPct - popGrowthPct >= 0 ? "+" : ""}${(ourGrowthPct - popGrowthPct).toFixed(1)} pts`}
+                  sub={ourGrowthPct > popGrowthPct ? "faster than population" : "slower than population"}
+                />
+              </div>
+              <p className="text-[11px] text-subtle max-w-3xl">
+                {ourGrowthPct > popGrowthPct
+                  ? `At +${ourGrowthPct}%/yr vs the valley's ~+${popGrowthPct}% population growth, Faith is gaining a larger share of the area — outpacing how fast the unchurched pool grows.`
+                  : `At +${ourGrowthPct}%/yr, Faith is growing about as fast as — or slower than — the valley's ~+${popGrowthPct}% population growth, so our share of the area is roughly flat.`}
+                {" "}(Pop. growth = LV 2010–2020 census; attendance YoY is in-person, excluding closures.)
+              </p>
+            </>
           )}
         </Card>
 
