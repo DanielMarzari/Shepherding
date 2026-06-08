@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { MemberPoint } from "@/lib/geocode";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { RoadLine } from "@/lib/road-mesh";
-import { LEHIGH_VALLEY_REGION, LEHIGH_VALLEY_VALID_AREA } from "@/lib/lehigh-valley";
+import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
 import { LV_TRACTS } from "@/lib/lv-census";
 
 const LV_COLOR = "#7c3aed"; // Lehigh Valley region + its 5-mile valid area
@@ -17,12 +17,14 @@ export interface CensusTractView {
   ourCount: number;
   reachPct: number;
   need: number;
+  cost: number;
 }
-type CensusMetric = "need" | "unchurched" | "reach";
+type CensusMetric = "need" | "unchurched" | "reach" | "cost";
 const CENSUS_METRICS: Record<CensusMetric, { label: string; from: string; to: string; legend: string }> = {
   need: { label: "Need", from: "#fef3c7", to: "#b91c1c", legend: "unchurched & unreached" },
   unchurched: { label: "Unchurched", from: "#dbeafe", to: "#1e3a8a", legend: "unchurched people" },
   reach: { label: "Our reach", from: "#e5e7eb", to: "#15803d", legend: "our people per population" },
+  cost: { label: "Land price", from: "#dcfce7", to: "#7f1d1d", legend: "median home value" },
 };
 function lerpHex(a: string, b: string, t: number): string {
   const pa = [parseInt(a.slice(1, 3), 16), parseInt(a.slice(3, 5), 16), parseInt(a.slice(5, 7), 16)];
@@ -31,7 +33,7 @@ function lerpHex(a: string, b: string, t: number): string {
   return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 const metricVal = (t: CensusTractView, m: CensusMetric) =>
-  m === "need" ? t.need : m === "unchurched" ? t.unchurched : t.reachPct;
+  m === "need" ? t.need : m === "unchurched" ? t.unchurched : m === "cost" ? t.cost : t.reachPct;
 
 const LEAFLET_VERSION = "1.9.4";
 // Colors tuned for a pale (muted) basemap.
@@ -298,17 +300,12 @@ export function MemberMap({
           drawCensus();
         }
 
-        // Lehigh Valley region (filled) + 5-mile valid 2nd-campus area
-        // (dashed). Under the data, over the basemap.
+        // Lehigh Valley region (filled), under the data, over the basemap.
         const lvRegion = L.geoJSON(LEHIGH_VALLEY_REGION, {
           interactive: false,
           style: { color: LV_COLOR, weight: 1.5, opacity: 0.85, fillColor: LV_COLOR, fillOpacity: 0.08 },
         });
-        const lvArea = L.geoJSON(LEHIGH_VALLEY_VALID_AREA, {
-          interactive: false,
-          style: { color: LV_COLOR, weight: 1.5, opacity: 0.6, dashArray: "6 5", fill: false },
-        });
-        lvRef.current = L.layerGroup([lvRegion, lvArea]).addTo(map);
+        lvRef.current = L.layerGroup([lvRegion]).addTo(map);
 
         if (mode === "roads") {
           meshRef.current = L.layerGroup().addTo(map);
@@ -329,6 +326,9 @@ export function MemberMap({
           }).bindTooltip("Need-based 2nd campus — centers the biggest unreached, unchurched areas").addTo(map);
           needCampusRef.current.bringToFront();
         }
+        // The map sits in a flex row beside the settings column — make sure
+        // Leaflet measures the final width after layout settles.
+        setTimeout(() => { try { map.invalidateSize(); } catch { /* unmounted */ } }, 120);
       })
       .catch(() => {
         if (el) el.innerHTML = '<div style="padding:2rem;text-align:center;color:#94a3b8;font-size:13px">Map failed to load.</div>';
@@ -433,23 +433,27 @@ export function MemberMap({
     if (!L || !layer || !census) return;
     layer.clearLayers();
     const vals = new Map(census.tracts.map((t) => [t.geoid, t]));
-    let max = 0;
+    // Land price doesn't start at 0, so normalize it min→max; the others
+    // are counts/shares where 0 is meaningful, so normalize 0→max.
+    let max = 0, min = Infinity;
     for (const t of census.tracts) {
       const v = metricVal(t, censusMetric);
       if (v > max) max = v;
+      if (v < min) min = v;
     }
-    max = max || 1;
+    const lo = censusMetric === "cost" ? min : 0;
+    const span = Math.max(1, max - lo);
     const scheme = CENSUS_METRICS[censusMetric];
     L.geoJSON(LV_TRACTS, {
       style: (f: any) => {
         const t = vals.get(f.properties.geoid);
-        const v = t ? metricVal(t, censusMetric) : 0;
-        return { fillColor: lerpHex(scheme.from, scheme.to, v / max), fillOpacity: 0.72, color: "#ffffff", weight: 0.4, opacity: 0.5 };
+        const v = t ? metricVal(t, censusMetric) : lo;
+        return { fillColor: lerpHex(scheme.from, scheme.to, (v - lo) / span), fillOpacity: 0.72, color: "#ffffff", weight: 0.4, opacity: 0.5 };
       },
       onEachFeature: (f: any, lyr: any) => {
         const t = vals.get(f.properties.geoid);
         const tip = t
-          ? `<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}%)`
+          ? `<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}%) · land $${Math.round(t.cost).toLocaleString()}`
           : f.properties.name ?? "tract";
         lyr.bindTooltip(tip, { sticky: true });
       },
@@ -510,47 +514,57 @@ export function MemberMap({
   const cohortOptions = secondCampuses.map((s) => s.cohort);
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-1.5 text-xs">
-        <span className="text-muted mr-1">Basemap:</span>
-        <select
-          value={basemapId}
-          onChange={(e) => pickBasemap(e.target.value)}
-          className="bg-bg-elev-2 border border-border-soft rounded px-2 py-1 text-fg text-xs cursor-pointer"
-        >
-          {BASEMAPS.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.label}
-            </option>
-          ))}
-        </select>
-        <span className="text-subtle ml-1">
-          if tiles don&apos;t load, try another provider
-        </span>
+    <div className="flex flex-col lg:flex-row gap-3">
+      {/* MAP (center) */}
+      <div className="order-2 lg:order-1 flex-1 min-w-0">
+        <div
+          ref={ref}
+          className="w-full rounded-xl overflow-hidden border border-border-soft"
+          style={{ height, minHeight: 360, background: basemap.dark ? "#0b1220" : "#e5e7eb" }}
+        />
       </div>
-      {showDotControls && (
-        <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
-          <div className="flex items-center gap-1.5">
-            <span className="text-muted mr-1">Color by:</span>
-            {(["shepherding", "membership"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => pickColorBy(m)}
-                className={`px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${
-                  colorBy === m ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"
-                }`}
-              >
-                {m === "shepherding" ? "Shepherding" : "Membership"}
-              </button>
+      {/* SETTINGS (right) */}
+      <div className="order-1 lg:order-2 lg:w-60 shrink-0 space-y-3 text-xs">
+        <div className="space-y-1">
+          <div className="text-muted font-medium">Basemap</div>
+          <select
+            value={basemapId}
+            onChange={(e) => pickBasemap(e.target.value)}
+            className="w-full bg-bg-elev-2 border border-border-soft rounded px-2 py-1 text-fg text-xs cursor-pointer"
+          >
+            {BASEMAPS.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.label}
+              </option>
             ))}
+          </select>
+          <span className="text-subtle">if tiles don&apos;t load, try another</span>
+        </div>
+      {showDotControls && (
+        <>
+          <div className="space-y-1.5">
+            <div className="text-muted font-medium">Color by</div>
+            <div className="flex flex-wrap gap-1.5">
+              {(["shepherding", "membership"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => pickColorBy(m)}
+                  className={`px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${
+                    colorBy === m ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"
+                  }`}
+                >
+                  {m === "shepherding" ? "Shepherding" : "Membership"}
+                </button>
+              ))}
+            </div>
             {mode === "campus" && cohortOptions.length > 0 && (
-              <>
-                <span className="text-muted ml-2 mr-1">Plan for:</span>
+              <div className="pt-1">
+                <div className="text-muted mb-1">Plan for</div>
                 <select
                   value={secondCohort}
                   onChange={(e) => pickCohort(e.target.value as Cohort | "none")}
-                  className="bg-bg-elev-2 border border-border-soft rounded px-2 py-1 text-fg text-xs cursor-pointer"
+                  className="w-full bg-bg-elev-2 border border-border-soft rounded px-2 py-1 text-fg text-xs cursor-pointer"
                 >
                   <option value="none">hide</option>
                   {cohortOptions.map((c) => (
@@ -559,24 +573,21 @@ export function MemberMap({
                     </option>
                   ))}
                 </select>
-              </>
+              </div>
             )}
           </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 text-muted">
+          <div className="space-y-1.5">
+            <div className="text-muted font-medium">Legend</div>
+            <span className="flex items-center gap-1.5 text-muted">
               <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: CHURCH_COLOR }} />
               Faith Church
             </span>
-            <span className="inline-flex items-center gap-1.5 text-muted">
+            <span className="flex items-center gap-1.5 text-muted">
               <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />
               Lehigh Valley
             </span>
-            <span className="inline-flex items-center gap-1.5 text-muted">
-              <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: LV_COLOR }} />
-              2nd-campus area (+5 mi)
-            </span>
             {mode === "campus" && (
-              <span className="inline-flex items-center gap-1.5 text-muted">
+              <span className="flex items-center gap-1.5 text-muted">
                 <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: SECOND_COLOR }} />
                 2nd campus
               </span>
@@ -588,7 +599,7 @@ export function MemberMap({
                   key={cat}
                   type="button"
                   onClick={() => toggleCat(cat)}
-                  className="inline-flex items-center gap-1.5 cursor-pointer"
+                  className="flex items-center gap-1.5 cursor-pointer"
                   title={on ? "Click to hide" : "Click to show"}
                 >
                   <span
@@ -600,75 +611,70 @@ export function MemberMap({
               );
             })}
           </div>
-        </div>
+        </>
       )}
       {mode === "roads" && (
-        <div className="flex items-center gap-3 text-xs text-muted">
-          <span className="inline-flex items-center gap-1.5">
+        <div className="space-y-1.5">
+          <div className="text-muted font-medium">Legend</div>
+          <span className="flex items-center gap-1.5 text-muted">
             <span className="inline-block w-4 h-1 rounded-full" style={{ background: MESH_COLOR }} />
-            roads your people drive to Faith Church
+            roads your people drive
           </span>
-          <span className="inline-flex items-center gap-1.5">
+          <span className="flex items-center gap-1.5 text-muted">
             <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: CHURCH_COLOR }} />
             Faith Church
           </span>
-          <span className="inline-flex items-center gap-1.5">
+          <span className="flex items-center gap-1.5 text-muted">
             <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />
             Lehigh Valley
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: LV_COLOR }} />
-            2nd-campus area (+5 mi)
           </span>
         </div>
       )}
       {mode === "census" && (
-        <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
-          <div className="flex items-center gap-1.5">
-            <span className="text-muted mr-1">Color by:</span>
-            {(Object.keys(CENSUS_METRICS) as CensusMetric[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => pickCensusMetric(m)}
-                className={`px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${
-                  censusMetric === m ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"
-                }`}
-                title={CENSUS_METRICS[m].legend}
-              >
-                {CENSUS_METRICS[m].label}
-              </button>
-            ))}
-            <span
-              className="ml-2 inline-block h-2.5 w-24 rounded-full"
+        <>
+          <div className="space-y-1.5">
+            <div className="text-muted font-medium">Color by</div>
+            <div className="flex flex-wrap gap-1.5">
+              {(Object.keys(CENSUS_METRICS) as CensusMetric[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => pickCensusMetric(m)}
+                  className={`px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${
+                    censusMetric === m ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"
+                  }`}
+                  title={CENSUS_METRICS[m].legend}
+                >
+                  {CENSUS_METRICS[m].label}
+                </button>
+              ))}
+            </div>
+            <div
+              className="h-2.5 w-full rounded-full"
               style={{ background: `linear-gradient(to right, ${CENSUS_METRICS[censusMetric].from}, ${CENSUS_METRICS[censusMetric].to})` }}
             />
             <span className="text-subtle">low → high {CENSUS_METRICS[censusMetric].legend}</span>
           </div>
-          <div className="flex items-center gap-3 flex-wrap text-muted">
-            <span className="inline-flex items-center gap-1.5">
+          <div className="space-y-1.5 text-muted">
+            <div className="text-muted font-medium">Legend</div>
+            <span className="flex items-center gap-1.5">
               <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: CHURCH_COLOR }} />
               Faith Church
             </span>
             {census?.needCampus && (
-              <span className="inline-flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5">
                 <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: SECOND_COLOR }} />
                 need-based 2nd campus
               </span>
             )}
-            <span className="inline-flex items-center gap-1.5">
+            <span className="flex items-center gap-1.5">
               <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />
               Lehigh Valley
             </span>
           </div>
-        </div>
+        </>
       )}
-
-      <div
-        ref={ref}
-        className="w-full rounded-xl overflow-hidden border border-border-soft"
-        style={{ height, minHeight: 360, background: basemap.dark ? "#0b1220" : "#e5e7eb" }}
-      />
+      </div>
     </div>
   );
 }

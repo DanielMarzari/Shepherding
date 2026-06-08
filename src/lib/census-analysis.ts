@@ -197,12 +197,20 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
 }
 
 function siteNeedCampus(tracts: CensusTract[]): NeedCampus | null {
-  // Cost-aware weight: weight a tract by its unmet need, boosted where land
-  // is cheaper (sqrt(avgCost / cost)) so the campus drifts toward affordable,
-  // high-need areas rather than the priciest ones.
+  // We're siting a campus to reach the UNREACHED, not to sit near our
+  // current people. Weight a tract by:
+  //   need        — unchurched people, discounted where we already have presence
+  //   × cost      — boosted where land is cheaper (sqrt(avgCost/cost))
+  //   × distance  — boosted the farther it is from Faith Church, since those
+  //                 unchurched are the ones FC isn't already positioned to reach.
   const pts = tracts
     .filter((t) => t.need > 0 && t.clat && t.clng)
-    .map((t) => ({ ...t, w0: t.need * Math.sqrt(AVG_COST / Math.max(50000, t.cost)) }));
+    .map((t) => {
+      const distFC = haversineMiles(CHURCH.lat, CHURCH.lng, t.clat, t.clng);
+      const distFactor = 0.5 + Math.min(distFC, 22) / 6; // ~0.5 near FC → ~4.2 far out
+      const costFactor = Math.sqrt(AVG_COST / Math.max(50000, t.cost));
+      return { ...t, w0: t.need * costFactor * distFactor };
+    });
   if (pts.length < 5) return null;
   const sumW = pts.reduce((a, t) => a + t.w0, 0) || 1;
   let lat = pts.reduce((a, t) => a + t.clat * t.w0, 0) / sumW;
