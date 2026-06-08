@@ -1,13 +1,14 @@
 import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { CHURCH, getMemberGeoPoints } from "@/lib/geocode";
+import { CHURCH, FAITH_CHURCH_PROFILE, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
 import { analyzeCensus, computeDrawModel, computeGrowth } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { getRoadMesh } from "@/lib/road-mesh";
 import { MemberMap } from "../map/member-map";
 import { CampusPlannerMap } from "../map/campus-planner-map";
+import { MiniMap } from "../map/mini-map";
 
 const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
 
@@ -48,6 +49,34 @@ export default async function NextCampusPlannerPage() {
             area (Lehigh Valley + 5 miles).
           </p>
         </div>
+
+        {/* ── Current campuses ───────────────────────────────────────── */}
+        <Card className="p-5 space-y-3">
+          <h2 className="text-sm font-semibold">Current campuses</h2>
+          <div className="grid md:grid-cols-[280px_1fr] gap-4">
+            <MiniMap lat={CHURCH.lat} lng={CHURCH.lng} label={CHURCH.name} zoom={16} height="220px" />
+            <div className="space-y-3">
+              <div>
+                <div className="text-base font-semibold">{CHURCH.name}</div>
+                <div className="text-xs text-muted">{CHURCH.address} · {FAITH_CHURCH_PROFILE.denomination}</div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Stat label="Engaged people" value={census.ourMembers.toLocaleString()} sub="shepherded/active/present (located)" />
+                <Stat label="Building" value={`${FAITH_CHURCH_PROFILE.buildingSqft.toLocaleString()} ft²`} sub={FAITH_CHURCH_PROFILE.buildingNote} />
+                <Stat label="Lot size" value={FAITH_CHURCH_PROFILE.lotAcres != null ? `${FAITH_CHURCH_PROFILE.lotAcres} ac` : "—"} sub="see county records" />
+                <Stat label="Est. market value" value={FAITH_CHURCH_PROFILE.estMarketValue != null ? usd(FAITH_CHURCH_PROFILE.estMarketValue) : "—"} sub="tax-exempt; see records" />
+              </div>
+              <div className="flex flex-wrap gap-3 text-xs">
+                <a href={FAITH_CHURCH_PROFILE.satelliteUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">Satellite view</a>
+                <a href={FAITH_CHURCH_PROFILE.parcelUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">Lehigh County parcel / assessment</a>
+              </div>
+              <p className="text-[11px] text-subtle">
+                Lot size and market value aren&rsquo;t public for tax-exempt church property — use the county
+                parcel link to confirm, then candidate sites below can target a comparable or larger lot.
+              </p>
+            </div>
+          </div>
+        </Card>
 
         {/* ── Census: churched vs unchurched + areas of need ─────────── */}
         <Card className="p-5 space-y-3">
@@ -116,31 +145,31 @@ export default async function NextCampusPlannerPage() {
             <span className="text-xs text-subtle">within ~{Math.round(growth.radiusMi)} mi of Faith Church</span>
           </div>
           <p className="text-xs text-muted max-w-3xl">
-            How much Faith Church can grow by reaching people who&rsquo;d
-            otherwise stay unchurched (net benefit to the valley) before
-            further growth just redistributes Christians already in other
-            churches. The area can only become so churched — once it nears
-            that ceiling, our growth starts taking from other congregations
-            rather than enlarging the church&rsquo;s overall footprint.
+            The realistic ceiling isn&rsquo;t everyone — it&rsquo;s the share who even
+            identify as Christian (Pew 2023–24: ~{Math.round(growth.capRate * 100)}% of Pennsylvanians,
+            and dropping). Only ~{Math.round(growth.capRate * 100)}% of the catchment is a plausible churchgoer, and
+            ~{(growth.churched / growth.pop * 100).toFixed(0)}% already attend somewhere — so the truly reachable pool
+            (Christians not currently in a church) is smaller than the raw &ldquo;unchurched&rdquo; count. Past it,
+            our growth mostly redistributes other churches&rsquo; members rather than making the valley more Christian.
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <Stat label="Catchment" value={Math.round(growth.pop).toLocaleString()} sub={`pop · ~${Math.round(growth.radiusMi)} mi · ${growth.churches} churches`} />
-            <Stat label="People per church" value={Math.round(growth.peoplePerChurch).toLocaleString()} sub="churched ÷ churches in area" />
-            <Stat label="Our ministry-load share" value={`${(growth.ourShareOfChurched * 100).toFixed(1)}%`} sub={`of the churched · ${growth.ourLoadVsAvg.toFixed(1)}× an average church`} />
+            <Stat label="People per church" value={Math.round(growth.peoplePerChurch).toLocaleString()} sub="attending ÷ churches in area" />
+            <Stat label="Our ministry-load share" value={`${(growth.ourShareOfChurched * 100).toFixed(1)}%`} sub={`of attenders · ${growth.ourLoadVsAvg.toFixed(1)}× an average church`} />
+            <Stat label="Christians not yet churched" value={`~${Math.round(growth.netNewHeadroom).toLocaleString()}`} sub={`the reachable pool (≤${Math.round(growth.capRate * 100)}% Christian − attending)`} />
             <Stat label="Our size here" value={Math.round(growth.ourSize).toLocaleString()} sub="engaged people in catchment" />
-            <Stat label="Net-new headroom" value={`~${Math.round(growth.netNewHeadroom).toLocaleString()}`} sub={`to a ${Math.round(growth.capRate * 100)}% churched ceiling`} />
             <Stat label="Interference point" value={`~${Math.round(growth.interferenceCeiling).toLocaleString()}`} sub="grow past this = taking from others" />
           </div>
           <p className="text-[11px] text-subtle max-w-3xl">
-            Today the area runs about {Math.round(growth.peoplePerChurch).toLocaleString()} churched people per
-            church, and Faith carries {growth.ourLoadVsAvg.toFixed(1)}× an average church&rsquo;s load
-            ({(growth.ourShareOfChurched * 100).toFixed(1)}% of all churched people in the catchment). If the area could reach
-            ~{Math.round(growth.capRate * 100)}% churched, there&rsquo;s room for about{" "}
-            {Math.round(growth.netNewHeadroom).toLocaleString()} more new Christians — so Faith growing toward
-            ~{Math.round(growth.interferenceCeiling).toLocaleString()} can still be net-positive. Past that, the valley is about as
-            churched as it&rsquo;s going to get, and additional Faith attendance increasingly means drawing people
-            from other churches rather than helping the valley become more Christian.
-            ({Math.round(growth.capRate * 100)}% ceiling and the 2020 county churched rate are assumptions — adjust as needed.)
+            Of the catchment&rsquo;s ~{Math.round(growth.pop).toLocaleString()} residents, an estimated{" "}
+            {Math.round(growth.areaChurchedCap).toLocaleString()} ({Math.round(growth.capRate * 100)}%) identify as Christian and{" "}
+            ~{Math.round(growth.churched).toLocaleString()} already attend a church — leaving only about{" "}
+            {Math.round(growth.netNewHeadroom).toLocaleString()} reachable people who&rsquo;d genuinely add to the valley&rsquo;s
+            churched count. Faith growing toward ~{Math.round(growth.interferenceCeiling).toLocaleString()} can still be
+            net-positive; beyond that, the valley is about as churched as it&rsquo;s going to get, so more Faith
+            attendance increasingly means drawing from the area&rsquo;s other congregations (Faith already carries{" "}
+            {growth.ourLoadVsAvg.toFixed(1)}× an average church&rsquo;s load). (Christian-identity % is Pew&rsquo;s PA figure;
+            the attending rate is the 2020 Religion Census — both adjustable.)
           </p>
         </Card>
       </div>

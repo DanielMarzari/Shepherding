@@ -161,10 +161,14 @@ export function computeDrawModel(
   return { radiusMi: r, captureRate };
 }
 
-// A plausible ceiling for how churched an area could realistically become
-// (no US region is ~100% churched). Used to mark where Faith's growth stops
-// adding new Christians and starts redistributing existing ones.
-export const CAP_CHURCHED_RATE = 0.6;
+// The realistic ceiling for how churched an area can get isn't 100% — it's
+// roughly the share who even identify as Christian. Pew's 2023–24 Religious
+// Landscape Study puts Pennsylvania at 61% Christian (30% unaffiliated), so
+// the addressable pool is the Christians NOT currently attending, not every
+// "unchurched" resident. Beyond that, growth means converting non-Christians
+// or (more likely) drawing members from other churches.
+export const CHRISTIAN_IDENTITY_RATE = 0.61;
+export const CAP_CHURCHED_RATE = CHRISTIAN_IDENTITY_RATE;
 
 export interface GrowthModel {
   radiusMi: number;

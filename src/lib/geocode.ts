@@ -16,6 +16,20 @@ export const CHURCH = {
   lng: -75.584432833772,
 };
 
+/** Faith Church campus profile for the planner's "current campuses" card.
+ *  Building size is the documented 2020 three-story addition (total is
+ *  larger); lot size and market value aren't public (churches are tax-
+ *  exempt), so those link out to county records rather than guess. */
+export const FAITH_CHURCH_PROFILE = {
+  denomination: "Evangelical Free (EFCA)",
+  buildingSqft: 50652, // 2020 three-story addition (per Beers+Hoffman); total building is larger
+  buildingNote: "2020 three-story addition; total building is larger",
+  lotAcres: null as number | null,
+  estMarketValue: null as number | null,
+  parcelUrl: "https://www.lehighcounty.org/Departments/Assessment",
+  satelliteUrl: `https://www.google.com/maps/search/?api=1&query=${CHURCH.lat},${CHURCH.lng}`,
+};
+
 /** Polite delay between live geocoder calls (cache hits don't wait). */
 export const GEOCODE_DELAY_MS = 120;
 
