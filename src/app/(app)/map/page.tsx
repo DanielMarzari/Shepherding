@@ -3,6 +3,7 @@ import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { CHURCH, countPendingGeo, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
+import { analyzeCensus } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { countPendingDrive, isRoutingConfigured } from "@/lib/drive-routing";
 import { countPendingMesh, getRoadMesh } from "@/lib/road-mesh";
@@ -23,6 +24,7 @@ export default async function MapPage() {
   const drivePending = routingOn ? countPendingDrive(session.orgId) : 0;
   const meshPending = routingOn ? countPendingMesh(session.orgId) : 0;
   const mesh = getRoadMesh(session.orgId);
+  const census = analyzeCensus(session.orgId);
   const isAdmin = session.role === "admin";
 
   return (
@@ -220,6 +222,56 @@ export default async function MapPage() {
             </div>
           </Card>
         )}
+
+        {/* ── Census: churched vs unchurched + areas of need ─────────── */}
+        <Card className="p-5 space-y-3">
+          <div className="flex items-baseline justify-between gap-3 flex-wrap">
+            <h2 className="text-sm font-semibold">Reaching the Lehigh Valley</h2>
+            <span className="text-xs text-subtle">{census.source}</span>
+          </div>
+          <p className="text-xs text-muted max-w-2xl">
+            How much of the Lehigh Valley is churched vs. unchurched, how much
+            of it Faith Church already reaches, and where the biggest
+            unreached need is. The choropleth colors each census tract — switch
+            between need, unchurched population, and our reach. The purple
+            marker is where a second campus would best center the unmet need.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="Lehigh Valley pop." value={Math.round(census.population).toLocaleString()} sub={`${census.totalTracts} census tracts`} />
+            <Stat label="Churched" value={`${census.churchedPct.toFixed(1)}%`} sub={`~${Math.round(census.unchurched).toLocaleString()} unchurched`} />
+            <Stat label="Area we reach" value={`${census.reachedPopulationPct.toFixed(0)}%`} sub={`${census.reachedTracts} of ${census.totalTracts} tracts have our people`} />
+            <Stat label="Our footprint" value={`${census.shareOfChurchedPct.toFixed(1)}%`} sub={`of churched · ${census.shareOfPopulationPct.toFixed(1)}% of all residents`} />
+          </div>
+          <MemberMap
+            church={CHURCH}
+            points={[]}
+            mode="census"
+            census={{ tracts: census.tracts, needCampus: census.needCampus }}
+          />
+          {census.topNeed.length > 0 && (
+            <div>
+              <div className="text-xs text-muted mb-1.5">Biggest unreached need (by tract)</div>
+              <div className="flex flex-wrap gap-2">
+                {census.topNeed.map((t) => (
+                  <div key={t.geoid} className="rounded-lg border border-border-soft bg-bg-elev-2/40 px-3 py-2 text-xs">
+                    <div className="font-medium">{t.name}</div>
+                    <div className="text-muted tnum">
+                      ~{Math.round(t.unchurched).toLocaleString()} unchurched · {t.ourCount} of our people
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {census.needCampus && (
+            <p className="text-[11px] text-subtle">
+              A need-based second campus (purple) sited within the valid area
+              would be closer than Faith Church for roughly{" "}
+              {Math.round(census.needCampus.servedNeed).toLocaleString()} unchurched
+              residents — complementing the people-based siting above.
+            </p>
+          )}
+        </Card>
 
         {/* ── Engagement vs travel time ──────────────────────────────── */}
         {reach.engagementBins.length >= 2 && (

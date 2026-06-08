@@ -5,8 +5,33 @@ import type { MemberPoint } from "@/lib/geocode";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { RoadLine } from "@/lib/road-mesh";
 import { LEHIGH_VALLEY_REGION, LEHIGH_VALLEY_VALID_AREA } from "@/lib/lehigh-valley";
+import { LV_TRACTS } from "@/lib/lv-census";
 
 const LV_COLOR = "#7c3aed"; // Lehigh Valley region + its 5-mile valid area
+
+export interface CensusTractView {
+  geoid: string;
+  name: string;
+  pop: number;
+  unchurched: number;
+  ourCount: number;
+  reachPct: number;
+  need: number;
+}
+type CensusMetric = "need" | "unchurched" | "reach";
+const CENSUS_METRICS: Record<CensusMetric, { label: string; from: string; to: string; legend: string }> = {
+  need: { label: "Need", from: "#fef3c7", to: "#b91c1c", legend: "unchurched & unreached" },
+  unchurched: { label: "Unchurched", from: "#dbeafe", to: "#1e3a8a", legend: "unchurched people" },
+  reach: { label: "Our reach", from: "#e5e7eb", to: "#15803d", legend: "our people per population" },
+};
+function lerpHex(a: string, b: string, t: number): string {
+  const pa = [parseInt(a.slice(1, 3), 16), parseInt(a.slice(3, 5), 16), parseInt(a.slice(5, 7), 16)];
+  const pb = [parseInt(b.slice(1, 3), 16), parseInt(b.slice(3, 5), 16), parseInt(b.slice(5, 7), 16)];
+  const c = pa.map((v, i) => Math.round(v + (pb[i] - v) * Math.max(0, Math.min(1, t))));
+  return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+const metricVal = (t: CensusTractView, m: CensusMetric) =>
+  m === "need" ? t.need : m === "unchurched" ? t.unchurched : t.reachPct;
 
 const LEAFLET_VERSION = "1.9.4";
 // Colors tuned for a pale (muted) basemap.
@@ -23,7 +48,7 @@ const SECOND_COLOR = "#9333ea";
 const MESH_COLOR = "#1d4ed8";
 
 type ColorBy = "shepherding" | "membership";
-type MapMode = "members" | "roads" | "campus";
+type MapMode = "members" | "roads" | "campus" | "census";
 
 interface Basemap {
   id: string;
@@ -199,6 +224,7 @@ export function MemberMap({
   points,
   secondCampuses = [],
   mesh,
+  census,
   mode = "members",
   height = "62vh",
 }: {
@@ -206,6 +232,7 @@ export function MemberMap({
   points: MemberPoint[];
   secondCampuses?: SecondCampus[];
   mesh?: { roads: RoadLine[] };
+  census?: { tracts: CensusTractView[]; needCampus?: { lat: number; lng: number } | null };
   mode?: MapMode;
   height?: string;
 }) {
@@ -218,13 +245,16 @@ export function MemberMap({
   const tileRef = useRef<any>(null);
   const churchRef = useRef<any>(null);
   const lvRef = useRef<any>(null);
+  const censusRef = useRef<any>(null);
+  const needCampusRef = useRef<any>(null);
 
-  const showDotControls = mode !== "roads";
+  const showDotControls = mode === "members" || mode === "campus";
   const [colorBy, setColorBy] = useState<ColorBy>("shepherding");
   const [hiddenShep, setHiddenShep] = useState<string[]>([]);
   const [hiddenMem, setHiddenMem] = useState<string[]>([]);
   const [secondCohort, setSecondCohort] = useState<Cohort | "none">("all");
   const [basemapId, setBasemapId] = useState(DEFAULT_BASEMAP);
+  const [censusMetric, setCensusMetric] = useState<CensusMetric>("need");
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -234,6 +264,7 @@ export function MemberMap({
     setHiddenMem(lsGet("shepherdly.map.hidden.membership", []));
     setSecondCohort(lsGet("shepherdly.map.secondCohort", "all"));
     setBasemapId(lsGet("shepherdly.map.basemap", DEFAULT_BASEMAP));
+    setCensusMetric(lsGet("shepherdly.map.censusMetric", "need"));
     setLoaded(true);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
@@ -261,6 +292,12 @@ export function MemberMap({
         tileRef.current.addTo(map);
         tileRef.current.bringToBack?.();
 
+        // Census choropleth sits under the region outline + markers.
+        if (mode === "census") {
+          censusRef.current = L.layerGroup().addTo(map);
+          drawCensus();
+        }
+
         // Lehigh Valley region (filled) + 5-mile valid 2nd-campus area
         // (dashed). Under the data, over the basemap.
         const lvRegion = L.geoJSON(LEHIGH_VALLEY_REGION, {
@@ -286,6 +323,12 @@ export function MemberMap({
         churchRef.current.bringToFront();
 
         if (mode === "campus") drawSecond();
+        if (mode === "census" && census?.needCampus) {
+          needCampusRef.current = L.circleMarker([census.needCampus.lat, census.needCampus.lng], {
+            radius: 11, color: "#fff", weight: 2, fillColor: SECOND_COLOR, fillOpacity: 1,
+          }).bindTooltip("Need-based 2nd campus — centers the biggest unreached, unchurched areas").addTo(map);
+          needCampusRef.current.bringToFront();
+        }
       })
       .catch(() => {
         if (el) el.innerHTML = '<div style="padding:2rem;text-align:center;color:#94a3b8;font-size:13px">Map failed to load.</div>';
@@ -293,7 +336,7 @@ export function MemberMap({
     return () => {
       cancelled = true;
       if (mapRef.current) mapRef.current.remove();
-      mapRef.current = layerRef.current = secondRef.current = meshRef.current = tileRef.current = churchRef.current = lvRef.current = null;
+      mapRef.current = layerRef.current = secondRef.current = meshRef.current = tileRef.current = churchRef.current = lvRef.current = censusRef.current = needCampusRef.current = null;
       if (el) delete el.dataset.init;
     };
     // Only re-init the whole map when the underlying data/mode changes —
@@ -338,6 +381,7 @@ export function MemberMap({
     const layer = layerRef.current;
     if (!L || !layer) return;
     layer.clearLayers();
+    if (mode === "census") return; // census has no member dots
     // On the roads map, dots are tiny grey context so the web is the star.
     if (mode === "roads") {
       for (const p of points) {
@@ -383,6 +427,39 @@ export function MemberMap({
     secondRef.current.bringToFront();
   }
 
+  function drawCensus() {
+    const L = LRef.current;
+    const layer = censusRef.current;
+    if (!L || !layer || !census) return;
+    layer.clearLayers();
+    const vals = new Map(census.tracts.map((t) => [t.geoid, t]));
+    let max = 0;
+    for (const t of census.tracts) {
+      const v = metricVal(t, censusMetric);
+      if (v > max) max = v;
+    }
+    max = max || 1;
+    const scheme = CENSUS_METRICS[censusMetric];
+    L.geoJSON(LV_TRACTS, {
+      style: (f: any) => {
+        const t = vals.get(f.properties.geoid);
+        const v = t ? metricVal(t, censusMetric) : 0;
+        return { fillColor: lerpHex(scheme.from, scheme.to, v / max), fillOpacity: 0.72, color: "#ffffff", weight: 0.4, opacity: 0.5 };
+      },
+      onEachFeature: (f: any, lyr: any) => {
+        const t = vals.get(f.properties.geoid);
+        const tip = t
+          ? `<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}%)`
+          : f.properties.name ?? "tract";
+        lyr.bindTooltip(tip, { sticky: true });
+      },
+    }).addTo(layer);
+    // Keep the region outline + anchors above the choropleth.
+    lvRef.current?.eachLayer?.((l: any) => l.bringToFront?.());
+    churchRef.current?.bringToFront?.();
+    needCampusRef.current?.bringToFront?.();
+  }
+
   useEffect(() => {
     if (loaded && mode !== "roads") draw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -397,6 +474,10 @@ export function MemberMap({
     if (mode === "roads") drawMesh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesh?.roads.length]);
+  useEffect(() => {
+    if (mode === "census") drawCensus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [censusMetric, census?.tracts.length]);
 
   function toggleCat(cat: string) {
     if (colorBy === "membership") {
@@ -420,6 +501,10 @@ export function MemberMap({
   function pickBasemap(id: string) {
     setBasemapId(id);
     lsSet("shepherdly.map.basemap", id);
+  }
+  function pickCensusMetric(m: CensusMetric) {
+    setCensusMetric(m);
+    lsSet("shepherdly.map.censusMetric", m);
   }
 
   const cohortOptions = secondCampuses.map((s) => s.cohort);
@@ -535,6 +620,47 @@ export function MemberMap({
             <span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: LV_COLOR }} />
             2nd-campus area (+5 mi)
           </span>
+        </div>
+      )}
+      {mode === "census" && (
+        <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted mr-1">Color by:</span>
+            {(Object.keys(CENSUS_METRICS) as CensusMetric[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => pickCensusMetric(m)}
+                className={`px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${
+                  censusMetric === m ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"
+                }`}
+                title={CENSUS_METRICS[m].legend}
+              >
+                {CENSUS_METRICS[m].label}
+              </button>
+            ))}
+            <span
+              className="ml-2 inline-block h-2.5 w-24 rounded-full"
+              style={{ background: `linear-gradient(to right, ${CENSUS_METRICS[censusMetric].from}, ${CENSUS_METRICS[censusMetric].to})` }}
+            />
+            <span className="text-subtle">low → high {CENSUS_METRICS[censusMetric].legend}</span>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap text-muted">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: CHURCH_COLOR }} />
+              Faith Church
+            </span>
+            {census?.needCampus && (
+              <span className="inline-flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: SECOND_COLOR }} />
+                need-based 2nd campus
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />
+              Lehigh Valley
+            </span>
+          </div>
         </div>
       )}
 
