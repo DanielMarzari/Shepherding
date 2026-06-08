@@ -72,6 +72,12 @@ const SECTIONS: MoreSection[] = [
         description:
           "Where your people live, plotted around Faith Church. Addresses are geocoded (free US Census geocoder) and colored by classification — useful for spotting clusters and coverage gaps.",
       },
+      {
+        href: "/next-campus-planner",
+        title: "Next campus planner",
+        description:
+          "Where to plant a second campus — your people's geographic center, the Lehigh Valley's churched/unchurched areas of need (2020 Census + Religion Census), and land-cost-aware site suggestions within the valley + 5 miles.",
+      },
     ],
   },
   {

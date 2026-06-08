@@ -4,6 +4,8 @@ import { CHURCH } from "./geocode";
 import { clampToValidArea } from "./lehigh-valley";
 import { LV_TRACTS, LV_CENSUS_META, type TractProps } from "./lv-census";
 
+const AVG_COST = LV_CENSUS_META.avgHomeValue;
+
 // Census/need analysis: join our people's homes to Lehigh Valley census
 // tracts, estimate churched vs unchurched, how much of the valley we
 // reach, where the biggest unreached need is, and a need-weighted second
@@ -22,6 +24,7 @@ export interface NeedCampus {
   lat: number;
   lng: number;
   servedNeed: number; // unchurched people in tracts it's closest to
+  estCost: number; // est. area property cost (median home value) at the site
 }
 
 export interface CensusAnalysis {
@@ -99,6 +102,16 @@ function tractOf(prepared: PreparedTract[], lat: number, lng: number): PreparedT
   return null;
 }
 
+let _prepared: PreparedTract[] | null = null;
+const getPrepared = () => (_prepared ??= prepareTracts());
+
+/** Estimated area property cost (median home value) at a point — used to
+ *  factor land cost into campus siting. Falls back to the LV average. */
+export function propertyCostAt(lat: number, lng: number): number {
+  const t = tractOf(getPrepared(), lat, lng);
+  return t?.props.cost || AVG_COST;
+}
+
 function loadEngagedHomes(orgId: number): Array<{ lat: number; lng: number }> {
   return getDb()
     .prepare(
@@ -123,7 +136,7 @@ function haversineMiles(aLat: number, aLng: number, bLat: number, bLng: number):
 }
 
 export function analyzeCensus(orgId: number): CensusAnalysis {
-  const prepared = prepareTracts();
+  const prepared = getPrepared();
   const counts = new Map<string, number>();
   const homes = loadEngagedHomes(orgId);
   let ourMembers = 0;
@@ -150,7 +163,7 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
       ourCount,
       reachPct: p.pop > 0 ? (ourCount / p.pop) * 100 : 0,
       need,
-    };
+    } as CensusTract;
   });
 
   const population = tracts.reduce((a, t) => a + t.pop, 0);
@@ -184,15 +197,21 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
 }
 
 function siteNeedCampus(tracts: CensusTract[]): NeedCampus | null {
-  const pts = tracts.filter((t) => t.need > 0 && t.clat && t.clng);
+  // Cost-aware weight: weight a tract by its unmet need, boosted where land
+  // is cheaper (sqrt(avgCost / cost)) so the campus drifts toward affordable,
+  // high-need areas rather than the priciest ones.
+  const pts = tracts
+    .filter((t) => t.need > 0 && t.clat && t.clng)
+    .map((t) => ({ ...t, w0: t.need * Math.sqrt(AVG_COST / Math.max(50000, t.cost)) }));
   if (pts.length < 5) return null;
-  let lat = pts.reduce((a, t) => a + t.clat * t.need, 0) / pts.reduce((a, t) => a + t.need, 0);
-  let lng = pts.reduce((a, t) => a + t.clng * t.need, 0) / pts.reduce((a, t) => a + t.need, 0);
+  const sumW = pts.reduce((a, t) => a + t.w0, 0) || 1;
+  let lat = pts.reduce((a, t) => a + t.clat * t.w0, 0) / sumW;
+  let lng = pts.reduce((a, t) => a + t.clng * t.w0, 0) / sumW;
   for (let iter = 0; iter < 40; iter++) {
     let nLat = 0, nLng = 0, w = 0;
     for (const t of pts) {
       const d = Math.hypot(t.clat - lat, t.clng - lng) || 1e-9;
-      const ww = t.need / d;
+      const ww = t.w0 / d;
       nLat += t.clat * ww; nLng += t.clng * ww; w += ww;
     }
     const newLat = nLat / w, newLng = nLng / w;
@@ -204,5 +223,5 @@ function siteNeedCampus(tracts: CensusTract[]): NeedCampus | null {
   const servedNeed = tracts
     .filter((t) => haversineMiles(c.lat, c.lng, t.clat, t.clng) < haversineMiles(CHURCH.lat, CHURCH.lng, t.clat, t.clng))
     .reduce((a, t) => a + t.need, 0);
-  return { lat: c.lat, lng: c.lng, servedNeed };
+  return { lat: c.lat, lng: c.lng, servedNeed, estCost: propertyCostAt(c.lat, c.lng) };
 }

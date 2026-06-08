@@ -4,6 +4,7 @@ import { decryptJson } from "./encryption";
 import { CHURCH } from "./geocode";
 import { getDriveMap } from "./drive-routing";
 import { clampToValidArea } from "./lehigh-valley";
+import { propertyCostAt } from "./census-analysis";
 
 interface PIIBlob {
   address?: string | null;
@@ -79,6 +80,7 @@ export interface SecondCampus {
   avgMilesBefore: number;
   avgMilesAfter: number;
   served: number;
+  estCost: number; // est. area property cost (median home value) at the site
 }
 export interface ReachAnalysis {
   count: number;
@@ -87,6 +89,7 @@ export interface ReachAnalysis {
   medianMiles: number;
   estDriveMin: number;
   shepherdedCorr: number | null;
+  shepherdedOfEngagedPct: number; // shepherded / (shepherded+active+present)
   bands: DistanceBand[];
   secondCampuses: SecondCampus[]; // one per cohort that qualifies
   engagementBins: EngagementBin[];
@@ -201,6 +204,7 @@ function siteSecondCampus(
     avgMilesBefore: mean(cohortPts.map((p) => p.dFc)),
     avgMilesAfter: avgAfter,
     served: served.length,
+    estCost: propertyCostAt(c2.lat, c2.lng),
   };
 }
 
@@ -214,6 +218,7 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
     medianMiles: 0,
     estDriveMin: 0,
     shepherdedCorr: null,
+    shepherdedOfEngagedPct: 0,
     bands: [],
     secondCampuses: [],
     engagementBins: [],
@@ -244,9 +249,15 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
 
   const shepBin = reachPts.map((p) => (p.classification === "shepherded" ? 1 : 0));
   const corr = pearson(metric, shepBin);
+  const shepCount = shepBin.reduce<number>((a, b) => a + b, 0);
+  const shepherdedOfEngagedPct = reachPts.length
+    ? Math.round((shepCount / reachPts.length) * 100)
+    : 0;
 
   // Shepherded by distance — fine bands so it reads as one continuous
-  // curve. midMiles anchors each point on a true distance axis.
+  // curve. midMiles anchors each point on a true distance axis. Bands need
+  // a minimum sample so a 1-of-2 far band can't spike the curve to 50%.
+  const MIN_BAND = 12;
   const bandDefs: Array<[string, number, number]> = [
     ["0–2", 0, 2], ["2–4", 2, 4], ["4–6", 4, 6], ["6–8", 6, 8],
     ["8–10", 8, 10], ["10–13", 10, 13], ["13–16", 13, 16],
@@ -263,7 +274,7 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
         shepherdedPct: sub.length ? Math.round((shep / sub.length) * 100) : 0,
       };
     })
-    .filter((b) => b.count > 0);
+    .filter((b) => b.count >= MIN_BAND);
 
   // ── Engagement vs travel time (minutes). ──────────────────────────
   const binDefs: Array<[string, number, number]> = [
@@ -333,6 +344,7 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
     medianMiles,
     estDriveMin,
     shepherdedCorr: corr,
+    shepherdedOfEngagedPct,
     bands,
     secondCampuses,
     engagementBins,

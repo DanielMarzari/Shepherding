@@ -7,7 +7,7 @@ const LINE = "#eab308"; // matches the "shepherded" dot color on the map
 
 /** Shepherded share as one continuous curve over distance from Faith
  *  Church (engaged people, within the radius). Smoothed Catmull-Rom. */
-export function DistanceBandChart({ bands }: { bands: DistanceBand[] }) {
+export function DistanceBandChart({ bands, avg }: { bands: DistanceBand[]; avg?: number }) {
   const [hover, setHover] = useState<number | null>(null);
   if (bands.length < 2) return null;
 
@@ -87,6 +87,12 @@ export function DistanceBandChart({ bands }: { bands: DistanceBand[] }) {
             {b.label}
           </text>
         ))}
+        {avg != null && (
+          <g>
+            <line x1={padL} x2={width - padR} y1={yFor(avg)} y2={yFor(avg)} stroke="#94a3b8" strokeWidth={1} strokeDasharray="5 4" />
+            <text x={width - padR} y={yFor(avg) - 4} textAnchor="end" fontSize={10} fill="#94a3b8">avg {Math.round(avg)}%</text>
+          </g>
+        )}
         <path d={area} fill={LINE} fillOpacity={0.1} stroke="none" />
         <path d={d} fill="none" stroke={LINE} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
         {pts.map(([x, y], i) => (
