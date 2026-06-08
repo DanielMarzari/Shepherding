@@ -3,7 +3,7 @@ import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { CHURCH, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
-import { analyzeCensus, computeDrawModel } from "@/lib/census-analysis";
+import { analyzeCensus, computeDrawModel, computeGrowth } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { getRoadMesh } from "@/lib/road-mesh";
 import { MemberMap } from "../map/member-map";
@@ -19,12 +19,22 @@ export default async function NextCampusPlannerPage() {
   const census = analyzeCensus(session.orgId);
   const mesh = getRoadMesh(session.orgId);
   const drawModel = computeDrawModel(census.tracts, census.ourMembers, reach.avgMiles);
+  const growth = computeGrowth(census.tracts, reach.avgMiles);
   const allCohort = reach.secondCampuses.find((s) => s.cohort === "all");
   const initialCampus = census.needCampus
     ? { lat: census.needCampus.lat, lng: census.needCampus.lng }
     : allCohort
       ? { lat: allCohort.lat, lng: allCohort.lng }
       : { lat: CHURCH.lat, lng: CHURCH.lng };
+  // Auto-suggested candidate sites = need-based + per-cohort people-based.
+  const suggestions = [
+    ...(census.needCampus ? [{ label: "unreached (need-based)", lat: census.needCampus.lat, lng: census.needCampus.lng }] : []),
+    ...reach.secondCampuses.map((sc) => ({
+      label: sc.cohort === "all" ? "everyone" : sc.cohort,
+      lat: sc.lat,
+      lng: sc.lng,
+    })),
+  ];
 
   return (
     <AppShell active="See more" breadcrumb="See more › Next campus planner">
@@ -110,63 +120,38 @@ export default async function NextCampusPlannerPage() {
             mesh={{ roads: mesh.roads }}
             initial={initialCampus}
             model={drawModel}
+            suggestions={suggestions}
           />
         </Card>
 
-        {/* ── People-based suggested starting points (reference) ─────── */}
-        {reach.secondCampuses.length > 0 && (
-          <Card className="p-5 space-y-3">
-            <div className="flex items-baseline justify-between gap-3 flex-wrap">
-              <h2 className="text-sm font-semibold">Suggested starting points</h2>
-              <span className="text-xs text-subtle">
-                people-based · excludes homes &gt; {mapSettings.secondCampusMaxHours}h away ·{" "}
-                <a href="/metrics" className="text-accent hover:underline">change in Metrics</a>
-              </span>
-            </div>
-            <p className="text-xs text-muted max-w-2xl">
-              The geographic best spot to serve each group (and the cost-aware,
-              need-based spot for the unreached). Use these as starting points,
-              then drag the dot above to compare alternatives.
-            </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-xs text-muted">
-                  <tr className="border-b border-border-soft">
-                    <th className="text-left font-medium py-1.5 pr-4">Serves</th>
-                    <th className="text-left font-medium py-1.5 pr-4">Near</th>
-                    <th className="text-right font-medium py-1.5 pr-4">Closer for</th>
-                    <th className="text-right font-medium py-1.5 pr-4">Avg distance</th>
-                    <th className="text-right font-medium py-1.5">Est. land cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reach.secondCampuses.map((sc) => (
-                    <tr key={sc.cohort} className="border-b border-border-softer">
-                      <td className="py-2 pr-4 capitalize">
-                        {sc.cohort === "all" ? "Everyone" : sc.cohort}
-                      </td>
-                      <td className="py-2 pr-4 text-muted">{sc.label}</td>
-                      <td className="py-2 pr-4 text-right tnum">{sc.served.toLocaleString()} homes</td>
-                      <td className="py-2 pr-4 text-right tnum">
-                        {sc.avgMilesBefore.toFixed(1)} → {sc.avgMilesAfter.toFixed(1)} mi
-                      </td>
-                      <td className="py-2 text-right tnum">{usd(sc.estCost)}</td>
-                    </tr>
-                  ))}
-                  {census.needCampus && (
-                    <tr className="border-b border-border-softer">
-                      <td className="py-2 pr-4">Unreached (need-based)</td>
-                      <td className="py-2 pr-4 text-muted">cost-aware</td>
-                      <td className="py-2 pr-4 text-right tnum">~{Math.round(census.needCampus.servedNeed).toLocaleString()} unchurched</td>
-                      <td className="py-2 pr-4 text-right tnum">—</td>
-                      <td className="py-2 text-right tnum">{usd(census.needCampus.estCost)}</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
+        {/* ── Healthy church growth ──────────────────────────────────── */}
+        <Card className="p-5 space-y-3">
+          <div className="flex items-baseline justify-between gap-3 flex-wrap">
+            <h2 className="text-sm font-semibold">Healthy church growth</h2>
+            <span className="text-xs text-subtle">within ~{Math.round(growth.radiusMi)} mi of Faith Church</span>
+          </div>
+          <p className="text-xs text-muted max-w-2xl">
+            How much Faith Church can grow by reaching the unchurched (net
+            benefit to the valley) before further growth has to come from the
+            area&rsquo;s other churches — transfer growth that doesn&rsquo;t
+            raise the valley&rsquo;s churched share.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            <Stat label="Catchment population" value={Math.round(growth.pop).toLocaleString()} sub={`~${Math.round(growth.radiusMi)} mi around FC`} />
+            <Stat label="Unchurched in reach" value={Math.round(growth.unchurched).toLocaleString()} sub="the net-positive growth pool" />
+            <Stat label="Our size here" value={Math.round(growth.ourSize).toLocaleString()} sub="engaged people in catchment" />
+            <Stat label="Healthy growth ceiling" value={`~${Math.round(growth.healthyMax).toLocaleString()}`} sub="our size + all local unchurched" />
+            <Stat label="Headroom" value={`~${Math.max(0, Math.round(growth.healthyMax - growth.ourSize)).toLocaleString()}`} sub={`${growth.healthyMax > 0 ? Math.round((growth.ourSize / growth.healthyMax) * 100) : 0}% of ceiling reached`} />
+          </div>
+          <p className="text-[11px] text-subtle max-w-3xl">
+            Past ~{Math.round(growth.healthyMax).toLocaleString()} people, you&rsquo;d have effectively
+            absorbed every unchurched person within reach, so new attenders would
+            increasingly transfer from other congregations. Of the people you don&rsquo;t
+            yet reach, {Math.round(growth.transferShareNow * 100)}% already attend another church — the higher
+            that share, the sooner growth starts drawing from them rather than the unchurched.
+            (Assumes the 2020 county churched rate; reaching 100% of the unchurched is a ceiling, not a forecast.)
+          </p>
+        </Card>
       </div>
     </AppShell>
   );

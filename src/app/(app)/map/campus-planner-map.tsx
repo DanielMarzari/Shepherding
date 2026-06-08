@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MemberPoint } from "@/lib/geocode";
 import type { RoadLine } from "@/lib/road-mesh";
 import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
@@ -73,7 +73,9 @@ interface Stats {
   avgNearest: number;
   baselineAvg: number;
   estCost: number | null;
-  expectedDraw: number; // unchurched we'd expect to draw at our main-campus rate
+  drawUnchurched: number; // expected draw from the unchurched (valley benefit)
+  drawChurched: number; // expected draw from the already-churched (transfer)
+  expectedDraw: number; // total
   churches: number;
 }
 
@@ -87,15 +89,35 @@ interface SavedCandidate {
   churches: number;
 }
 
-// Outbound property-search links seeded with the saved location (live
-// listings need a paid real-estate API; these open the search there).
+// Outbound property-search links pre-centered on the saved location (live
+// listings need a paid real-estate API; these open the provider's own map
+// search, scoped to a ~3–4 mile box and filtered for sizeable land).
+const MIN_LOT_ACRES = 2;
 function propertyLinks(lat: number, lng: number) {
   const ll = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+  const d = 0.06; // ~3–4 mi half-box
+  const zillowState = {
+    isMapVisible: true,
+    isListVisible: true,
+    mapBounds: { west: lng - d, east: lng + d, south: lat - d * 0.75, north: lat + d * 0.75 },
+    filterState: {
+      sort: { value: "days" },
+      isLotLand: { value: true },
+      isSingleFamily: { value: false },
+      isTownhouse: { value: false },
+      isMultiFamily: { value: false },
+      isCondo: { value: false },
+      isManufactured: { value: false },
+      isApartment: { value: false },
+      lotSize: { min: Math.round(MIN_LOT_ACRES * 43560) },
+    },
+  };
+  const zillow = `https://www.zillow.com/homes/for_sale/?searchQueryState=${encodeURIComponent(JSON.stringify(zillowState))}`;
   return [
-    { label: "LoopNet (land)", url: `https://www.loopnet.com/search/land/${ll},13z/` },
-    { label: "LoopNet (commercial)", url: `https://www.loopnet.com/search/commercial-real-estate/${ll},13z/` },
+    { label: `Zillow land (≥${MIN_LOT_ACRES}ac)`, url: zillow },
+    { label: "LoopNet land", url: `https://www.loopnet.com/search/land/${ll},13z/` },
+    { label: "LoopNet commercial", url: `https://www.loopnet.com/search/commercial-real-estate/${ll},13z/` },
     { label: "Crexi", url: `https://www.crexi.com/properties?types[]=Land&mapCenter=${ll}&mapZoom=13` },
-    { label: "Maps", url: `https://www.google.com/maps/search/${encodeURIComponent("commercial land or building for sale")}/@${lat},${lng},13z` },
   ];
 }
 
@@ -113,6 +135,7 @@ export function CampusPlannerMap({
   mesh,
   initial,
   model,
+  suggestions = [],
   height = "66vh",
 }: {
   church: { lat: number; lng: number; name: string; address: string };
@@ -121,6 +144,7 @@ export function CampusPlannerMap({
   mesh?: { roads: RoadLine[] };
   initial: { lat: number; lng: number };
   model: { radiusMi: number; captureRate: number };
+  suggestions?: Array<{ label: string; lat: number; lng: number }>;
   height?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -131,7 +155,7 @@ export function CampusPlannerMap({
   const fcRef = useRef<any>(null);
   const lvRef = useRef<any>(null);
 
-  const byGeoid = useRef(new Map(tracts.map((t) => [t.geoid, t]))).current;
+  const byGeoid = useMemo(() => new Map(tracts.map((t) => [t.geoid, t])), [tracts]);
 
   const [showDots, setShowDots] = useState(true);
   const [metric, setMetric] = useState<CensusMetric | "none">("need");
@@ -163,23 +187,29 @@ export function CampusPlannerMap({
         byClass[p.classification] = (byClass[p.classification] ?? 0) + 1;
       }
     }
-    let unchurchedWithin = 0, churches = 0;
+    let unchurchedWithin = 0, churchedWithin = 0, churches = 0;
     for (const t of tracts) {
       const dNew = hav(t.clat, t.clng, lat, lng);
       // Catchment = our average main-campus member distance.
-      if (dNew <= model.radiusMi) unchurchedWithin += t.unchurched;
+      if (dNew <= model.radiusMi) {
+        unchurchedWithin += t.unchurched;
+        churchedWithin += Math.max(0, t.pop - t.unchurched);
+      }
       if (dNew <= 3) churches += t.churches; // within ~3 miles
     }
     const n = points.length || 1;
     const seed = (byClass.shepherded ?? 0) + (byClass.active ?? 0) + (byClass.present ?? 0);
+    // At the same penetration we achieve around the main campus, a campus here
+    // would draw from BOTH the unchurched (valley benefit) and the already-
+    // churched (transfer from other congregations).
+    const drawUnchurched = unchurchedWithin * model.captureRate;
+    const drawChurched = churchedWithin * model.captureRate;
     return {
       lat, lng, closer, byClass, seed,
       avgNearest: nearestSum / n,
       baselineAvg: baseSum / n,
       estCost: tractCostAt(lat, lng, byGeoid),
-      // At the same rate we reach our own catchment, how many local unchurched
-      // would a campus here plausibly draw.
-      expectedDraw: unchurchedWithin * model.captureRate,
+      drawUnchurched, drawChurched, expectedDraw: drawUnchurched + drawChurched,
       churches,
     };
   }
@@ -323,6 +353,13 @@ export function CampusPlannerMap({
 
   const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
 
+  // Auto-suggested sites (need-based + people-based), computed client-side.
+  const autoRows = useMemo(
+    () => suggestions.map((s) => ({ label: s.label, ...compute(s.lat, s.lng) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   return (
     <div className="space-y-3">
       <div className="flex flex-col lg:flex-row gap-3">
@@ -400,24 +437,26 @@ export function CampusPlannerMap({
             <Metric
               label="Est. people we'd draw"
               value={`~${Math.round(stats.expectedDraw).toLocaleString()}`}
-              sub={`unchurched within ~${Math.round(model.radiusMi)} mi, at our ${(model.captureRate * 100).toFixed(1)}% main-campus rate`}
+              sub={`~${Math.round(stats.drawUnchurched).toLocaleString()} unchurched + ~${Math.round(stats.drawChurched).toLocaleString()} transfer · within ~${Math.round(model.radiusMi)} mi @ ${(model.captureRate * 100).toFixed(1)}%`}
             />
             <Metric label="Protestant churches nearby" value={`${stats.churches}`} sub="within ~3 miles" />
           </div>
         </div>
       )}
 
-      {/* Saved candidates + property search */}
-      {saved.length > 0 && (
+      {/* Candidate sites (auto-suggested + saved) + property search */}
+      {(autoRows.length > 0 || saved.length > 0) && (
         <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4 space-y-2">
           <div className="text-xs text-muted">
-            Saved candidate sites — search nearby properties (live listings open on the provider; we can&apos;t pull
-            them without a paid real-estate API). Target a lot comparable to or larger than Faith Church&apos;s campus.
+            Candidate sites — our auto-suggested spots plus any you lock in. &ldquo;Find properties&rdquo; opens each
+            provider&apos;s map search pre-centered on the spot, filtered for land ≥ {MIN_LOT_ACRES} acres (live listings
+            need a paid real-estate API). Aim for a lot comparable to or larger than Faith Church&apos;s campus.
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="text-muted">
                 <tr className="border-b border-border-soft">
+                  <th className="text-left font-medium py-1.5 pr-3">Site</th>
                   <th className="text-left font-medium py-1.5 pr-3">Location</th>
                   <th className="text-right font-medium py-1.5 pr-3">Seed</th>
                   <th className="text-right font-medium py-1.5 pr-3">Est. draw</th>
@@ -427,8 +466,30 @@ export function CampusPlannerMap({
                 </tr>
               </thead>
               <tbody>
+                {autoRows.map((s, i) => (
+                  <tr key={`auto${i}`} className="border-b border-border-softer">
+                    <td className="py-2 pr-3"><span className="text-subtle">auto</span> · {s.label}</td>
+                    <td className="py-2 pr-3">
+                      <button type="button" onClick={() => goTo(s.lat, s.lng)} className="text-accent hover:underline cursor-pointer tnum">
+                        {s.lat.toFixed(4)}, {s.lng.toFixed(4)}
+                      </button>
+                    </td>
+                    <td className="py-2 pr-3 text-right tnum">{s.seed.toLocaleString()}</td>
+                    <td className="py-2 pr-3 text-right tnum">~{Math.round(s.expectedDraw).toLocaleString()}</td>
+                    <td className="py-2 pr-3 text-right tnum">{s.estCost != null ? usd(s.estCost) : "—"}</td>
+                    <td className="py-2 pr-3">
+                      <span className="flex flex-wrap gap-2">
+                        {propertyLinks(s.lat, s.lng).map((l) => (
+                          <a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{l.label}</a>
+                        ))}
+                      </span>
+                    </td>
+                    <td className="py-2" />
+                  </tr>
+                ))}
                 {saved.map((s) => (
                   <tr key={s.id} className="border-b border-border-softer">
+                    <td className="py-2 pr-3 text-muted">saved</td>
                     <td className="py-2 pr-3">
                       <button type="button" onClick={() => goTo(s.lat, s.lng)} className="text-accent hover:underline cursor-pointer tnum">
                         {s.lat.toFixed(4)}, {s.lng.toFixed(4)}
@@ -440,9 +501,7 @@ export function CampusPlannerMap({
                     <td className="py-2 pr-3">
                       <span className="flex flex-wrap gap-2">
                         {propertyLinks(s.lat, s.lng).map((l) => (
-                          <a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-                            {l.label}
-                          </a>
+                          <a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{l.label}</a>
                         ))}
                       </span>
                     </td>

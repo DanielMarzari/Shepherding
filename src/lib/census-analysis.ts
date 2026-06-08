@@ -161,6 +161,36 @@ export function computeDrawModel(
   return { radiusMi: r, captureRate };
 }
 
+export interface GrowthModel {
+  radiusMi: number;
+  pop: number;
+  churched: number;
+  unchurched: number;
+  ourSize: number; // our engaged people within the catchment
+  healthyMax: number; // ourSize + all local unchurched (the net-positive ceiling)
+  transferShareNow: number; // of gettable non-us people, share already in other churches (0–1)
+}
+
+/** Healthy-growth estimate for the MAIN campus: within our catchment, how
+ *  much room is there to grow by reaching the unchurched (net benefit to
+ *  the valley) before further growth has to come from other churches
+ *  (transfer growth that doesn't raise the valley's churched share). */
+export function computeGrowth(
+  tracts: Array<{ clat: number; clng: number; pop: number; churched: number; unchurched: number; ourCount: number }>,
+  radiusMi: number,
+): GrowthModel {
+  const r = radiusMi > 0 ? radiusMi : 10;
+  let pop = 0, churched = 0, unchurched = 0, ourSize = 0;
+  for (const t of tracts) {
+    if (haversineMiles(CHURCH.lat, CHURCH.lng, t.clat, t.clng) <= r) {
+      pop += t.pop; churched += t.churched; unchurched += t.unchurched; ourSize += t.ourCount;
+    }
+  }
+  const otherChurched = Math.max(0, churched - ourSize);
+  const transferShareNow = otherChurched + unchurched > 0 ? otherChurched / (otherChurched + unchurched) : 0;
+  return { radiusMi: r, pop, churched, unchurched, ourSize, healthyMax: ourSize + unchurched, transferShareNow };
+}
+
 export function analyzeCensus(orgId: number): CensusAnalysis {
   const prepared = getPrepared();
   const counts = new Map<string, number>();
