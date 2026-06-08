@@ -75,21 +75,6 @@ export default async function NextCampusPlannerPage() {
             mode="census"
             census={{ tracts: census.tracts, needCampus: census.needCampus }}
           />
-          {census.topNeed.length > 0 && (
-            <div>
-              <div className="text-xs text-muted mb-1.5">Biggest unreached need (by tract)</div>
-              <div className="flex flex-wrap gap-2">
-                {census.topNeed.map((t) => (
-                  <div key={t.geoid} className="rounded-lg border border-border-soft bg-bg-elev-2/40 px-3 py-2 text-xs">
-                    <div className="font-medium">{t.name}</div>
-                    <div className="text-muted tnum">
-                      ~{Math.round(t.unchurched).toLocaleString()} unchurched · {t.ourCount} of our people · land {usd(t.cost)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
           {census.needCampus && (
             <p className="text-[11px] text-subtle">
               A cost-aware, need-based second campus (purple) sited in the valid
@@ -130,26 +115,32 @@ export default async function NextCampusPlannerPage() {
             <h2 className="text-sm font-semibold">Healthy church growth</h2>
             <span className="text-xs text-subtle">within ~{Math.round(growth.radiusMi)} mi of Faith Church</span>
           </div>
-          <p className="text-xs text-muted max-w-2xl">
-            How much Faith Church can grow by reaching the unchurched (net
-            benefit to the valley) before further growth has to come from the
-            area&rsquo;s other churches — transfer growth that doesn&rsquo;t
-            raise the valley&rsquo;s churched share.
+          <p className="text-xs text-muted max-w-3xl">
+            How much Faith Church can grow by reaching people who&rsquo;d
+            otherwise stay unchurched (net benefit to the valley) before
+            further growth just redistributes Christians already in other
+            churches. The area can only become so churched — once it nears
+            that ceiling, our growth starts taking from other congregations
+            rather than enlarging the church&rsquo;s overall footprint.
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-            <Stat label="Catchment population" value={Math.round(growth.pop).toLocaleString()} sub={`~${Math.round(growth.radiusMi)} mi around FC`} />
-            <Stat label="Unchurched in reach" value={Math.round(growth.unchurched).toLocaleString()} sub="the net-positive growth pool" />
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <Stat label="Catchment" value={Math.round(growth.pop).toLocaleString()} sub={`pop · ~${Math.round(growth.radiusMi)} mi · ${growth.churches} churches`} />
+            <Stat label="People per church" value={Math.round(growth.peoplePerChurch).toLocaleString()} sub="churched ÷ churches in area" />
+            <Stat label="Our ministry-load share" value={`${(growth.ourShareOfChurched * 100).toFixed(1)}%`} sub={`of the churched · ${growth.ourLoadVsAvg.toFixed(1)}× an average church`} />
             <Stat label="Our size here" value={Math.round(growth.ourSize).toLocaleString()} sub="engaged people in catchment" />
-            <Stat label="Healthy growth ceiling" value={`~${Math.round(growth.healthyMax).toLocaleString()}`} sub="our size + all local unchurched" />
-            <Stat label="Headroom" value={`~${Math.max(0, Math.round(growth.healthyMax - growth.ourSize)).toLocaleString()}`} sub={`${growth.healthyMax > 0 ? Math.round((growth.ourSize / growth.healthyMax) * 100) : 0}% of ceiling reached`} />
+            <Stat label="Net-new headroom" value={`~${Math.round(growth.netNewHeadroom).toLocaleString()}`} sub={`to a ${Math.round(growth.capRate * 100)}% churched ceiling`} />
+            <Stat label="Interference point" value={`~${Math.round(growth.interferenceCeiling).toLocaleString()}`} sub="grow past this = taking from others" />
           </div>
           <p className="text-[11px] text-subtle max-w-3xl">
-            Past ~{Math.round(growth.healthyMax).toLocaleString()} people, you&rsquo;d have effectively
-            absorbed every unchurched person within reach, so new attenders would
-            increasingly transfer from other congregations. Of the people you don&rsquo;t
-            yet reach, {Math.round(growth.transferShareNow * 100)}% already attend another church — the higher
-            that share, the sooner growth starts drawing from them rather than the unchurched.
-            (Assumes the 2020 county churched rate; reaching 100% of the unchurched is a ceiling, not a forecast.)
+            Today the area runs about {Math.round(growth.peoplePerChurch).toLocaleString()} churched people per
+            church, and Faith carries {growth.ourLoadVsAvg.toFixed(1)}× an average church&rsquo;s load
+            ({(growth.ourShareOfChurched * 100).toFixed(1)}% of all churched people in the catchment). If the area could reach
+            ~{Math.round(growth.capRate * 100)}% churched, there&rsquo;s room for about{" "}
+            {Math.round(growth.netNewHeadroom).toLocaleString()} more new Christians — so Faith growing toward
+            ~{Math.round(growth.interferenceCeiling).toLocaleString()} can still be net-positive. Past that, the valley is about as
+            churched as it&rsquo;s going to get, and additional Faith attendance increasingly means drawing people
+            from other churches rather than helping the valley become more Christian.
+            ({Math.round(growth.capRate * 100)}% ceiling and the 2020 county churched rate are assumptions — adjust as needed.)
           </p>
         </Card>
       </div>

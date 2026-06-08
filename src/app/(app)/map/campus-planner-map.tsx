@@ -162,7 +162,7 @@ export function CampusPlannerMap({
   const [showRoads, setShowRoads] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
   const [saved, setSaved] = useState<SavedCandidate[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
@@ -170,7 +170,6 @@ export function CampusPlannerMap({
     setMetric(lsGet("shepherdly.planner.metric", "need"));
     setShowRoads(lsGet("shepherdly.planner.roads", false));
     setSaved(lsGet("shepherdly.planner.saved", []));
-    setLoaded(true);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
@@ -303,6 +302,8 @@ export function CampusPlannerMap({
         const ll = e.target.getLatLng();
         setStats(compute(ll.lat, ll.lng));
       });
+      // Re-render overlay now that layers exist, using restored settings.
+      setMapReady(true);
 
       setTimeout(() => {
         try { map.invalidateSize(); map.fitBounds(lvBounds, { padding: [12, 12] }); } catch { /* noop */ }
@@ -321,9 +322,9 @@ export function CampusPlannerMap({
 
   // re-render overlay when layer toggles change
   useEffect(() => {
-    if (loaded) renderOverlay();
+    if (mapReady) renderOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDots, metric, showRoads, loaded]);
+  }, [showDots, metric, showRoads, mapReady]);
 
   function lockIn() {
     if (!stats) return;

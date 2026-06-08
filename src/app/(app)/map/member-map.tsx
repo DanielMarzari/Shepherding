@@ -264,7 +264,7 @@ export function MemberMap({
   const [hiddenMem, setHiddenMem] = useState<string[]>([]);
   const [secondCohort, setSecondCohort] = useState<Cohort | "none">("all");
   const [censusMetric, setCensusMetric] = useState<CensusMetric>("need");
-  const [loaded, setLoaded] = useState(false);
+  const [ready, setReady] = useState(false); // map fully initialized (layers exist)
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
@@ -273,7 +273,6 @@ export function MemberMap({
     setHiddenMem(lsGet("shepherdly.map.hidden.membership", []));
     setSecondCohort(lsGet("shepherdly.map.secondCohort", "all"));
     setCensusMetric(lsGet("shepherdly.map.censusMetric", "need"));
-    setLoaded(true);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
@@ -335,6 +334,9 @@ export function MemberMap({
           }).bindTooltip("Need-based 2nd campus — centers the biggest unreached, unchurched areas").addTo(map);
           needCampusRef.current.bringToFront();
         }
+        // Re-run the draw effects now that layers exist, so the map reflects
+        // the settings restored from localStorage (not the initial defaults).
+        setReady(true);
         // The map sits in a flex row beside the settings column — measure the
         // final width after layout settles, then re-frame the valley.
         setTimeout(() => {
@@ -458,23 +460,23 @@ export function MemberMap({
   }
 
   useEffect(() => {
-    if (loaded && mode !== "roads") draw();
+    if (ready && mode !== "roads") draw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colorBy, hiddenShep, hiddenMem, loaded]);
+  }, [colorBy, hiddenShep, hiddenMem, ready]);
   useEffect(() => {
-    if (mode === "campus") drawSecond();
+    if (ready && mode === "campus") drawSecond();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secondCohort, secondCampuses.length]);
+  }, [secondCohort, secondCampuses.length, ready]);
   // Redraw the web only when the mesh data actually changes (stable key),
   // not on every render — keeps filter/basemap changes from rebuilding it.
   useEffect(() => {
-    if (mode === "roads") drawMesh();
+    if (ready && mode === "roads") drawMesh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesh?.roads.length]);
+  }, [mesh?.roads.length, ready]);
   useEffect(() => {
-    if (mode === "census") drawCensus();
+    if (ready && mode === "census") drawCensus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [censusMetric, census?.tracts.length]);
+  }, [censusMetric, census?.tracts.length, ready]);
 
   function toggleCat(cat: string) {
     if (colorBy === "membership") {
