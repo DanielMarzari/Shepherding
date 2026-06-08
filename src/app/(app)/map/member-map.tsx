@@ -20,26 +20,37 @@ export interface CensusTractView {
   cost: number;
   churches: number;
   churchSat: number;
+  age: number | null;
+  income: number | null;
+  driveMin: number | null;
 }
-export type CensusMetric = "need" | "unchurched" | "reach" | "cost" | "churches";
+export type CensusMetric = "need" | "unchurched" | "reach" | "cost" | "churches" | "income" | "age" | "driveTime";
 export const CENSUS_METRICS: Record<CensusMetric, { label: string; from: string; to: string; legend: string }> = {
   need: { label: "Need", from: "#fef3c7", to: "#b91c1c", legend: "unchurched & unreached" },
   unchurched: { label: "Unchurched", from: "#dbeafe", to: "#1e3a8a", legend: "unchurched people" },
   reach: { label: "Our reach", from: "#e5e7eb", to: "#15803d", legend: "our people per population" },
   cost: { label: "Land price", from: "#dcfce7", to: "#7f1d1d", legend: "median home value" },
   churches: { label: "Churches", from: "#cffafe", to: "#155e75", legend: "existing-church saturation" },
+  income: { label: "Income", from: "#e5e7eb", to: "#166534", legend: "median household income" },
+  age: { label: "Median age", from: "#fde68a", to: "#7c2d12", legend: "median age" },
+  driveTime: { label: "Drive time", from: "#dcfce7", to: "#7f1d1d", legend: "minutes from Faith Church" },
 };
+// Metrics whose values don't start at 0 → normalize min→max (else 0→max).
+export const MINMAX_METRICS = new Set<CensusMetric>(["cost", "income", "age", "driveTime"]);
 export function lerpHex(a: string, b: string, t: number): string {
   const pa = [parseInt(a.slice(1, 3), 16), parseInt(a.slice(3, 5), 16), parseInt(a.slice(5, 7), 16)];
   const pb = [parseInt(b.slice(1, 3), 16), parseInt(b.slice(3, 5), 16), parseInt(b.slice(5, 7), 16)];
   const c = pa.map((v, i) => Math.round(v + (pb[i] - v) * Math.max(0, Math.min(1, t))));
   return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
-export const metricVal = (t: CensusTractView, m: CensusMetric) =>
+export const metricVal = (t: CensusTractView, m: CensusMetric): number =>
   m === "need" ? t.need
   : m === "unchurched" ? t.unchurched
   : m === "cost" ? t.cost
   : m === "churches" ? t.churchSat
+  : m === "income" ? (t.income ?? NaN)
+  : m === "age" ? (t.age ?? NaN)
+  : m === "driveTime" ? (t.driveMin ?? NaN)
   : t.reachPct;
 
 const LEAFLET_VERSION = "1.9.4";
@@ -428,21 +439,23 @@ export function MemberMap({
     if (!L || !layer || !census) return;
     layer.clearLayers();
     const vals = new Map(census.tracts.map((t) => [t.geoid, t]));
-    // Land price doesn't start at 0, so normalize it min→max; the others
-    // are counts/shares where 0 is meaningful, so normalize 0→max.
-    let max = 0, min = Infinity;
+    // Some metrics don't start at 0 (price/income/age/drive) → min→max;
+    // counts/shares normalize 0→max. No-data tracts render neutral grey.
+    let max = -Infinity, min = Infinity;
     for (const t of census.tracts) {
       const v = metricVal(t, censusMetric);
+      if (!Number.isFinite(v)) continue;
       if (v > max) max = v;
       if (v < min) min = v;
     }
-    const lo = censusMetric === "cost" ? min : 0;
-    const span = Math.max(1, max - lo);
+    const lo = MINMAX_METRICS.has(censusMetric) ? min : 0;
+    const span = Math.max(1e-6, max - lo);
     const scheme = CENSUS_METRICS[censusMetric];
     L.geoJSON(LV_TRACTS, {
       style: (f: any) => {
         const t = vals.get(f.properties.geoid);
-        const v = t ? metricVal(t, censusMetric) : lo;
+        const v = t ? metricVal(t, censusMetric) : NaN;
+        if (!Number.isFinite(v)) return { fillColor: "#d1d5db", fillOpacity: 0.5, color: "#ffffff", weight: 0.4, opacity: 0.5 };
         return { fillColor: lerpHex(scheme.from, scheme.to, (v - lo) / span), fillOpacity: 0.72, color: "#ffffff", weight: 0.4, opacity: 0.5 };
       },
       onEachFeature: (f: any, lyr: any) => {

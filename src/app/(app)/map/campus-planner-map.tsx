@@ -10,6 +10,7 @@ import {
   makeBasemapLayer,
   OUTDOOR_BASEMAP,
   CENSUS_METRICS,
+  MINMAX_METRICS,
   lerpHex,
   metricVal,
   type CensusMetric,
@@ -223,24 +224,26 @@ export function CampusPlannerMap({
     layer.clearLayers();
 
     if (metric !== "none") {
-      let max = 0, min = Infinity;
+      let max = -Infinity, min = Infinity;
       for (const t of tracts) {
         const v = metricVal(t, metric);
+        if (!Number.isFinite(v)) continue;
         if (v > max) max = v;
         if (v < min) min = v;
       }
-      const lo = metric === "cost" || metric === "churches" ? min : 0;
-      const span = Math.max(metric === "churches" ? 0.001 : 1, max - lo);
+      const lo = MINMAX_METRICS.has(metric) ? min : 0;
+      const span = Math.max(1e-6, max - lo);
       const sch = CENSUS_METRICS[metric];
       L.geoJSON(LV_TRACTS, {
         style: (f: any) => {
           const t = byGeoid.get(f.properties.geoid);
-          const v = t ? metricVal(t, metric) : lo;
+          const v = t ? metricVal(t, metric) : NaN;
+          if (!Number.isFinite(v)) return { fillColor: "#d1d5db", fillOpacity: 0.45, color: "#fff", weight: 0.4, opacity: 0.4 };
           return { fillColor: lerpHex(sch.from, sch.to, (v - lo) / span), fillOpacity: 0.6, color: "#fff", weight: 0.4, opacity: 0.4 };
         },
         onEachFeature: (f: any, ly: any) => {
           const t = byGeoid.get(f.properties.geoid);
-          if (t) ly.bindTooltip(`<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched · ${t.churches} Protestant churches<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}% of pop) · land $${Math.round(t.cost).toLocaleString()}`, { sticky: true });
+          if (t) ly.bindTooltip(`<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched · ${t.churches} Protestant churches<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}% of pop)<br>${t.income != null ? "income $" + Math.round(t.income).toLocaleString() : "income n/a"} · age ${t.age ?? "n/a"} · ${t.driveMin != null ? t.driveMin + " min" : "drive n/a"} · land $${Math.round(t.cost).toLocaleString()}`, { sticky: true });
         },
       }).addTo(layer);
     }

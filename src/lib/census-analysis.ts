@@ -171,7 +171,7 @@ export const CHRISTIAN_IDENTITY_RATE = 0.61;
 export const CAP_CHURCHED_RATE = CHRISTIAN_IDENTITY_RATE;
 
 export interface GrowthModel {
-  radiusMi: number;
+  driveMinThreshold: number; // catchment = within this many OSRM driving minutes of FC
   pop: number;
   churched: number;
   unchurched: number;
@@ -193,13 +193,14 @@ export interface GrowthModel {
  *  unchurched (net benefit to the valley) before further growth just
  *  redistributes existing Christians from other churches. */
 export function computeGrowth(
-  tracts: Array<{ clat: number; clng: number; pop: number; churched: number; unchurched: number; ourCount: number; churches: number }>,
-  radiusMi: number,
+  tracts: Array<{ clat: number; clng: number; pop: number; churched: number; unchurched: number; ourCount: number; churches: number; driveMin: number | null }>,
+  driveMinThreshold: number,
 ): GrowthModel {
-  const r = radiusMi > 0 ? radiusMi : 10;
+  const r = driveMinThreshold > 0 ? driveMinThreshold : 20;
   let pop = 0, churched = 0, unchurched = 0, ourSize = 0, churches = 0;
   for (const t of tracts) {
-    if (haversineMiles(CHURCH.lat, CHURCH.lng, t.clat, t.clng) <= r) {
+    // Catchment by real driving time from Faith Church (OSRM), not a circle.
+    if (t.driveMin != null && t.driveMin <= r) {
       pop += t.pop; churched += t.churched; unchurched += t.unchurched; ourSize += t.ourCount; churches += t.churches;
     }
   }
@@ -208,7 +209,7 @@ export function computeGrowth(
   const areaChurchedCap = pop * CAP_CHURCHED_RATE;
   const netNewHeadroom = Math.max(0, areaChurchedCap - churched);
   return {
-    radiusMi: r, pop, churched, unchurched, ourSize, churches,
+    driveMinThreshold: r, pop, churched, unchurched, ourSize, churches,
     peoplePerChurch,
     ourShareOfChurched: churched > 0 ? ourSize / churched : 0,
     ourLoadVsAvg: peoplePerChurch > 0 ? ourSize / peoplePerChurch : 0,

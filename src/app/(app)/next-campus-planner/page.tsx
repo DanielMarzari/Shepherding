@@ -4,8 +4,10 @@ import { requireOrg } from "@/lib/auth";
 import { CHURCH, FAITH_CHURCH_PROFILE, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
 import { analyzeCensus, computeDrawModel, computeGrowth } from "@/lib/census-analysis";
+import { LV_CENSUS_META } from "@/lib/lv-census";
 import { getMapSettings } from "@/lib/map-settings";
 import { getRoadMesh } from "@/lib/road-mesh";
+import { getWeeklyAttendance } from "@/lib/attendance-read";
 import { MemberMap } from "../map/member-map";
 import { CampusPlannerMap } from "../map/campus-planner-map";
 import { MiniMap } from "../map/mini-map";
@@ -20,7 +22,14 @@ export default async function NextCampusPlannerPage() {
   const census = analyzeCensus(session.orgId);
   const mesh = getRoadMesh(session.orgId);
   const drawModel = computeDrawModel(census.tracts, census.ourMembers, reach.avgMiles);
-  const growth = computeGrowth(census.tracts, reach.avgMiles);
+  const growth = computeGrowth(census.tracts, reach.estDriveMin);
+  const attendance = getWeeklyAttendance(session.orgId);
+  // Church density vs national (comprehensive 2020 Religion Census counts).
+  const churchesPer10k = census.population > 0 ? (LV_CENSUS_META.congregations / census.population) * 10000 : 0;
+  const nat = LV_CENSUS_META.nationalChurchesPer10k;
+  // Growth vs the valley (our YoY attendance change vs LV population growth).
+  const ourGrowthPct = attendance.inPersonTrend12moDelta; // % vs prior 12 mo (may be null)
+  const popGrowthPct = LV_CENSUS_META.lvPopGrowthPctYoY;
   const allCohort = reach.secondCampuses.find((s) => s.cohort === "all");
   const initialCampus = census.needCampus
     ? { lat: census.needCampus.lat, lng: census.needCampus.lng }
@@ -144,7 +153,7 @@ export default async function NextCampusPlannerPage() {
         <Card className="p-5 space-y-3">
           <div className="flex items-baseline justify-between gap-3 flex-wrap">
             <h2 className="text-sm font-semibold">Healthy church growth</h2>
-            <span className="text-xs text-subtle">within ~{Math.round(growth.radiusMi)} mi of Faith Church</span>
+            <span className="text-xs text-subtle">within ~{Math.round(growth.driveMinThreshold)} min drive of Faith Church</span>
           </div>
           <p className="text-xs text-muted max-w-3xl">
             The realistic ceiling isn&rsquo;t everyone — it&rsquo;s the share who even
@@ -155,7 +164,7 @@ export default async function NextCampusPlannerPage() {
             our growth mostly redistributes other churches&rsquo; members rather than making the valley more Christian.
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <Stat label="Catchment" value={Math.round(growth.pop).toLocaleString()} sub={`pop · ~${Math.round(growth.radiusMi)} mi · ${growth.churches} churches`} />
+            <Stat label="Catchment" value={Math.round(growth.pop).toLocaleString()} sub={`pop · ~${Math.round(growth.driveMinThreshold)} min drive · ${growth.churches} churches`} />
             <Stat label="People per church" value={Math.round(growth.peoplePerChurch).toLocaleString()} sub="attending ÷ churches in area" />
             <Stat label="Our ministry-load share" value={`${(growth.ourShareOfChurched * 100).toFixed(1)}%`} sub={`of attenders · ${growth.ourLoadVsAvg.toFixed(1)}× an average church`} />
             <Stat label="Christians not yet churched" value={`~${Math.round(growth.netNewHeadroom).toLocaleString()}`} sub={`the reachable pool (≤${Math.round(growth.capRate * 100)}% Christian − attending)`} />
@@ -173,6 +182,63 @@ export default async function NextCampusPlannerPage() {
             {growth.ourLoadVsAvg.toFixed(1)}× an average church&rsquo;s load). (Christian-identity % is Pew&rsquo;s PA figure;
             the attending rate is the 2020 Religion Census — both adjustable.)
           </p>
+        </Card>
+
+        {/* ── Church density vs national ─────────────────────────────── */}
+        <Card className="p-5 space-y-3">
+          <h2 className="text-sm font-semibold">Church density</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat label="Churches per 10k" value={churchesPer10k.toFixed(1)} sub={`${LV_CENSUS_META.congregations} congregations (all faiths)`} />
+            <Stat label="National average" value={nat.toFixed(1)} sub="per 10k residents (2020)" />
+            <Stat
+              label={churchesPer10k < nat ? "Under-served" : "Over-served"}
+              value={`${Math.abs(Math.round(((churchesPer10k - nat) / nat) * 100))}%`}
+              sub={churchesPer10k < nat ? "fewer churches per capita than the US" : "more churches per capita than the US"}
+            />
+            <Stat label="People per church" value={Math.round(census.population / LV_CENSUS_META.congregations).toLocaleString()} sub="residents per congregation" />
+          </div>
+          <p className="text-[11px] text-subtle max-w-3xl">
+            The Lehigh Valley has about {churchesPer10k.toFixed(1)} congregations per 10,000 residents vs. roughly{" "}
+            {nat.toFixed(1)} nationally — so it&rsquo;s {churchesPer10k < nat ? "under-served" : "over-served"} relative
+            to the US average, leaving {churchesPer10k < nat ? "room for more churches" : "limited room"} per capita.
+            (Comprehensive 2020 U.S. Religion Census congregation counts, all faiths.)
+          </p>
+        </Card>
+
+        {/* ── Growth vs the valley ───────────────────────────────────── */}
+        <Card className="p-5 space-y-3">
+          <h2 className="text-sm font-semibold">Growth vs. the valley</h2>
+          <p className="text-xs text-muted max-w-3xl">
+            Are we outpacing the Lehigh Valley&rsquo;s population growth (gaining a larger share, i.e. genuinely
+            reaching new people) or just keeping pace? Our growth is the year-over-year change in average weekly
+            in-person attendance (from{" "}
+            <a href="/attendance" className="text-accent hover:underline">Attendance</a>).
+          </p>
+          {ourGrowthPct == null ? (
+            <p className="text-xs text-subtle">
+              Not enough attendance history yet — import at least ~2 years on the{" "}
+              <a href="/attendance" className="text-accent hover:underline">Attendance</a> page to see this.
+            </p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Stat label="Weekly attendance" value={(attendance.inPerson12moAvg ?? 0).toLocaleString()} sub="in-person, last 12 mo avg" />
+                <Stat label="Our growth (YoY)" value={`${ourGrowthPct > 0 ? "+" : ""}${ourGrowthPct}%`} sub="vs prior 12 months" />
+                <Stat label="Valley pop. growth" value={`+${popGrowthPct}%`} sub="Lehigh Valley, per year" />
+                <Stat
+                  label={ourGrowthPct > popGrowthPct ? "Gaining ground" : "Falling behind"}
+                  value={`${(ourGrowthPct - popGrowthPct >= 0 ? "+" : "")}${(ourGrowthPct - popGrowthPct).toFixed(1)} pts`}
+                  sub={ourGrowthPct > popGrowthPct ? "growing faster than population" : "slower than population growth"}
+                />
+              </div>
+              <p className="text-[11px] text-subtle max-w-3xl">
+                {ourGrowthPct > popGrowthPct
+                  ? `At +${ourGrowthPct}% a year vs the valley's ~+${popGrowthPct}% population growth, Faith is gaining a larger share of the area — outpacing the rate at which the unchurched pool grows, so the valley is becoming (slightly) more churched through us.`
+                  : `At +${ourGrowthPct}% a year, Faith is growing about as fast as — or slower than — the valley's ~+${popGrowthPct}% population growth, so our share of the area is roughly flat; the unchurched pool is growing at least as fast as we're reaching it.`}
+                {" "}(Population growth is the Lehigh Valley&rsquo;s 2010–2020 census rate; attendance YoY is in-person, excluding closures.)
+              </p>
+            </>
+          )}
         </Card>
       </div>
     </AppShell>
