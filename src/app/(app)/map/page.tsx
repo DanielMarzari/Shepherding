@@ -136,7 +136,7 @@ export default async function MapPage() {
               <h2 className="text-sm font-semibold">Roads driven to Faith Church</h2>
               <span className="text-xs text-subtle">
                 {mesh.total > 0
-                  ? `${mesh.total.toLocaleString()} road segments`
+                  ? `${mesh.total.toLocaleString()} roads`
                   : "not built yet"}
                 {meshPending > 0 && (
                   <span> · {meshPending.toLocaleString()} homes not added</span>
@@ -144,15 +144,15 @@ export default async function MapPage() {
               </span>
             </div>
             <p className="text-xs text-muted max-w-2xl">
-              One shared web of the roads households take to Faith Church —
-              each home is routed once and folded in, so trunk roads near
-              church thicken as more people share them.
+              The network of roads your people (shepherded/active/present)
+              drive to Faith Church — each road appears once; its presence
+              means a household needs it to get here.
             </p>
-            {mesh.segments.length > 0 ? (
+            {mesh.roads.length > 0 ? (
               <MemberMap
                 church={CHURCH}
                 points={points}
-                mesh={{ segments: mesh.segments, maxUsage: mesh.maxUsage }}
+                mesh={{ roads: mesh.roads }}
                 mode="roads"
               />
             ) : (

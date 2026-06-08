@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MemberPoint } from "@/lib/geocode";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
-import type { MeshSegment } from "@/lib/road-mesh";
+import type { RoadLine } from "@/lib/road-mesh";
 import { LEHIGH_VALLEY } from "./lehigh-valley";
 
 const LV_COLOR = "#7c3aed"; // Lehigh Valley target-area outline
@@ -21,16 +21,6 @@ const NONMEMBER_COLOR = "#f97316"; // orange — clearly distinct from member
 const CHURCH_COLOR = "#dc2626";
 const SECOND_COLOR = "#9333ea";
 const MESH_COLOR = "#1d4ed8";
-// Thickness/opacity hierarchy for the web: thin residential streets →
-// thick arterials/highways (the segments the most households funnel onto).
-const MESH_TIERS = [
-  { weight: 0.5, opacity: 0.35 },
-  { weight: 1.0, opacity: 0.45 },
-  { weight: 1.7, opacity: 0.55 },
-  { weight: 2.6, opacity: 0.68 },
-  { weight: 3.8, opacity: 0.82 },
-  { weight: 5.2, opacity: 1.0 },
-];
 
 type ColorBy = "shepherding" | "membership";
 type MapMode = "members" | "roads" | "campus";
@@ -215,7 +205,7 @@ export function MemberMap({
   church: { lat: number; lng: number; name: string; address: string };
   points: MemberPoint[];
   secondCampuses?: SecondCampus[];
-  mesh?: { segments: MeshSegment[]; maxUsage: number };
+  mesh?: { roads: RoadLine[] };
   mode?: MapMode;
   height?: string;
 }) {
@@ -327,24 +317,13 @@ export function MemberMap({
   function drawMesh() {
     const L = LRef.current;
     const layer = meshRef.current;
-    if (!L || !layer || !mesh || mesh.segments.length === 0) return;
+    if (!L || !layer || !mesh || mesh.roads.length === 0) return;
     layer.clearLayers();
-    const maxU = Math.max(1, mesh.maxUsage);
-    const N = MESH_TIERS.length;
-    const tiers: Array<Array<[number, number][]>> = MESH_TIERS.map(() => []);
-    for (const s of mesh.segments) {
-      const t = Math.min(N - 1, Math.floor((Math.log(s.usage) / Math.log(maxU + 1)) * N));
-      tiers[t].push([[s.ay, s.ax], [s.by, s.bx]]);
-    }
-    tiers.forEach((segs, i) => {
-      if (segs.length === 0) return;
-      L.polyline(segs, {
-        color: MESH_COLOR,
-        weight: MESH_TIERS[i].weight,
-        opacity: MESH_TIERS[i].opacity,
-        interactive: false,
-      }).addTo(layer);
-    });
+    // Each road drawn once, uniform — presence is the signal, not weight.
+    L.polyline(
+      mesh.roads.map((r) => r.coords),
+      { color: MESH_COLOR, weight: 1.5, opacity: 0.7, interactive: false },
+    ).addTo(layer);
     churchRef.current?.bringToFront();
   }
 
@@ -411,7 +390,7 @@ export function MemberMap({
   useEffect(() => {
     if (mode === "roads") drawMesh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesh?.segments.length, mesh?.maxUsage]);
+  }, [mesh?.roads.length]);
 
   function toggleCat(cat: string) {
     if (colorBy === "membership") {
@@ -532,7 +511,7 @@ export function MemberMap({
         <div className="flex items-center gap-3 text-xs text-muted">
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block w-4 h-1 rounded-full" style={{ background: MESH_COLOR }} />
-            roads driven (thicker = more households)
+            roads your people drive to Faith Church
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: CHURCH_COLOR }} />
