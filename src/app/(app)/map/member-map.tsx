@@ -154,7 +154,7 @@ function loadMaplibre(): Promise<void> {
     document.head.appendChild(link);
   }
   return loadScript("maplibre-gl-js", "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js")
-    .then(() => loadScript("maplibre-gl-leaflet-js", "https://unpkg.com/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"));
+    .then(() => loadScript("maplibre-gl-leaflet-js", "https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.0/leaflet-maplibre-gl.js"));
 }
 
 /** Build a basemap layer — a MapLibre GL vector layer for vector styles,
