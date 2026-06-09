@@ -9,12 +9,13 @@ import { RetentionSeasonalityChart } from "./retention-seasonality-chart";
 export default async function RetentionPage() {
   const session = await requireOrg();
   const {
-    byYear, byMonth, decay, annualDecayPct, decayTrends, seasonality, bestMonth, worstMonth,
+    byYear, byMonth, decay, annualDecayPct, decayTrends, reactivations, seasonality, bestMonth, worstMonth,
     seasonalityTrends, overallJoined, overallRetained, activityMonths, startYear,
   } = getRetention(session.orgId);
   const overallPct =
     overallJoined > 0 ? Math.round((overallRetained / overallJoined) * 100) : 0;
   const pendingYears = byYear.filter((y) => y.pending).length;
+  const maxReact = Math.max(1, ...reactivations.map((r) => r.count));
 
   return (
     <AppShell active="See more" breadcrumb="See more › Retention">
@@ -76,16 +77,39 @@ export default async function RetentionPage() {
               )}
             </div>
             <p className="text-xs text-muted max-w-3xl">
-              Engaged adults by join cohort over time. &ldquo;Engaged&rdquo; = anyone within the{" "}
-              {activityMonths}-month activity window (matching the dashboard&apos;s active-people count); the current
-              point uses the live classification, and history is replayed from each person&apos;s recorded activity
-              (group attendance, check-ins, serving) so leave→rejoin shows up. The <span className="text-fg">≤2016</span>{" "}
-              band pools pre-2017 joiners so the stack total reflects everyone. Toggle{" "}
+              Of the adults who joined each year, how many are still retained — a true survival curve, so a cohort
+              never grows in a later year. &ldquo;Retained as of a year&rdquo; = their most recent activity is still
+              within the {activityMonths}-month window then. People who lapsed and came back are tracked separately
+              in <span className="text-fg">Returns</span> below, not folded back in. The{" "}
+              <span className="text-fg">≤2016</span> band pools pre-2017 joiners. Toggle{" "}
               <span className="text-fg">Total people</span> vs <span className="text-fg">% share</span>, and{" "}
               <span className="text-fg">By year</span> vs <span className="text-fg">By month</span>.
             </p>
             <RetentionDecayChart decay={decay} />
             {decayTrends.length > 0 && <Trends items={decayTrends} />}
+          </Card>
+        )}
+
+        {/* ── Returns: lapsed then reactivated ───────────────────────── */}
+        {reactivations.length > 0 && (
+          <Card className="p-5 space-y-3">
+            <h2 className="text-sm font-semibold">Returns</h2>
+            <p className="text-xs text-muted max-w-3xl">
+              People who went quiet for longer than the {activityMonths}-month activity window and then came back,
+              by the year they returned — the flip side of the decay (kept separate so it doesn&apos;t inflate a
+              cohort&apos;s survival). Based on recorded activity (group attendance, check-ins, serving).
+            </p>
+            <div className="space-y-1.5">
+              {reactivations.map((r) => (
+                <div key={r.year} className="flex items-center gap-3 text-xs">
+                  <span className="w-10 text-muted tnum">{r.year}</span>
+                  <div className="flex-1 h-4 rounded bg-bg-elev-2/60 overflow-hidden">
+                    <div className="h-full rounded bg-accent" style={{ width: `${(r.count / maxReact) * 100}%` }} />
+                  </div>
+                  <span className="w-16 text-right tnum text-fg">{r.count.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
           </Card>
         )}
 

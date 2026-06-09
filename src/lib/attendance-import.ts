@@ -19,6 +19,8 @@ interface WeeklyRow {
   kids_total: number | null;
   student_total: number | null;
   adult_total: number | null;
+  center_total: number | null;
+  chapel_total: number | null;
   online_live: number | null;
   online_on_demand: number | null;
   abfs: number | null;
@@ -33,6 +35,8 @@ type NumericMetric =
   | "kids_total"
   | "student_total"
   | "adult_total"
+  | "center_total"
+  | "chapel_total"
   | "online_live"
   | "online_on_demand"
   | "abfs";
@@ -46,6 +50,8 @@ const LABEL_ALIASES: Record<NumericMetric, string[]> = {
   kids_total: ["total kids worship"],
   student_total: ["total student worship", "total youth services"],
   adult_total: ["total adult worship", "total worship services"],
+  center_total: ["center", "the center", "center worship", "total center worship"],
+  chapel_total: ["chapel", "chapel worship", "total chapel worship"],
   online_live: [
     "sunday morning online live streaming",
     "sunday online live streaming",
@@ -177,6 +183,8 @@ export function parseAttendanceWorkbook(
         kids_total: null,
         student_total: null,
         adult_total: null,
+        center_total: null,
+        chapel_total: null,
         online_live: null,
         online_on_demand: null,
         abfs: null,
@@ -193,6 +201,8 @@ export function parseAttendanceWorkbook(
     "kids_total",
     "student_total",
     "adult_total",
+    "center_total",
+    "chapel_total",
     "online_live",
     "online_on_demand",
     "abfs",
@@ -268,6 +278,8 @@ export function parseAttendanceWorkbook(
       w.kids_total !== null ||
       w.student_total !== null ||
       w.adult_total !== null ||
+      w.center_total !== null ||
+      w.chapel_total !== null ||
       w.online_live !== null ||
       w.online_on_demand !== null ||
       w.abfs !== null ||
@@ -293,15 +305,17 @@ export function importAttendanceFile(
   const stmt = db.prepare(
     `INSERT INTO attendance_weekly
        (org_id, week_date, in_person_total, kids_total, student_total,
-        adult_total, online_live, online_on_demand, abfs, exception_reason,
-        source_file, imported_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        adult_total, center_total, chapel_total, online_live, online_on_demand,
+        abfs, exception_reason, source_file, imported_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, week_date) DO UPDATE SET
        in_person_total = excluded.in_person_total,
        kids_total = excluded.kids_total,
        student_total = excluded.student_total,
        adult_total = excluded.adult_total,
+       center_total = excluded.center_total,
+       chapel_total = excluded.chapel_total,
        online_live = excluded.online_live,
        online_on_demand = excluded.online_on_demand,
        abfs = excluded.abfs,
@@ -318,6 +332,8 @@ export function importAttendanceFile(
         r.kids_total,
         r.student_total,
         r.adult_total,
+        r.center_total,
+        r.chapel_total,
         r.online_live,
         r.online_on_demand,
         r.abfs,

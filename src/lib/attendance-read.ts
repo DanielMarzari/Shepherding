@@ -8,6 +8,8 @@ export interface WeeklyAttendanceRow {
   kids_total: number | null;
   student_total: number | null;
   adult_total: number | null;
+  center_total: number | null;
+  chapel_total: number | null;
   online_live: number | null;
   online_on_demand: number | null;
   abfs: number | null;
@@ -61,8 +63,8 @@ export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
   const rows = db
     .prepare(
       `SELECT week_date, in_person_total, kids_total, student_total,
-              adult_total, online_live, online_on_demand, abfs,
-              exception_reason
+              adult_total, center_total, chapel_total, online_live,
+              online_on_demand, abfs, exception_reason
          FROM attendance_weekly
         WHERE org_id = ?
         ORDER BY week_date ASC`,

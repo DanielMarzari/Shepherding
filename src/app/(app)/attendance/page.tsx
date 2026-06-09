@@ -24,6 +24,7 @@ import {
 } from "./actions";
 import { AttendanceUploadForm } from "./upload-form";
 import { AttendanceHistoryChart } from "./history-chart";
+import { RoomTrendsChart } from "./room-trends-chart";
 import { AttendanceWeatherChart } from "./weather-chart";
 import { PreacherChart } from "./preacher-chart";
 import { FamilyChart } from "./family-chart";
@@ -270,6 +271,18 @@ export default async function AttendancePage() {
             )}
           </div>
         </Card>
+
+        {history.rows.length > 0 && (
+          <Card className="p-5 space-y-3">
+            <h2 className="text-sm font-semibold">By room</h2>
+            <p className="text-xs text-muted max-w-2xl">
+              Monthly average attendance per venue / room — Center, Chapel, Kids,
+              Students, Online, and ABFs — so each can be tracked on its own.
+              Click a room in the legend to hide it.
+            </p>
+            <RoomTrendsChart rows={history.rows} />
+          </Card>
+        )}
 
         {history.rows.length > 0 && (
           <Card>
