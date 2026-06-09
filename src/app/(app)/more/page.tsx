@@ -102,7 +102,7 @@ const SECTIONS: MoreSection[] = [
 export default function MorePage() {
   return (
     <AppShell active="See more" breadcrumb="See more">
-      <div className="px-5 md:px-7 py-7 space-y-8 max-w-3xl">
+      <div className="px-5 md:px-7 py-7 space-y-8">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">See more</h1>
           <p className="text-muted text-sm mt-1">
@@ -120,7 +120,7 @@ export default function MorePage() {
                 <p className="text-xs text-subtle mt-1">{section.blurb}</p>
               )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {section.links.map((l) => (
                 <Card key={l.href} className="p-5">
                   <Link

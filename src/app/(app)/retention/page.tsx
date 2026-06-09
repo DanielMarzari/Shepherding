@@ -3,14 +3,18 @@ import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { getRetention } from "@/lib/retention-read";
 import { RetentionChart } from "./retention-chart";
+import { RetentionDecayChart } from "./retention-decay-chart";
 
 export default async function RetentionPage() {
   const session = await requireOrg();
-  const { byYear, byMonth, overallJoined, overallRetained, activityMonths, startYear } =
-    getRetention(session.orgId);
+  const {
+    byYear, byMonth, decay, annualDecayPct, seasonality, bestMonth, worstMonth,
+    overallJoined, overallRetained, activityMonths, startYear,
+  } = getRetention(session.orgId);
   const overallPct =
     overallJoined > 0 ? Math.round((overallRetained / overallJoined) * 100) : 0;
   const pendingYears = byYear.filter((y) => y.pending).length;
+  const maxSeasonPct = Math.max(1, ...seasonality.map((s) => s.pct));
 
   return (
     <AppShell active="Retention" breadcrumb="Retention">
@@ -59,6 +63,62 @@ export default async function RetentionPage() {
             <RetentionChart byYear={byYear} byMonth={byMonth} />
           )}
         </Card>
+
+        {/* ── Decay: how each cohort's retention fell year by year ───── */}
+        {decay.length > 0 && (
+          <Card className="p-5 space-y-3">
+            <div className="flex items-baseline justify-between gap-3 flex-wrap">
+              <h2 className="text-sm font-semibold">Retention decay</h2>
+              {annualDecayPct != null && (
+                <span className="text-xs text-subtle">
+                  ≈ {annualDecayPct}% of remaining members lost per year
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted max-w-3xl">
+              Not just where each cohort sits today — how it got there. Each line follows one join-year cohort,
+              showing the share still active as of each later year-end (reconstructed from each person&apos;s last
+              recorded activity). The slope is the decay rate.
+            </p>
+            <RetentionDecayChart decay={decay} />
+          </Card>
+        )}
+
+        {/* ── Seasonality: which months retain better / worse ────────── */}
+        {bestMonth && worstMonth && bestMonth.month !== worstMonth.month && (
+          <Card className="p-5 space-y-3">
+            <div className="flex items-baseline justify-between gap-3 flex-wrap">
+              <h2 className="text-sm font-semibold">Retention by join month</h2>
+              <span className="text-xs text-subtle">
+                best: {bestMonth.label} ({bestMonth.pct}%) · worst: {worstMonth.label} ({worstMonth.pct}%)
+              </span>
+            </div>
+            <p className="text-xs text-muted max-w-3xl">
+              Do people who join in some months stick around more than others? Settled monthly cohorts pooled by
+              calendar month — useful for spotting whether a season (back-to-school, new year, summer) brings
+              stickier newcomers.
+            </p>
+            <div className="space-y-1.5">
+              {seasonality.map((s) => (
+                <div key={s.month} className="flex items-center gap-3 text-xs">
+                  <span className="w-8 text-muted">{s.label}</span>
+                  <div className="flex-1 h-4 rounded bg-bg-elev-2/60 overflow-hidden">
+                    <div
+                      className="h-full rounded"
+                      style={{
+                        width: `${s.joined > 0 ? (s.pct / maxSeasonPct) * 100 : 0}%`,
+                        background: s.month === bestMonth.month ? "var(--good-soft-fg)" : s.month === worstMonth.month ? "var(--warn-soft-fg)" : "var(--accent)",
+                        opacity: s.joined > 0 ? 1 : 0.2,
+                      }}
+                    />
+                  </div>
+                  <span className="w-10 text-right tnum text-fg">{s.joined > 0 ? `${s.pct}%` : "—"}</span>
+                  <span className="w-28 text-right text-subtle tnum">{s.joined.toLocaleString()} joined</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
 
         <p className="text-xs text-subtle max-w-2xl leading-relaxed">
           &ldquo;Ongoing&rdquo; cohorts are too recent to score: within the{" "}

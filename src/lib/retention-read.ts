@@ -17,9 +17,33 @@ export interface RetentionPoint {
   /** Inside the activity window → not yet measurable ("ongoing"). */
   pending: boolean;
 }
+/** One join-year cohort's retention measured as-of each later year-end. */
+export interface CohortDecay {
+  year: number;
+  size: number;
+  currentPct: number;
+  points: Array<{ year: number; pct: number }>;
+}
+/** Retention by calendar month-of-year (settled monthly cohorts pooled). */
+export interface MonthSeasonality {
+  month: number; // 1–12
+  label: string;
+  cohorts: number;
+  joined: number;
+  retained: number;
+  pct: number;
+}
 export interface RetentionSummary {
   byYear: RetentionPoint[];
   byMonth: RetentionPoint[];
+  /** Per-cohort decay (how each join-year's retention fell year by year). */
+  decay: CohortDecay[];
+  /** Avg % of still-retained members lost each year (the decay rate). */
+  annualDecayPct: number | null;
+  /** Retention by calendar month-of-year + the best/worst months. */
+  seasonality: MonthSeasonality[];
+  bestMonth: MonthSeasonality | null;
+  worstMonth: MonthSeasonality | null;
   /** Settled cohorts only (excludes pending). */
   overallJoined: number;
   overallRetained: number;
@@ -30,6 +54,7 @@ export interface RetentionSummary {
 interface RawRow {
   created: string;
   retained: number;
+  lastActivity: string | null;
 }
 
 /** Retention by join-cohort (yearly + monthly series for a line chart).
@@ -41,6 +66,7 @@ export function getRetention(orgId: number): RetentionSummary {
   const rows = getDb()
     .prepare(
       `SELECT p.pco_created_at AS created,
+              pa.last_activity_at AS lastActivity,
               CASE WHEN pa.classification IS NOT NULL
                     AND pa.classification != 'inactive'
                    THEN 1 ELSE 0 END AS retained
@@ -56,11 +82,18 @@ export function getRetention(orgId: number): RetentionSummary {
 
   const yearAgg = new Map<string, { joined: number; retained: number }>();
   const monthAgg = new Map<string, { joined: number; retained: number }>();
+  // Per join-year cohort: each member's last-activity timestamp (or NaN if
+  // never active), so we can replay who was still active as of each year.
+  const cohortLast = new Map<number, number[]>();
   for (const r of rows) {
     const y = Number(r.created.slice(0, 4));
     if (!y || y < RETENTION_START_YEAR) continue;
     bump(yearAgg, String(y), r.retained);
     bump(monthAgg, r.created.slice(0, 7), r.retained);
+    const ms = r.lastActivity ? Date.parse(r.lastActivity) : NaN;
+    const arr = cohortLast.get(y) ?? [];
+    arr.push(ms);
+    cohortLast.set(y, arr);
   }
 
   const now = Date.now();
@@ -83,9 +116,73 @@ export function getRetention(orgId: number): RetentionSummary {
     overallRetained += c.retained;
   }
 
+  // ── Decay: for each cohort, % still active as of each later year-end ──
+  const winMs = activityMonths * MS_PER_MONTH;
+  const currentYear = new Date().getUTCFullYear();
+  const decay: CohortDecay[] = [...cohortLast.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([year, lasts]) => {
+      const size = lasts.length;
+      const points: Array<{ year: number; pct: number }> = [];
+      for (let Y = year; Y <= currentYear; Y++) {
+        // "Active as of end of year Y" = last activity within the window
+        // before that point (or before now, for the current year).
+        const ref = Y < currentYear ? Date.UTC(Y + 1, 0, 1) : now;
+        const cutoff = ref - winMs;
+        const ret = lasts.reduce((a, ms) => a + (!Number.isNaN(ms) && ms >= cutoff ? 1 : 0), 0);
+        points.push({ year: Y, pct: size > 0 ? Math.round((ret / size) * 100) : 0 });
+      }
+      return { year, size, currentPct: points[points.length - 1]?.pct ?? 0, points };
+    });
+
+  // Annual decay rate = avg fraction of still-retained members lost per year
+  // (across cohorts, year over year, while retention is still > 0).
+  const ratios: number[] = [];
+  for (const c of decay) {
+    for (let k = 1; k < c.points.length; k++) {
+      const prev = c.points[k - 1].pct;
+      if (prev > 0) ratios.push(c.points[k].pct / prev);
+    }
+  }
+  const annualDecayPct = ratios.length
+    ? Math.round((1 - ratios.reduce((a, b) => a + b, 0) / ratios.length) * 100)
+    : null;
+
+  // ── Seasonality: pool settled monthly cohorts by calendar month ──────
+  const monAgg = new Map<number, { joined: number; retained: number; cohorts: number }>();
+  for (const m of byMonth) {
+    if (m.pending) continue;
+    const mo = Number(m.key.slice(5, 7));
+    const e = monAgg.get(mo) ?? { joined: 0, retained: 0, cohorts: 0 };
+    e.joined += m.joined;
+    e.retained += m.retained;
+    e.cohorts += 1;
+    monAgg.set(mo, e);
+  }
+  const seasonality: MonthSeasonality[] = [];
+  for (let mo = 1; mo <= 12; mo++) {
+    const e = monAgg.get(mo);
+    seasonality.push({
+      month: mo,
+      label: MONTHS[mo - 1],
+      cohorts: e?.cohorts ?? 0,
+      joined: e?.joined ?? 0,
+      retained: e?.retained ?? 0,
+      pct: e && e.joined > 0 ? Math.round((e.retained / e.joined) * 100) : 0,
+    });
+  }
+  const ranked = seasonality.filter((s) => s.joined >= 20).sort((a, b) => b.pct - a.pct);
+  const bestMonth = ranked[0] ?? null;
+  const worstMonth = ranked.length ? ranked[ranked.length - 1] : null;
+
   return {
     byYear,
     byMonth,
+    decay,
+    annualDecayPct,
+    seasonality,
+    bestMonth,
+    worstMonth,
     overallJoined,
     overallRetained,
     activityMonths,
