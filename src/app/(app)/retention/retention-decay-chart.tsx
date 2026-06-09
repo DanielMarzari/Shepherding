@@ -87,7 +87,7 @@ export function RetentionDecayChart({ decay }: { decay: CohortDecay[] }) {
         {cohorts.map((c, i) => (
           <span key={c.year} className="inline-flex items-center gap-1.5 text-muted">
             <span className="inline-block w-3 h-[3px] rounded" style={{ background: colorFor(i) }} />
-            {c.year}
+            {c.label}
           </span>
         ))}
       </div>
@@ -139,7 +139,7 @@ export function RetentionDecayChart({ decay }: { decay: CohortDecay[] }) {
             <span className="font-medium">{gran === "year" ? Math.floor(hoverX) : fmtMonth(hoverX)}</span>
             <span className="text-muted ml-3">
               <span className="text-fg tnum mr-2">{(yTotals[hoverX] ?? 0).toLocaleString()} engaged</span>
-              {cohorts.map((c, i) => { const n = countAt(i, hoverX); return n > 0 ? `${c.year}: ${n.toLocaleString()}` : null; }).filter(Boolean).join(" · ")}
+              {cohorts.map((c, i) => { const n = countAt(i, hoverX); return n > 0 ? `${c.label}: ${n.toLocaleString()}` : null; }).filter(Boolean).join(" · ")}
             </span>
           </span>
         ) : (

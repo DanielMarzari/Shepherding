@@ -76,11 +76,13 @@ export default async function RetentionPage() {
               )}
             </div>
             <p className="text-xs text-muted max-w-3xl">
-              Not just where each cohort sits today — how it got there. Reconstructed from each person&apos;s
-              recorded activity (group attendance, check-ins, serving), so leave-then-rejoin is captured.
-              Toggle <span className="text-fg">Total people</span> (stacked — watch each year&apos;s cohort taper),{" "}
-              <span className="text-fg">% share</span> (composition of the engaged base), or{" "}
-              <span className="text-fg">Retention %</span> (each cohort&apos;s decay curve).
+              Engaged adults by join cohort over time. &ldquo;Engaged&rdquo; = anyone within the{" "}
+              {activityMonths}-month activity window (matching the dashboard&apos;s active-people count); the current
+              point uses the live classification, and history is replayed from each person&apos;s recorded activity
+              (group attendance, check-ins, serving) so leave→rejoin shows up. The <span className="text-fg">≤2016</span>{" "}
+              band pools pre-2017 joiners so the stack total reflects everyone. Toggle{" "}
+              <span className="text-fg">Total people</span> vs <span className="text-fg">% share</span>, and{" "}
+              <span className="text-fg">By year</span> vs <span className="text-fg">By month</span>.
             </p>
             <RetentionDecayChart decay={decay} />
             {decayTrends.length > 0 && <Trends items={decayTrends} />}
