@@ -73,10 +73,16 @@ const SECTIONS: MoreSection[] = [
           "Where your people live, plotted around Faith Church. Addresses are geocoded (free US Census geocoder) and colored by classification — useful for spotting clusters and coverage gaps.",
       },
       {
+        href: "/reaching-the-valley",
+        title: "Reaching the Lehigh Valley",
+        description:
+          "Churched vs. unchurched across the Lehigh Valley by census tract — how much of the area Faith Church reaches, where the biggest unreached need is, and tract shading by need, income, age, land price, churches, and drive time.",
+      },
+      {
         href: "/next-campus-planner",
         title: "Next campus planner",
         description:
-          "Where to plant a second campus — your people's geographic center, the Lehigh Valley's churched/unchurched areas of need (2020 Census + Religion Census), and land-cost-aware site suggestions within the valley + 5 miles.",
+          "Where to plant a second campus — your people's geographic center, the unreached need, land-cost-aware site suggestions, a drag-to-test map, and a healthy-growth ceiling.",
       },
     ],
   },

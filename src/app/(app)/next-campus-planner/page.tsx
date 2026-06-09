@@ -6,7 +6,6 @@ import { analyzeReach } from "@/lib/map-analysis";
 import { analyzeCensus, computeDrawModel, computeGrowth } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { getRoadMesh } from "@/lib/road-mesh";
-import { MemberMap } from "../map/member-map";
 import { CampusPlannerMap } from "../map/campus-planner-map";
 import { MiniMap } from "../map/mini-map";
 
@@ -45,8 +44,8 @@ export default async function NextCampusPlannerPage() {
           <p className="text-muted text-sm mt-1 max-w-2xl">
             Where Faith Church should consider a second campus — weighing where
             your people are, where the Lehigh Valley&rsquo;s unreached need is,
-            and what land costs. Candidate sites are constrained to the valid
-            area (Lehigh Valley + 5 miles).
+            and what land costs. Candidate sites are constrained to the Lehigh
+            Valley.
           </p>
         </div>
 
@@ -79,43 +78,6 @@ export default async function NextCampusPlannerPage() {
           </div>
         </Card>
 
-        {/* ── Census: churched vs unchurched + areas of need ─────────── */}
-        <Card className="p-5 space-y-3">
-          <div className="flex items-baseline justify-between gap-3 flex-wrap">
-            <h2 className="text-sm font-semibold">Reaching the Lehigh Valley</h2>
-            <span className="text-xs text-subtle">{census.source}</span>
-          </div>
-          <p className="text-xs text-muted max-w-2xl">
-            How much of the Lehigh Valley is churched vs. unchurched, how much
-            of it Faith Church already reaches, and where the biggest unreached
-            need is. The choropleth colors each census tract — switch between
-            need, unchurched population, and our reach. The purple marker is
-            where a cost-aware second campus would best center the unmet need.
-          </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-            <Stat label="Lehigh Valley pop." value={Math.round(census.population).toLocaleString()} sub={`${census.totalTracts} census tracts`} />
-            <Stat label="Churched" value={`${census.churchedPct.toFixed(1)}%`} sub={`~${Math.round(census.unchurched).toLocaleString()} unchurched`} />
-            <Stat label="Area we reach" value={`${census.reachedPopulationPct.toFixed(0)}%`} sub={`${census.reachedTracts} of ${census.totalTracts} tracts`} />
-            <Stat label="Of churched" value={`${census.shareOfChurchedPct.toFixed(1)}%`} sub={`${census.ourMembers.toLocaleString()} engaged / churched pop.`} />
-            <Stat label="Of all Lehigh Valley" value={`${census.shareOfPopulationPct.toFixed(1)}%`} sub="engaged / total residents" />
-          </div>
-          <MemberMap
-            church={CHURCH}
-            points={[]}
-            mode="census"
-            census={{ tracts: census.tracts, needCampus: census.needCampus }}
-          />
-          {census.needCampus && (
-            <p className="text-[11px] text-subtle">
-              A cost-aware, need-based second campus (purple) sited in the valid
-              area would be closer than Faith Church for roughly{" "}
-              {Math.round(census.needCampus.servedNeed).toLocaleString()} unchurched
-              residents, in an area where land runs about {usd(census.needCampus.estCost)}{" "}
-              (median home value, vs. a valley average of {usd(avgCost(census.tracts))}).
-            </p>
-          )}
-        </Card>
-
         {/* ── Interactive: drag-to-test a campus, stack any layers ───── */}
         <Card className="p-5 space-y-3">
           <h2 className="text-sm font-semibold">Test a location</h2>
@@ -146,7 +108,7 @@ export default async function NextCampusPlannerPage() {
             <h2 className="text-sm font-semibold">Healthy church growth</h2>
             <span className="text-xs text-subtle">within ~{Math.round(growth.driveMinThreshold)} min drive of Faith Church</span>
           </div>
-          <p className="text-xs text-muted max-w-3xl">
+          <p className="text-xs text-muted">
             The realistic ceiling isn&rsquo;t everyone — it&rsquo;s the share who even
             identify as Christian (Pew 2023–24: ~{Math.round(growth.capRate * 100)}% of Pennsylvanians,
             and dropping). Only ~{Math.round(growth.capRate * 100)}% of the catchment is a plausible churchgoer, and
@@ -162,7 +124,7 @@ export default async function NextCampusPlannerPage() {
             <Stat label="Our size here" value={Math.round(growth.ourSize).toLocaleString()} sub="engaged people in catchment" />
             <Stat label="Interference point" value={`~${Math.round(growth.interferenceCeiling).toLocaleString()}`} sub="grow past this = taking from others" />
           </div>
-          <p className="text-[11px] text-subtle max-w-3xl">
+          <p className="text-[11px] text-subtle">
             Of the catchment&rsquo;s ~{Math.round(growth.pop).toLocaleString()} residents, an estimated{" "}
             {Math.round(growth.areaChurchedCap).toLocaleString()} ({Math.round(growth.capRate * 100)}%) identify as Christian and{" "}
             ~{Math.round(growth.churched).toLocaleString()} already attend a church — leaving only about{" "}
@@ -178,11 +140,6 @@ export default async function NextCampusPlannerPage() {
       </div>
     </AppShell>
   );
-}
-
-function avgCost(tracts: Array<{ cost: number }>): number {
-  const vals = tracts.map((t) => t.cost).filter((c) => c > 0);
-  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
 }
 
 function Stat({ label, value, sub }: { label: string; value: string; sub: string }) {

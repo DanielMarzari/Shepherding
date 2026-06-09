@@ -116,10 +116,11 @@ function propertyLinks(lat: number, lng: number, minAcres: number) {
   const zillow = `https://www.zillow.com/homes/for_sale/?searchQueryState=${encodeURIComponent(JSON.stringify(zillowState))}`;
   const acLabel = minAcres % 1 === 0 ? `${minAcres}` : minAcres.toFixed(1);
   return [
-    { label: `Zillow land (≥${acLabel}ac)`, url: zillow },
+    { label: `Zillow land (≥${acLabel} ac)`, url: zillow },
+    { label: "Churches for sale", url: `https://www.loopnet.com/search/churches-religious-facilities/${ll},12z/` },
+    { label: "Convertible buildings", url: `https://www.loopnet.com/search/commercial-real-estate/${ll},13z/` },
     { label: "LoopNet land", url: `https://www.loopnet.com/search/land/${ll},13z/` },
-    { label: "LoopNet commercial", url: `https://www.loopnet.com/search/commercial-real-estate/${ll},13z/` },
-    { label: "Crexi", url: `https://www.crexi.com/properties?types[]=Land&mapCenter=${ll}&mapZoom=13` },
+    { label: "Crexi", url: `https://www.crexi.com/properties?mapCenter=${ll}&mapZoom=12` },
   ];
 }
 
@@ -158,6 +159,7 @@ export function CampusPlannerMap({
   const markerRef = useRef<any>(null);
   const fcRef = useRef<any>(null);
   const lvRef = useRef<any>(null);
+  const suggRef = useRef<any>(null);
 
   const byGeoid = useMemo(() => new Map(tracts.map((t) => [t.geoid, t])), [tracts]);
 
@@ -282,6 +284,7 @@ export function CampusPlannerMap({
 
     // anchors above everything
     lvRef.current?.bringToFront?.();
+    suggRef.current?.eachLayer?.((l: any) => l.bringToFront?.());
     fcRef.current?.bringToFront?.();
     markerRef.current?.setZIndexOffset?.(1000);
   }
@@ -315,6 +318,14 @@ export function CampusPlannerMap({
         radius: 8, color: "#fff", weight: 2, fillColor: FC_COLOR, fillOpacity: 1,
       }).bindTooltip(`${church.name} — ${church.address}`).addTo(map);
 
+      // Auto-suggested campuses: fixed yellow dots (not draggable).
+      suggRef.current = L.layerGroup(
+        suggestions.map((s) =>
+          L.circleMarker([s.lat, s.lng], { radius: 6, color: "#1f2937", weight: 1.5, fillColor: "#eab308", fillOpacity: 1 })
+            .bindTooltip(`Auto suggestion: ${s.label}`),
+        ),
+      ).addTo(map);
+
       const icon = L.divIcon({
         className: "",
         html: `<div style="width:20px;height:20px;border-radius:50%;background:${DOT_BLUE};border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.4)"></div>`,
@@ -346,7 +357,7 @@ export function CampusPlannerMap({
     return () => {
       cancelled = true;
       if (mapRef.current) mapRef.current.remove();
-      mapRef.current = overlayRef.current = markerRef.current = fcRef.current = lvRef.current = null;
+      mapRef.current = overlayRef.current = markerRef.current = fcRef.current = lvRef.current = suggRef.current = null;
       if (el) delete el.dataset.init;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -439,6 +450,7 @@ export function CampusPlannerMap({
           <div className="space-y-1.5 text-muted">
             <div className="font-medium">Legend</div>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3.5 h-3.5 rounded-full" style={{ background: DOT_BLUE, border: "2px solid #fff", boxShadow: "0 0 0 1px #0006" }} />candidate campus (drag)</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#eab308", border: "1px solid #1f2937" }} />auto suggestions (fixed)</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: FC_COLOR }} />Faith Church</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />Lehigh Valley</span>
           </div>
@@ -483,8 +495,9 @@ export function CampusPlannerMap({
         <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4 space-y-2">
           <div className="text-xs text-muted">
             Candidate sites — our auto-suggested spots plus any you lock in. &ldquo;Find properties&rdquo; opens each
-            provider&apos;s map search pre-centered on the spot, filtered for land ≥ {targetLotAcres % 1 === 0 ? targetLotAcres : targetLotAcres.toFixed(1)} acres
-            (Faith Church&apos;s ~lot size) — live listings need a paid real-estate API.
+            provider&apos;s map search pre-centered on the spot: land ≥ {targetLotAcres % 1 === 0 ? targetLotAcres : targetLotAcres.toFixed(1)} acres
+            (Faith Church&apos;s ~lot size), existing churches/faith facilities, and large commercial buildings that
+            could be converted to a campus. Live listings need a paid real-estate API.
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
