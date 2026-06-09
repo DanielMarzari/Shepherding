@@ -27,7 +27,6 @@ export const SHELL_NAV = {
   nextSteps: [
     { href: "/lanes", label: "Activity overview" },
     { href: "/lanes/list", label: "Lanes" },
-    { href: "/retention", label: "Retention" },
   ],
   credentials: [
     { href: "/pco", label: "PCO" },
@@ -83,7 +82,6 @@ const SETTINGS_NAV_ITEMS = [
 const NEXT_STEPS_NAV_ITEMS = [
   { href: "/lanes", label: "Activity overview" },
   { href: "/lanes/list", label: "Lanes" },
-  { href: "/retention", label: "Retention" },
 ];
 
 export async function AppShell({

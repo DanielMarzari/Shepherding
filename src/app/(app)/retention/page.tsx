@@ -17,7 +17,7 @@ export default async function RetentionPage() {
   const pendingYears = byYear.filter((y) => y.pending).length;
 
   return (
-    <AppShell active="Retention" breadcrumb="Retention">
+    <AppShell active="See more" breadcrumb="See more › Retention">
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Retention</h1>
@@ -119,15 +119,18 @@ export default async function RetentionPage() {
   );
 }
 
-function Trends({ items }: { items: string[] }) {
+function Trends({ items }: { items: Array<{ title: string; detail: string; tone: "up" | "down" | "neutral" }> }) {
   return (
-    <div className="rounded-lg border border-border-soft bg-bg-elev-2/40 p-3 mt-1">
-      <div className="text-[11px] font-medium uppercase tracking-wider text-muted mb-1.5">Trends</div>
-      <ul className="space-y-1">
+    <div className="pt-1">
+      <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted mb-2">Trends</h3>
+      <ul className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
         {items.map((t, i) => (
-          <li key={i} className="flex items-start gap-2 text-xs text-muted">
-            <span className="mt-1 inline-block w-1 h-1 rounded-full bg-accent shrink-0" />
-            <span>{t}</span>
+          <li key={i} className="rounded-lg border border-border-soft bg-bg-elev-2/40 p-3">
+            <div className="flex items-center gap-2">
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${t.tone === "up" ? "bg-good-soft-fg" : t.tone === "down" ? "bg-warn-soft-fg" : "bg-muted"}`} />
+              <span className="text-sm font-medium">{t.title}</span>
+            </div>
+            <p className="text-xs text-muted mt-1 leading-relaxed">{t.detail}</p>
           </li>
         ))}
       </ul>

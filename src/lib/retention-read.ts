@@ -17,6 +17,11 @@ export interface RetentionPoint {
   /** Inside the activity window → not yet measurable ("ongoing"). */
   pending: boolean;
 }
+export interface RetentionInsight {
+  title: string;
+  detail: string;
+  tone: "up" | "down" | "neutral";
+}
 /** One join-year cohort's retention measured as-of each later year-end. */
 export interface CohortDecay {
   year: number;
@@ -43,13 +48,13 @@ export interface RetentionSummary {
   /** Avg % of still-retained members lost each year (the decay rate). */
   annualDecayPct: number | null;
   /** Auto-generated insights for the decay chart. */
-  decayTrends: string[];
+  decayTrends: RetentionInsight[];
   /** Retention by calendar month-of-year + the best/worst months. */
   seasonality: MonthSeasonality[];
   bestMonth: MonthSeasonality | null;
   worstMonth: MonthSeasonality | null;
   /** Auto-generated insights for the seasonality chart. */
-  seasonalityTrends: string[];
+  seasonalityTrends: RetentionInsight[];
   /** Settled cohorts only (excludes pending). */
   overallJoined: number;
   overallRetained: number;
@@ -61,6 +66,7 @@ interface RawRow {
   personId: string;
   created: string;
   retained: number;
+  lastActivity: string | null;
 }
 
 /** Retention by join-cohort (yearly + monthly series for a line chart).
@@ -73,6 +79,7 @@ export function getRetention(orgId: number): RetentionSummary {
     .prepare(
       `SELECT p.pco_id AS personId,
               p.pco_created_at AS created,
+              pa.last_activity_at AS lastActivity,
               CASE WHEN pa.classification IS NOT NULL
                     AND pa.classification != 'inactive'
                    THEN 1 ELSE 0 END AS retained
@@ -88,20 +95,19 @@ export function getRetention(orgId: number): RetentionSummary {
 
   const yearAgg = new Map<string, { joined: number; retained: number }>();
   const monthAgg = new Map<string, { joined: number; retained: number }>();
-  // Per join-year cohort: the member ids, so we can replay each person's
-  // real activity history (group attendance / check-ins / serving) and see
-  // who was active as of each year — including leave-then-rejoin.
-  const cohortMembers = new Map<number, string[]>();
-  const memberYear = new Map<string, number>();
+  // Per join-year cohort: each member's last-activity timestamp (or NaN) and
+  // whether they're currently engaged (classification != inactive), so we can
+  // replay who was still active as of each past year-end and anchor the
+  // current point to the live engaged count.
+  const cohortMembers = new Map<number, Array<{ last: number; retained: number }>>();
   for (const r of rows) {
     const y = Number(r.created.slice(0, 4));
     if (!y || y < RETENTION_START_YEAR) continue;
     bump(yearAgg, String(y), r.retained);
     bump(monthAgg, r.created.slice(0, 7), r.retained);
     const arr = cohortMembers.get(y) ?? [];
-    arr.push(r.personId);
+    arr.push({ last: r.lastActivity ? Date.parse(r.lastActivity) : NaN, retained: r.retained });
     cohortMembers.set(y, arr);
-    memberYear.set(r.personId, y);
   }
 
   const now = Date.now();
@@ -129,74 +135,41 @@ export function getRetention(orgId: number): RetentionSummary {
   const winMs = activityMonths * MS_PER_MONTH;
   const currentYear = new Date().getUTCFullYear();
 
-  // Dated activity events (group attendance, check-ins, serving) since just
-  // before the start year, for cohort members only.
-  const cutoffIso = `${RETENTION_START_YEAR - 1}`;
-  const evRows = getDb()
-    .prepare(
-      `SELECT person_id AS pid, event_starts_at AS d
-         FROM pco_event_attendances
-        WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?
-       UNION ALL
-       SELECT person_id AS pid, event_time_at AS d
-         FROM pco_check_ins
-        WHERE org_id = ? AND person_id IS NOT NULL AND event_time_at >= ?
-       UNION ALL
-       SELECT pp.person_id AS pid, pl.sort_date AS d
-         FROM pco_plan_people pp
-         JOIN pco_plans pl ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
-        WHERE pp.org_id = ? AND pl.sort_date >= ?`,
-    )
-    .all(orgId, cutoffIso, orgId, cutoffIso, orgId, cutoffIso) as Array<{ pid: string; d: string }>;
-
-  const acts = new Map<string, number[]>();
-  for (const e of evRows) {
-    if (!memberYear.has(e.pid)) continue;
-    const ms = Date.parse(e.d);
-    if (Number.isNaN(ms)) continue;
-    const arr = acts.get(e.pid);
-    if (arr) arr.push(ms);
-    else acts.set(e.pid, [ms]);
-  }
-  for (const arr of acts.values()) arr.sort((a, b) => a - b);
-
-  // True if a sorted ms array has any entry in (lo, hi].
-  const activeInWindow = (arr: number[] | undefined, lo: number, hi: number): boolean => {
-    if (!arr || arr.length === 0) return false;
-    let l = 0, r = arr.length - 1, idx = arr.length;
-    while (l <= r) {
-      const m = (l + r) >> 1;
-      if (arr[m] >= lo) { idx = m; r = m - 1; } else l = m + 1;
-    }
-    return idx < arr.length && arr[idx] <= hi;
-  };
-
   const currentMonth = new Date().getUTCMonth() + 1; // 1-indexed
-  const countActive = (members: string[], lo: number, hi: number): number => {
-    let count = 0;
-    for (const pid of members) if (activeInWindow(acts.get(pid), lo, hi)) count++;
-    return count;
-  };
+  // Active as of time T = last recorded activity within the window ending at
+  // T. For the CURRENT period we use the live classification (engaged =
+  // not-inactive) so the latest number matches the dashboard / PCO exactly —
+  // it also credits group/team membership, which a date alone can't.
   const decay: CohortDecay[] = [...cohortMembers.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([year, members]) => {
       const size = members.length;
       const pct = (count: number) => (size > 0 ? Math.round((count / size) * 100) : 0);
-      // Yearly: active as of each year-end (or now for the current year).
+      const countAsOf = (ref: number, isCurrent: boolean): number => {
+        if (isCurrent) {
+          let c = 0;
+          for (const m of members) if (m.retained) c++;
+          return c;
+        }
+        const lo = ref - winMs;
+        let c = 0;
+        for (const m of members) if (!Number.isNaN(m.last) && m.last >= lo && m.last <= ref) c++;
+        return c;
+      };
+      // Yearly: active as of each year-end (live engaged for the current year).
       const points: Array<{ year: number; pct: number; count: number }> = [];
       for (let Y = year; Y <= currentYear; Y++) {
-        const ref = Y < currentYear ? Date.UTC(Y + 1, 0, 1) : now;
-        const count = countActive(members, ref - winMs, ref);
+        const isCur = Y === currentYear;
+        const count = countAsOf(isCur ? now : Date.UTC(Y + 1, 0, 1), isCur);
         points.push({ year: Y, count, pct: pct(count) });
       }
-      // Monthly: finer resolution of the same active-as-of measure.
+      // Monthly: finer resolution of the same measure.
       const monthly: Array<{ key: string; pct: number; count: number }> = [];
       for (let yy = year; yy <= currentYear; yy++) {
         const endMo = yy === currentYear ? currentMonth : 12;
         for (let mm = 1; mm <= endMo; mm++) {
           const isCur = yy === currentYear && mm === currentMonth;
-          const ref = isCur ? now : Date.UTC(yy, mm, 1); // start of next month = end of mm
-          const count = countActive(members, ref - winMs, ref);
+          const count = countAsOf(isCur ? now : Date.UTC(yy, mm, 1), isCur);
           monthly.push({ key: `${yy}-${String(mm).padStart(2, "0")}`, count, pct: pct(count) });
         }
       }
@@ -243,28 +216,49 @@ export function getRetention(orgId: number): RetentionSummary {
   const bestMonth = ranked[0] ?? null;
   const worstMonth = ranked.length ? ranked[ranked.length - 1] : null;
 
-  // ── Trends / auto-insights ───────────────────────────────────────────
-  const decayTrends: string[] = [];
+  // ── Trends / auto-insights (cards) ───────────────────────────────────
+  const decayTrends: RetentionInsight[] = [];
   if (annualDecayPct != null) {
-    decayTrends.push(`Cohorts lose roughly ${annualDecayPct}% of their still-active members each year.`);
+    decayTrends.push({
+      title: `~${annualDecayPct}% lost per year`,
+      detail: "Average share of a cohort's still-active members who fall away each year — the decay rate.",
+      tone: annualDecayPct >= 20 ? "down" : "neutral",
+    });
   }
   const yr1 = decay.map((c) => c.points[1]?.pct).filter((v): v is number => v != null);
   if (yr1.length) {
-    decayTrends.push(`About a year after joining, a cohort is down to ~${Math.round(yr1.reduce((a, b) => a + b, 0) / yr1.length)}% still active on average.`);
+    const avg = Math.round(yr1.reduce((a, b) => a + b, 0) / yr1.length);
+    decayTrends.push({
+      title: `~${avg}% after year one`,
+      detail: "On average, a cohort is down to about this share still active a year after joining.",
+      tone: avg < 50 ? "down" : "neutral",
+    });
   }
   const oldest = decay[0];
   if (oldest) {
     const last = oldest.points[oldest.points.length - 1];
-    decayTrends.push(`The ${oldest.year} cohort sits at ${oldest.currentPct}% after ${currentYear - oldest.year} years — ${last.count.toLocaleString()} of ${oldest.size.toLocaleString()} still active.`);
+    decayTrends.push({
+      title: `${oldest.year} cohort: ${oldest.currentPct}%`,
+      detail: `${last.count.toLocaleString()} of ${oldest.size.toLocaleString()} still engaged ${currentYear - oldest.year} years on.`,
+      tone: "neutral",
+    });
   }
   const engagedNow = decay.reduce((a, c) => a + (c.points[c.points.length - 1]?.count ?? 0), 0);
   if (engagedNow > 0) {
-    decayTrends.push(`Across all tracked cohorts, ~${engagedNow.toLocaleString()} of those people are still engaged today.`);
+    decayTrends.push({
+      title: `~${engagedNow.toLocaleString()} engaged today`,
+      detail: "Across all tracked join-year cohorts, still active right now.",
+      tone: "up",
+    });
   }
 
-  const seasonalityTrends: string[] = [];
+  const seasonalityTrends: RetentionInsight[] = [];
   if (bestMonth && worstMonth && bestMonth.month !== worstMonth.month) {
-    seasonalityTrends.push(`${bestMonth.label} joiners stick best (${bestMonth.pct}%) and ${worstMonth.label} worst (${worstMonth.pct}%) — a ${bestMonth.pct - worstMonth.pct}-point spread.`);
+    seasonalityTrends.push({
+      title: `${bestMonth.label} sticks best (${bestMonth.pct}%)`,
+      detail: `${worstMonth.label} joiners retain worst (${worstMonth.pct}%) — a ${bestMonth.pct - worstMonth.pct}-point spread by join month.`,
+      tone: "up",
+    });
   }
   const SEASONS: Array<[string, number[]]> = [
     ["Winter", [12, 1, 2]], ["Spring", [3, 4, 5]], ["Summer", [6, 7, 8]], ["Fall", [9, 10, 11]],
@@ -276,7 +270,11 @@ export function getRetention(orgId: number): RetentionSummary {
   }).filter((s) => s.joined >= 30).sort((a, b) => b.pct - a.pct);
   if (seasonPct.length >= 2) {
     const b = seasonPct[0], w = seasonPct[seasonPct.length - 1];
-    seasonalityTrends.push(`By season, ${b.name} brings the stickiest newcomers (${b.pct}%) and ${w.name} the least (${w.pct}%).`);
+    seasonalityTrends.push({
+      title: `${b.name} > ${w.name}`,
+      detail: `By season, ${b.name} brings the stickiest newcomers (${b.pct}%) and ${w.name} the least (${w.pct}%).`,
+      tone: "neutral",
+    });
   }
 
   return {

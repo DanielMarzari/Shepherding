@@ -67,6 +67,12 @@ const SECTIONS: MoreSection[] = [
           "An interactive node-web of everyone in the church. Lines connect people who shepherd one another through group / team leadership or a care roster.",
       },
       {
+        href: "/retention",
+        title: "Retention",
+        description:
+          "Of the people who joined in a given year, how many are still active — with per-cohort decay curves (stacked engaged people or % share, by year or month) and which join months retain best.",
+      },
+      {
         href: "/map",
         title: "Member map",
         description:
