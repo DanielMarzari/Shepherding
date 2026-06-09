@@ -69,7 +69,14 @@ interface RawRow {
   personId: string;
   created: string;
   retained: number;
-  lastActivity: string | null;
+  // Real-activity signals only — deliberately NOT last_pco_updated_at, which
+  // PCO bumps on any profile edit/sync (the 2016 import stamped ~11k profiles
+  // at once, making long-gone people look "active"). Survival uses the most
+  // recent of these.
+  lastForm: string | null;
+  lastCheckin: string | null;
+  lastAttended: string | null;
+  lastServed: string | null;
 }
 
 /** Retention by join-cohort (yearly + monthly series for a line chart).
@@ -82,7 +89,10 @@ export function getRetention(orgId: number): RetentionSummary {
     .prepare(
       `SELECT p.pco_id AS personId,
               p.pco_created_at AS created,
-              pa.last_activity_at AS lastActivity,
+              pa.last_form_at AS lastForm,
+              pa.last_check_in_at AS lastCheckin,
+              pa.last_attended_at AS lastAttended,
+              pa.last_served_at AS lastServed,
               CASE WHEN pa.classification IS NOT NULL
                     AND pa.classification != 'inactive'
                    THEN 1 ELSE 0 END AS retained
@@ -103,8 +113,15 @@ export function getRetention(orgId: number): RetentionSummary {
   // their last activity. We add real per-month activity history below so we
   // can replay who was active as of each past period — including rejoin.
   const monthIdxOf = (iso: string) => Number(iso.slice(0, 4)) * 12 + (Number(iso.slice(5, 7)) - 1);
-  // lastIdx = month of last activity (drives the monotonic survival curve);
-  // months = dated activity history (drives reactivation/return detection).
+  const lastRealIdx = (r: RawRow): number => {
+    let best = -Infinity;
+    for (const d of [r.lastForm, r.lastCheckin, r.lastAttended, r.lastServed]) {
+      if (d) best = Math.max(best, monthIdxOf(d));
+    }
+    return best;
+  };
+  // lastIdx = month of last REAL activity (drives the monotonic survival
+  // curve); months = dated activity history (drives reactivation detection).
   interface Member { id: string; lastIdx: number; months: number[] }
   const PRE = RETENTION_START_YEAR - 1; // pre-start joiners pooled into this bucket
   const cohortMembers = new Map<number, Member[]>();
@@ -121,7 +138,7 @@ export function getRetention(orgId: number): RetentionSummary {
     // The decay/stacked-area pools pre-2017 joiners into a "≤2016" band so
     // the engaged TOTAL reflects everyone, not just 2017+ cohorts.
     const cy = y < RETENTION_START_YEAR ? PRE : y;
-    const m: Member = { id: r.personId, lastIdx: r.lastActivity ? monthIdxOf(r.lastActivity) : -Infinity, months: [] };
+    const m: Member = { id: r.personId, lastIdx: lastRealIdx(r), months: [] };
     const arr = cohortMembers.get(cy) ?? [];
     arr.push(m);
     cohortMembers.set(cy, arr);
