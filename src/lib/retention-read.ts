@@ -22,7 +22,7 @@ export interface CohortDecay {
   year: number;
   size: number;
   currentPct: number;
-  points: Array<{ year: number; pct: number }>;
+  points: Array<{ year: number; pct: number; count: number }>;
 }
 /** Retention by calendar month-of-year (settled monthly cohorts pooled). */
 export interface MonthSeasonality {
@@ -52,9 +52,9 @@ export interface RetentionSummary {
 }
 
 interface RawRow {
+  personId: string;
   created: string;
   retained: number;
-  lastActivity: string | null;
 }
 
 /** Retention by join-cohort (yearly + monthly series for a line chart).
@@ -65,8 +65,8 @@ export function getRetention(orgId: number): RetentionSummary {
   const activityMonths = getSyncSettings(orgId).activityMonths;
   const rows = getDb()
     .prepare(
-      `SELECT p.pco_created_at AS created,
-              pa.last_activity_at AS lastActivity,
+      `SELECT p.pco_id AS personId,
+              p.pco_created_at AS created,
               CASE WHEN pa.classification IS NOT NULL
                     AND pa.classification != 'inactive'
                    THEN 1 ELSE 0 END AS retained
@@ -82,18 +82,20 @@ export function getRetention(orgId: number): RetentionSummary {
 
   const yearAgg = new Map<string, { joined: number; retained: number }>();
   const monthAgg = new Map<string, { joined: number; retained: number }>();
-  // Per join-year cohort: each member's last-activity timestamp (or NaN if
-  // never active), so we can replay who was still active as of each year.
-  const cohortLast = new Map<number, number[]>();
+  // Per join-year cohort: the member ids, so we can replay each person's
+  // real activity history (group attendance / check-ins / serving) and see
+  // who was active as of each year — including leave-then-rejoin.
+  const cohortMembers = new Map<number, string[]>();
+  const memberYear = new Map<string, number>();
   for (const r of rows) {
     const y = Number(r.created.slice(0, 4));
     if (!y || y < RETENTION_START_YEAR) continue;
     bump(yearAgg, String(y), r.retained);
     bump(monthAgg, r.created.slice(0, 7), r.retained);
-    const ms = r.lastActivity ? Date.parse(r.lastActivity) : NaN;
-    const arr = cohortLast.get(y) ?? [];
-    arr.push(ms);
-    cohortLast.set(y, arr);
+    const arr = cohortMembers.get(y) ?? [];
+    arr.push(r.personId);
+    cohortMembers.set(y, arr);
+    memberYear.set(r.personId, y);
   }
 
   const now = Date.now();
@@ -116,21 +118,64 @@ export function getRetention(orgId: number): RetentionSummary {
     overallRetained += c.retained;
   }
 
-  // ── Decay: for each cohort, % still active as of each later year-end ──
+  // ── Decay: replay each person's recorded activity to see who was active
+  //    as of each later year-end (handles leave → rejoin). ──────────────
   const winMs = activityMonths * MS_PER_MONTH;
   const currentYear = new Date().getUTCFullYear();
-  const decay: CohortDecay[] = [...cohortLast.entries()]
+
+  // Dated activity events (group attendance, check-ins, serving) since just
+  // before the start year, for cohort members only.
+  const cutoffIso = `${RETENTION_START_YEAR - 1}`;
+  const evRows = getDb()
+    .prepare(
+      `SELECT person_id AS pid, event_starts_at AS d
+         FROM pco_event_attendances
+        WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?
+       UNION ALL
+       SELECT person_id AS pid, event_time_at AS d
+         FROM pco_check_ins
+        WHERE org_id = ? AND person_id IS NOT NULL AND event_time_at >= ?
+       UNION ALL
+       SELECT pp.person_id AS pid, pl.sort_date AS d
+         FROM pco_plan_people pp
+         JOIN pco_plans pl ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+        WHERE pp.org_id = ? AND pl.sort_date >= ?`,
+    )
+    .all(orgId, cutoffIso, orgId, cutoffIso, orgId, cutoffIso) as Array<{ pid: string; d: string }>;
+
+  const acts = new Map<string, number[]>();
+  for (const e of evRows) {
+    if (!memberYear.has(e.pid)) continue;
+    const ms = Date.parse(e.d);
+    if (Number.isNaN(ms)) continue;
+    const arr = acts.get(e.pid);
+    if (arr) arr.push(ms);
+    else acts.set(e.pid, [ms]);
+  }
+  for (const arr of acts.values()) arr.sort((a, b) => a - b);
+
+  // True if a sorted ms array has any entry in (lo, hi].
+  const activeInWindow = (arr: number[] | undefined, lo: number, hi: number): boolean => {
+    if (!arr || arr.length === 0) return false;
+    let l = 0, r = arr.length - 1, idx = arr.length;
+    while (l <= r) {
+      const m = (l + r) >> 1;
+      if (arr[m] >= lo) { idx = m; r = m - 1; } else l = m + 1;
+    }
+    return idx < arr.length && arr[idx] <= hi;
+  };
+
+  const decay: CohortDecay[] = [...cohortMembers.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([year, lasts]) => {
-      const size = lasts.length;
-      const points: Array<{ year: number; pct: number }> = [];
+    .map(([year, members]) => {
+      const size = members.length;
+      const points: Array<{ year: number; pct: number; count: number }> = [];
       for (let Y = year; Y <= currentYear; Y++) {
-        // "Active as of end of year Y" = last activity within the window
-        // before that point (or before now, for the current year).
         const ref = Y < currentYear ? Date.UTC(Y + 1, 0, 1) : now;
-        const cutoff = ref - winMs;
-        const ret = lasts.reduce((a, ms) => a + (!Number.isNaN(ms) && ms >= cutoff ? 1 : 0), 0);
-        points.push({ year: Y, pct: size > 0 ? Math.round((ret / size) * 100) : 0 });
+        const lo = ref - winMs;
+        let count = 0;
+        for (const pid of members) if (activeInWindow(acts.get(pid), lo, ref)) count++;
+        points.push({ year: Y, count, pct: size > 0 ? Math.round((count / size) * 100) : 0 });
       }
       return { year, size, currentPct: points[points.length - 1]?.pct ?? 0, points };
     });

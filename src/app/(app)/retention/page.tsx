@@ -4,6 +4,7 @@ import { requireOrg } from "@/lib/auth";
 import { getRetention } from "@/lib/retention-read";
 import { RetentionChart } from "./retention-chart";
 import { RetentionDecayChart } from "./retention-decay-chart";
+import { RetentionSeasonalityChart } from "./retention-seasonality-chart";
 
 export default async function RetentionPage() {
   const session = await requireOrg();
@@ -14,7 +15,6 @@ export default async function RetentionPage() {
   const overallPct =
     overallJoined > 0 ? Math.round((overallRetained / overallJoined) * 100) : 0;
   const pendingYears = byYear.filter((y) => y.pending).length;
-  const maxSeasonPct = Math.max(1, ...seasonality.map((s) => s.pct));
 
   return (
     <AppShell active="Retention" breadcrumb="Retention">
@@ -76,9 +76,11 @@ export default async function RetentionPage() {
               )}
             </div>
             <p className="text-xs text-muted max-w-3xl">
-              Not just where each cohort sits today — how it got there. Each line follows one join-year cohort,
-              showing the share still active as of each later year-end (reconstructed from each person&apos;s last
-              recorded activity). The slope is the decay rate.
+              Not just where each cohort sits today — how it got there. Reconstructed from each person&apos;s
+              recorded activity (group attendance, check-ins, serving), so leave-then-rejoin is captured.
+              Toggle <span className="text-fg">Total people</span> (stacked — watch each year&apos;s cohort taper),{" "}
+              <span className="text-fg">% share</span> (composition of the engaged base), or{" "}
+              <span className="text-fg">Retention %</span> (each cohort&apos;s decay curve).
             </p>
             <RetentionDecayChart decay={decay} />
           </Card>
@@ -98,25 +100,11 @@ export default async function RetentionPage() {
               calendar month — useful for spotting whether a season (back-to-school, new year, summer) brings
               stickier newcomers.
             </p>
-            <div className="space-y-1.5">
-              {seasonality.map((s) => (
-                <div key={s.month} className="flex items-center gap-3 text-xs">
-                  <span className="w-8 text-muted">{s.label}</span>
-                  <div className="flex-1 h-4 rounded bg-bg-elev-2/60 overflow-hidden">
-                    <div
-                      className="h-full rounded"
-                      style={{
-                        width: `${s.joined > 0 ? (s.pct / maxSeasonPct) * 100 : 0}%`,
-                        background: s.month === bestMonth.month ? "var(--good-soft-fg)" : s.month === worstMonth.month ? "var(--warn-soft-fg)" : "var(--accent)",
-                        opacity: s.joined > 0 ? 1 : 0.2,
-                      }}
-                    />
-                  </div>
-                  <span className="w-10 text-right tnum text-fg">{s.joined > 0 ? `${s.pct}%` : "—"}</span>
-                  <span className="w-28 text-right text-subtle tnum">{s.joined.toLocaleString()} joined</span>
-                </div>
-              ))}
-            </div>
+            <RetentionSeasonalityChart
+              seasonality={seasonality}
+              bestMonth={bestMonth.month}
+              worstMonth={worstMonth.month}
+            />
           </Card>
         )}
 
