@@ -6,12 +6,8 @@ import type { MonthSeasonality } from "@/lib/retention-read";
 /** Retention by calendar join-month as a line — Jan→Dec on the x-axis. */
 export function RetentionSeasonalityChart({
   seasonality,
-  bestMonth,
-  worstMonth,
 }: {
   seasonality: MonthSeasonality[];
-  bestMonth: number | null;
-  worstMonth: number | null;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const withData = seasonality.filter((s) => s.joined > 0);
@@ -58,10 +54,9 @@ export function RetentionSeasonalityChart({
           <line x1={xFor(hover)} x2={xFor(hover)} y1={padT} y2={padT + innerH} stroke="rgba(168,178,198,0.5)" strokeWidth={1} pointerEvents="none" />
         )}
         <path d={d} fill="none" stroke="var(--accent)" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
-        {withData.map((s) => {
-          const col = s.month === bestMonth ? "var(--good-soft-fg)" : s.month === worstMonth ? "var(--warn-soft-fg)" : "var(--accent)";
-          return <circle key={s.month} cx={xFor(s.month)} cy={yFor(s.pct)} r={s.month === bestMonth || s.month === worstMonth ? 4 : 2.5} fill={col} />;
-        })}
+        {withData.map((s) => (
+          <circle key={s.month} cx={xFor(s.month)} cy={yFor(s.pct)} r={hover === s.month ? 4 : 2.5} fill="var(--accent)" />
+        ))}
       </svg>
       <div className="min-h-[34px] mt-1 text-xs">
         {hs && hs.joined > 0 ? (
@@ -73,7 +68,7 @@ export function RetentionSeasonalityChart({
             </span>
           </span>
         ) : (
-          <span className="text-subtle">Hover a month for its pooled retention. Green = best, red = worst.</span>
+          <span className="text-subtle">Hover a month for its pooled retention.</span>
         )}
       </div>
     </div>

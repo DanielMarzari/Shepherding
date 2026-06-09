@@ -9,8 +9,8 @@ import { RetentionSeasonalityChart } from "./retention-seasonality-chart";
 export default async function RetentionPage() {
   const session = await requireOrg();
   const {
-    byYear, byMonth, decay, annualDecayPct, seasonality, bestMonth, worstMonth,
-    overallJoined, overallRetained, activityMonths, startYear,
+    byYear, byMonth, decay, annualDecayPct, decayTrends, seasonality, bestMonth, worstMonth,
+    seasonalityTrends, overallJoined, overallRetained, activityMonths, startYear,
   } = getRetention(session.orgId);
   const overallPct =
     overallJoined > 0 ? Math.round((overallRetained / overallJoined) * 100) : 0;
@@ -83,6 +83,7 @@ export default async function RetentionPage() {
               <span className="text-fg">Retention %</span> (each cohort&apos;s decay curve).
             </p>
             <RetentionDecayChart decay={decay} />
+            {decayTrends.length > 0 && <Trends items={decayTrends} />}
           </Card>
         )}
 
@@ -100,11 +101,8 @@ export default async function RetentionPage() {
               calendar month — useful for spotting whether a season (back-to-school, new year, summer) brings
               stickier newcomers.
             </p>
-            <RetentionSeasonalityChart
-              seasonality={seasonality}
-              bestMonth={bestMonth.month}
-              worstMonth={worstMonth.month}
-            />
+            <RetentionSeasonalityChart seasonality={seasonality} />
+            {seasonalityTrends.length > 0 && <Trends items={seasonalityTrends} />}
           </Card>
         )}
 
@@ -118,5 +116,21 @@ export default async function RetentionPage() {
         </p>
       </div>
     </AppShell>
+  );
+}
+
+function Trends({ items }: { items: string[] }) {
+  return (
+    <div className="rounded-lg border border-border-soft bg-bg-elev-2/40 p-3 mt-1">
+      <div className="text-[11px] font-medium uppercase tracking-wider text-muted mb-1.5">Trends</div>
+      <ul className="space-y-1">
+        {items.map((t, i) => (
+          <li key={i} className="flex items-start gap-2 text-xs text-muted">
+            <span className="mt-1 inline-block w-1 h-1 rounded-full bg-accent shrink-0" />
+            <span>{t}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

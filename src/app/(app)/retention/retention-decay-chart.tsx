@@ -3,69 +3,82 @@
 import { useMemo, useState } from "react";
 import type { CohortDecay } from "@/lib/retention-read";
 
-type Mode = "people" | "share" | "lines";
+type Mode = "people" | "share";
+type Gran = "year" | "month";
 
-/** Retention decay by join-year cohort. Three views:
- *  - People: stacked area of engaged people per year (each cohort a band
- *    you watch taper) → total engaged is the stack height.
- *  - Share: same, normalized to 100% (composition of the engaged base).
- *  - Lines: each cohort's retention % over time (the decay rate). */
+/** Retention decay by join-year cohort, as a stacked area: each cohort is a
+ *  band you watch ramp then taper. "Total people" → stack height is total
+ *  engaged; "% share" → composition of the engaged base. Year or month
+ *  resolution on the time axis. */
 export function RetentionDecayChart({ decay }: { decay: CohortDecay[] }) {
   const [mode, setMode] = useState<Mode>("people");
-  const [hoverYear, setHoverYear] = useState<number | null>(null);
+  const [gran, setGran] = useState<Gran>("year");
+  const [hoverX, setHoverX] = useState<number | null>(null);
   const cohorts = useMemo(() => decay.filter((c) => c.size >= 10), [decay]);
 
-  const years = useMemo(() => {
+  // Per-cohort {x → count} for the chosen granularity, and the global x axis.
+  const { series, times } = useMemo(() => {
+    const series = cohorts.map((c) => {
+      const m = new Map<number, number>();
+      if (gran === "year") {
+        for (const p of c.points) m.set(p.year, p.count);
+      } else {
+        for (const p of c.monthly) {
+          const x = Number(p.key.slice(0, 4)) + (Number(p.key.slice(5, 7)) - 1) / 12;
+          m.set(x, p.count);
+        }
+      }
+      return m;
+    });
     const set = new Set<number>();
-    for (const c of cohorts) for (const p of c.points) set.add(p.year);
-    return [...set].sort((a, b) => a - b);
-  }, [cohorts]);
+    for (const m of series) for (const x of m.keys()) set.add(x);
+    return { series, times: [...set].sort((a, b) => a - b) };
+  }, [cohorts, gran]);
 
-  if (cohorts.length === 0 || years.length < 2) {
+  if (cohorts.length === 0 || times.length < 2) {
     return <p className="text-xs text-subtle">Not enough cohort history yet to chart decay.</p>;
   }
 
   const width = 1000, height = 300;
-  const padL = 40, padR = 66, padT = 14, padB = 34;
+  const padL = 40, padR = 14, padT = 14, padB = 34;
   const innerW = width - padL - padR;
   const innerH = height - padT - padB;
-  const y0 = years[0], y1 = years[years.length - 1];
-  const span = Math.max(1, y1 - y0);
-  const xFor = (yr: number) => padL + ((yr - y0) / span) * innerW;
-  const yFor = (frac: number) => padT + innerH - frac * innerH; // frac 0..1 of plot height
+  const x0 = times[0], x1 = times[times.length - 1];
+  const xspan = Math.max(0.001, x1 - x0);
+  const xFor = (x: number) => padL + ((x - x0) / xspan) * innerW;
+  const yFor = (frac: number) => padT + innerH - frac * innerH;
   const colorFor = (i: number) => `hsl(${Math.round(212 - (i / Math.max(1, cohorts.length - 1)) * 190)} 70% 55%)`;
 
-  const countAt = (c: CohortDecay, yr: number) => c.points.find((p) => p.year === yr)?.count ?? 0;
-  const totalAt = (yr: number) => cohorts.reduce((a, c) => a + countAt(c, yr), 0);
-  const maxTotal = Math.max(1, ...years.map(totalAt));
-  const yTotals: Record<number, number> = Object.fromEntries(years.map((yr) => [yr, totalAt(yr)]));
+  const countAt = (i: number, x: number) => series[i].get(x) ?? 0;
+  const totalAt = (x: number) => series.reduce((a, _, i) => a + countAt(i, x), 0);
+  const maxTotal = Math.max(1, ...times.map(totalAt));
+  const yTotals: Record<number, number> = Object.fromEntries(times.map((x) => [x, totalAt(x)]));
 
-  // Stacked band (oldest cohort at the bottom). Returns the fraction-of-height
-  // lower/upper boundary for cohort index i at year yr, per current mode.
-  const bounds = (i: number, yr: number): [number, number] => {
-    let lowerCount = 0;
-    for (let j = 0; j < i; j++) lowerCount += countAt(cohorts[j], yr);
-    const upperCount = lowerCount + countAt(cohorts[i], yr);
-    if (mode === "share") {
-      const tot = yTotals[yr] || 1;
-      return [lowerCount / tot, upperCount / tot];
-    }
-    return [lowerCount / maxTotal, upperCount / maxTotal];
+  const bounds = (i: number, x: number): [number, number] => {
+    let lower = 0;
+    for (let j = 0; j < i; j++) lower += countAt(j, x);
+    const upper = lower + countAt(i, x);
+    const denom = mode === "share" ? (yTotals[x] || 1) : maxTotal;
+    return [lower / denom, upper / denom];
   };
 
   const yTicks = mode === "share" ? [0, 0.25, 0.5, 0.75, 1] : niceTicks(maxTotal);
+  const yearTicks = [...new Set(times.map((x) => Math.floor(x)))]; // integer years present
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-2 text-[11px]">
-        {(["people", "share", "lines"] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => setMode(m)}
-            className={`px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${mode === m ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"}`}
-          >
-            {m === "people" ? "Total people" : m === "share" ? "% share" : "Retention %"}
+      <div className="flex items-center gap-2 mb-2 text-[11px] flex-wrap">
+        {(["people", "share"] as const).map((m) => (
+          <button key={m} type="button" onClick={() => setMode(m)}
+            className={`px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${mode === m ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"}`}>
+            {m === "people" ? "Total people" : "% share"}
+          </button>
+        ))}
+        <span className="mx-1 text-border-soft">|</span>
+        {(["year", "month"] as const).map((g) => (
+          <button key={g} type="button" onClick={() => { setGran(g); setHoverX(null); }}
+            className={`px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${gran === g ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"}`}>
+            {g === "year" ? "By year" : "By month"}
           </button>
         ))}
       </div>
@@ -84,10 +97,12 @@ export function RetentionDecayChart({ decay }: { decay: CohortDecay[] }) {
         onMouseMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const vx = ((e.clientX - rect.left) / rect.width) * width;
-          const yr = Math.round(y0 + ((vx - padL) / innerW) * span);
-          setHoverYear(years.includes(yr) ? yr : null);
+          const target = x0 + ((vx - padL) / innerW) * xspan;
+          let best = times[0], bd = Infinity;
+          for (const t of times) { const d = Math.abs(t - target); if (d < bd) { bd = d; best = t; } }
+          setHoverX(best);
         }}
-        onMouseLeave={() => setHoverYear(null)}
+        onMouseLeave={() => setHoverX(null)}
         style={{ width: "100%", height: "auto", display: "block", cursor: "crosshair" }}
       >
         {yTicks.map((t) => {
@@ -102,65 +117,36 @@ export function RetentionDecayChart({ decay }: { decay: CohortDecay[] }) {
             </g>
           );
         })}
-        {years.map((yr) => (
+        {yearTicks.map((yr) => (
           <text key={yr} x={xFor(yr)} y={height - padB + 14} textAnchor="middle" fontSize={10} fill="#7c879c">{yr}</text>
         ))}
-        {hoverYear != null && (
-          <line x1={xFor(hoverYear)} x2={xFor(hoverYear)} y1={padT} y2={padT + innerH} stroke="rgba(168,178,198,0.55)" strokeWidth={1} pointerEvents="none" />
+        {hoverX != null && (
+          <line x1={xFor(hoverX)} x2={xFor(hoverX)} y1={padT} y2={padT + innerH} stroke="rgba(168,178,198,0.55)" strokeWidth={1} pointerEvents="none" />
         )}
-
-        {mode === "lines"
-          ? cohorts.map((c, i) => {
-              const col = colorFor(i);
-              const d = c.points.map((p, k) => `${k === 0 ? "M" : "L"} ${xFor(p.year).toFixed(1)} ${yFor(p.pct / 100).toFixed(1)}`).join(" ");
-              const last = c.points[c.points.length - 1];
-              return (
-                <g key={c.year}>
-                  <path d={d} fill="none" stroke={col} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-                  <text x={xFor(last.year) + 5} y={yFor(last.pct / 100) + 3} fontSize={9} fill={col}>{c.year}: {last.pct}%</text>
-                </g>
-              );
-            })
-          : cohorts.map((c, i) => {
-              const col = colorFor(i);
-              // upper boundary forward, lower boundary back → filled band
-              let d = "";
-              years.forEach((yr, k) => {
-                const [, up] = bounds(i, yr);
-                d += `${k === 0 ? "M" : "L"} ${xFor(yr).toFixed(1)} ${yFor(up).toFixed(1)} `;
-              });
-              for (let k = years.length - 1; k >= 0; k--) {
-                const [lo] = bounds(i, years[k]);
-                d += `L ${xFor(years[k]).toFixed(1)} ${yFor(lo).toFixed(1)} `;
-              }
-              d += "Z";
-              return <path key={c.year} d={d} fill={col} fillOpacity={0.8} stroke={col} strokeWidth={0.4} />;
-            })}
+        {cohorts.map((c, i) => {
+          const col = colorFor(i);
+          let d = "";
+          times.forEach((x, k) => { const [, up] = bounds(i, x); d += `${k === 0 ? "M" : "L"} ${xFor(x).toFixed(1)} ${yFor(up).toFixed(1)} `; });
+          for (let k = times.length - 1; k >= 0; k--) { const [lo] = bounds(i, times[k]); d += `L ${xFor(times[k]).toFixed(1)} ${yFor(lo).toFixed(1)} `; }
+          d += "Z";
+          return <path key={c.year} d={d} fill={col} fillOpacity={0.8} stroke={col} strokeWidth={0.4} />;
+        })}
       </svg>
 
       <div className="min-h-[34px] mt-2 text-xs">
-        {hoverYear != null ? (
+        {hoverX != null ? (
           <span>
-            <span className="font-medium">{hoverYear}</span>
+            <span className="font-medium">{gran === "year" ? Math.floor(hoverX) : fmtMonth(hoverX)}</span>
             <span className="text-muted ml-3">
-              {mode !== "lines" && <span className="text-fg tnum mr-2">{yTotals[hoverYear]?.toLocaleString() ?? 0} engaged total</span>}
-              {cohorts
-                .map((c) => {
-                  const p = c.points.find((x) => x.year === hoverYear);
-                  if (!p) return null;
-                  return mode === "lines" ? `${c.year}: ${p.pct}%` : `${c.year}: ${p.count.toLocaleString()}`;
-                })
-                .filter(Boolean)
-                .join(" · ")}
+              <span className="text-fg tnum mr-2">{(yTotals[hoverX] ?? 0).toLocaleString()} engaged</span>
+              {cohorts.map((c, i) => { const n = countAt(i, hoverX); return n > 0 ? `${c.year}: ${n.toLocaleString()}` : null; }).filter(Boolean).join(" · ")}
             </span>
           </span>
         ) : (
           <p className="text-subtle">
             {mode === "people"
-              ? "Stacked engaged people by join-year cohort — the stack height is total engaged; each band tapers as that cohort decays."
-              : mode === "share"
-                ? "Same, normalized to 100% — the share of today's engaged base contributed by each join-year cohort."
-                : "Each line is a join-year cohort's retention %; the slope is the decay rate."}
+              ? "Stacked engaged people by join-year cohort — stack height is the total engaged; each band ramps then tapers as that cohort decays."
+              : "Each band is a join-year cohort's share of today's engaged base, over time."}
           </p>
         )}
       </div>
@@ -168,6 +154,12 @@ export function RetentionDecayChart({ decay }: { decay: CohortDecay[] }) {
   );
 }
 
+const MO = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtMonth(x: number): string {
+  const yr = Math.floor(x);
+  const mo = Math.round((x - yr) * 12);
+  return `${MO[mo] ?? ""} ${yr}`;
+}
 function niceTicks(max: number): number[] {
   const step = Math.max(1, Math.ceil(max / 4 / 50) * 50);
   const out: number[] = [];
