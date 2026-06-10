@@ -5,6 +5,10 @@ import { getSyncSettings } from "./pco";
 // Work with 2016 (when the church started tracking in PCO) and forward;
 // ignore anyone who joined before then. No pre-2016 pooled band.
 const RETENTION_START_YEAR = 2016;
+// The retention-% chart (byYear/byMonth) and seasonality start in 2017 —
+// 2016 is the bulk PCO import, not a real join cohort, so its % is noise.
+// The decay/stacked-area still includes the 2016 base as its starting band.
+const PCT_START_YEAR = 2017;
 const MS_PER_MONTH = 30.4375 * 86_400_000;
 
 export interface RetentionPoint {
@@ -127,8 +131,11 @@ export function getRetention(orgId: number): RetentionSummary {
   for (const r of rows) {
     const y = Number(r.created.slice(0, 4));
     if (!y || y < RETENTION_START_YEAR) continue; // ignore anyone before the start year
-    bump(yearAgg, String(y), r.retained);
-    bump(monthAgg, r.created.slice(0, 7), r.retained);
+    // retention-% chart / seasonality start in 2017 (skip the 2016 import).
+    if (y >= PCT_START_YEAR) {
+      bump(yearAgg, String(y), r.retained);
+      bump(monthAgg, r.created.slice(0, 7), r.retained);
+    }
     const arr = cohortMembers.get(y) ?? [];
     arr.push({ createdIdx: monthIdxOf(r.created), lastIdx: lastRealIdx(r) });
     cohortMembers.set(y, arr);
@@ -285,6 +292,24 @@ export function getRetention(orgId: number): RetentionSummary {
       tone: "neutral",
     });
   }
+  // COVID trend: compare the engaged base just before COVID (end of 2019) to
+  // its low after lockdowns and to today — name the shift.
+  const totalAtYear = (Y: number) => decay.reduce((a, c) => a + (c.points.find((p) => p.year === Y)?.count ?? 0), 0);
+  const pre = totalAtYear(2019);
+  const trough = Math.min(totalAtYear(2020), totalAtYear(2021));
+  const nowTotal = totalAtYear(currentYear);
+  if (pre > 0 && trough > 0) {
+    const dropPct = Math.round((1 - trough / pre) * 100);
+    const recoveredPct = Math.round((nowTotal / pre) * 100);
+    decayTrends.push({
+      title: dropPct >= 15 ? `COVID cliff: −${dropPct}% by 2020–21` : `Steady through COVID`,
+      detail:
+        recoveredPct >= 95
+          ? `Recorded activity fell ${dropPct}% from its 2019 level during the 2020–21 shutdowns, but has since recovered to ~${recoveredPct}% of pre-COVID.`
+          : `Recorded activity fell ${dropPct}% from 2019 during the 2020–21 shutdowns and sits at ~${recoveredPct}% of the pre-COVID level today — a lasting step down, not a full rebound.`,
+      tone: recoveredPct >= 95 ? "up" : "down",
+    });
+  }
 
   const seasonalityTrends: RetentionInsight[] = [];
   if (bestMonth && worstMonth && bestMonth.month !== worstMonth.month) {
@@ -325,7 +350,7 @@ export function getRetention(orgId: number): RetentionSummary {
     overallJoined,
     overallRetained,
     activityMonths,
-    startYear: RETENTION_START_YEAR,
+    startYear: PCT_START_YEAR,
   };
 }
 
