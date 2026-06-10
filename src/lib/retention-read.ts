@@ -397,42 +397,62 @@ function toPoints(
 /** Nightly precompute for the Returns chart. Walks each person's distinct
  *  months of dated activity (check-ins, plan serving, event attendance),
  *  finds gaps longer than the activity window, and counts each post-gap
- *  return by the calendar year it happened. Heavy (full window scan over
- *  ~330k rows) — call this only from the dashboard refresh, never a request.
- *  Stores one row per (org, year) in retention_returns; the page reads that. */
-export function refreshRetentionReturns(orgId: number): void {
+ *  return by the calendar year it happened.
+ *
+ *  The scan de-dups ~330k dated rows and takes ~2 min. better-sqlite3 is
+ *  synchronous, so running it on the main connection would freeze the single
+ *  Node worker for everyone. The DB is in WAL mode (readers don't block
+ *  writers), so we run the heavy SELECT in a child `sqlite3` process — the
+ *  event loop stays free — and then do the tiny write back on the main
+ *  connection. Call only from the dashboard refresh / cron, never a request. */
+export async function refreshRetentionReturns(orgId: number): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const run = promisify(execFile);
+
   const win = getSyncSettings(orgId).activityMonths;
   const currentYear = new Date().getUTCFullYear();
-  const cutoffIso = `${RETENTION_START_YEAR - 1}`;
+  const startYear = RETENTION_START_YEAR;
+  const cutoff = `${startYear - 1}`;
   const db = getDb();
-  const rows = db
-    .prepare(
-      `WITH am AS (
-         SELECT pid, CAST(substr(ym,1,4) AS INTEGER)*12 + CAST(substr(ym,6,2) AS INTEGER) - 1 AS mi
-         FROM (
-           SELECT person_id AS pid, substr(event_starts_at,1,7) AS ym
-             FROM pco_event_attendances WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?
-           UNION
-           SELECT person_id AS pid, substr(event_time_at,1,7) AS ym
-             FROM pco_check_ins WHERE org_id = ? AND person_id IS NOT NULL AND event_time_at >= ?
-           UNION
-           SELECT pp.person_id AS pid, substr(pl.sort_date,1,7) AS ym
-             FROM pco_plan_people pp JOIN pco_plans pl ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
-            WHERE pp.org_id = ? AND pl.sort_date >= ?
-         )
-       ),
-       g AS (
-         SELECT mi, mi - LAG(mi) OVER (PARTITION BY pid ORDER BY mi) AS gap FROM am
-       )
-       SELECT (mi / 12) AS year, COUNT(*) AS count
-         FROM g
-        WHERE gap > ? AND (mi / 12) BETWEEN ? AND ?
-        GROUP BY year`,
-    )
-    .all(orgId, cutoffIso, orgId, cutoffIso, orgId, cutoffIso, win, RETENTION_START_YEAR, currentYear) as Array<{
-    year: number;
-    count: number;
-  }>;
+  const dbFile = db.name; // exact file the app opened
+
+  // orgId/win/years are integers from our own data; cutoff is a fixed string.
+  const sql = `
+    WITH am AS (
+      SELECT pid, CAST(substr(ym,1,4) AS INTEGER)*12 + CAST(substr(ym,6,2) AS INTEGER) - 1 AS mi
+      FROM (
+        SELECT person_id AS pid, substr(event_starts_at,1,7) AS ym
+          FROM pco_event_attendances WHERE org_id=${orgId} AND attended=1 AND event_starts_at >= '${cutoff}'
+        UNION
+        SELECT person_id AS pid, substr(event_time_at,1,7) AS ym
+          FROM pco_check_ins WHERE org_id=${orgId} AND person_id IS NOT NULL AND event_time_at >= '${cutoff}'
+        UNION
+        SELECT pp.person_id AS pid, substr(pl.sort_date,1,7) AS ym
+          FROM pco_plan_people pp JOIN pco_plans pl ON pl.org_id=pp.org_id AND pl.pco_id=pp.plan_id
+         WHERE pp.org_id=${orgId} AND pl.sort_date >= '${cutoff}'
+      )
+    ),
+    g AS (SELECT mi, mi - LAG(mi) OVER (PARTITION BY pid ORDER BY mi) AS gap FROM am)
+    SELECT (mi/12) AS year, COUNT(*) AS count
+      FROM g WHERE gap > ${win} AND (mi/12) BETWEEN ${startYear} AND ${currentYear}
+     GROUP BY year ORDER BY year;`;
+
+  const { stdout } = await run(
+    process.env.SQLITE3_BIN ?? "sqlite3",
+    ["-readonly", dbFile, sql],
+    { timeout: 5 * 60_000, maxBuffer: 1 << 20 },
+  );
+  const rows = stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [y, c] = line.split("|");
+      return { year: Number(y), count: Number(c) };
+    })
+    .filter((r) => Number.isFinite(r.year) && Number.isFinite(r.count));
+
   const tx = db.transaction(() => {
     db.prepare("DELETE FROM retention_returns WHERE org_id = ?").run(orgId);
     const ins = db.prepare(

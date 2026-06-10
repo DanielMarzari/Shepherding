@@ -70,7 +70,7 @@ export async function GET(req: Request) {
         // Recompute the retention "Returns" table (heavy activity-gap scan).
         // Nightly only — never on a live request. Never let it break the cron.
         try {
-          refreshRetentionReturns(id);
+          await refreshRetentionReturns(id);
         } catch (e) {
           console.error("refreshRetentionReturns failed", id, e);
         }

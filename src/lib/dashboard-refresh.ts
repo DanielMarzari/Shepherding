@@ -136,7 +136,7 @@ export async function refreshDashboardSnapshotsAsync(
   // off live requests and the per-sync path; populated here on an on-demand /
   // background refresh and nightly by the cron. Never fatal to the refresh.
   try {
-    refreshRetentionReturns(orgId);
+    await refreshRetentionReturns(orgId);
   } catch (e) {
     console.error("refreshRetentionReturns failed", orgId, e);
   }
