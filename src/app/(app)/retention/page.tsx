@@ -25,9 +25,9 @@ export default async function RetentionPage() {
           <p className="text-muted text-sm mt-1 max-w-2xl">
             Of the people whose PCO profile was created in a given year, how
             many are still active today (in a group/team, or active by recent
-            activity). Each year breaks down into its 12 monthly cohorts. Data
-            starts in {startYear} — the {startYear - 1} import was the PCO
-            transition and isn&apos;t treated as live.
+            activity). Each year breaks down into its 12 monthly cohorts. Covers
+            join cohorts from {startYear} on (when the church started tracking in
+            PCO); anyone who joined earlier is ignored.
           </p>
         </div>
 
@@ -81,8 +81,8 @@ export default async function RetentionPage() {
               never grows in a later year. &ldquo;Retained as of a year&rdquo; = their most recent <em>real</em>{" "}
               activity (attendance, check-ins, serving, forms — deliberately not PCO profile edits) is still within
               the {activityMonths}-month window then. People who lapsed and came back are tracked separately in{" "}
-              <span className="text-fg">Returns</span> below, not folded back in. The{" "}
-              <span className="text-fg">≤2016</span> band pools pre-2017 joiners. Toggle{" "}
+              <span className="text-fg">Returns</span> below, not folded back in. Each band ramps up as people
+              actually join through the year, then decays. Toggle{" "}
               <span className="text-fg">Total people</span> vs <span className="text-fg">% share</span>, and{" "}
               <span className="text-fg">By year</span> vs <span className="text-fg">By month</span>.
             </p>

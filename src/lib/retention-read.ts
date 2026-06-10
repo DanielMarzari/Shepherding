@@ -2,9 +2,9 @@ import "server-only";
 import { getDb } from "./db";
 import { getSyncSettings } from "./pco";
 
-// Our big PCO import was 2016 (≈12k people, ~1.1k real), so treat
-// everything before this as transition noise, not live data.
-const RETENTION_START_YEAR = 2017;
+// Work with 2016 (when the church started tracking in PCO) and forward;
+// ignore anyone who joined before then. No pre-2016 pooled band.
+const RETENTION_START_YEAR = 2016;
 const MS_PER_MONTH = 30.4375 * 86_400_000;
 
 export interface RetentionPoint {
@@ -120,28 +120,21 @@ export function getRetention(orgId: number): RetentionSummary {
     }
     return best;
   };
-  // lastIdx = month of last REAL activity (drives the monotonic survival
-  // curve); months = dated activity history (drives reactivation detection).
-  interface Member { id: string; lastIdx: number; months: number[] }
-  const PRE = RETENTION_START_YEAR - 1; // pre-start joiners pooled into this bucket
+  // createdIdx = join month (so a cohort ramps as people actually join, not
+  // appear full each January); lastIdx = last REAL activity month (survival);
+  // months = dated activity history (reactivation detection).
+  interface Member { id: string; createdIdx: number; lastIdx: number; months: number[] }
   const cohortMembers = new Map<number, Member[]>();
   const byId = new Map<string, Member>();
   for (const r of rows) {
     const y = Number(r.created.slice(0, 4));
-    if (!y) continue;
-    // byYear / byMonth / seasonality only score 2017+ cohorts (the 2016
-    // import isn't a real join cohort).
-    if (y >= RETENTION_START_YEAR) {
-      bump(yearAgg, String(y), r.retained);
-      bump(monthAgg, r.created.slice(0, 7), r.retained);
-    }
-    // The decay/stacked-area pools pre-2017 joiners into a "≤2016" band so
-    // the engaged TOTAL reflects everyone, not just 2017+ cohorts.
-    const cy = y < RETENTION_START_YEAR ? PRE : y;
-    const m: Member = { id: r.personId, lastIdx: lastRealIdx(r), months: [] };
-    const arr = cohortMembers.get(cy) ?? [];
+    if (!y || y < RETENTION_START_YEAR) continue; // ignore anyone before the start year
+    bump(yearAgg, String(y), r.retained);
+    bump(monthAgg, r.created.slice(0, 7), r.retained);
+    const m: Member = { id: r.personId, createdIdx: monthIdxOf(r.created), lastIdx: lastRealIdx(r), months: [] };
+    const arr = cohortMembers.get(y) ?? [];
     arr.push(m);
-    cohortMembers.set(cy, arr);
+    cohortMembers.set(y, arr);
     byId.set(r.personId, m);
   }
 
@@ -177,7 +170,10 @@ export function getRetention(orgId: number): RetentionSummary {
   const survivedAt = (members: Member[], periodIdx: number): number => {
     const lo = periodIdx - win + 1;
     let c = 0;
-    for (const m of members) if (m.lastIdx >= lo) c++;
+    // Only count someone once they've actually joined (createdIdx <= P) AND
+    // their last real activity hasn't aged out — so a cohort builds up as
+    // people join through the year, then decays, instead of starting full.
+    for (const m of members) if (m.createdIdx <= periodIdx && m.lastIdx >= lo) c++;
     return c;
   };
 
@@ -199,8 +195,7 @@ export function getRetention(orgId: number): RetentionSummary {
           monthly.push({ key: `${yy}-${String(mm).padStart(2, "0")}`, count, pct: pct(count) });
         }
       }
-      const label = year < RETENTION_START_YEAR ? `≤${year}` : String(year);
-      return { year, label, size, currentPct: points[points.length - 1]?.pct ?? 0, points, monthly };
+      return { year, label: String(year), size, currentPct: points[points.length - 1]?.pct ?? 0, points, monthly };
     });
 
   // ── Reactivations: lapsed (>window gap in recorded activity) then came
@@ -237,9 +232,7 @@ export function getRetention(orgId: number): RetentionSummary {
     .sort((a, b) => a[0] - b[0])
     .map(([year, count]) => ({ year, count }));
 
-  // Real join-year cohorts (exclude the pooled ≤2016 band, which isn't a
-  // real cohort — it's only there so the stacked total reflects everyone).
-  const realCohorts = decay.filter((c) => c.year >= RETENTION_START_YEAR);
+  const realCohorts = decay;
 
   // Annual decay rate = avg fraction of still-retained members lost per year
   // (across cohorts, year over year, while retention is still > 0).
