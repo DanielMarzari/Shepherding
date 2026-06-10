@@ -4,6 +4,7 @@ import { requireOrg } from "@/lib/auth";
 import { getRetention } from "@/lib/retention-read";
 import { RetentionChart } from "./retention-chart";
 import { RetentionDecayChart } from "./retention-decay-chart";
+import { RetentionReturnsChart } from "./retention-returns-chart";
 import { RetentionSeasonalityChart } from "./retention-seasonality-chart";
 
 export default async function RetentionPage() {
@@ -15,7 +16,6 @@ export default async function RetentionPage() {
   const overallPct =
     overallJoined > 0 ? Math.round((overallRetained / overallJoined) * 100) : 0;
   const pendingYears = byYear.filter((y) => y.pending).length;
-  const maxReact = Math.max(1, ...reactivations.map((r) => r.count));
 
   return (
     <AppShell active="See more" breadcrumb="See more › Retention">
@@ -96,21 +96,12 @@ export default async function RetentionPage() {
           <Card className="p-5 space-y-3">
             <h2 className="text-sm font-semibold">Returns</h2>
             <p className="text-xs text-muted max-w-3xl">
-              People who went quiet for longer than the {activityMonths}-month activity window and then came back,
-              by the year they returned — the flip side of the decay (kept separate so it doesn&apos;t inflate a
-              cohort&apos;s survival). Based on recorded activity (group attendance, check-ins, serving).
+              People who went quiet for longer than the {activityMonths}-month activity window and then came back —
+              counted as a fresh re-entrance in the year they returned, not folded back into their original cohort
+              (so it doesn&apos;t inflate a cohort&apos;s survival). Based on recorded activity (group attendance,
+              check-ins, serving); recomputed nightly.
             </p>
-            <div className="space-y-1.5">
-              {reactivations.map((r) => (
-                <div key={r.year} className="flex items-center gap-3 text-xs">
-                  <span className="w-10 text-muted tnum">{r.year}</span>
-                  <div className="flex-1 h-4 rounded bg-bg-elev-2/60 overflow-hidden">
-                    <div className="h-full rounded bg-accent" style={{ width: `${(r.count / maxReact) * 100}%` }} />
-                  </div>
-                  <span className="w-16 text-right tnum text-fg">{r.count.toLocaleString()}</span>
-                </div>
-              ))}
-            </div>
+            <RetentionReturnsChart data={reactivations} />
           </Card>
         )}
 

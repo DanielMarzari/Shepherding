@@ -3,6 +3,7 @@ import { getDb } from "./db";
 import { getExcludedMembershipTypes, getSyncSettings } from "./pco";
 import { populateShepherdedTempTable } from "./people-read";
 import { rebuildDuplicatePairs } from "./audit-read";
+import { refreshRetentionReturns } from "./retention-read";
 
 const MS_PER_DAY = 86_400_000;
 const MS_PER_MONTH = 30 * MS_PER_DAY;
@@ -129,6 +130,16 @@ export async function refreshDashboardSnapshotsAsync(
 
   rebuildLaneTransitions(orgId);
   onProgress?.(5, REFRESH_TOTAL_STEPS, REFRESH_PHASES[4].label);
+  await yieldTick();
+
+  // Recompute the retention "Returns" table (heavy activity-gap scan). Kept
+  // off live requests and the per-sync path; populated here on an on-demand /
+  // background refresh and nightly by the cron. Never fatal to the refresh.
+  try {
+    refreshRetentionReturns(orgId);
+  } catch (e) {
+    console.error("refreshRetentionReturns failed", orgId, e);
+  }
 }
 
 // ─── Background-run tracking (for the progress-bar UI) ───────────

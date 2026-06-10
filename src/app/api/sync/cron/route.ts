@@ -6,6 +6,7 @@ import { runSync } from "@/lib/pco-sync";
 import { startGeocodeRun } from "@/lib/geocode-runner";
 import { startDriveRun } from "@/lib/drive-runner";
 import { startMeshRun } from "@/lib/mesh-runner";
+import { refreshRetentionReturns } from "@/lib/retention-read";
 
 /**
  * Cron-tickable endpoint. The Oracle host runs a system crontab every
@@ -66,6 +67,13 @@ export async function GET(req: Request) {
         startGeocodeRun(id);
         startDriveRun(id);
         startMeshRun(id);
+        // Recompute the retention "Returns" table (heavy activity-gap scan).
+        // Nightly only — never on a live request. Never let it break the cron.
+        try {
+          refreshRetentionReturns(id);
+        } catch (e) {
+          console.error("refreshRetentionReturns failed", id, e);
+        }
       }
     } catch (e) {
       results.push({

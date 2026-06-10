@@ -201,11 +201,23 @@ export function getRetention(orgId: number): RetentionSummary {
       return { year, label: String(year), size, currentPct: points[points.length - 1]?.pct ?? 0, points, monthly };
     });
 
-  // ── Reactivations (lapsed → returned): DISABLED on the page-load path.
-  //    It requires scanning ~330k dated activity rows (266k check-ins +
-  //    61k plan rows), which takes minutes on the 1 GB box and was 502-ing
-  //    /retention. It belongs in a nightly precompute, not a live request.
-  const reactivations: Array<{ year: number; count: number }> = [];
+  // ── Reactivations (lapsed → returned): read the nightly-precomputed
+  //    table (refreshRetentionReturns, run during the dashboard refresh).
+  //    Computing this live scans ~330k dated activity rows and 502'd the
+  //    page, so the request just reads these few rows. Returns are counted
+  //    by the year a person came back — i.e. a fresh re-entrance that year.
+  let reactivations: Array<{ year: number; count: number }> = [];
+  try {
+    reactivations = getDb()
+      .prepare(
+        `SELECT year, count FROM retention_returns
+          WHERE org_id = ? AND year >= ? AND year <= ?
+          ORDER BY year`,
+      )
+      .all(orgId, PCT_START_YEAR, currentYear) as Array<{ year: number; count: number }>;
+  } catch {
+    reactivations = [];
+  }
 
   const realCohorts = decay;
 
@@ -380,6 +392,55 @@ function toPoints(
       pct: v.joined > 0 ? Math.round((v.retained / v.joined) * 100) : 0,
       pending: pending(key),
     }));
+}
+
+/** Nightly precompute for the Returns chart. Walks each person's distinct
+ *  months of dated activity (check-ins, plan serving, event attendance),
+ *  finds gaps longer than the activity window, and counts each post-gap
+ *  return by the calendar year it happened. Heavy (full window scan over
+ *  ~330k rows) — call this only from the dashboard refresh, never a request.
+ *  Stores one row per (org, year) in retention_returns; the page reads that. */
+export function refreshRetentionReturns(orgId: number): void {
+  const win = getSyncSettings(orgId).activityMonths;
+  const currentYear = new Date().getUTCFullYear();
+  const cutoffIso = `${RETENTION_START_YEAR - 1}`;
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `WITH am AS (
+         SELECT pid, CAST(substr(ym,1,4) AS INTEGER)*12 + CAST(substr(ym,6,2) AS INTEGER) - 1 AS mi
+         FROM (
+           SELECT person_id AS pid, substr(event_starts_at,1,7) AS ym
+             FROM pco_event_attendances WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?
+           UNION
+           SELECT person_id AS pid, substr(event_time_at,1,7) AS ym
+             FROM pco_check_ins WHERE org_id = ? AND person_id IS NOT NULL AND event_time_at >= ?
+           UNION
+           SELECT pp.person_id AS pid, substr(pl.sort_date,1,7) AS ym
+             FROM pco_plan_people pp JOIN pco_plans pl ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
+            WHERE pp.org_id = ? AND pl.sort_date >= ?
+         )
+       ),
+       g AS (
+         SELECT mi, mi - LAG(mi) OVER (PARTITION BY pid ORDER BY mi) AS gap FROM am
+       )
+       SELECT (mi / 12) AS year, COUNT(*) AS count
+         FROM g
+        WHERE gap > ? AND (mi / 12) BETWEEN ? AND ?
+        GROUP BY year`,
+    )
+    .all(orgId, cutoffIso, orgId, cutoffIso, orgId, cutoffIso, win, RETENTION_START_YEAR, currentYear) as Array<{
+    year: number;
+    count: number;
+  }>;
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM retention_returns WHERE org_id = ?").run(orgId);
+    const ins = db.prepare(
+      "INSERT INTO retention_returns (org_id, year, count) VALUES (?, ?, ?)",
+    );
+    for (const r of rows) ins.run(orgId, r.year, r.count);
+  });
+  tx();
 }
 
 const MONTHS = [
