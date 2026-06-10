@@ -121,21 +121,17 @@ export function getRetention(orgId: number): RetentionSummary {
     return best;
   };
   // createdIdx = join month (so a cohort ramps as people actually join, not
-  // appear full each January); lastIdx = last REAL activity month (survival);
-  // months = dated activity history (reactivation detection).
-  interface Member { id: string; createdIdx: number; lastIdx: number; months: number[] }
+  // appear full each January); lastIdx = last REAL activity month (survival).
+  interface Member { createdIdx: number; lastIdx: number }
   const cohortMembers = new Map<number, Member[]>();
-  const byId = new Map<string, Member>();
   for (const r of rows) {
     const y = Number(r.created.slice(0, 4));
     if (!y || y < RETENTION_START_YEAR) continue; // ignore anyone before the start year
     bump(yearAgg, String(y), r.retained);
     bump(monthAgg, r.created.slice(0, 7), r.retained);
-    const m: Member = { id: r.personId, createdIdx: monthIdxOf(r.created), lastIdx: lastRealIdx(r), months: [] };
     const arr = cohortMembers.get(y) ?? [];
-    arr.push(m);
+    arr.push({ createdIdx: monthIdxOf(r.created), lastIdx: lastRealIdx(r) });
     cohortMembers.set(y, arr);
-    byId.set(r.personId, m);
   }
 
   const now = Date.now();
@@ -198,39 +194,11 @@ export function getRetention(orgId: number): RetentionSummary {
       return { year, label: String(year), size, currentPct: points[points.length - 1]?.pct ?? 0, points, monthly };
     });
 
-  // ── Reactivations: lapsed (>window gap in recorded activity) then came
-  //    back — tracked separately from the survival decay. ───────────────
-  const cutoffIso = `${RETENTION_START_YEAR - 1}`;
-  const monthRows = getDb()
-    .prepare(
-      `SELECT pid, ym FROM (
-         SELECT person_id AS pid, substr(event_starts_at,1,7) AS ym
-           FROM pco_event_attendances WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?
-         UNION ALL
-         SELECT person_id AS pid, substr(event_time_at,1,7) AS ym
-           FROM pco_check_ins WHERE org_id = ? AND person_id IS NOT NULL AND event_time_at >= ?
-         UNION ALL
-         SELECT pp.person_id AS pid, substr(pl.sort_date,1,7) AS ym
-           FROM pco_plan_people pp JOIN pco_plans pl ON pl.org_id = pp.org_id AND pl.pco_id = pp.plan_id
-          WHERE pp.org_id = ? AND pl.sort_date >= ?
-       ) GROUP BY pid, ym`,
-    )
-    .all(orgId, cutoffIso, orgId, cutoffIso, orgId, cutoffIso) as Array<{ pid: string; ym: string }>;
-  for (const e of monthRows) {
-    const m = byId.get(e.pid);
-    if (m && e.ym) m.months.push(Number(e.ym.slice(0, 4)) * 12 + (Number(e.ym.slice(5, 7)) - 1));
-  }
-  const reactByYear = new Map<number, number>();
-  for (const m of byId.values()) {
-    const a = m.months.sort((x, y) => x - y);
-    for (let i = 1; i < a.length; i++) {
-      if (a[i] - a[i - 1] > win) reactByYear.set(Math.floor(a[i] / 12), (reactByYear.get(Math.floor(a[i] / 12)) ?? 0) + 1);
-    }
-  }
-  const reactivations = [...reactByYear.entries()]
-    .filter(([y]) => y >= RETENTION_START_YEAR && y <= currentYear)
-    .sort((a, b) => a[0] - b[0])
-    .map(([year, count]) => ({ year, count }));
+  // ── Reactivations (lapsed → returned): DISABLED on the page-load path.
+  //    It requires scanning ~330k dated activity rows (266k check-ins +
+  //    61k plan rows), which takes minutes on the 1 GB box and was 502-ing
+  //    /retention. It belongs in a nightly precompute, not a live request.
+  const reactivations: Array<{ year: number; count: number }> = [];
 
   const realCohorts = decay;
 
