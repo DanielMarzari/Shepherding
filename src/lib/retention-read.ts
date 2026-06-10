@@ -438,8 +438,9 @@ export async function refreshRetentionReturns(orgId: number): Promise<void> {
       FROM g WHERE gap > ${win} AND (mi/12) BETWEEN ${startYear} AND ${currentYear}
      GROUP BY year ORDER BY year;`;
 
+  // Absolute path by default so we don't depend on the pm2 process PATH.
   const { stdout } = await run(
-    process.env.SQLITE3_BIN ?? "sqlite3",
+    process.env.SQLITE3_BIN ?? "/usr/bin/sqlite3",
     ["-readonly", dbFile, sql],
     { timeout: 5 * 60_000, maxBuffer: 1 << 20 },
   );
