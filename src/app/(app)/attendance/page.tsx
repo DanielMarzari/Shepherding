@@ -292,7 +292,7 @@ export default async function AttendancePage() {
           <Card className="p-5 space-y-3">
             <h2 className="text-sm font-semibold">By service time</h2>
             <p className="text-xs text-muted max-w-2xl">
-              Monthly average attendance for a room broken out by service time —
+              Week-by-week attendance for a room broken out by service time —
               pick Center, Chapel, or Kids and compare the 8:00 / 9:30 / 11:15
               services (earlier years used 9:00 / 10:30). Click a service in the
               legend to hide it. Online streaming has no per-service split, so

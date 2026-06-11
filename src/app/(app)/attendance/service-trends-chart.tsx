@@ -17,9 +17,9 @@ const toMinutes = (svc: string) => {
   return (h || 0) * 60 + (m || 0);
 };
 
-/** Per-service-time attendance for one room, monthly averages, each service
- *  time its own toggleable line. Service times drift over the years, so we
- *  plot whatever times appear (each as a separate line, null where absent). */
+/** Per-service-time attendance for one room, week by week — each service time
+ *  its own toggleable line. Service times drift over the years, so we plot
+ *  whatever times appear (each a separate line, null where absent that week). */
 export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
   const roomsPresent = useMemo(
     () => ROOMS.filter((r) => rows.some((x) => x.room === r.key && x.count != null)),
@@ -29,28 +29,21 @@ export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [hover, setHover] = useState<number | null>(null);
 
-  const { months, services, series } = useMemo(() => {
+  const { weeks, services, series } = useMemo(() => {
     const roomRows = rows.filter((r) => r.room === room && r.count != null);
-    const agg = new Map<string, Map<string, { sum: number; n: number }>>(); // ym -> svc -> {}
+    const weekSet = new Set<string>();
     const svcSet = new Set<string>();
+    const byKey = new Map<string, number>(); // `${week}|${svc}` -> count
     for (const r of roomRows) {
-      const ym = r.week_date.slice(0, 7);
+      weekSet.add(r.week_date);
       svcSet.add(r.service);
-      let e = agg.get(ym);
-      if (!e) { e = new Map(); agg.set(ym, e); }
-      const c = e.get(r.service) ?? { sum: 0, n: 0 };
-      c.sum += r.count as number; c.n += 1; e.set(r.service, c);
+      byKey.set(`${r.week_date}|${r.service}`, r.count as number);
     }
-    const months = [...agg.keys()].sort();
+    const weeks = [...weekSet].sort();
     const services = [...svcSet].sort((a, b) => toMinutes(a) - toMinutes(b));
     const series: Record<string, Array<number | null>> = {};
-    for (const s of services) {
-      series[s] = months.map((m) => {
-        const c = agg.get(m)?.get(s);
-        return c && c.n > 0 ? Math.round(c.sum / c.n) : null;
-      });
-    }
-    return { months, services, series };
+    for (const s of services) series[s] = weeks.map((w) => byKey.get(`${w}|${s}`) ?? null);
+    return { weeks, services, series };
   }, [rows, room]);
 
   if (roomsPresent.length === 0) {
@@ -65,7 +58,7 @@ export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
   const shown = services.filter((s) => !hidden.has(s));
   const width = 1000, height = 280, padL = 44, padR = 14, padT = 14, padB = 30;
   const innerW = width - padL - padR, innerH = height - padT - padB;
-  const n = months.length;
+  const n = weeks.length;
   const stepX = n > 1 ? innerW / (n - 1) : innerW;
   const xFor = (i: number) => padL + i * stepX;
   let max = 0;
@@ -73,7 +66,9 @@ export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
   max = Math.max(1, max);
   const yFor = (v: number) => padT + innerH - (v / max) * innerH;
   const yTicks = niceTicks(max);
-  const yearTicks = months.map((m, i) => ({ i, m })).filter((x) => x.m.endsWith("-01"));
+  const yearTicks = weeks
+    .map((w, i) => ({ i, y: w.slice(0, 4) }))
+    .filter((x, i, arr) => i !== 0 && x.y !== arr[i - 1].y);
 
   const path = (svc: string) => {
     let d = "", started = false;
@@ -122,21 +117,24 @@ export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
           </g>
         ); })}
         {yearTicks.map((t) => (
-          <text key={t.i} x={xFor(t.i)} y={height - padB + 14} textAnchor="middle" fontSize={10} fill="#7c879c">{t.m.slice(0, 4)}</text>
+          <g key={t.i}>
+            <line x1={xFor(t.i)} x2={xFor(t.i)} y1={padT} y2={padT + innerH} stroke="rgba(140,150,170,0.12)" strokeWidth={0.5} />
+            <text x={xFor(t.i)} y={height - padB + 14} textAnchor="middle" fontSize={10} fill="#7c879c">{t.y}</text>
+          </g>
         ))}
         {hover != null && <line x1={xFor(hover)} x2={xFor(hover)} y1={padT} y2={padT + innerH} stroke="rgba(168,178,198,0.5)" strokeWidth={1} pointerEvents="none" />}
-        {shown.map((s) => <path key={s} d={path(s)} fill="none" stroke={colorFor(s)} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />)}
+        {shown.map((s) => <path key={s} d={path(s)} fill="none" stroke={colorFor(s)} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />)}
       </svg>
-      <div className="min-h-[34px] mt-1 text-xs">
+      <div className="min-h-[20px] mt-1 text-xs">
         {hover != null ? (
           <span>
-            <span className="font-medium">{months[hover]}</span>
+            <span className="font-medium">Week of {weeks[hover]}</span>
             <span className="text-muted ml-3">
               {shown.map((s) => { const v = series[s][hover]; return v != null ? `${s}: ${v.toLocaleString()}` : null; }).filter(Boolean).join(" · ")}
             </span>
           </span>
         ) : (
-          <span className="text-subtle">Monthly average attendance per service time. Click a service to hide it.</span>
+          <span className="text-subtle">Weekly attendance per service time. Click a service to hide it.</span>
         )}
       </div>
     </div>
