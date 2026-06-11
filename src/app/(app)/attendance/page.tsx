@@ -3,6 +3,7 @@ import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import {
   getWeeklyAttendance,
+  getServiceAttendance,
   listImportedAttendanceFiles,
 } from "@/lib/attendance-read";
 import { listAttendanceSources } from "@/lib/attendance-sources-read";
@@ -25,6 +26,7 @@ import {
 import { AttendanceUploadForm } from "./upload-form";
 import { AttendanceHistoryChart } from "./history-chart";
 import { RoomTrendsChart } from "./room-trends-chart";
+import { ServiceTrendsChart } from "./service-trends-chart";
 import { AttendanceWeatherChart } from "./weather-chart";
 import { PreacherChart } from "./preacher-chart";
 import { FamilyChart } from "./family-chart";
@@ -36,6 +38,7 @@ export default async function AttendancePage() {
   const counts = getClassificationCounts(session.orgId, settings.activityMonths);
   const sources = listAttendanceSources(session.orgId);
   const history = getWeeklyAttendance(session.orgId);
+  const serviceRows = getServiceAttendance(session.orgId);
   const importedFiles = listImportedAttendanceFiles(session.orgId);
   // Weekly attendance is now DERIVED from the imported adult in-person
   // average (last 12 mo) — no longer a manually-entered number.
@@ -281,6 +284,20 @@ export default async function AttendancePage() {
               Click a room in the legend to hide it.
             </p>
             <RoomTrendsChart rows={history.rows} />
+          </Card>
+        )}
+
+        {serviceRows.length > 0 && (
+          <Card className="p-5 space-y-3">
+            <h2 className="text-sm font-semibold">By service time</h2>
+            <p className="text-xs text-muted max-w-2xl">
+              Monthly average attendance for a room broken out by service time —
+              pick Center, Chapel, or Kids and compare the 8:00 / 9:30 / 11:15
+              services (earlier years used 9:00 / 10:30). Click a service in the
+              legend to hide it. Online streaming has no per-service split, so
+              it stays in <span className="text-fg">By room</span> above.
+            </p>
+            <ServiceTrendsChart rows={serviceRows} />
           </Card>
         )}
 

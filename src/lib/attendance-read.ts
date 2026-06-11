@@ -58,6 +58,25 @@ export function listImportedAttendanceFiles(
     .all(orgId) as ImportedAttendanceFile[];
 }
 
+export interface ServiceAttendanceRow {
+  week_date: string;
+  room: string; // 'center' | 'chapel' | 'kids' | 'student'
+  service: string; // start time, e.g. '8:00'
+  count: number | null;
+}
+
+/** Per-service-time, per-room rows (long form) for the "By service" view. */
+export function getServiceAttendance(orgId: number): ServiceAttendanceRow[] {
+  return getDb()
+    .prepare(
+      `SELECT week_date, room, service, count
+         FROM attendance_service
+        WHERE org_id = ?
+        ORDER BY week_date ASC, room ASC, service ASC`,
+    )
+    .all(orgId) as ServiceAttendanceRow[];
+}
+
 export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
   const db = getDb();
   const rows = db

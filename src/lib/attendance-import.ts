@@ -27,6 +27,28 @@ interface WeeklyRow {
   exception_reason: string | null;
 }
 
+/** Internal: one per-service-time, per-room cell (long form). */
+interface ServiceRow {
+  week_date: string;
+  room: string; // 'center' | 'chapel' | 'kids' | 'student'
+  service: string; // start time, e.g. '8:00', '9:30', '11:15'
+  count: number;
+}
+
+/** Match a per-service worship row to (room, service-time). Rows look like:
+ *  "8:00 Center", "9:30 Chapel" (adult); "TOTAL 8:00 Attendance" (kids, the
+ *  per-service floor total); "11:15 Student MS" / "6:30 Student HS". Service
+ *  times drift year to year, so we capture whatever time the label carries. */
+function matchServiceRow(label: string): { room: string; service: string } | null {
+  let m = /^(\d{1,2}:\d{2})\s+(center|chapel)$/.exec(label);
+  if (m) return { room: m[2], service: m[1] };
+  m = /^total\s+(\d{1,2}:\d{2})\s+attendance$/.exec(label);
+  if (m) return { room: "kids", service: m[1] };
+  m = /^(\d{1,2}:\d{2})\s+student\s+(ms|hs)$/.exec(label);
+  if (m) return { room: "student", service: m[1] };
+  return null;
+}
+
 // Label aliases — case-insensitive substring matching is too loose
 // (e.g. "Kids Worship" appears as a category header AND a row), so we
 // hard-code exact label sets per metric. Keep in lowercase.
@@ -147,7 +169,7 @@ function findDateHeader(
 export function parseAttendanceWorkbook(
   buffer: ArrayBuffer | Buffer,
   filename: string,
-): { rows: WeeklyRow[]; warnings: string[] } {
+): { rows: WeeklyRow[]; services: ServiceRow[]; warnings: string[] } {
   const warnings: string[] = [];
   const wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
   // Pick a sheet that looks like attendance: prefer "Attendance Summary"
@@ -159,7 +181,7 @@ export function parseAttendanceWorkbook(
   const sheet = wb.Sheets[sheetName];
   if (!sheet) {
     warnings.push(`${filename}: no sheets`);
-    return { rows: [], warnings };
+    return { rows: [], services: [], warnings };
   }
   const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
     header: 1,
@@ -169,7 +191,7 @@ export function parseAttendanceWorkbook(
   const header = findDateHeader(rows);
   if (!header) {
     warnings.push(`${filename}: couldn't find a row of weekly dates`);
-    return { rows: [], warnings };
+    return { rows: [], services: [], warnings };
   }
 
   // Build initial weekly rows keyed by date.
@@ -268,6 +290,26 @@ export function parseAttendanceWorkbook(
     break;
   }
 
+  // Per-service-time, per-room rows (long form). Sum collisions so e.g. two
+  // student rows at the same time merge instead of clobbering.
+  const svcAgg = new Map<string, ServiceRow>();
+  for (let i = header.rowIdx + 1; i < rows.length; i++) {
+    const hit = matchServiceRow(labelKey(rows[i][0]));
+    if (!hit) continue;
+    const row = rows[i];
+    for (let col = 1; col < header.dates.length; col++) {
+      const d = header.dates[col];
+      if (!d) continue;
+      const v = toIntOrNull(row[col]);
+      if (v == null) continue;
+      const key = `${d}|${hit.room}|${hit.service}`;
+      const e = svcAgg.get(key);
+      if (e) e.count += v;
+      else svcAgg.set(key, { week_date: d, room: hit.room, service: hit.service, count: v });
+    }
+  }
+  const services = [...svcAgg.values()];
+
   // Drop weeks that have ZERO data for every metric (empty trailing
   // columns from spreadsheet padding) — but KEEP weeks flagged with an
   // exception even if the counts are blank (a closure still happened).
@@ -290,7 +332,7 @@ export function parseAttendanceWorkbook(
   if (out.length === 0) {
     warnings.push(`${filename}: parsed 0 weekly rows`);
   }
-  return { rows: out, warnings };
+  return { rows: out, services, warnings };
 }
 
 /** Parse + upsert in one shot. Replaces any existing row for the same
@@ -300,7 +342,7 @@ export function importAttendanceFile(
   filename: string,
   buffer: Buffer,
 ): AttendanceImportResult {
-  const { rows, warnings } = parseAttendanceWorkbook(buffer, filename);
+  const { rows, services, warnings } = parseAttendanceWorkbook(buffer, filename);
   const db = getDb();
   const stmt = db.prepare(
     `INSERT INTO attendance_weekly
@@ -323,7 +365,18 @@ export function importAttendanceFile(
        source_file = excluded.source_file,
        imported_at = excluded.imported_at`,
   );
-  const tx = db.transaction((rs: WeeklyRow[]) => {
+  // Per-service rows: clear this file's existing service rows for the weeks
+  // it covers, then insert fresh — so a re-import replaces cleanly.
+  const svcDel = db.prepare(
+    `DELETE FROM attendance_service WHERE org_id = ? AND week_date = ?`,
+  );
+  const svcIns = db.prepare(
+    `INSERT INTO attendance_service (org_id, week_date, room, service, count, source_file)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(org_id, week_date, room, service) DO UPDATE SET
+       count = excluded.count, source_file = excluded.source_file`,
+  );
+  const tx = db.transaction((rs: WeeklyRow[], svc: ServiceRow[]) => {
     for (const r of rs) {
       stmt.run(
         orgId,
@@ -341,8 +394,10 @@ export function importAttendanceFile(
         filename,
       );
     }
+    for (const d of new Set(svc.map((s) => s.week_date))) svcDel.run(orgId, d);
+    for (const s of svc) svcIns.run(orgId, s.week_date, s.room, s.service, s.count, filename);
   });
-  tx(rows);
+  tx(rows, services);
   return {
     filename,
     imported: rows.length,
