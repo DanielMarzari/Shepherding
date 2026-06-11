@@ -77,12 +77,13 @@ export default async function RetentionPage() {
               )}
             </div>
             <p className="text-xs text-muted max-w-3xl">
-              Of the adults who joined each year, how many are still retained — a true survival curve, so a cohort
-              never grows in a later year. &ldquo;Retained as of a year&rdquo; = their most recent <em>real</em>{" "}
-              activity (attendance, check-ins, serving, forms — deliberately not PCO profile edits) is still within
-              the {activityMonths}-month window then. People who lapsed and came back are tracked separately in{" "}
-              <span className="text-fg">Returns</span> below, not folded back in. Each band ramps up as people
-              actually join through the year, then decays. Toggle{" "}
+              Each band is grouped by the year a person <em>first actually engaged</em> (first dated attendance,
+              check-in, or serving) — not when their PCO profile was created — so someone who sat in the system for
+              years and only showed up later starts, and decays, from that later year. People who never engaged
+              don&apos;t appear at all. It&apos;s a true survival curve: &ldquo;retained as of a year&rdquo; means
+              their most recent engagement is still within the {activityMonths}-month window then, so a cohort never
+              grows in a later year. People who lapsed and came back are counted in{" "}
+              <span className="text-fg">Returns</span> below, not folded back in. Toggle{" "}
               <span className="text-fg">Total people</span> vs <span className="text-fg">% share</span>, and{" "}
               <span className="text-fg">By year</span> vs <span className="text-fg">By month</span>.
             </p>

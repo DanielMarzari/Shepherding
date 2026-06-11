@@ -70,17 +70,16 @@ export interface RetentionSummary {
 }
 
 interface RawRow {
-  personId: string;
   created: string;
   retained: number;
-  // Real-activity signals only — deliberately NOT last_pco_updated_at, which
-  // PCO bumps on any profile edit/sync (the 2016 import stamped ~11k profiles
-  // at once, making long-gone people look "active"). Survival uses the most
-  // recent of these.
-  lastForm: string | null;
-  lastCheckin: string | null;
-  lastAttended: string | null;
-  lastServed: string | null;
+  // First/last REAL-engagement month-index (year*12 + month-1), from the
+  // nightly precompute (retention_engagement): dated check-ins, plan serving,
+  // and event attendance only. NULL when the person never engaged. The decay
+  // is built on these — not the PCO profile-created date — so someone's curve
+  // starts the year they first actually showed up, and never-engaged people
+  // don't appear at all.
+  firstMi: number | null;
+  lastMi: number | null;
 }
 
 /** Retention by join-cohort (yearly + monthly series for a line chart).
@@ -89,20 +88,20 @@ interface RawRow {
  *  recency, so the % would be a meaningless ~100%. */
 export function getRetention(orgId: number): RetentionSummary {
   const activityMonths = getSyncSettings(orgId).activityMonths;
+  const currentYear = new Date().getUTCFullYear();
   const rows = getDb()
     .prepare(
-      `SELECT p.pco_id AS personId,
-              p.pco_created_at AS created,
-              pa.last_form_at AS lastForm,
-              pa.last_check_in_at AS lastCheckin,
-              pa.last_attended_at AS lastAttended,
-              pa.last_served_at AS lastServed,
+      `SELECT p.pco_created_at AS created,
+              re.first_mi AS firstMi,
+              re.last_mi AS lastMi,
               CASE WHEN pa.classification IS NOT NULL
                     AND pa.classification != 'inactive'
                    THEN 1 ELSE 0 END AS retained
          FROM pco_people p
          LEFT JOIN person_activity pa
            ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
+         LEFT JOIN retention_engagement re
+           ON re.org_id = p.org_id AND re.person_id = p.pco_id
         WHERE p.org_id = ?
           AND p.pco_created_at IS NOT NULL
           AND (p.is_minor IS NULL OR p.is_minor != 1)
@@ -113,32 +112,31 @@ export function getRetention(orgId: number): RetentionSummary {
 
   const yearAgg = new Map<string, { joined: number; retained: number }>();
   const monthAgg = new Map<string, { joined: number; retained: number }>();
-  // Per join-year cohort member: id, currently-engaged flag, and the month of
-  // their last activity. We add real per-month activity history below so we
-  // can replay who was active as of each past period — including rejoin.
-  const monthIdxOf = (iso: string) => Number(iso.slice(0, 4)) * 12 + (Number(iso.slice(5, 7)) - 1);
-  const lastRealIdx = (r: RawRow): number => {
-    let best = -Infinity;
-    for (const d of [r.lastForm, r.lastCheckin, r.lastAttended, r.lastServed]) {
-      if (d) best = Math.max(best, monthIdxOf(d));
-    }
-    return best;
-  };
-  // createdIdx = join month (so a cohort ramps as people actually join, not
-  // appear full each January); lastIdx = last REAL activity month (survival).
-  interface Member { createdIdx: number; lastIdx: number }
+  // Two independent views, from one pass:
+  //  • byYear/byMonth (the retention-% chart) — keyed by JOIN year, scored by
+  //    current classification. Unchanged.
+  //  • cohortMembers (the decay) — keyed by FIRST-ENGAGEMENT year. firstIdx =
+  //    the month a person first actually engaged (their real start); lastIdx =
+  //    their last engagement month (survival). People who never engaged have
+  //    no firstMi and don't appear in the decay at all.
+  interface Member { firstIdx: number; lastIdx: number }
   const cohortMembers = new Map<number, Member[]>();
   for (const r of rows) {
-    const y = Number(r.created.slice(0, 4));
-    if (!y || y < RETENTION_START_YEAR) continue; // ignore anyone before the start year
-    // retention-% chart / seasonality start in 2017 (skip the 2016 import).
-    if (y >= PCT_START_YEAR) {
-      bump(yearAgg, String(y), r.retained);
+    const jy = Number(r.created.slice(0, 4));
+    // retention-% chart / seasonality: by join year, from 2017 (skip the 2016 import).
+    if (jy && jy >= PCT_START_YEAR) {
+      bump(yearAgg, String(jy), r.retained);
       bump(monthAgg, r.created.slice(0, 7), r.retained);
     }
-    const arr = cohortMembers.get(y) ?? [];
-    arr.push({ createdIdx: monthIdxOf(r.created), lastIdx: lastRealIdx(r) });
-    cohortMembers.set(y, arr);
+    // decay: by first-engagement year, regardless of when the profile was made.
+    if (r.firstMi != null && r.lastMi != null) {
+      const ey = Math.floor(r.firstMi / 12);
+      if (ey >= RETENTION_START_YEAR && ey <= currentYear) {
+        const arr = cohortMembers.get(ey) ?? [];
+        arr.push({ firstIdx: r.firstMi, lastIdx: r.lastMi });
+        cohortMembers.set(ey, arr);
+      }
+    }
   }
 
   const now = Date.now();
@@ -167,16 +165,15 @@ export function getRetention(orgId: number): RetentionSummary {
   // can only fall as T advances, so a cohort never gains members in a later
   // year. Returns (someone who lapsed and came back) are tracked separately
   // below, not folded back into the decay line.
-  const currentYear = new Date().getUTCFullYear();
   const currentMonth = new Date().getUTCMonth() + 1; // 1-indexed
   const win = activityMonths; // months in the activity window
   const survivedAt = (members: Member[], periodIdx: number): number => {
     const lo = periodIdx - win + 1;
     let c = 0;
-    // Only count someone once they've actually joined (createdIdx <= P) AND
-    // their last real activity hasn't aged out — so a cohort builds up as
-    // people join through the year, then decays, instead of starting full.
-    for (const m of members) if (m.createdIdx <= periodIdx && m.lastIdx >= lo) c++;
+    // Count someone once they've actually engaged (firstIdx <= P) AND their
+    // last engagement hasn't aged out — so the cohort builds up as people
+    // first show up through the year, then decays, instead of starting full.
+    for (const m of members) if (m.firstIdx <= periodIdx && m.lastIdx >= lo) c++;
     return c;
   };
 
@@ -462,6 +459,52 @@ export async function refreshRetentionReturns(orgId: number): Promise<void> {
     for (const r of rows) ins.run(orgId, r.year, r.count);
   });
   tx();
+
+  // ── Per-person first/last engagement month (same sources, same child
+  //    process). Re-bases the decay on the year a person first actually
+  //    engaged. UNION ALL is fine here — MIN/MAX don't need de-duped months. ──
+  const engSql = `
+    WITH am AS (
+      SELECT pid, CAST(substr(ym,1,4) AS INTEGER)*12 + CAST(substr(ym,6,2) AS INTEGER) - 1 AS mi
+      FROM (
+        SELECT person_id AS pid, substr(event_starts_at,1,7) AS ym
+          FROM pco_event_attendances WHERE org_id=${orgId} AND attended=1 AND event_starts_at >= '${cutoff}'
+        UNION ALL
+        SELECT person_id AS pid, substr(event_time_at,1,7) AS ym
+          FROM pco_check_ins WHERE org_id=${orgId} AND person_id IS NOT NULL AND event_time_at >= '${cutoff}'
+        UNION ALL
+        SELECT pp.person_id AS pid, substr(pl.sort_date,1,7) AS ym
+          FROM pco_plan_people pp JOIN pco_plans pl ON pl.org_id=pp.org_id AND pl.pco_id=pp.plan_id
+         WHERE pp.org_id=${orgId} AND pl.sort_date >= '${cutoff}'
+      )
+    )
+    SELECT pid, MIN(mi) AS first_mi, MAX(mi) AS last_mi
+      FROM am
+     WHERE pid IS NOT NULL AND pid != '' AND mi <= ${currentYear} * 12 + 11
+     GROUP BY pid;`;
+  const { stdout: engOut } = await run(
+    process.env.SQLITE3_BIN ?? "/usr/bin/sqlite3",
+    ["-readonly", dbFile, engSql],
+    { timeout: 5 * 60_000, maxBuffer: 32 << 20 },
+  );
+  const eng = engOut
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [pid, f, l] = line.split("|");
+      return { pid, first: Number(f), last: Number(l) };
+    })
+    .filter((e) => e.pid && Number.isFinite(e.first) && Number.isFinite(e.last));
+
+  const engTx = db.transaction(() => {
+    db.prepare("DELETE FROM retention_engagement WHERE org_id = ?").run(orgId);
+    const ins = db.prepare(
+      "INSERT INTO retention_engagement (org_id, person_id, first_mi, last_mi) VALUES (?, ?, ?, ?)",
+    );
+    for (const e of eng) ins.run(orgId, e.pid, e.first, e.last);
+  });
+  engTx();
 }
 
 const MONTHS = [
