@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import type { ServiceAttendanceRow } from "@/lib/attendance-read";
+import type { AttendanceMarker } from "@/lib/attendance-exclusion";
+import { MarkerLayer, MarkerLegend, markerHoverText, buildMarkerMap } from "./attendance-markers";
 
 const ROOMS: Array<{ key: string; label: string }> = [
   { key: "center", label: "Center" },
@@ -9,8 +11,10 @@ const ROOMS: Array<{ key: string; label: string }> = [
   { key: "kids", label: "Kids" },
   { key: "student", label: "Students" },
 ];
-// Distinct colors per service-time slot (assigned by sorted order).
-const PALETTE = ["#2563eb", "#0d9488", "#f97316", "#7c3aed", "#db2777", "#65a30d"];
+// Seven maximally-distinct colors per service-time slot (assigned by sorted
+// order) — there can be up to 7 distinct times across the years
+// (6:30 / 8:00 / 9:00 / 9:30 / 10:30 / 11:00 / 11:15).
+const PALETTE = ["#2563eb", "#dc2626", "#16a34a", "#f97316", "#9333ea", "#0891b2", "#ca8a04"];
 
 const toMinutes = (svc: string) => {
   const [h, m] = svc.split(":").map(Number);
@@ -20,7 +24,7 @@ const toMinutes = (svc: string) => {
 /** Per-service-time attendance for one room, week by week — each service time
  *  its own toggleable line. Service times drift over the years, so we plot
  *  whatever times appear (each a separate line, null where absent that week). */
-export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
+export function ServiceTrendsChart({ rows, markers }: { rows: ServiceAttendanceRow[]; markers?: AttendanceMarker[] }) {
   const roomsPresent = useMemo(
     () => ROOMS.filter((r) => rows.some((x) => x.room === r.key && x.count != null)),
     [rows],
@@ -54,6 +58,7 @@ export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
     );
   }
 
+  const markerMap = buildMarkerMap(markers);
   const colorFor = (svc: string) => PALETTE[services.indexOf(svc) % PALETTE.length];
   const shown = services.filter((s) => !hidden.has(s));
   const width = 1000, height = 280, padL = 44, padR = 14, padT = 14, padB = 30;
@@ -105,6 +110,7 @@ export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
             );
           })}
         </div>
+        <span className="ml-auto"><MarkerLegend markers={markers} /></span>
       </div>
       <svg viewBox={`0 0 ${width} ${height}`}
         onMouseMove={(e) => { const rect = e.currentTarget.getBoundingClientRect(); const vx = ((e.clientX - rect.left) / rect.width) * width; setHover(Math.max(0, Math.min(n - 1, Math.round((vx - padL) / stepX)))); }}
@@ -122,6 +128,7 @@ export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
             <text x={xFor(t.i)} y={height - padB + 14} textAnchor="middle" fontSize={10} fill="#7c879c">{t.y}</text>
           </g>
         ))}
+        <MarkerLayer weeks={weeks} markers={markers} xFor={xFor} padT={padT} innerH={innerH} />
         {hover != null && <line x1={xFor(hover)} x2={xFor(hover)} y1={padT} y2={padT + innerH} stroke="rgba(168,178,198,0.5)" strokeWidth={1} pointerEvents="none" />}
         {shown.map((s) => <path key={s} d={path(s)} fill="none" stroke={colorFor(s)} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />)}
       </svg>
@@ -132,6 +139,9 @@ export function ServiceTrendsChart({ rows }: { rows: ServiceAttendanceRow[] }) {
             <span className="text-muted ml-3">
               {shown.map((s) => { const v = series[s][hover]; return v != null ? `${s}: ${v.toLocaleString()}` : null; }).filter(Boolean).join(" · ")}
             </span>
+            {markerHoverText(markerMap, weeks[hover]) && (
+              <span className="ml-3 text-warn-soft-fg">{markerHoverText(markerMap, weeks[hover])}</span>
+            )}
           </span>
         ) : (
           <span className="text-subtle">Weekly attendance per service time. Click a service to hide it.</span>

@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import type { WeeklyAttendanceRow } from "@/lib/attendance-read";
+import type { AttendanceMarker } from "@/lib/attendance-exclusion";
+import { MarkerLayer, MarkerLegend, markerHoverText, buildMarkerMap } from "./attendance-markers";
 
 type RoomKey = "center_total" | "chapel_total" | "adult_total" | "kids_total" | "student_total" | "online_live" | "abfs";
 const ROOMS: Array<{ key: RoomKey; label: string; color: string }> = [
@@ -19,7 +21,7 @@ const DAY = 86_400_000;
 /** Per-room attendance, week by week — each venue/room its own toggleable
  *  line — plus a trend chip per room (last-12-months average vs the prior 12).
  *  Built from the weekly rows already loaded for the page. */
-export function RoomTrendsChart({ rows }: { rows: WeeklyAttendanceRow[] }) {
+export function RoomTrendsChart({ rows, markers }: { rows: WeeklyAttendanceRow[]; markers?: AttendanceMarker[] }) {
   const { weeks, series, available, trends } = useMemo(() => {
     const sorted = [...rows].sort((a, b) => a.week_date.localeCompare(b.week_date));
     const weeks = sorted.map((r) => r.week_date);
@@ -59,6 +61,7 @@ export function RoomTrendsChart({ rows }: { rows: WeeklyAttendanceRow[] }) {
   }
 
   const shown = available.filter((r) => !hidden.has(r.key));
+  const markerMap = buildMarkerMap(markers);
   const width = 1000, height = 280, padL = 44, padR = 14, padT = 14, padB = 30;
   const innerW = width - padL - padR, innerH = height - padT - padB;
   const n = weeks.length;
@@ -99,6 +102,7 @@ export function RoomTrendsChart({ rows }: { rows: WeeklyAttendanceRow[] }) {
             </button>
           );
         })}
+        <span className="ml-auto self-center"><MarkerLegend markers={markers} /></span>
       </div>
       <svg viewBox={`0 0 ${width} ${height}`}
         onMouseMove={(e) => { const rect = e.currentTarget.getBoundingClientRect(); const vx = ((e.clientX - rect.left) / rect.width) * width; setHover(Math.max(0, Math.min(n - 1, Math.round((vx - padL) / stepX)))); }}
@@ -116,6 +120,7 @@ export function RoomTrendsChart({ rows }: { rows: WeeklyAttendanceRow[] }) {
             <text x={xFor(t.i)} y={height - padB + 14} textAnchor="middle" fontSize={10} fill="#7c879c">{t.y}</text>
           </g>
         ))}
+        <MarkerLayer weeks={weeks} markers={markers} xFor={xFor} padT={padT} innerH={innerH} />
         {hover != null && <line x1={xFor(hover)} x2={xFor(hover)} y1={padT} y2={padT + innerH} stroke="rgba(168,178,198,0.5)" strokeWidth={1} pointerEvents="none" />}
         {shown.map((r) => <path key={r.key} d={path(r.key)} fill="none" stroke={r.color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />)}
       </svg>
@@ -126,6 +131,9 @@ export function RoomTrendsChart({ rows }: { rows: WeeklyAttendanceRow[] }) {
             <span className="text-muted ml-3">
               {shown.map((r) => { const v = series[r.key][hover]; return v != null ? `${r.label}: ${v.toLocaleString()}` : null; }).filter(Boolean).join(" · ")}
             </span>
+            {markerHoverText(markerMap, weeks[hover]) && (
+              <span className="ml-3 text-warn-soft-fg">{markerHoverText(markerMap, weeks[hover])}</span>
+            )}
           </span>
         ) : (
           <span className="text-subtle">Weekly attendance per room. Click a room to hide it.</span>

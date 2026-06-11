@@ -8,6 +8,7 @@ import {
 } from "@/lib/attendance-read";
 import { listAttendanceSources } from "@/lib/attendance-sources-read";
 import { buildAttendanceDistribution } from "@/lib/attendance-distribution";
+import { classifyException } from "@/lib/attendance-exclusion";
 import { loadWeatherForWeeks } from "@/lib/weather-trexlertown";
 import { analyzeSeasonalTrends } from "@/lib/attendance-seasonal";
 import {
@@ -39,6 +40,16 @@ export default async function AttendancePage() {
   const sources = listAttendanceSources(session.orgId);
   const history = getWeeklyAttendance(session.orgId);
   const serviceRows = getServiceAttendance(session.orgId);
+  // Cancellation / holiday / note markers, shared by the per-room and
+  // per-service charts.
+  const attendanceMarkers = history.rows
+    .map((r) => {
+      const kind = classifyException(r.exception_reason);
+      return kind && r.exception_reason
+        ? { week_date: r.week_date, reason: r.exception_reason, kind }
+        : null;
+    })
+    .filter((m): m is { week_date: string; reason: string; kind: "cancel" | "holiday" | "note" } => m != null);
   const importedFiles = listImportedAttendanceFiles(session.orgId);
   // Weekly attendance is now DERIVED from the imported adult in-person
   // average (last 12 mo) — no longer a manually-entered number.
@@ -284,7 +295,7 @@ export default async function AttendancePage() {
               with a trend chip (last 12 months vs the prior 12) for each. Click
               a room in the legend to hide it.
             </p>
-            <RoomTrendsChart rows={history.rows} />
+            <RoomTrendsChart rows={history.rows} markers={attendanceMarkers} />
           </Card>
         )}
 
@@ -298,7 +309,7 @@ export default async function AttendancePage() {
               legend to hide it. Online streaming has no per-service split, so
               it stays in <span className="text-fg">By room</span> above.
             </p>
-            <ServiceTrendsChart rows={serviceRows} />
+            <ServiceTrendsChart rows={serviceRows} markers={attendanceMarkers} />
           </Card>
         )}
 
