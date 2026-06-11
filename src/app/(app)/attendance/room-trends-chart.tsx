@@ -14,47 +14,54 @@ const ROOMS: Array<{ key: RoomKey; label: string; color: string }> = [
   { key: "abfs", label: "ABFs", color: "#65a30d" },
 ];
 
-/** Per-room attendance trends — monthly averages, each venue/room its own
- *  toggleable line. Built from the weekly rows already loaded for the page. */
+const DAY = 86_400_000;
+
+/** Per-room attendance, week by week — each venue/room its own toggleable
+ *  line — plus a trend chip per room (last-12-months average vs the prior 12).
+ *  Built from the weekly rows already loaded for the page. */
 export function RoomTrendsChart({ rows }: { rows: WeeklyAttendanceRow[] }) {
-  // Monthly average per room (ignoring blank weeks).
-  const { months, series, available } = useMemo(() => {
-    const agg = new Map<string, Record<RoomKey, { sum: number; n: number }>>();
-    for (const r of rows) {
-      const ym = r.week_date.slice(0, 7);
-      let e = agg.get(ym);
-      if (!e) { e = {} as Record<RoomKey, { sum: number; n: number }>; agg.set(ym, e); }
-      for (const room of ROOMS) {
-        const v = r[room.key];
-        if (v != null) {
-          const c = e[room.key] ?? { sum: 0, n: 0 };
-          c.sum += v; c.n += 1; e[room.key] = c;
-        }
-      }
-    }
-    const months = [...agg.keys()].sort();
+  const { weeks, series, available, trends } = useMemo(() => {
+    const sorted = [...rows].sort((a, b) => a.week_date.localeCompare(b.week_date));
+    const weeks = sorted.map((r) => r.week_date);
     const series: Record<RoomKey, Array<number | null>> = {} as Record<RoomKey, Array<number | null>>;
-    for (const room of ROOMS) {
-      series[room.key] = months.map((m) => {
-        const c = agg.get(m)?.[room.key];
-        return c && c.n > 0 ? Math.round(c.sum / c.n) : null;
-      });
-    }
+    for (const room of ROOMS) series[room.key] = sorted.map((r) => r[room.key]);
     const available = ROOMS.filter((room) => series[room.key].some((v) => v != null));
-    return { months, series, available };
+
+    // Trend: last-12-months average vs the prior 12 months, anchored to the
+    // latest week (so stale test data still gives a meaningful comparison).
+    const latestMs = weeks.length ? new Date(weeks[weeks.length - 1]).valueOf() : 0;
+    const recentCut = latestMs - 365 * DAY;
+    const priorCut = latestMs - 730 * DAY;
+    const trends = new Map<RoomKey, { recent: number | null; deltaPct: number | null }>();
+    for (const room of ROOMS) {
+      const rec: number[] = [], pri: number[] = [];
+      sorted.forEach((r) => {
+        const v = r[room.key];
+        if (v == null) return;
+        const t = new Date(r.week_date).valueOf();
+        if (t > recentCut) rec.push(v);
+        else if (t > priorCut) pri.push(v);
+      });
+      const recent = rec.length ? Math.round(rec.reduce((a, b) => a + b, 0) / rec.length) : null;
+      const priorAvg = pri.length ? pri.reduce((a, b) => a + b, 0) / pri.length : null;
+      const deltaPct = recent != null && priorAvg != null && priorAvg > 0
+        ? Math.round(((recent - priorAvg) / priorAvg) * 100) : null;
+      trends.set(room.key, { recent, deltaPct });
+    }
+    return { weeks, series, available, trends };
   }, [rows]);
 
   const [hidden, setHidden] = useState<Set<RoomKey>>(new Set());
   const [hover, setHover] = useState<number | null>(null);
 
-  if (available.length === 0 || months.length < 2) {
+  if (available.length === 0 || weeks.length < 2) {
     return <p className="text-xs text-subtle">No per-room data in the imported attendance yet.</p>;
   }
 
   const shown = available.filter((r) => !hidden.has(r.key));
   const width = 1000, height = 280, padL = 44, padR = 14, padT = 14, padB = 30;
   const innerW = width - padL - padR, innerH = height - padT - padB;
-  const n = months.length;
+  const n = weeks.length;
   const stepX = n > 1 ? innerW / (n - 1) : innerW;
   const xFor = (i: number) => padL + i * stepX;
   let max = 0;
@@ -62,7 +69,10 @@ export function RoomTrendsChart({ rows }: { rows: WeeklyAttendanceRow[] }) {
   max = Math.max(1, max);
   const yFor = (v: number) => padT + innerH - (v / max) * innerH;
   const yTicks = niceTicks(max);
-  const yearTicks = months.map((m, i) => ({ i, m })).filter((x) => x.m.endsWith("-01"));
+  // First week of each calendar year, for x labels.
+  const yearTicks = weeks
+    .map((w, i) => ({ i, y: w.slice(0, 4) }))
+    .filter((x, i, arr) => i === 0 ? false : x.y !== arr[i - 1].y);
 
   const path = (key: RoomKey) => {
     let d = "", started = false;
@@ -101,22 +111,55 @@ export function RoomTrendsChart({ rows }: { rows: WeeklyAttendanceRow[] }) {
           </g>
         ); })}
         {yearTicks.map((t) => (
-          <text key={t.i} x={xFor(t.i)} y={height - padB + 14} textAnchor="middle" fontSize={10} fill="#7c879c">{t.m.slice(0, 4)}</text>
+          <g key={t.i}>
+            <line x1={xFor(t.i)} x2={xFor(t.i)} y1={padT} y2={padT + innerH} stroke="rgba(140,150,170,0.12)" strokeWidth={0.5} />
+            <text x={xFor(t.i)} y={height - padB + 14} textAnchor="middle" fontSize={10} fill="#7c879c">{t.y}</text>
+          </g>
         ))}
         {hover != null && <line x1={xFor(hover)} x2={xFor(hover)} y1={padT} y2={padT + innerH} stroke="rgba(168,178,198,0.5)" strokeWidth={1} pointerEvents="none" />}
-        {shown.map((r) => <path key={r.key} d={path(r.key)} fill="none" stroke={r.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />)}
+        {shown.map((r) => <path key={r.key} d={path(r.key)} fill="none" stroke={r.color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />)}
       </svg>
-      <div className="min-h-[34px] mt-1 text-xs">
+      <div className="min-h-[20px] mt-1 text-xs">
         {hover != null ? (
           <span>
-            <span className="font-medium">{months[hover]}</span>
+            <span className="font-medium">Week of {weeks[hover]}</span>
             <span className="text-muted ml-3">
               {shown.map((r) => { const v = series[r.key][hover]; return v != null ? `${r.label}: ${v.toLocaleString()}` : null; }).filter(Boolean).join(" · ")}
             </span>
           </span>
         ) : (
-          <span className="text-subtle">Monthly average attendance per room. Click a room to hide it.</span>
+          <span className="text-subtle">Weekly attendance per room. Click a room to hide it.</span>
         )}
+      </div>
+
+      {/* Trend chips: last-12-mo average vs the prior 12 months, per room. */}
+      <div className="mt-3 pt-3 border-t border-border-soft">
+        <div className="text-[11px] font-medium uppercase tracking-wider text-muted mb-2">Trend — last 12 mo vs prior 12 mo</div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+          {available.map((r) => {
+            const t = trends.get(r.key);
+            if (!t || t.recent == null) return null;
+            const up = t.deltaPct != null && t.deltaPct > 0;
+            const down = t.deltaPct != null && t.deltaPct < 0;
+            return (
+              <div key={r.key} className="rounded-lg border border-border-soft bg-bg-elev-2/40 p-2.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-block w-2 h-2 rounded-full" style={{ background: r.color }} />
+                  <span className="text-xs font-medium">{r.label}</span>
+                </div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="tnum text-base font-semibold">{t.recent.toLocaleString()}</span>
+                  {t.deltaPct != null && (
+                    <span className={`text-xs tnum ${up ? "text-good-soft-fg" : down ? "text-warn-soft-fg" : "text-muted"}`}>
+                      {up ? "▲" : down ? "▼" : "→"} {Math.abs(t.deltaPct)}%
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] text-subtle mt-0.5">avg/week</div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

@@ -279,9 +279,10 @@ export default async function AttendancePage() {
           <Card className="p-5 space-y-3">
             <h2 className="text-sm font-semibold">By room</h2>
             <p className="text-xs text-muted max-w-2xl">
-              Monthly average attendance per venue / room — Center, Chapel, Kids,
-              Students, Online, and ABFs — so each can be tracked on its own.
-              Click a room in the legend to hide it.
+              Week-by-week attendance per venue / room — Center, Chapel, Kids,
+              Students, Online, and ABFs — so each can be tracked on its own,
+              with a trend chip (last 12 months vs the prior 12) for each. Click
+              a room in the legend to hide it.
             </p>
             <RoomTrendsChart rows={history.rows} />
           </Card>
