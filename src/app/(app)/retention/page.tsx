@@ -10,7 +10,7 @@ import { RetentionSeasonalityChart } from "./retention-seasonality-chart";
 export default async function RetentionPage() {
   const session = await requireOrg();
   const {
-    byYear, byMonth, decay, annualDecayPct, decayTrends, reactivations, seasonality, bestMonth, worstMonth,
+    byYear, byMonth, decay, interactionDecay, annualDecayPct, decayTrends, reactivations, seasonality, bestMonth, worstMonth,
     seasonalityTrends, overallJoined, overallRetained, activityMonths, startYear,
   } = getRetention(session.orgId);
   const overallPct =
@@ -65,7 +65,7 @@ export default async function RetentionPage() {
           )}
         </Card>
 
-        {/* ── Decay: how each cohort's retention fell year by year ───── */}
+        {/* ── Retention decay: engaged (shepherded OR active) over time ── */}
         {decay.length > 0 && (
           <Card className="p-5 space-y-3">
             <div className="flex items-baseline justify-between gap-3 flex-wrap">
@@ -77,18 +77,34 @@ export default async function RetentionPage() {
               )}
             </div>
             <p className="text-xs text-muted max-w-3xl">
-              Each band is grouped by the year a person <em>first actually engaged</em> (first dated attendance,
-              check-in, or serving) — not when their PCO profile was created — so someone who sat in the system for
-              years and only showed up later starts, and decays, from that later year. People who never engaged
-              don&apos;t appear at all. It&apos;s a true survival curve: &ldquo;retained as of a year&rdquo; means
-              their most recent engagement is still within the {activityMonths}-month window then, so a cohort never
-              grows in a later year. People who lapsed and came back are counted in{" "}
-              <span className="text-fg">Returns</span> below, not folded back in. Toggle{" "}
+              Are our engaged people staying or leaving? &ldquo;Engaged&rdquo; = <em>shepherded</em> (in a
+              group/team) <em>or</em> <em>active</em> (a check-in, serving, or attendance within the{" "}
+              {activityMonths}-month window). Each band is grouped by the year a person <em>first</em> became
+              engaged — not when their PCO profile was created — so someone who sat in the system for years and only
+              showed up later starts, and decays, from that later year. People who never engaged don&apos;t appear.
+              It&apos;s a survival curve, so a cohort never grows in a later year; people who lapsed and came back
+              are counted in <span className="text-fg">Returns</span> below. Toggle{" "}
               <span className="text-fg">Total people</span> vs <span className="text-fg">% share</span>, and{" "}
               <span className="text-fg">By year</span> vs <span className="text-fg">By month</span>.
             </p>
             <RetentionDecayChart decay={decay} />
             {decayTrends.length > 0 && <Trends items={decayTrends} />}
+          </Card>
+        )}
+
+        {/* ── Interaction decay: everyone who came through the doors ───── */}
+        {interactionDecay.length > 0 && (
+          <Card className="p-5 space-y-3">
+            <h2 className="text-sm font-semibold">Interaction decay</h2>
+            <p className="text-xs text-muted max-w-3xl">
+              How many people come through the doors, and how many stick around vs. drift away — the wide-angle
+              view. Each band is a <em>join</em> cohort (everyone whose profile was created that year,{" "}
+              <em>including</em> those who later went inactive), surviving while their most recent real interaction
+              (attendance, check-in, serving, or form) is still within the {activityMonths}-month window. Unlike
+              Retention decay above, this counts <em>all</em> comers, not just the shepherded/active — so the gap
+              between the two is the slice that never really engaged.
+            </p>
+            <RetentionDecayChart decay={interactionDecay} />
           </Card>
         )}
 

@@ -48,8 +48,11 @@ export interface MonthSeasonality {
 export interface RetentionSummary {
   byYear: RetentionPoint[];
   byMonth: RetentionPoint[];
-  /** Per-cohort decay (how each join-year's retention fell year by year). */
+  /** Retention decay — per first-engagement cohort (shepherded OR active). */
   decay: CohortDecay[];
+  /** Interaction decay — per join cohort, surviving by last real interaction
+   *  (includes everyone who joined, even those who went inactive). */
+  interactionDecay: CohortDecay[];
   /** Avg % of still-retained members lost each year (the decay rate). */
   annualDecayPct: number | null;
   /** Auto-generated insights for the decay chart. */
@@ -70,14 +73,19 @@ export interface RetentionSummary {
 }
 
 interface RawRow {
+  personId: string;
   created: string;
   retained: number;
-  // First/last REAL-engagement month-index (year*12 + month-1), from the
-  // nightly precompute (retention_engagement): dated check-ins, plan serving,
-  // and event attendance only. NULL when the person never engaged. The decay
-  // is built on these — not the PCO profile-created date — so someone's curve
-  // starts the year they first actually showed up, and never-engaged people
-  // don't appear at all.
+  // Last of each REAL-interaction signal (NOT pco_updated). Powers the
+  // "Interaction decay" — join cohorts surviving by most-recent interaction.
+  lastForm: string | null;
+  lastCheckin: string | null;
+  lastAttended: string | null;
+  lastServed: string | null;
+  // First/last ACTIVITY month-index (year*12 + month-1) from the nightly
+  // precompute (retention_engagement): dated check-ins, plan serving, event
+  // attendance. Combined with live group/team membership spans to define
+  // "engaged" (shepherded OR active) for the Retention decay.
   firstMi: number | null;
   lastMi: number | null;
 }
@@ -91,7 +99,12 @@ export function getRetention(orgId: number): RetentionSummary {
   const currentYear = new Date().getUTCFullYear();
   const rows = getDb()
     .prepare(
-      `SELECT p.pco_created_at AS created,
+      `SELECT p.pco_id AS personId,
+              p.pco_created_at AS created,
+              pa.last_form_at AS lastForm,
+              pa.last_check_in_at AS lastCheckin,
+              pa.last_attended_at AS lastAttended,
+              pa.last_served_at AS lastServed,
               re.first_mi AS firstMi,
               re.last_mi AS lastMi,
               CASE WHEN pa.classification IS NOT NULL
@@ -110,31 +123,82 @@ export function getRetention(orgId: number): RetentionSummary {
     )
     .all(orgId) as RawRow[];
 
+  const win = activityMonths; // months in the activity window
+  const currentMi = currentYear * 12 + new Date().getUTCMonth(); // this month
+
+  // "Shepherded" spans, computed live (these tables are tiny): the months a
+  // person held a group/team membership. Still-open memberships (no archive)
+  // run to this month. MIN start / MAX end per person.
+  const memRows = getDb()
+    .prepare(
+      `SELECT pid, MIN(smi) AS mfirst, MAX(emi) AS mlast FROM (
+         SELECT person_id AS pid,
+                CAST(substr(joined_at,1,4) AS INTEGER)*12 + CAST(substr(joined_at,6,2) AS INTEGER) - 1 AS smi,
+                CASE WHEN archived_at IS NULL THEN ?
+                     ELSE CAST(substr(archived_at,1,4) AS INTEGER)*12 + CAST(substr(archived_at,6,2) AS INTEGER) - 1 END AS emi
+           FROM pco_group_memberships WHERE org_id = ? AND joined_at IS NOT NULL
+         UNION ALL
+         SELECT person_id AS pid,
+                CAST(substr(pco_created_at,1,4) AS INTEGER)*12 + CAST(substr(pco_created_at,6,2) AS INTEGER) - 1 AS smi,
+                CASE WHEN archived_at IS NULL THEN ?
+                     ELSE CAST(substr(archived_at,1,4) AS INTEGER)*12 + CAST(substr(archived_at,6,2) AS INTEGER) - 1 END AS emi
+           FROM pco_team_memberships WHERE org_id = ? AND pco_created_at IS NOT NULL AND person_id != ''
+       ) GROUP BY pid`,
+    )
+    .all(currentMi, orgId, currentMi, orgId) as Array<{ pid: string; mfirst: number; mlast: number }>;
+  const memSpan = new Map<string, { mfirst: number; mlast: number }>();
+  for (const m of memRows) memSpan.set(m.pid, { mfirst: m.mfirst, mlast: m.mlast });
+
+  const monthIdxOf = (iso: string) => Number(iso.slice(0, 4)) * 12 + (Number(iso.slice(5, 7)) - 1);
+  const lastRealIdx = (r: RawRow): number => {
+    let best = -Infinity;
+    for (const d of [r.lastForm, r.lastCheckin, r.lastAttended, r.lastServed]) {
+      if (d) best = Math.max(best, monthIdxOf(d));
+    }
+    return best;
+  };
+
   const yearAgg = new Map<string, { joined: number; retained: number }>();
   const monthAgg = new Map<string, { joined: number; retained: number }>();
-  // Two independent views, from one pass:
-  //  • byYear/byMonth (the retention-% chart) — keyed by JOIN year, scored by
-  //    current classification. Unchanged.
-  //  • cohortMembers (the decay) — keyed by FIRST-ENGAGEMENT year. firstIdx =
-  //    the month a person first actually engaged (their real start); lastIdx =
-  //    their last engagement month (survival). People who never engaged have
-  //    no firstMi and don't appear in the decay at all.
-  interface Member { firstIdx: number; lastIdx: number }
-  const cohortMembers = new Map<number, Member[]>();
+  // Members carry an engaged SPAN [startIdx, endIdx]; survival at period P =
+  // start <= P <= end. Built three ways from one pass:
+  //  • byYear/byMonth (retention-% chart) — by JOIN year, current classification.
+  //  • interactionMembers (Interaction decay) — by JOIN year; span = from joining
+  //    until their last real interaction ages out. EVERY adult who joined, even
+  //    never-interacting ones, so it shows the full "came in / stuck or left".
+  //  • engagedMembers (Retention decay) — by the year a person first became
+  //    ENGAGED (shepherded OR active); span covers their shepherded membership
+  //    plus the window after their last dated activity. Never-engaged drop out.
+  interface Member { startIdx: number; endIdx: number }
+  const interactionMembers = new Map<number, Member[]>();
+  const engagedMembers = new Map<number, Member[]>();
   for (const r of rows) {
     const jy = Number(r.created.slice(0, 4));
-    // retention-% chart / seasonality: by join year, from 2017 (skip the 2016 import).
     if (jy && jy >= PCT_START_YEAR) {
       bump(yearAgg, String(jy), r.retained);
       bump(monthAgg, r.created.slice(0, 7), r.retained);
+      // Interaction decay: join cohort; survives while last interaction is
+      // within the window. No real interaction → endIdx = -Infinity (counts in
+      // the cohort size but never "survives").
+      const last = lastRealIdx(r);
+      const arr = interactionMembers.get(jy) ?? [];
+      arr.push({ startIdx: monthIdxOf(r.created), endIdx: last === -Infinity ? -Infinity : last + win - 1 });
+      interactionMembers.set(jy, arr);
     }
-    // decay: by first-engagement year, regardless of when the profile was made.
-    if (r.firstMi != null && r.lastMi != null) {
-      const ey = Math.floor(r.firstMi / 12);
+    // Retention decay: engaged = shepherded (membership span) OR active (dated
+    // activity + window). Cohort = year of first engagement, regardless of join.
+    const mem = memSpan.get(r.personId);
+    const starts: number[] = [];
+    const ends: number[] = [];
+    if (r.firstMi != null && r.lastMi != null) { starts.push(r.firstMi); ends.push(r.lastMi + win - 1); }
+    if (mem) { starts.push(mem.mfirst); ends.push(mem.mlast); }
+    if (starts.length) {
+      const startIdx = Math.min(...starts);
+      const ey = Math.floor(startIdx / 12);
       if (ey >= RETENTION_START_YEAR && ey <= currentYear) {
-        const arr = cohortMembers.get(ey) ?? [];
-        arr.push({ firstIdx: r.firstMi, lastIdx: r.lastMi });
-        cohortMembers.set(ey, arr);
+        const arr = engagedMembers.get(ey) ?? [];
+        arr.push({ startIdx, endIdx: Math.max(...ends) });
+        engagedMembers.set(ey, arr);
       }
     }
   }
@@ -159,44 +223,44 @@ export function getRetention(orgId: number): RetentionSummary {
     overallRetained += c.retained;
   }
 
-  // ── Decay: monotonic SURVIVAL of each cohort ────────────────────────
-  // "Still retained as of T" = the person's most recent activity is within
-  // the activity window ending at T (last activity hasn't aged out). This
-  // can only fall as T advances, so a cohort never gains members in a later
-  // year. Returns (someone who lapsed and came back) are tracked separately
-  // below, not folded back into the decay line.
+  // ── Decay builder: SURVIVAL of each cohort as of each period ─────────
+  // A member survives at period P when their engaged span covers it
+  // (startIdx <= P <= endIdx). The span already bakes in the activity window,
+  // so this is just an interval test. A cohort builds up as people start
+  // through the year, then decays as spans end.
   const currentMonth = new Date().getUTCMonth() + 1; // 1-indexed
-  const win = activityMonths; // months in the activity window
   const survivedAt = (members: Member[], periodIdx: number): number => {
-    const lo = periodIdx - win + 1;
     let c = 0;
-    // Count someone once they've actually engaged (firstIdx <= P) AND their
-    // last engagement hasn't aged out — so the cohort builds up as people
-    // first show up through the year, then decays, instead of starting full.
-    for (const m of members) if (m.firstIdx <= periodIdx && m.lastIdx >= lo) c++;
+    for (const m of members) if (m.startIdx <= periodIdx && m.endIdx >= periodIdx) c++;
     return c;
   };
-
-  const decay: CohortDecay[] = [...cohortMembers.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([year, members]) => {
-      const size = members.length;
-      const pct = (count: number) => (size > 0 ? Math.round((count / size) * 100) : 0);
-      const points: Array<{ year: number; pct: number; count: number }> = [];
-      for (let Y = year; Y <= currentYear; Y++) {
-        const count = survivedAt(members, Y * 12 + 11);
-        points.push({ year: Y, count, pct: pct(count) });
-      }
-      const monthly: Array<{ key: string; pct: number; count: number }> = [];
-      for (let yy = year; yy <= currentYear; yy++) {
-        const endMo = yy === currentYear ? currentMonth : 12;
-        for (let mm = 1; mm <= endMo; mm++) {
-          const count = survivedAt(members, yy * 12 + (mm - 1));
-          monthly.push({ key: `${yy}-${String(mm).padStart(2, "0")}`, count, pct: pct(count) });
+  const buildDecay = (cohorts: Map<number, Member[]>): CohortDecay[] =>
+    [...cohorts.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([year, members]) => {
+        const size = members.length;
+        const pct = (count: number) => (size > 0 ? Math.round((count / size) * 100) : 0);
+        const points: Array<{ year: number; pct: number; count: number }> = [];
+        for (let Y = year; Y <= currentYear; Y++) {
+          // Past years: as of December. Current year: as of this month (Dec is
+          // still in the future, so open memberships/recent activity wouldn't
+          // reach it yet → would undercount).
+          const count = survivedAt(members, Math.min(Y * 12 + 11, currentMi));
+          points.push({ year: Y, count, pct: pct(count) });
         }
-      }
-      return { year, label: String(year), size, currentPct: points[points.length - 1]?.pct ?? 0, points, monthly };
-    });
+        const monthly: Array<{ key: string; pct: number; count: number }> = [];
+        for (let yy = year; yy <= currentYear; yy++) {
+          const endMo = yy === currentYear ? currentMonth : 12;
+          for (let mm = 1; mm <= endMo; mm++) {
+            const count = survivedAt(members, yy * 12 + (mm - 1));
+            monthly.push({ key: `${yy}-${String(mm).padStart(2, "0")}`, count, pct: pct(count) });
+          }
+        }
+        return { year, label: String(year), size, currentPct: points[points.length - 1]?.pct ?? 0, points, monthly };
+      });
+
+  const decay = buildDecay(engagedMembers);
+  const interactionDecay = buildDecay(interactionMembers);
 
   // ── Reactivations (lapsed → returned): read the nightly-precomputed
   //    table (refreshRetentionReturns, run during the dashboard refresh).
@@ -259,64 +323,70 @@ export function getRetention(orgId: number): RetentionSummary {
   const worstMonth = ranked.length ? ranked[ranked.length - 1] : null;
 
   // ── Trends / auto-insights (cards) ───────────────────────────────────
-  const decayTrends: RetentionInsight[] = [];
-  if (annualDecayPct != null) {
-    decayTrends.push({
-      title: `~${annualDecayPct}% lost per year`,
-      detail: "Average share of a cohort's still-active members who fall away each year — the decay rate.",
-      tone: annualDecayPct >= 20 ? "down" : "neutral",
-    });
-  }
-  const yr1 = realCohorts.map((c) => c.points[1]?.pct).filter((v): v is number => v != null);
-  if (yr1.length) {
-    const avg = Math.round(yr1.reduce((a, b) => a + b, 0) / yr1.length);
-    decayTrends.push({
-      title: `~${avg}% after year one`,
-      detail: "On average, a cohort is down to about this share still active a year after joining.",
-      tone: avg < 50 ? "down" : "neutral",
-    });
-  }
-  const oldest = realCohorts[0];
-  if (oldest) {
-    const last = oldest.points[oldest.points.length - 1];
-    decayTrends.push({
-      title: `${oldest.year} cohort: ${oldest.currentPct}%`,
-      detail: `${last.count.toLocaleString()} of ${oldest.size.toLocaleString()} still engaged ${currentYear - oldest.year} years on.`,
-      tone: "neutral",
-    });
-  }
-  const survivingNow = decay.reduce((a, c) => a + (c.points[c.points.length - 1]?.count ?? 0), 0);
-  if (survivingNow > 0) {
-    decayTrends.push({
-      title: `~${survivingNow.toLocaleString()} still retained`,
-      detail: "Adults across all join cohorts whose most recent activity is still within the activity window.",
-      tone: "up",
-    });
-  }
-  const reactNow = reactivations[reactivations.length - 1];
-  if (reactNow) {
-    decayTrends.push({
-      title: `${reactNow.count.toLocaleString()} returned in ${reactNow.year}`,
-      detail: "Lapsed (a gap longer than the activity window) and then came back — tracked separately from the decay.",
-      tone: "neutral",
-    });
-  }
-  // COVID trend: compare the engaged base just before COVID (end of 2019) to
-  // its low after lockdowns and to today — name the shift.
+  // Steady-state annual loss rate over a calendar-year span: per cohort, the
+  // fraction of still-engaged members lost year over year, skipping each
+  // cohort's first (ramp-up) year so we measure decay, not arrival.
+  const decayTrendOver = (yLo: number, yHi: number): number | null => {
+    const rs: number[] = [];
+    for (const c of decay) {
+      for (let k = 2; k < c.points.length; k++) {
+        const y = c.points[k].year;
+        if (y < yLo || y > yHi) continue;
+        const prev = c.points[k - 1].count;
+        if (prev > 0) rs.push(Math.max(0, 1 - c.points[k].count / prev));
+      }
+    }
+    return rs.length ? Math.round((rs.reduce((a, b) => a + b, 0) / rs.length) * 100) : null;
+  };
+  const preCovidDecay = decayTrendOver(2017, 2019);
+  const postCovidDecay = decayTrendOver(2022, currentYear);
   const totalAtYear = (Y: number) => decay.reduce((a, c) => a + (c.points.find((p) => p.year === Y)?.count ?? 0), 0);
-  const pre = totalAtYear(2019);
-  const trough = Math.min(totalAtYear(2020), totalAtYear(2021));
-  const nowTotal = totalAtYear(currentYear);
-  if (pre > 0 && trough > 0) {
-    const dropPct = Math.round((1 - trough / pre) * 100);
-    const recoveredPct = Math.round((nowTotal / pre) * 100);
+
+  const decayTrends: RetentionInsight[] = [];
+  // (a) decay trend, pre-COVID
+  if (preCovidDecay != null) {
     decayTrends.push({
-      title: dropPct >= 15 ? `COVID cliff: −${dropPct}% by 2020–21` : `Steady through COVID`,
+      title: `Pre-COVID: ~${preCovidDecay}%/yr lost`,
+      detail: `Before 2020, an engaged cohort shed about ${preCovidDecay}% of its remaining people each year.`,
+      tone: preCovidDecay >= 20 ? "down" : "neutral",
+    });
+  }
+  // (b) decay trend, post-COVID
+  if (postCovidDecay != null) {
+    const cmp = preCovidDecay != null
+      ? ` — ${postCovidDecay > preCovidDecay ? "faster" : postCovidDecay < preCovidDecay ? "slower" : "about the same as"} than the ~${preCovidDecay}% pre-COVID`
+      : "";
+    decayTrends.push({
+      title: `Post-COVID: ~${postCovidDecay}%/yr lost`,
+      detail: `Since 2022, cohorts lose about ${postCovidDecay}% of remaining people per year${cmp}.`,
+      tone: preCovidDecay != null && postCovidDecay > preCovidDecay ? "down" : "up",
+    });
+  }
+  // (c) the impact of COVID
+  const preTotal = totalAtYear(2019);
+  const troughTotal = Math.min(totalAtYear(2020), totalAtYear(2021));
+  const nowTotal = totalAtYear(currentYear);
+  if (preTotal > 0 && troughTotal > 0) {
+    const dropPct = Math.round((1 - troughTotal / preTotal) * 100);
+    const recoveredPct = Math.round((nowTotal / preTotal) * 100);
+    decayTrends.push({
+      title: `COVID hit: −${dropPct}% engaged`,
       detail:
         recoveredPct >= 95
-          ? `Recorded activity fell ${dropPct}% from its 2019 level during the 2020–21 shutdowns, but has since recovered to ~${recoveredPct}% of pre-COVID.`
-          : `Recorded activity fell ${dropPct}% from 2019 during the 2020–21 shutdowns and sits at ~${recoveredPct}% of the pre-COVID level today — a lasting step down, not a full rebound.`,
-      tone: recoveredPct >= 95 ? "up" : "down",
+          ? `The engaged base fell ${dropPct}% from 2019 to the 2020–21 low, then recovered to ~${recoveredPct}% of pre-COVID.`
+          : `The engaged base fell ${dropPct}% from 2019 to the 2020–21 low and sits at ~${recoveredPct}% of pre-COVID today — a lasting step down, not a full rebound.`,
+      tone: recoveredPct >= 95 ? "neutral" : "down",
+    });
+  }
+  // (d) loss-per-year of new people (year one)
+  const yr1 = decay.map((c) => c.points[1]?.pct).filter((v): v is number => v != null);
+  if (yr1.length) {
+    const remain = Math.round(yr1.reduce((a, b) => a + b, 0) / yr1.length);
+    const lost = Math.max(0, 100 - remain);
+    decayTrends.push({
+      title: `~${lost}% lost in year one`,
+      detail: `Of people new to engagement, about ${lost}% drop off within their first year (≈${remain}% are still engaged a year on).`,
+      tone: lost >= 50 ? "down" : "neutral",
     });
   }
 
@@ -349,6 +419,7 @@ export function getRetention(orgId: number): RetentionSummary {
     byYear,
     byMonth,
     decay,
+    interactionDecay,
     annualDecayPct,
     decayTrends,
     reactivations,
