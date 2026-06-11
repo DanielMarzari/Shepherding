@@ -76,12 +76,12 @@ interface RawRow {
   personId: string;
   created: string;
   retained: number;
-  // Last of each REAL-interaction signal (NOT pco_updated). Powers the
-  // "Interaction decay" — join cohorts surviving by most-recent interaction.
-  lastForm: string | null;
-  lastCheckin: string | null;
-  lastAttended: string | null;
-  lastServed: string | null;
+  // Last ANY PCO touch — most recent of activity OR a profile create/update
+  // (i.e. last_activity_at, which includes pco_updated_at). Powers the
+  // "Interaction decay": every record counts from its join until this signal
+  // ages out of the window — including "present" people whose only touch is a
+  // profile edit, and people who created a record once and then vanished.
+  lastActivity: string | null;
   // First/last ACTIVITY month-index (year*12 + month-1) from the nightly
   // precompute (retention_engagement): dated check-ins, plan serving, event
   // attendance. Combined with live group/team membership spans to define
@@ -101,10 +101,7 @@ export function getRetention(orgId: number): RetentionSummary {
     .prepare(
       `SELECT p.pco_id AS personId,
               p.pco_created_at AS created,
-              pa.last_form_at AS lastForm,
-              pa.last_check_in_at AS lastCheckin,
-              pa.last_attended_at AS lastAttended,
-              pa.last_served_at AS lastServed,
+              pa.last_activity_at AS lastActivity,
               re.first_mi AS firstMi,
               re.last_mi AS lastMi,
               CASE WHEN pa.classification IS NOT NULL
@@ -150,13 +147,6 @@ export function getRetention(orgId: number): RetentionSummary {
   for (const m of memRows) memSpan.set(m.pid, { mfirst: m.mfirst, mlast: m.mlast });
 
   const monthIdxOf = (iso: string) => Number(iso.slice(0, 4)) * 12 + (Number(iso.slice(5, 7)) - 1);
-  const lastRealIdx = (r: RawRow): number => {
-    let best = -Infinity;
-    for (const d of [r.lastForm, r.lastCheckin, r.lastAttended, r.lastServed]) {
-      if (d) best = Math.max(best, monthIdxOf(d));
-    }
-    return best;
-  };
 
   const yearAgg = new Map<string, { joined: number; retained: number }>();
   const monthAgg = new Map<string, { joined: number; retained: number }>();
@@ -164,8 +154,9 @@ export function getRetention(orgId: number): RetentionSummary {
   // start <= P <= end. Built three ways from one pass:
   //  • byYear/byMonth (retention-% chart) — by JOIN year, current classification.
   //  • interactionMembers (Interaction decay) — by JOIN year; span = from joining
-  //    until their last real interaction ages out. EVERY adult who joined, even
-  //    never-interacting ones, so it shows the full "came in / stuck or left".
+  //    until their last ANY PCO touch (activity OR profile edit) ages out. EVERY
+  //    record of every classification (shepherded/active/present/inactive), so it
+  //    shows the full "came in / stuck or timed out" funnel.
   //  • engagedMembers (Retention decay) — by the year a person first became
   //    ENGAGED (shepherded OR active); span covers their shepherded membership
   //    plus the window after their last dated activity. Never-engaged drop out.
@@ -177,10 +168,10 @@ export function getRetention(orgId: number): RetentionSummary {
     if (jy && jy >= PCT_START_YEAR) {
       bump(yearAgg, String(jy), r.retained);
       bump(monthAgg, r.created.slice(0, 7), r.retained);
-      // Interaction decay: join cohort; survives while last interaction is
-      // within the window. No real interaction → endIdx = -Infinity (counts in
-      // the cohort size but never "survives").
-      const last = lastRealIdx(r);
+      // Interaction decay: join cohort; survives while their last PCO touch
+      // (activity OR profile create/edit) is within the window. No touch at all
+      // → endIdx = -Infinity (counts in the cohort size but never "survives").
+      const last = r.lastActivity ? monthIdxOf(r.lastActivity) : -Infinity;
       const arr = interactionMembers.get(jy) ?? [];
       arr.push({ startIdx: monthIdxOf(r.created), endIdx: last === -Infinity ? -Infinity : last + win - 1 });
       interactionMembers.set(jy, arr);
@@ -378,15 +369,18 @@ export function getRetention(orgId: number): RetentionSummary {
       tone: recoveredPct >= 95 ? "neutral" : "down",
     });
   }
-  // (d) loss-per-year of new people (year one)
-  const yr1 = decay.map((c) => c.points[1]?.pct).filter((v): v is number => v != null);
-  if (yr1.length) {
-    const remain = Math.round(yr1.reduce((a, b) => a + b, 0) / yr1.length);
-    const lost = Math.max(0, 100 - remain);
+  // (d) the trend since COVID: engaged base recovering year over year
+  const t2020 = totalAtYear(2020);
+  const t2021 = totalAtYear(2021);
+  const troughYear = t2021 <= t2020 ? 2021 : 2020;
+  const troughVal = Math.min(t2020, t2021);
+  const nowVal = totalAtYear(currentYear);
+  if (troughVal > 0 && nowVal > 0) {
+    const growthPct = Math.round((nowVal / troughVal - 1) * 100);
     decayTrends.push({
-      title: `~${lost}% lost in year one`,
-      detail: `Of people new to engagement, about ${lost}% drop off within their first year (≈${remain}% are still engaged a year on).`,
-      tone: lost >= 50 ? "down" : "neutral",
+      title: growthPct > 0 ? `Up ${growthPct}% since the COVID low` : `Flat since the COVID low`,
+      detail: `The engaged base has climbed from ${troughVal.toLocaleString()} (${troughYear}) to ${nowVal.toLocaleString()} (${currentYear}) — retention has been rising year over year since COVID.`,
+      tone: growthPct > 0 ? "up" : "neutral",
     });
   }
 

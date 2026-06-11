@@ -97,12 +97,13 @@ export default async function RetentionPage() {
           <Card className="p-5 space-y-3">
             <h2 className="text-sm font-semibold">Interaction decay</h2>
             <p className="text-xs text-muted max-w-3xl">
-              How many people come through the doors, and how many stick around vs. drift away — the wide-angle
-              view. Each band is a <em>join</em> cohort (everyone whose profile was created that year,{" "}
-              <em>including</em> those who later went inactive), surviving while their most recent real interaction
-              (attendance, check-in, serving, or form) is still within the {activityMonths}-month window. Unlike
-              Retention decay above, this counts <em>all</em> comers, not just the shepherded/active — so the gap
-              between the two is the slice that never really engaged.
+              How many people come through the doors, and how many stick around vs. time out — the wide-angle view.
+              Each band is a <em>join</em> cohort (every PCO record created that year, of <em>any</em> kind —
+              shepherded, active, present, or inactive), surviving while their most recent PCO touch of <em>any</em>{" "}
+              sort — attendance, check-in, serving, a form, even just a profile create/edit — is still within the{" "}
+              {activityMonths}-month window. So even someone whose record was created once and then went quiet shows
+              up here, then drops off when they time out. The gap below the Retention decay above is the slice that
+              never really engaged.
             </p>
             <RetentionDecayChart decay={interactionDecay} />
           </Card>
