@@ -8,7 +8,9 @@ import {
 } from "@/lib/attendance-read";
 import { listAttendanceSources } from "@/lib/attendance-sources-read";
 import { buildAttendanceDistribution } from "@/lib/attendance-distribution";
-import { classifyException } from "@/lib/attendance-exclusion";
+import { classifyException, type AttendanceMarker } from "@/lib/attendance-exclusion";
+import { holidayMarkersForWeeks } from "@/lib/church-holidays";
+import { projectAttendance } from "@/lib/attendance-forecast";
 import { loadWeatherForWeeks } from "@/lib/weather-trexlertown";
 import { analyzeSeasonalTrends } from "@/lib/attendance-seasonal";
 import {
@@ -28,6 +30,7 @@ import { AttendanceUploadForm } from "./upload-form";
 import { AttendanceHistoryChart } from "./history-chart";
 import { RoomTrendsChart } from "./room-trends-chart";
 import { ServiceTrendsChart } from "./service-trends-chart";
+import { ProjectionTable } from "./projection-table";
 import { AttendanceWeatherChart } from "./weather-chart";
 import { PreacherChart } from "./preacher-chart";
 import { FamilyChart } from "./family-chart";
@@ -40,16 +43,21 @@ export default async function AttendancePage() {
   const sources = listAttendanceSources(session.orgId);
   const history = getWeeklyAttendance(session.orgId);
   const serviceRows = getServiceAttendance(session.orgId);
-  // Cancellation / holiday / note markers, shared by the per-room and
-  // per-service charts.
-  const attendanceMarkers = history.rows
-    .map((r) => {
-      const kind = classifyException(r.exception_reason);
-      return kind && r.exception_reason
-        ? { week_date: r.week_date, reason: r.exception_reason, kind }
-        : null;
-    })
-    .filter((m): m is { week_date: string; reason: string; kind: "cancel" | "holiday" | "note" } => m != null);
+  // Markers shared by the per-room and per-service charts: cancellations /
+  // notes from the spreadsheet, plus Easter (✝) and Christmas (★) computed
+  // from the calendar for every year. Calendar holidays are appended last so
+  // they win over any note on the same Sunday.
+  const noteMarkers: AttendanceMarker[] = history.rows.flatMap((r) => {
+    const kind = classifyException(r.exception_reason);
+    return kind && r.exception_reason
+      ? [{ week_date: r.week_date, reason: r.exception_reason, kind }]
+      : [];
+  });
+  const attendanceMarkers: AttendanceMarker[] = [
+    ...noteMarkers,
+    ...holidayMarkersForWeeks(history.rows.map((r) => r.week_date)),
+  ];
+  const projection = projectAttendance(history.rows);
   const importedFiles = listImportedAttendanceFiles(session.orgId);
   // Weekly attendance is now DERIVED from the imported adult in-person
   // average (last 12 mo) — no longer a manually-entered number.
@@ -310,6 +318,18 @@ export default async function AttendancePage() {
               it stays in <span className="text-fg">By room</span> above.
             </p>
             <ServiceTrendsChart rows={serviceRows} markers={attendanceMarkers} />
+          </Card>
+        )}
+
+        {projection.categories.length > 0 && (
+          <Card className="p-5 space-y-3">
+            <h2 className="text-sm font-semibold">Projection — 2026 &amp; 2027</h2>
+            <p className="text-xs text-muted max-w-2xl">
+              Where each category is headed if current trends hold. {projection.method}
+              {" "}Projections are directional, not promises — holidays, building changes, and one-off events can
+              swing a year.
+            </p>
+            <ProjectionTable categories={projection.categories} />
           </Card>
         )}
 

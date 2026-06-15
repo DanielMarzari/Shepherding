@@ -6,6 +6,7 @@ import { RetentionChart } from "./retention-chart";
 import { RetentionDecayChart } from "./retention-decay-chart";
 import { RetentionReturnsChart } from "./retention-returns-chart";
 import { RetentionSeasonalityChart } from "./retention-seasonality-chart";
+import { RetentionSeasonalityTable } from "./retention-seasonality-table";
 
 export default async function RetentionPage() {
   const session = await requireOrg();
@@ -105,7 +106,7 @@ export default async function RetentionPage() {
               up here, then drops off when they time out. The gap below the Retention decay above is the slice that
               never really engaged.
             </p>
-            <RetentionDecayChart decay={interactionDecay} />
+            <RetentionDecayChart decay={interactionDecay} noun="interacting" subject="people interacting" />
           </Card>
         )}
 
@@ -135,9 +136,11 @@ export default async function RetentionPage() {
             <p className="text-xs text-muted max-w-3xl">
               Do people who join in some months stick around more than others? Settled monthly cohorts pooled by
               calendar month — useful for spotting whether a season (back-to-school, new year, summer) brings
-              stickier newcomers.
+              stickier newcomers. The table below breaks each month out by year, with 3-yr and 5-yr averages, so a
+              one-off outlier year (a post-COVID reopening month, say) doesn&apos;t masquerade as a trend.
             </p>
             <RetentionSeasonalityChart seasonality={seasonality} />
+            <RetentionSeasonalityTable seasonality={seasonality} />
             {seasonalityTrends.length > 0 && <Trends items={seasonalityTrends} />}
           </Card>
         )}

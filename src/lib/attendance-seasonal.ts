@@ -367,7 +367,13 @@ export function analyzeSeasonalTrends(
   const corrLow = wLowTemps.length >= 8 ? pearson(wLowTemps, wLowAtt) : null;
   const highWeak = corr != null && Math.abs(corr) < 0.15;
   const lowWeak = corrLow != null && Math.abs(corrLow) < 0.15;
-  if (corr != null && corrLow != null && highWeak && lowWeak) {
+  // A weak LINEAR correlation doesn't mean temperature is irrelevant — extreme
+  // cold can still suppress attendance (a threshold effect). So only claim
+  // "temperature doesn't affect attendance" when the sub-freezing comparison
+  // ALSO shows nothing; otherwise it contradicts the "Cold lowers…" insight.
+  const coldEffect =
+    cold.length >= 4 && mild.length >= 4 && Math.abs(pct(mean(cold), mean(mild))) >= 3;
+  if (corr != null && corrLow != null && highWeak && lowWeak && !coldEffect) {
     // Both the high AND the low are uncorrelated — say it once.
     weatherInsights.push({
       title: "Temperature doesn't affect attendance",
@@ -438,22 +444,6 @@ export function analyzeSeasonalTrends(
       });
     }
   }
-  // Weather cancellations — the most extreme weather effect (attendance
-  // dropped to ~0 / the service didn't happen), so they're excluded from
-  // the correlations above; surface the count so weather isn't understated.
-  const WEATHER_CANCEL = /\b(snow|sleet|ice|icy|storm|blizzard|weather|freez|wind|hurricane|flood)\b/i;
-  let weatherCancels = 0;
-  for (const r of rows) {
-    if (r.exception_reason && WEATHER_CANCEL.test(r.exception_reason)) weatherCancels++;
-  }
-  if (weatherCancels > 0) {
-    weatherInsights.push({
-      title: "Weather has forced full cancellations",
-      detail: `${weatherCancels} Sunday${weatherCancels === 1 ? "" : "s"} ${weatherCancels === 1 ? "was" : "were"} cancelled or closed for weather (excluded from the averages) — the most extreme weather effect, so the temperature correlations above understate weather's true impact.`,
-      tone: "down",
-    });
-  }
-
   return {
     markers,
     baseline,

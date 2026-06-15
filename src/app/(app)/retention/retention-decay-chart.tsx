@@ -10,7 +10,17 @@ type Gran = "year" | "month";
  *  band you watch ramp then taper. "Total people" → stack height is total
  *  engaged; "% share" → composition of the engaged base. Year or month
  *  resolution on the time axis. */
-export function RetentionDecayChart({ decay }: { decay: CohortDecay[] }) {
+export function RetentionDecayChart({
+  decay,
+  noun = "engaged",
+  subject = "engaged people",
+}: {
+  decay: CohortDecay[];
+  /** Count word in the hover readout, e.g. "engaged" or "interacting". */
+  noun?: string;
+  /** Phrase in the description, e.g. "engaged people" or "people interacting". */
+  subject?: string;
+}) {
   const [mode, setMode] = useState<Mode>("people");
   const [gran, setGran] = useState<Gran>("year");
   const [hoverX, setHoverX] = useState<number | null>(null);
@@ -138,15 +148,15 @@ export function RetentionDecayChart({ decay }: { decay: CohortDecay[] }) {
           <span>
             <span className="font-medium">{gran === "year" ? Math.floor(hoverX) : fmtMonth(hoverX)}</span>
             <span className="text-muted ml-3">
-              <span className="text-fg tnum mr-2">{(yTotals[hoverX] ?? 0).toLocaleString()} engaged</span>
+              <span className="text-fg tnum mr-2">{(yTotals[hoverX] ?? 0).toLocaleString()} {noun}</span>
               {cohorts.map((c, i) => { const n = countAt(i, hoverX); return n > 0 ? `${c.label}: ${n.toLocaleString()}` : null; }).filter(Boolean).join(" · ")}
             </span>
           </span>
         ) : (
           <p className="text-subtle">
             {mode === "people"
-              ? "Stacked engaged people by join-year cohort — stack height is the total engaged; each band ramps then tapers as that cohort decays."
-              : "Each band is a join-year cohort's share of today's engaged base, over time."}
+              ? `Stacked ${subject} by join-year cohort — stack height is the total; each band ramps then tapers as that cohort decays.`
+              : `Each band is a join-year cohort's share of the ${noun} base, over time.`}
           </p>
         )}
       </div>

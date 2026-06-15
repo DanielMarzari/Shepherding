@@ -65,7 +65,7 @@ export function isHolidayReason(reason: string | null | undefined): boolean {
   return HOLIDAY.test(reason);
 }
 
-export type ExceptionKind = "cancel" | "holiday" | "note";
+export type ExceptionKind = "cancel" | "holiday" | "easter" | "christmas" | "note";
 export interface AttendanceMarker {
   week_date: string;
   reason: string;

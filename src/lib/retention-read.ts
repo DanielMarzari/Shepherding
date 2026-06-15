@@ -44,6 +44,11 @@ export interface MonthSeasonality {
   joined: number;
   retained: number;
   pct: number;
+  /** Each settled year's cohort for this month, so outlier years are visible. */
+  years: Array<{ year: number; pct: number; joined: number }>;
+  /** Average % over the most recent 3 / 5 settled years for this month. */
+  avg3: number | null;
+  avg5: number | null;
 }
 export interface RetentionSummary {
   byYear: RetentionPoint[];
@@ -288,6 +293,9 @@ export function getRetention(orgId: number): RetentionSummary {
 
   // ── Seasonality: pool settled monthly cohorts by calendar month ──────
   const monAgg = new Map<number, { joined: number; retained: number; cohorts: number }>();
+  // Per-month-of-year, the settled cohort for each YEAR — so a single outlier
+  // year (e.g. a post-COVID reopening month) is visible, not buried in a pool.
+  const monYears = new Map<number, Array<{ year: number; pct: number; joined: number }>>();
   for (const m of byMonth) {
     if (m.pending) continue;
     const mo = Number(m.key.slice(5, 7));
@@ -296,10 +304,18 @@ export function getRetention(orgId: number): RetentionSummary {
     e.retained += m.retained;
     e.cohorts += 1;
     monAgg.set(mo, e);
+    const arr = monYears.get(mo) ?? [];
+    arr.push({ year: Number(m.key.slice(0, 4)), pct: m.pct, joined: m.joined });
+    monYears.set(mo, arr);
   }
+  const avgOfRecent = (ys: Array<{ year: number; pct: number }>, n: number): number | null => {
+    const recent = [...ys].sort((a, b) => b.year - a.year).slice(0, n);
+    return recent.length ? Math.round(recent.reduce((a, b) => a + b.pct, 0) / recent.length) : null;
+  };
   const seasonality: MonthSeasonality[] = [];
   for (let mo = 1; mo <= 12; mo++) {
     const e = monAgg.get(mo);
+    const years = (monYears.get(mo) ?? []).sort((a, b) => a.year - b.year);
     seasonality.push({
       month: mo,
       label: MONTHS[mo - 1],
@@ -307,6 +323,9 @@ export function getRetention(orgId: number): RetentionSummary {
       joined: e?.joined ?? 0,
       retained: e?.retained ?? 0,
       pct: e && e.joined > 0 ? Math.round((e.retained / e.joined) * 100) : 0,
+      years,
+      avg3: avgOfRecent(years, 3),
+      avg5: avgOfRecent(years, 5),
     });
   }
   const ranked = seasonality.filter((s) => s.joined >= 20).sort((a, b) => b.pct - a.pct);

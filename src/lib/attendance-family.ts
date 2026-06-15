@@ -52,8 +52,11 @@ export function analyzeFamilyTrends(rows: WeeklyAttendanceRow[]): FamilyAnalysis
 
   const adult: number[] = [];
   const kids: number[] = [];
+  const studentsAll: number[] = [];
+  const adultForStudents: number[] = [];
   const shareByYear = new Map<number, number[]>();
   const kidsByYear = new Map<number, number[]>();
+  const studentByYear = new Map<number, number[]>();
   let latest: string | null = null;
   for (const r of rows) {
     if (isExcludingReason(r.exception_reason)) continue;
@@ -61,6 +64,14 @@ export function analyzeFamilyTrends(rows: WeeklyAttendanceRow[]): FamilyAnalysis
     if (r.adult_total != null && r.kids_total != null) {
       adult.push(r.adult_total);
       kids.push(r.kids_total);
+    }
+    if (r.adult_total != null && r.student_total != null) {
+      adultForStudents.push(r.adult_total);
+      studentsAll.push(r.student_total);
+    }
+    if (r.student_total != null) {
+      if (!studentByYear.has(y)) studentByYear.set(y, []);
+      studentByYear.get(y)!.push(r.student_total);
     }
     if (r.kids_total != null) {
       if (!kidsByYear.has(y)) kidsByYear.set(y, []);
@@ -146,6 +157,42 @@ export function analyzeFamilyTrends(rows: WeeklyAttendanceRow[]): FamilyAnalysis
         title: "Kids are a growing share of the room",
         detail: `Kids went from ${f.avg.toFixed(0)}% of attendance (${f.y}) to ${l.avg.toFixed(0)}% (${l.y}) — +${delta} points.`,
         tone: "up",
+      });
+    }
+  }
+
+  // (4) Students COUNT over time — the absolute number in student worship.
+  const studentYearAvgs = [...studentByYear.entries()]
+    .filter(([, v]) => v.length >= 6)
+    .map(([y, v]) => ({ y, avg: mean(v) }))
+    .sort((a, b) => a.y - b.y);
+  if (studentYearAvgs.length >= 2) {
+    const f = studentYearAvgs[0];
+    const l = studentYearAvgs[studentYearAvgs.length - 1];
+    const span = l.y - f.y;
+    const totalPct = f.avg > 0 ? Math.round(((l.avg - f.avg) / f.avg) * 100) : 0;
+    const perYear = span > 0 ? Math.round(totalPct / span) : totalPct;
+    insights.push({
+      title:
+        perYear > 0
+          ? "More students over time"
+          : perYear < 0
+            ? "Fewer students over time"
+            : "Student attendance is steady",
+      detail: `Students in worship went from about ${Math.round(f.avg).toLocaleString()} (${f.y}) to ${Math.round(l.avg).toLocaleString()} (${l.y}) — roughly ${perYear >= 0 ? "+" : ""}${perYear}% per year.`,
+      tone: perYear > 0 ? "up" : perYear < 0 ? "down" : "neutral",
+    });
+  }
+
+  // Students per 10 adults.
+  if (adultForStudents.length > 0) {
+    const totalStudents = studentsAll.reduce((a, b) => a + b, 0);
+    const totalAdult = adultForStudents.reduce((a, b) => a + b, 0);
+    if (totalAdult > 0) {
+      insights.push({
+        title: "Students per adult",
+        detail: `About ${((totalStudents / totalAdult) * 10).toFixed(1)} students in worship for every 10 adults.`,
+        tone: "neutral",
       });
     }
   }

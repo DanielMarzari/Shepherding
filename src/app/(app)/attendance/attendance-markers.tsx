@@ -4,6 +4,8 @@ import type { AttendanceMarker, ExceptionKind } from "@/lib/attendance-exclusion
 
 const STYLE: Record<ExceptionKind, { stroke: string; glyph: string; fill: string; label: string; dash?: string }> = {
   cancel: { stroke: "rgba(245,158,11,0.55)", glyph: "✕", fill: "#f59e0b", label: "Cancelled", dash: "3 2" },
+  easter: { stroke: "rgba(147,51,234,0.45)", glyph: "✝", fill: "#9333ea", label: "Easter" },
+  christmas: { stroke: "rgba(220,38,38,0.45)", glyph: "★", fill: "#dc2626", label: "Christmas" },
   holiday: { stroke: "rgba(217,70,239,0.50)", glyph: "★", fill: "#d946ef", label: "Holiday" },
   note: { stroke: "rgba(148,163,184,0.35)", glyph: "•", fill: "#94a3b8", label: "Note", dash: "2 2" },
 };
@@ -47,7 +49,7 @@ export function MarkerLayer({
 export function MarkerLegend({ markers }: { markers: AttendanceMarker[] | undefined }) {
   const kinds = new Set((markers ?? []).map((m) => m.kind));
   if (kinds.size === 0) return null;
-  const order: ExceptionKind[] = ["cancel", "holiday", "note"];
+  const order: ExceptionKind[] = ["cancel", "easter", "christmas", "holiday", "note"];
   return (
     <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-subtle">
       {order.filter((k) => kinds.has(k)).map((k) => (
