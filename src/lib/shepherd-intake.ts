@@ -132,6 +132,8 @@ export interface IntakeCandidate {
   lastName: string;
   initials: string;
   known: boolean;
+  /** PCO household id (or null) — used to suggest adding household members. */
+  householdId: string | null;
 }
 
 /** Active-adult population the shepherd can mark, with whether THIS
@@ -148,7 +150,10 @@ export function listIntakeCandidates(
   const rows = db
     .prepare(
       `SELECT p.pco_id AS personId, p.enc_pii AS encPii,
-              CASE WHEN k.person_id IS NOT NULL THEN 1 ELSE 0 END AS known
+              CASE WHEN k.person_id IS NOT NULL THEN 1 ELSE 0 END AS known,
+              (SELECT hm.household_id FROM pco_household_memberships hm
+                WHERE hm.org_id = p.org_id AND hm.person_id = p.pco_id
+                LIMIT 1) AS householdId
          FROM person_activity pa
          JOIN pco_people p
            ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
@@ -173,6 +178,7 @@ export function listIntakeCandidates(
     personId: string;
     encPii: string | null;
     known: number;
+    householdId: string | null;
   }>;
   const out = rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
@@ -185,6 +191,7 @@ export function listIntakeCandidates(
       lastName: (last ?? first ?? "").trim(),
       initials: ((first?.[0] ?? "") + (last?.[0] ?? "")).toUpperCase() || "??",
       known: r.known === 1,
+      householdId: r.householdId,
     };
   });
   // Marked-known first, then by last name — so a returning shepherd

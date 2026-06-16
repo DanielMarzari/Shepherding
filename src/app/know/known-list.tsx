@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import type { IntakeCandidate } from "@/lib/shepherd-intake";
 import { toggleKnownAction } from "./actions";
 
@@ -34,6 +34,22 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
     for (const c of initial) m.set(c.personId, c);
     return m;
   }, [initial]);
+
+  // Candidates grouped by household (only households with 2+ people in the
+  // list), for the "add their family too" suggestions.
+  const householdGroups = useMemo(() => {
+    const byHouse = new Map<string, IntakeCandidate[]>();
+    for (const c of initial) {
+      if (!c.householdId) continue;
+      const arr = byHouse.get(c.householdId) ?? [];
+      arr.push(c);
+      byHouse.set(c.householdId, arr);
+    }
+    return [...byHouse.entries()].filter(([, g]) => g.length >= 2);
+  }, [initial]);
+
+  // Dismissed household suggestions (the ✕ on a card).
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   // Roster sorted by last name — the stable browse order.
   const sorted = useMemo(
@@ -86,9 +102,23 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
   );
   const markedCount = markedIds.length;
 
-  useEffect(() => {
-    if (q) setOffset(0);
-  }, [q]);
+  // For each household where the shepherd has marked someone but NOT everyone,
+  // suggest adding the rest. One card per household; dismissable.
+  const suggestions = useMemo(() => {
+    const out: Array<{ householdId: string; knownMembers: IntakeCandidate[]; toAdd: IntakeCandidate[] }> = [];
+    for (const [hid, group] of householdGroups) {
+      if (dismissed.has(hid)) continue;
+      const knownMembers = group.filter((c) => known[c.personId]);
+      const toAdd = group.filter((c) => !known[c.personId]);
+      if (knownMembers.length > 0 && toAdd.length > 0) {
+        out.push({ householdId: hid, knownMembers, toAdd });
+      }
+    }
+    out.sort((a, b) =>
+      (a.knownMembers[0]?.lastName ?? "").localeCompare(b.knownMembers[0]?.lastName ?? ""),
+    );
+    return out;
+  }, [householdGroups, dismissed, known]);
 
   function toggle(personId: string) {
     const next = !known[personId];
@@ -113,12 +143,64 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
       {/* ── Main column ───────────────────────────────────────────── */}
       <div className="space-y-4 order-last lg:order-first">
+        {/* Household suggestions — "you know X, add their family too?" */}
+        {suggestions.length > 0 && (
+          <div className="space-y-2">
+            {suggestions.map((s) => (
+              <div
+                key={s.householdId}
+                className="rounded-xl border border-accent/40 bg-accent/5 p-3 space-y-2"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm text-fg leading-snug">
+                    You know{" "}
+                    <span className="font-semibold">{formatNames(s.knownMembers)}</span>{" "}
+                    — add {s.toAdd.length === 1 ? "their household member" : "their household"} too?
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDismissed((p) => {
+                        const n = new Set(p);
+                        n.add(s.householdId);
+                        return n;
+                      })
+                    }
+                    aria-label="Dismiss suggestion"
+                    className="shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-subtle hover:text-fg hover:bg-bg-elev-2 transition-colors cursor-pointer"
+                  >
+                    <XIcon className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <ul className="space-y-1">
+                  {s.toAdd.map((m) => (
+                    <li key={m.personId}>
+                      <label className="flex items-center gap-2 cursor-pointer text-sm py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={!!known[m.personId]}
+                          onChange={() => toggle(m.personId)}
+                          className="w-4 h-4 rounded accent-[var(--accent)] cursor-pointer"
+                        />
+                        <span className="text-fg">{m.fullName}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="relative">
           <SearchIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-subtle pointer-events-none" />
           <input
             type="search"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              if (e.target.value.trim()) setOffset(0);
+            }}
             placeholder="Search for someone by name…"
             aria-label="Search people by name"
             className="w-full bg-bg-elev-2 border border-border-soft rounded-xl pl-11 pr-3 py-3 text-base text-fg placeholder:text-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent transition-shadow"
@@ -307,6 +389,14 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
       </aside>
     </div>
   );
+}
+
+/** "Jane Smith", "Jane & John Smith", "A, B & C". */
+function formatNames(cs: IntakeCandidate[]): string {
+  const names = cs.map((c) => c.fullName);
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length === 2) return `${names[0]} & ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")} & ${names[names.length - 1]}`;
 }
 
 function PersonRow({
