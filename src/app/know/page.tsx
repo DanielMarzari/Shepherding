@@ -53,9 +53,12 @@ export default async function KnowPage() {
               Hi, {session.fullName.split(" ")[0]}
             </h1>
             <p className="text-muted text-sm mt-1.5 leading-relaxed max-w-prose">
-              Mark the people you personally know — no rush, a few at a time
-              is fine. It just tells your church who you have a relationship
-              with; your admin decides who&apos;s formally assigned to you.
+              The people below are at our church but aren&apos;t in a team or
+              group yet — folks we&apos;d love to pray for, connect with, and
+              help take their next step. Select anyone you know personally, even
+              just in passing. This doesn&apos;t assign them to you for anything
+              — it just shows who&apos;s connected to whom and where these
+              people might already be getting involved.
             </p>
           </div>
           <form action={intakeLogoutAction} className="shrink-0">
