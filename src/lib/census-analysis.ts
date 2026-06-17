@@ -3,6 +3,7 @@ import { getDb } from "./db";
 import { CHURCH } from "./geocode";
 import { clampToValidArea } from "./lehigh-valley";
 import { LV_TRACTS, LV_CENSUS_META, type TractProps } from "./lv-census";
+import { countyOf, COUNTY_STATS } from "./pa-counties";
 
 const AVG_COST = LV_CENSUS_META.avgHomeValue;
 // Protestant church counts × an assumed avg congregation size → a rough
@@ -42,6 +43,10 @@ export interface CensusAnalysis {
   reachedPopulationPct: number; // share of LV population in tracts where we have anyone
   shareOfPopulationPct: number; // our people / LV population
   shareOfChurchedPct: number; // our people / churched population
+  /** Lifetime reach: EVERY geocoded person on file who lives in the LV… */
+  lifetimeInLV: number;
+  /** …as a share of the whole valley's population. */
+  lifetimeReachPct: number;
   tracts: CensusTract[];
   topNeed: CensusTract[];
   needCampus: NeedCampus | null;
@@ -125,6 +130,18 @@ function loadEngagedHomes(orgId: number): Array<{ lat: number; lng: number }> {
            ON pa.org_id = g.org_id AND pa.person_id = g.person_id
         WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL
           AND pa.classification IN ('shepherded','active','present')`,
+    )
+    .all(orgId) as Array<{ lat: number; lng: number }>;
+}
+
+/** EVERY geocoded person on file — regardless of classification — i.e. anyone
+ *  who has ever interacted with us and whose address we could place. Powers
+ *  "lifetime reach": how much of the valley's population has touched us. */
+function loadAllHomes(orgId: number): Array<{ lat: number; lng: number }> {
+  return getDb()
+    .prepare(
+      `SELECT lat, lng FROM person_geo
+        WHERE org_id = ? AND status = 'ok' AND lat IS NOT NULL`,
     )
     .all(orgId) as Array<{ lat: number; lng: number }>;
 }
@@ -259,6 +276,13 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
     } as CensusTract;
   });
 
+  // Lifetime reach — every geocoded person (any classification) whose home
+  // falls inside an LV tract, vs. the valley's total population.
+  let lifetimeInLV = 0;
+  for (const h of loadAllHomes(orgId)) {
+    if (tractOf(prepared, h.lat, h.lng)) lifetimeInLV++;
+  }
+
   const population = tracts.reduce((a, t) => a + t.pop, 0);
   const churched = tracts.reduce((a, t) => a + t.churched, 0);
   const unchurched = population - churched;
@@ -282,11 +306,127 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
     reachedPopulationPct: population > 0 ? (reachedPop / population) * 100 : 0,
     shareOfPopulationPct: population > 0 ? (ourMembers / population) * 100 : 0,
     shareOfChurchedPct: churched > 0 ? (ourMembers / churched) * 100 : 0,
+    lifetimeInLV,
+    lifetimeReachPct: population > 0 ? (lifetimeInLV / population) * 100 : 0,
     tracts,
     topNeed,
     needCampus,
     source: LV_CENSUS_META.source,
   };
+}
+
+// ── Reach by county (the Valley + its 5 neighbors) ──────────────────
+export interface CountyReach {
+  geoid: string;
+  name: string;
+  isValley: boolean;
+  population: number;
+  churchedPct: number;
+  congregations: number;
+  lifetimeCount: number; // every record placed in the county
+  engagedCount: number; // currently shepherded/active/present
+  lifetimeReachPct: number; // lifetime / population
+  engagedReachPct: number; // engaged / population
+  shareOfChurchedPct: number; // engaged / churched population
+}
+export interface CountyFinding {
+  title: string;
+  detail: string;
+  tone: "up" | "down" | "neutral";
+}
+export interface CountyAnalysis {
+  counties: CountyReach[];
+  findings: CountyFinding[];
+}
+
+function loadHomesWithClass(orgId: number): Array<{ lat: number; lng: number; engaged: boolean }> {
+  return (
+    getDb()
+      .prepare(
+        `SELECT g.lat, g.lng,
+                CASE WHEN pa.classification IN ('shepherded','active','present') THEN 1 ELSE 0 END AS engaged
+           FROM person_geo g
+           LEFT JOIN person_activity pa
+             ON pa.org_id = g.org_id AND pa.person_id = g.person_id
+          WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL`,
+      )
+      .all(orgId) as Array<{ lat: number; lng: number; engaged: number }>
+  ).map((r) => ({ lat: r.lat, lng: r.lng, engaged: r.engaged === 1 }));
+}
+
+/** How far our reach extends across the Valley and its five neighboring
+ *  counties — the same stats as the Valley, computed per county by placing
+ *  every geocoded home into a county boundary. */
+export function analyzeCounties(orgId: number): CountyAnalysis {
+  const life = new Map<string, number>();
+  const eng = new Map<string, number>();
+  for (const h of loadHomesWithClass(orgId)) {
+    const geoid = countyOf(h.lat, h.lng);
+    if (!geoid) continue;
+    life.set(geoid, (life.get(geoid) ?? 0) + 1);
+    if (h.engaged) eng.set(geoid, (eng.get(geoid) ?? 0) + 1);
+  }
+
+  const counties: CountyReach[] = Object.values(COUNTY_STATS)
+    .map((s) => {
+      const lifetimeCount = life.get(s.geoid) ?? 0;
+      const engagedCount = eng.get(s.geoid) ?? 0;
+      const churched = s.pop * s.rate;
+      return {
+        geoid: s.geoid,
+        name: s.name,
+        isValley: s.isValley,
+        population: s.pop,
+        churchedPct: s.rate * 100,
+        congregations: s.congregations,
+        lifetimeCount,
+        engagedCount,
+        lifetimeReachPct: (lifetimeCount / s.pop) * 100,
+        engagedReachPct: (engagedCount / s.pop) * 100,
+        shareOfChurchedPct: churched > 0 ? (engagedCount / churched) * 100 : 0,
+      };
+    })
+    .sort((a, b) => b.lifetimeCount - a.lifetimeCount);
+
+  // ── Findings ──────────────────────────────────────────────────────
+  const findings: CountyFinding[] = [];
+  const totalLife = counties.reduce((a, c) => a + c.lifetimeCount, 0);
+  const valley = counties.filter((c) => c.isValley);
+  const surrounding = counties.filter((c) => !c.isValley);
+  const valleyLife = valley.reduce((a, c) => a + c.lifetimeCount, 0);
+  if (totalLife > 0) {
+    const valleyPct = Math.round((valleyLife / totalLife) * 100);
+    findings.push({
+      title: `${valleyPct}% of our reach is in the Valley`,
+      detail: `${valleyLife.toLocaleString()} of the ${totalLife.toLocaleString()} people we've placed across these seven counties live in Lehigh or Northampton; the other ${(100 - valleyPct)}% spill into the surrounding five.`,
+      tone: "neutral",
+    });
+  }
+  const topSurround = surrounding[0];
+  if (topSurround && topSurround.lifetimeCount > 0) {
+    findings.push({
+      title: `Biggest spillover: ${topSurround.name}`,
+      detail: `${topSurround.lifetimeCount.toLocaleString()} people who've touched us live in ${topSurround.name} County — ${topSurround.lifetimeReachPct.toFixed(2)}% of its ${topSurround.population.toLocaleString()} residents.`,
+      tone: "up",
+    });
+  }
+  const reachedSurround = surrounding.filter((c) => c.lifetimeCount > 0).length;
+  findings.push({
+    title: `Present in ${reachedSurround} of 5 neighbors`,
+    detail: `We have at least one person on file in ${reachedSurround} of the five counties bordering the Valley${reachedSurround < 5 ? " — room to grow outward." : "."}`,
+    tone: reachedSurround >= 3 ? "up" : "neutral",
+  });
+  // Most-unreached neighbor: lowest reach where a sizable unchurched base exists.
+  const leastReached = [...surrounding].sort((a, b) => a.lifetimeReachPct - b.lifetimeReachPct)[0];
+  if (leastReached) {
+    const unchurched = Math.round(leastReached.population * (1 - leastReached.churchedPct / 100));
+    findings.push({
+      title: `Least-reached: ${leastReached.name}`,
+      detail: `${leastReached.name} County has the thinnest reach (${leastReached.lifetimeReachPct.toFixed(2)}% of residents) yet ~${unchurched.toLocaleString()} unchurched people.`,
+      tone: "down",
+    });
+  }
+  return { counties, findings };
 }
 
 function siteNeedCampus(tracts: CensusTract[]): NeedCampus | null {
