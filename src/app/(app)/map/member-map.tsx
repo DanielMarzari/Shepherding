@@ -6,7 +6,14 @@ import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { RoadLine } from "@/lib/road-mesh";
 import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
 import { LV_TRACTS } from "@/lib/lv-census";
-import { PA_SURROUNDING_COUNTIES } from "@/lib/pa-counties-geo";
+import { SURROUNDING_TRACTS } from "@/lib/surrounding-tracts";
+import { PA_COUNTY_BOUNDARIES } from "@/lib/pa-counties-geo";
+
+// Valley tracts + the five surrounding counties' tracts, one choropleth.
+const ALL_CENSUS_TRACTS = {
+  type: "FeatureCollection" as const,
+  features: [...LV_TRACTS.features, ...SURROUNDING_TRACTS.features],
+};
 
 /** Per-county reach for the surrounding-county polygons (subset of the
  *  census-analysis CountyReach shape — fields the map uses). */
@@ -259,6 +266,7 @@ export function MemberMap({
   secondCampuses = [],
   mesh,
   census,
+  surroundingTracts,
   counties,
   mode = "members",
   height = "62vh",
@@ -268,6 +276,8 @@ export function MemberMap({
   secondCampuses?: SecondCampus[];
   mesh?: { roads: RoadLine[] };
   census?: { tracts: CensusTractView[]; needCampus?: { lat: number; lng: number } | null };
+  /** Surrounding-county tracts (same shape) — merged into the choropleth. */
+  surroundingTracts?: CensusTractView[];
   /** Surrounding-county reach, keyed by GEOID — drawn as county polygons. */
   counties?: CountyView[];
   mode?: MapMode;
@@ -339,16 +349,20 @@ export function MemberMap({
           drawCounties();
         }
 
-        // Lehigh Valley region (filled), under the data, over the basemap.
+        // Lehigh Valley region. In census mode the blue county outlines mark
+        // the Valley (as two counties), so drop the combined orange border and
+        // keep only a faint fill; other modes keep the bordered region.
         const lvRegion = L.geoJSON(LEHIGH_VALLEY_REGION, {
           interactive: false,
-          style: { color: LV_COLOR, weight: 1.5, opacity: 0.85, fillColor: LV_COLOR, fillOpacity: 0.08 },
+          style: mode === "census"
+            ? { weight: 0, fillColor: LV_COLOR, fillOpacity: 0.05 }
+            : { color: LV_COLOR, weight: 1.5, opacity: 0.85, fillColor: LV_COLOR, fillOpacity: 0.08 },
         });
         lvRef.current = L.layerGroup([lvRegion]).addTo(map);
         // Open framed on the Valley — widened to include the surrounding
         // counties when they're shown, so they're visible on load.
         let fitTarget = lvRegion.getBounds();
-        if (mode === "census" && counties && counties.length && countiesRef.current) {
+        if (mode === "census" && countiesRef.current) {
           try { fitTarget = fitTarget.extend(countiesRef.current.getBounds()); } catch { /* noop */ }
         }
         try { map.fitBounds(fitTarget, { padding: [12, 12] }); } catch { /* noop */ }
@@ -466,25 +480,14 @@ export function MemberMap({
   function drawCounties() {
     const L = LRef.current;
     const layer = countiesRef.current;
-    if (!L || !layer || !counties || counties.length === 0) return;
+    if (!L || !layer) return;
     layer.clearLayers();
-    const byId = new Map(counties.map((c) => [c.geoid, c]));
-    const maxReach = Math.max(1e-6, ...counties.map((c) => c.lifetimeReachPct));
-    L.geoJSON(PA_SURROUNDING_COUNTIES, {
-      style: (f: any) => {
-        const c = byId.get(f.properties.geoid);
-        const frac = c ? c.lifetimeReachPct / maxReach : 0;
-        return { fillColor: "#0d9488", fillOpacity: 0.06 + 0.34 * frac, color: "#0d9488", weight: 1, opacity: 0.6, dashArray: "4 3" };
-      },
-      onEachFeature: (f: any, lyr: any) => {
-        const c = byId.get(f.properties.geoid);
-        lyr.bindTooltip(
-          c
-            ? `<b>${c.name} County</b><br>pop ${c.population.toLocaleString()} · ${c.churchedPct.toFixed(1)}% churched<br>${c.lifetimeCount.toLocaleString()} lifetime reach (${c.lifetimeReachPct.toFixed(2)}% of residents) · ${c.engagedCount.toLocaleString()} engaged`
-            : `${f.properties.name ?? ""} County`,
-          { sticky: true },
-        );
-      },
+    // Each of the 7 counties outlined in blue — including Lehigh/Northampton,
+    // so the Valley shows as two counties split by a line. Non-interactive so
+    // the tract choropleth underneath stays hoverable.
+    L.geoJSON(PA_COUNTY_BOUNDARIES, {
+      interactive: false,
+      style: () => ({ color: "#2563eb", weight: 1.6, opacity: 0.9, fill: false }),
     }).addTo(layer);
   }
 
@@ -493,11 +496,12 @@ export function MemberMap({
     const layer = censusRef.current;
     if (!L || !layer || !census) return;
     layer.clearLayers();
-    const vals = new Map(census.tracts.map((t) => [t.geoid, t]));
+    const allT = [...census.tracts, ...(surroundingTracts ?? [])];
+    const vals = new Map(allT.map((t) => [t.geoid, t]));
     // Some metrics don't start at 0 (price/income/age/drive) → min→max;
     // counts/shares normalize 0→max. No-data tracts render neutral grey.
     let max = -Infinity, min = Infinity;
-    for (const t of census.tracts) {
+    for (const t of allT) {
       const v = metricVal(t, censusMetric);
       if (!Number.isFinite(v)) continue;
       if (v > max) max = v;
@@ -506,7 +510,7 @@ export function MemberMap({
     const lo = MINMAX_METRICS.has(censusMetric) ? min : 0;
     const span = Math.max(1e-6, max - lo);
     const scheme = CENSUS_METRICS[censusMetric];
-    L.geoJSON(LV_TRACTS, {
+    L.geoJSON(ALL_CENSUS_TRACTS, {
       style: (f: any) => {
         const t = vals.get(f.properties.geoid);
         const v = t ? metricVal(t, censusMetric) : NaN;
@@ -732,8 +736,8 @@ export function MemberMap({
             </span>
             {counties && counties.length > 0 && (
               <span className="flex items-center gap-1.5">
-                <span className="inline-block w-3 h-3 rounded-sm border border-dashed" style={{ background: "#0d948822", borderColor: "#0d9488" }} />
-                surrounding counties (shaded by our reach)
+                <span className="inline-block w-3 h-3 rounded-sm border-2" style={{ borderColor: "#2563eb" }} />
+                county lines (Valley = Lehigh + Northampton)
               </span>
             )}
           </div>

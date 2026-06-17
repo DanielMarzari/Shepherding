@@ -20,7 +20,10 @@ export default async function ReachingTheValleyPage() {
           <p className="text-muted text-sm mt-1 max-w-3xl">
             How much of the Lehigh Valley is churched vs. unchurched, how much of it Faith Church already
             reaches, and where the biggest unreached need is. The choropleth colors each census tract — switch
-            between need, unchurched population, our reach, land price, churches, income, age, and drive time.
+            between need, unchurched population, our reach, land price, churches, income, age, and drive time. The
+            map now extends the same tract-level detail to the five surrounding counties (Berks, Bucks, Montgomery,
+            Schuylkill, Carbon), with every county outlined in blue (Lehigh and Northampton split by their shared
+            line). The headline stats below stay scoped to the Valley; per-county numbers are in “Reach by county.”
           </p>
           <p className="text-xs text-subtle mt-1">{census.source}</p>
         </div>
@@ -38,7 +41,8 @@ export default async function ReachingTheValleyPage() {
             points={[]}
             mode="census"
             census={{ tracts: census.tracts, needCampus: census.needCampus }}
-            counties={counties.counties.filter((c) => !c.isValley)}
+            surroundingTracts={census.surroundingTracts}
+            counties={counties.counties}
           />
           {census.needCampus && (
             <p className="text-[11px] text-subtle">

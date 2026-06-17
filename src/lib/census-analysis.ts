@@ -3,6 +3,7 @@ import { getDb } from "./db";
 import { CHURCH } from "./geocode";
 import { clampToValidArea } from "./lehigh-valley";
 import { LV_TRACTS, LV_CENSUS_META, type TractProps } from "./lv-census";
+import { SURROUNDING_TRACTS } from "./surrounding-tracts";
 import { countyOf, COUNTY_STATS } from "./pa-counties";
 
 const AVG_COST = LV_CENSUS_META.avgHomeValue;
@@ -47,7 +48,10 @@ export interface CensusAnalysis {
   lifetimeInLV: number;
   /** …as a share of the whole valley's population. */
   lifetimeReachPct: number;
+  /** Valley tracts (headline + campus planner). */
   tracts: CensusTract[];
+  /** Surrounding 5 counties' tracts — same metrics, for this page's map. */
+  surroundingTracts: CensusTract[];
   topNeed: CensusTract[];
   needCampus: NeedCampus | null;
   source: string;
@@ -82,8 +86,14 @@ interface PreparedTract {
   bbox: BBox;
 }
 
+/** Geoid prefix → Lehigh (42077) or Northampton (42095) = the Valley itself. */
+const isLVGeoid = (geoid: string) => geoid.startsWith("42077") || geoid.startsWith("42095");
+
 function prepareTracts(): PreparedTract[] {
-  return LV_TRACTS.features.map((f) => {
+  // The Valley's own tracts plus the five surrounding counties' tracts — both
+  // rendered as the same choropleth; the Valley still drives the headline stats.
+  const features = [...LV_TRACTS.features, ...SURROUNDING_TRACTS.features];
+  return features.map((f) => {
     const g = f.geometry;
     const polys: number[][][][] =
       g.type === "Polygon"
@@ -131,7 +141,10 @@ export function refreshGeoAssignments(orgId: number): void {
     .prepare(
       `SELECT person_id AS personId, lat, lng FROM person_geo
         WHERE org_id = ? AND status = 'ok' AND lat IS NOT NULL
-          AND (geo_assigned_at IS NULL OR geo_assigned_at < geocoded_at)`,
+          AND (geo_assigned_at IS NULL OR geo_assigned_at < geocoded_at
+               -- in a county but not yet matched to a tract: re-check now that
+               -- the surrounding-county tracts are part of the tract set.
+               OR (tract_geoid IS NULL AND county_geoid IS NOT NULL))`,
     )
     .all(orgId) as Array<{ personId: string; lat: number; lng: number }>;
   if (pending.length === 0) return;
@@ -264,10 +277,10 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
     .all(orgId) as Array<{ geoid: string; n: number }>;
   for (const r of engagedRows) {
     counts.set(r.geoid, r.n);
-    ourMembers += r.n;
+    if (isLVGeoid(r.geoid)) ourMembers += r.n; // headline = Valley only
   }
 
-  const tracts: CensusTract[] = prepared.map((t) => {
+  const allTracts: CensusTract[] = prepared.map((t) => {
     const p = t.props;
     const ourCount = counts.get(p.geoid) ?? 0;
     const churched = p.pop * p.rate;
@@ -292,25 +305,29 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
   });
 
   // Lifetime reach — every geocoded person (any classification) whose home
-  // falls inside an LV tract, vs. the valley's total population. tract_geoid
-  // is set only for homes inside an LV tract, so this is a simple count.
+  // falls inside a LEHIGH-VALLEY tract, vs. the valley's total population.
+  // (tract_geoid can now also be a surrounding-county tract, so filter to LV.)
   const lifetimeInLV = (
     getDb()
       .prepare(
         `SELECT COUNT(*) AS n FROM person_geo
-          WHERE org_id = ? AND status = 'ok' AND tract_geoid IS NOT NULL`,
+          WHERE org_id = ? AND status = 'ok'
+            AND (tract_geoid LIKE '42077%' OR tract_geoid LIKE '42095%')`,
       )
       .get(orgId) as { n: number }
   ).n;
 
+  // `tracts` = the Valley (drives the headline stats + campus planner, which
+  // is unchanged); `surroundingTracts` = the 5 neighbors, for this page's map.
+  const tracts = allTracts.filter((t) => isLVGeoid(t.geoid));
+  const surroundingTracts = allTracts.filter((t) => !isLVGeoid(t.geoid));
   const population = tracts.reduce((a, t) => a + t.pop, 0);
   const churched = tracts.reduce((a, t) => a + t.churched, 0);
   const unchurched = population - churched;
   const reachedTracts = tracts.filter((t) => t.ourCount > 0).length;
   const reachedPop = tracts.filter((t) => t.ourCount > 0).reduce((a, t) => a + t.pop, 0);
 
-  // Need-weighted second campus: geometric median of tract centroids
-  // weighted by need, then constrained to the valid area.
+  // Need-weighted second campus: over Valley tracts, constrained to the valley.
   const needCampus = siteNeedCampus(tracts);
 
   const topNeed = [...tracts].sort((a, b) => b.need - a.need).slice(0, 6);
@@ -329,6 +346,7 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
     lifetimeInLV,
     lifetimeReachPct: population > 0 ? (lifetimeInLV / population) * 100 : 0,
     tracts,
+    surroundingTracts,
     topNeed,
     needCampus,
     source: LV_CENSUS_META.source,
