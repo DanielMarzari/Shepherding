@@ -275,6 +275,9 @@ export function MemberMap({
   const [hiddenMem, setHiddenMem] = useState<string[]>([]);
   const [secondCohort, setSecondCohort] = useState<Cohort | "none">("all");
   const [censusMetric, setCensusMetric] = useState<CensusMetric>("need");
+  // Roads view: houses are hidden by default so the road web is the star;
+  // toggle them back on for context.
+  const [showHouses, setShowHouses] = useState(false);
   const [ready, setReady] = useState(false); // map fully initialized (layers exist)
 
   useEffect(() => {
@@ -388,12 +391,15 @@ export function MemberMap({
     if (!L || !layer) return;
     layer.clearLayers();
     if (mode === "census") return; // census has no member dots
-    // On the roads map, dots are tiny grey context so the web is the star.
+    // On the roads map, houses are hidden by default so the road web is the
+    // star; when shown they're tiny grey context dots.
     if (mode === "roads") {
-      for (const p of points) {
-        L.circleMarker([p.lat, p.lng], {
-          radius: 2, color: "#475569", weight: 0, fillColor: "#475569", fillOpacity: 0.45,
-        }).addTo(layer);
+      if (showHouses) {
+        for (const p of points) {
+          L.circleMarker([p.lat, p.lng], {
+            radius: 2, color: "#475569", weight: 0, fillColor: "#475569", fillOpacity: 0.45,
+          }).addTo(layer);
+        }
       }
       return;
     }
@@ -477,6 +483,10 @@ export function MemberMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colorBy, hiddenShep, hiddenMem, ready]);
   useEffect(() => {
+    if (ready && mode === "roads") draw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHouses, ready]);
+  useEffect(() => {
     if (ready && mode === "campus") drawSecond();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [secondCohort, secondCampuses.length, ready]);
@@ -529,6 +539,17 @@ export function MemberMap({
       </div>
       {/* SETTINGS (right) */}
       <div className="order-1 lg:order-2 lg:w-60 shrink-0 space-y-3 text-xs">
+      {mode === "roads" && (
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showHouses}
+            onChange={(e) => setShowHouses(e.target.checked)}
+            className="w-4 h-4 rounded accent-[var(--accent)] cursor-pointer"
+          />
+          <span className="text-muted">Show houses</span>
+        </label>
+      )}
       {showDotControls && (
         <>
           <div className="space-y-1.5">

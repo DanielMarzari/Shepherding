@@ -121,29 +121,34 @@ export function propertyCostAt(lat: number, lng: number): number {
   return t?.props.cost || AVG_COST;
 }
 
-function loadEngagedHomes(orgId: number): Array<{ lat: number; lng: number }> {
-  return getDb()
+/** Cache each geocoded home's census tract + county (point-in-polygon) so the
+ *  analysis pages don't recompute it for ~25k homes on every request. Only
+ *  touches rows never assigned or re-geocoded since — so after the first run
+ *  it's a no-op. Safe to call on every read (self-healing) and from the cron. */
+export function refreshGeoAssignments(orgId: number): void {
+  const db = getDb();
+  const pending = db
     .prepare(
-      `SELECT g.lat, g.lng
-         FROM person_geo g
-         JOIN person_activity pa
-           ON pa.org_id = g.org_id AND pa.person_id = g.person_id
-        WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL
-          AND pa.classification IN ('shepherded','active','present')`,
+      `SELECT person_id AS personId, lat, lng FROM person_geo
+        WHERE org_id = ? AND status = 'ok' AND lat IS NOT NULL
+          AND (geo_assigned_at IS NULL OR geo_assigned_at < geocoded_at)`,
     )
-    .all(orgId) as Array<{ lat: number; lng: number }>;
-}
-
-/** EVERY geocoded person on file — regardless of classification — i.e. anyone
- *  who has ever interacted with us and whose address we could place. Powers
- *  "lifetime reach": how much of the valley's population has touched us. */
-function loadAllHomes(orgId: number): Array<{ lat: number; lng: number }> {
-  return getDb()
-    .prepare(
-      `SELECT lat, lng FROM person_geo
-        WHERE org_id = ? AND status = 'ok' AND lat IS NOT NULL`,
-    )
-    .all(orgId) as Array<{ lat: number; lng: number }>;
+    .all(orgId) as Array<{ personId: string; lat: number; lng: number }>;
+  if (pending.length === 0) return;
+  const prepared = getPrepared();
+  const upd = db.prepare(
+    `UPDATE person_geo
+        SET tract_geoid = ?, county_geoid = ?,
+            geo_assigned_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE org_id = ? AND person_id = ?`,
+  );
+  const tx = db.transaction((rows: typeof pending) => {
+    for (const r of rows) {
+      const t = tractOf(prepared, r.lat, r.lng);
+      upd.run(t?.props.geoid ?? null, countyOf(r.lat, r.lng), orgId, r.personId);
+    }
+  });
+  tx(pending);
 }
 
 function haversineMiles(aLat: number, aLng: number, bLat: number, bLng: number): number {
@@ -240,16 +245,26 @@ export function computeGrowth(
 }
 
 export function analyzeCensus(orgId: number): CensusAnalysis {
+  refreshGeoAssignments(orgId); // cheap no-op once homes are assigned
   const prepared = getPrepared();
+
+  // Engaged people per tract — straight from the cached tract assignment.
   const counts = new Map<string, number>();
-  const homes = loadEngagedHomes(orgId);
   let ourMembers = 0;
-  for (const h of homes) {
-    const t = tractOf(prepared, h.lat, h.lng);
-    if (t) {
-      counts.set(t.props.geoid, (counts.get(t.props.geoid) ?? 0) + 1);
-      ourMembers++;
-    }
+  const engagedRows = getDb()
+    .prepare(
+      `SELECT g.tract_geoid AS geoid, COUNT(*) AS n
+         FROM person_geo g
+         JOIN person_activity pa
+           ON pa.org_id = g.org_id AND pa.person_id = g.person_id
+        WHERE g.org_id = ? AND g.status = 'ok' AND g.tract_geoid IS NOT NULL
+          AND pa.classification IN ('shepherded','active','present')
+        GROUP BY g.tract_geoid`,
+    )
+    .all(orgId) as Array<{ geoid: string; n: number }>;
+  for (const r of engagedRows) {
+    counts.set(r.geoid, r.n);
+    ourMembers += r.n;
   }
 
   const tracts: CensusTract[] = prepared.map((t) => {
@@ -277,11 +292,16 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
   });
 
   // Lifetime reach — every geocoded person (any classification) whose home
-  // falls inside an LV tract, vs. the valley's total population.
-  let lifetimeInLV = 0;
-  for (const h of loadAllHomes(orgId)) {
-    if (tractOf(prepared, h.lat, h.lng)) lifetimeInLV++;
-  }
+  // falls inside an LV tract, vs. the valley's total population. tract_geoid
+  // is set only for homes inside an LV tract, so this is a simple count.
+  const lifetimeInLV = (
+    getDb()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM person_geo
+          WHERE org_id = ? AND status = 'ok' AND tract_geoid IS NOT NULL`,
+      )
+      .get(orgId) as { n: number }
+  ).n;
 
   const population = tracts.reduce((a, t) => a + t.pop, 0);
   const churched = tracts.reduce((a, t) => a + t.churched, 0);
@@ -339,32 +359,28 @@ export interface CountyAnalysis {
   findings: CountyFinding[];
 }
 
-function loadHomesWithClass(orgId: number): Array<{ lat: number; lng: number; engaged: boolean }> {
-  return (
-    getDb()
-      .prepare(
-        `SELECT g.lat, g.lng,
-                CASE WHEN pa.classification IN ('shepherded','active','present') THEN 1 ELSE 0 END AS engaged
-           FROM person_geo g
-           LEFT JOIN person_activity pa
-             ON pa.org_id = g.org_id AND pa.person_id = g.person_id
-          WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL`,
-      )
-      .all(orgId) as Array<{ lat: number; lng: number; engaged: number }>
-  ).map((r) => ({ lat: r.lat, lng: r.lng, engaged: r.engaged === 1 }));
-}
-
 /** How far our reach extends across the Valley and its five neighboring
- *  counties — the same stats as the Valley, computed per county by placing
- *  every geocoded home into a county boundary. */
+ *  counties — the same stats as the Valley, read from each home's cached
+ *  county assignment (refreshGeoAssignments). */
 export function analyzeCounties(orgId: number): CountyAnalysis {
+  refreshGeoAssignments(orgId); // cheap no-op once homes are assigned
   const life = new Map<string, number>();
   const eng = new Map<string, number>();
-  for (const h of loadHomesWithClass(orgId)) {
-    const geoid = countyOf(h.lat, h.lng);
-    if (!geoid) continue;
-    life.set(geoid, (life.get(geoid) ?? 0) + 1);
-    if (h.engaged) eng.set(geoid, (eng.get(geoid) ?? 0) + 1);
+  const rows = getDb()
+    .prepare(
+      `SELECT g.county_geoid AS geoid,
+              COUNT(*) AS lifetime,
+              SUM(CASE WHEN pa.classification IN ('shepherded','active','present') THEN 1 ELSE 0 END) AS engaged
+         FROM person_geo g
+         LEFT JOIN person_activity pa
+           ON pa.org_id = g.org_id AND pa.person_id = g.person_id
+        WHERE g.org_id = ? AND g.status = 'ok' AND g.county_geoid IS NOT NULL
+        GROUP BY g.county_geoid`,
+    )
+    .all(orgId) as Array<{ geoid: string; lifetime: number; engaged: number }>;
+  for (const r of rows) {
+    life.set(r.geoid, r.lifetime);
+    eng.set(r.geoid, r.engaged ?? 0);
   }
 
   const counties: CountyReach[] = Object.values(COUNTY_STATS)

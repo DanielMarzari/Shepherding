@@ -7,6 +7,7 @@ import { startGeocodeRun } from "@/lib/geocode-runner";
 import { startDriveRun } from "@/lib/drive-runner";
 import { startMeshRun } from "@/lib/mesh-runner";
 import { refreshRetentionReturns } from "@/lib/retention-read";
+import { refreshGeoAssignments } from "@/lib/census-analysis";
 
 /**
  * Cron-tickable endpoint. The Oracle host runs a system crontab every
@@ -42,6 +43,14 @@ export async function GET(req: Request) {
   }> = [];
 
   for (const { id } of orgs) {
+    // Keep each home's cached census tract / county current (incremental — a
+    // no-op once assigned). Runs every tick regardless of sync schedule so the
+    // analysis pages never have to point-in-polygon on the request path.
+    try {
+      refreshGeoAssignments(id);
+    } catch (e) {
+      console.error("refreshGeoAssignments failed", id, e);
+    }
     const settings = getSyncSettings(id);
     if (!settings.enabled) {
       results.push({ orgId: id, skipped: true, reason: "auto-sync disabled" });
