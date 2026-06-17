@@ -6,6 +6,19 @@ import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { RoadLine } from "@/lib/road-mesh";
 import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
 import { LV_TRACTS } from "@/lib/lv-census";
+import { PA_SURROUNDING_COUNTIES } from "@/lib/pa-counties-geo";
+
+/** Per-county reach for the surrounding-county polygons (subset of the
+ *  census-analysis CountyReach shape — fields the map uses). */
+export interface CountyView {
+  geoid: string;
+  name: string;
+  population: number;
+  churchedPct: number;
+  lifetimeCount: number;
+  engagedCount: number;
+  lifetimeReachPct: number;
+}
 
 const LV_COLOR = "#7c3aed"; // Lehigh Valley region + its 5-mile valid area
 
@@ -246,6 +259,7 @@ export function MemberMap({
   secondCampuses = [],
   mesh,
   census,
+  counties,
   mode = "members",
   height = "62vh",
 }: {
@@ -254,6 +268,8 @@ export function MemberMap({
   secondCampuses?: SecondCampus[];
   mesh?: { roads: RoadLine[] };
   census?: { tracts: CensusTractView[]; needCampus?: { lat: number; lng: number } | null };
+  /** Surrounding-county reach, keyed by GEOID — drawn as county polygons. */
+  counties?: CountyView[];
   mode?: MapMode;
   height?: string;
 }) {
@@ -267,6 +283,7 @@ export function MemberMap({
   const churchRef = useRef<any>(null);
   const lvRef = useRef<any>(null);
   const censusRef = useRef<any>(null);
+  const countiesRef = useRef<any>(null);
   const needCampusRef = useRef<any>(null);
 
   const showDotControls = mode === "members" || mode === "campus";
@@ -317,6 +334,9 @@ export function MemberMap({
         if (mode === "census") {
           censusRef.current = L.layerGroup().addTo(map);
           drawCensus();
+          // Surrounding counties as coarse county-level polygons.
+          countiesRef.current = L.featureGroup().addTo(map);
+          drawCounties();
         }
 
         // Lehigh Valley region (filled), under the data, over the basemap.
@@ -325,9 +345,13 @@ export function MemberMap({
           style: { color: LV_COLOR, weight: 1.5, opacity: 0.85, fillColor: LV_COLOR, fillOpacity: 0.08 },
         });
         lvRef.current = L.layerGroup([lvRegion]).addTo(map);
-        // Open framed on the whole Lehigh Valley.
-        const lvBounds = lvRegion.getBounds();
-        try { map.fitBounds(lvBounds, { padding: [12, 12] }); } catch { /* noop */ }
+        // Open framed on the Valley — widened to include the surrounding
+        // counties when they're shown, so they're visible on load.
+        let fitTarget = lvRegion.getBounds();
+        if (mode === "census" && counties && counties.length && countiesRef.current) {
+          try { fitTarget = fitTarget.extend(countiesRef.current.getBounds()); } catch { /* noop */ }
+        }
+        try { map.fitBounds(fitTarget, { padding: [12, 12] }); } catch { /* noop */ }
 
         if (mode === "roads") {
           meshRef.current = L.layerGroup().addTo(map);
@@ -354,7 +378,7 @@ export function MemberMap({
         // The map sits in a flex row beside the settings column — measure the
         // final width after layout settles, then re-frame the valley.
         setTimeout(() => {
-          try { map.invalidateSize(); map.fitBounds(lvBounds, { padding: [12, 12] }); } catch { /* unmounted */ }
+          try { map.invalidateSize(); map.fitBounds(fitTarget, { padding: [12, 12] }); } catch { /* unmounted */ }
         }, 120);
       })
       .catch(() => {
@@ -363,7 +387,7 @@ export function MemberMap({
     return () => {
       cancelled = true;
       if (mapRef.current) mapRef.current.remove();
-      mapRef.current = layerRef.current = secondRef.current = meshRef.current = tileRef.current = churchRef.current = lvRef.current = censusRef.current = needCampusRef.current = null;
+      mapRef.current = layerRef.current = secondRef.current = meshRef.current = tileRef.current = churchRef.current = lvRef.current = censusRef.current = countiesRef.current = needCampusRef.current = null;
       if (el) delete el.dataset.init;
     };
     // Only re-init the whole map when the underlying data/mode changes —
@@ -437,6 +461,31 @@ export function MemberMap({
     // Both anchors stay above the dots.
     churchRef.current?.bringToFront();
     secondRef.current.bringToFront();
+  }
+
+  function drawCounties() {
+    const L = LRef.current;
+    const layer = countiesRef.current;
+    if (!L || !layer || !counties || counties.length === 0) return;
+    layer.clearLayers();
+    const byId = new Map(counties.map((c) => [c.geoid, c]));
+    const maxReach = Math.max(1e-6, ...counties.map((c) => c.lifetimeReachPct));
+    L.geoJSON(PA_SURROUNDING_COUNTIES, {
+      style: (f: any) => {
+        const c = byId.get(f.properties.geoid);
+        const frac = c ? c.lifetimeReachPct / maxReach : 0;
+        return { fillColor: "#0d9488", fillOpacity: 0.06 + 0.34 * frac, color: "#0d9488", weight: 1, opacity: 0.6, dashArray: "4 3" };
+      },
+      onEachFeature: (f: any, lyr: any) => {
+        const c = byId.get(f.properties.geoid);
+        lyr.bindTooltip(
+          c
+            ? `<b>${c.name} County</b><br>pop ${c.population.toLocaleString()} · ${c.churchedPct.toFixed(1)}% churched<br>${c.lifetimeCount.toLocaleString()} lifetime reach (${c.lifetimeReachPct.toFixed(2)}% of residents) · ${c.engagedCount.toLocaleString()} engaged`
+            : `${f.properties.name ?? ""} County`,
+          { sticky: true },
+        );
+      },
+    }).addTo(layer);
   }
 
   function drawCensus() {
@@ -681,6 +730,12 @@ export function MemberMap({
               <span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />
               Lehigh Valley
             </span>
+            {counties && counties.length > 0 && (
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-3 h-3 rounded-sm border border-dashed" style={{ background: "#0d948822", borderColor: "#0d9488" }} />
+                surrounding counties (shaded by our reach)
+              </span>
+            )}
           </div>
         </>
       )}

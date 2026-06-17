@@ -38,6 +38,7 @@ export default async function ReachingTheValleyPage() {
             points={[]}
             mode="census"
             census={{ tracts: census.tracts, needCampus: census.needCampus }}
+            counties={counties.counties.filter((c) => !c.isValley)}
           />
           {census.needCampus && (
             <p className="text-[11px] text-subtle">
