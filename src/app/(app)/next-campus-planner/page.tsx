@@ -82,13 +82,16 @@ export default async function NextCampusPlannerPage() {
         <Card className="p-5 space-y-3">
           <h2 className="text-sm font-semibold">Test a location</h2>
           <p className="text-xs text-muted max-w-2xl">
-            Drag the blue dot anywhere in the valley to test a campus site. The
-            table updates live — homes it&rsquo;s closer to than Faith Church,
-            the average distance to whichever campus is nearest, estimated land
-            cost, unreached people it would serve, and existing churches nearby.
-            Stack any layers (our people, roads driven, and tract shading by
-            need / unchurched / reach / land price / churches) to eyeball the
-            ideal spot.
+            Drag the blue dot to test a campus site — it&rsquo;s clamped to
+            within a real 30-minute drive of Faith Church (the dashed limit).
+            The stats update live: the <em>core seed</em> (people in a team,
+            group, or membership who&rsquo;d be closer than FC), the{" "}
+            <em>loose seed</em> (anyone engaged who&rsquo;d be closer), distance
+            to the nearest campus, land cost, unreached people served, and
+            churches nearby. Stack any layers — our people (filter by groups /
+            teams / membership / engaged), roads driven, the 25-minute drive
+            blob, and tract shading by need / unchurched / reach / land price /
+            churches.
           </p>
           <CampusPlannerMap
             church={CHURCH}

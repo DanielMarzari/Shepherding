@@ -5,6 +5,7 @@ import type { MemberPoint } from "@/lib/geocode";
 import type { RoadLine } from "@/lib/road-mesh";
 import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
 import { LV_TRACTS } from "@/lib/lv-census";
+import { FC_ISO_25, FC_ISO_30 } from "@/lib/fc-isochrones";
 import {
   loadLeaflet,
   makeBasemapLayer,
@@ -33,14 +34,16 @@ const CLASS_COLOR: Record<string, string> = {
 const FC_COLOR = "#dc2626";
 const LV_COLOR = "#7c3aed";
 const DOT_BLUE = "#2563eb";
-const DRIVE25_COLOR = "#16a34a";
-const DRIVE25_MIN = 25;
+const DRIVE25_COLOR = "#16a34a"; // 25-min isochrone blob
+const ISO30_COLOR = "#dc2626"; // 30-min campus limit
 
 const ENGAGED_CLASSES = new Set(["shepherded", "active", "present"]);
+const LOOSE_CLASSES = new Set(["shepherded", "active"]);
 // Overlapping people filters — multi-select; a dot shows if it matches ANY
 // selected chip (none selected = everyone).
 const PEOPLE_FILTERS: Array<{ key: string; label: string }> = [
   { key: "inGroup", label: "In groups" },
+  { key: "inTeam", label: "On teams" },
   { key: "member", label: "Members" },
   { key: "nonmember", label: "Non-members" },
   { key: "engaged", label: "Engaged" },
@@ -48,11 +51,36 @@ const PEOPLE_FILTERS: Array<{ key: string; label: string }> = [
 function pointMatches(p: MemberPoint, key: string): boolean {
   switch (key) {
     case "inGroup": return p.inGroup;
+    case "inTeam": return p.inTeam;
     case "member": return p.isMember;
     case "nonmember": return !p.isMember;
     case "engaged": return ENGAGED_CLASSES.has(p.classification);
     default: return false;
   }
+}
+
+type Ring = ReadonlyArray<readonly [number, number]>; // [lng, lat]
+function inRing(lng: number, lat: number, ring: Ring): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if (yi > lat !== yj > lat && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+/** Keep a point inside a ring — if outside, snap to the nearest boundary point. */
+function clampToRing(lat: number, lng: number, ring: Ring): { lat: number; lng: number } {
+  if (inRing(lng, lat, ring)) return { lat, lng };
+  let bx = lng, by = lat, best = Infinity;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const ax = ring[j][0], ay = ring[j][1], cx = ring[i][0], cy = ring[i][1];
+    const dx = cx - ax, dy = cy - ay;
+    const t = Math.max(0, Math.min(1, ((lng - ax) * dx + (lat - ay) * dy) / (dx * dx + dy * dy || 1e-12)));
+    const px = ax + t * dx, py = ay + t * dy;
+    const d = (px - lng) ** 2 + (py - lat) ** 2;
+    if (d < best) { best = d; bx = px; by = py; }
+  }
+  return { lat: by, lng: bx };
 }
 
 function hav(aLat: number, aLng: number, bLat: number, bLng: number): number {
@@ -91,7 +119,10 @@ interface Stats {
   lng: number;
   closer: number;
   byClass: Record<string, number>;
-  seed: number; // engaged (shepherded/active/present) closer to the new campus
+  /** Core seed: in a team/group OR a member, closer to the new campus than FC. */
+  coreSeed: number;
+  /** Loose seed: anyone engaged (shepherded or active), closer than FC. */
+  looseSeed: number;
   avgNearest: number;
   baselineAvg: number;
   estCost: number | null;
@@ -105,7 +136,7 @@ interface SavedCandidate {
   id: string;
   lat: number;
   lng: number;
-  seed: number;
+  coreSeed: number;
   draw: number;
   cost: number | null;
   churches: number;
@@ -207,7 +238,7 @@ export function CampusPlannerMap({
 
   function compute(lat: number, lng: number): Stats {
     const byClass: Record<string, number> = { shepherded: 0, active: 0, present: 0, inactive: 0 };
-    let closer = 0, nearestSum = 0, baseSum = 0;
+    let closer = 0, nearestSum = 0, baseSum = 0, coreSeed = 0, looseSeed = 0;
     for (const p of points) {
       const dNew = hav(p.lat, p.lng, lat, lng);
       const dFc = hav(p.lat, p.lng, church.lat, church.lng);
@@ -216,6 +247,9 @@ export function CampusPlannerMap({
       if (dNew < dFc) {
         closer++;
         byClass[p.classification] = (byClass[p.classification] ?? 0) + 1;
+        // Core = committed (team/group/membership); loose = engaged (shep/active).
+        if (p.inTeam || p.inGroup || p.isMember) coreSeed++;
+        if (LOOSE_CLASSES.has(p.classification)) looseSeed++;
       }
     }
     let unchurchedWithin = 0, churchedWithin = 0, churches = 0;
@@ -229,14 +263,13 @@ export function CampusPlannerMap({
       if (dNew <= 3) churches += t.churches; // within ~3 miles
     }
     const n = points.length || 1;
-    const seed = (byClass.shepherded ?? 0) + (byClass.active ?? 0) + (byClass.present ?? 0);
     // At the same penetration we achieve around the main campus, a campus here
     // would draw from BOTH the unchurched (valley benefit) and the already-
     // churched (transfer from other congregations).
     const drawUnchurched = unchurchedWithin * model.captureRate;
     const drawChurched = churchedWithin * model.captureRate;
     return {
-      lat, lng, closer, byClass, seed,
+      lat, lng, closer, byClass, coreSeed, looseSeed,
       avgNearest: nearestSum / n,
       baselineAvg: baseSum / n,
       estCost: tractCostAt(lat, lng, byGeoid),
@@ -296,17 +329,12 @@ export function CampusPlannerMap({
       }).addTo(layer);
     }
 
-    // ≈25-minute drive blob (Faith Church): the union of tracts whose drive
-    // time to FC is ≤ 25 min, filled — a real drive-shaped coverage area, not
-    // a circle. Overlaps with whatever else is on.
+    // 25-minute drive blob (Faith Church): a real OSRM isochrone — an organic,
+    // rounded shape of exactly 25 min driving outward, not a circle or tracts.
     if (showDrive25) {
-      L.geoJSON(LV_TRACTS, {
-        interactive: false,
-        filter: (f: any) => {
-          const t = byGeoid.get(f.properties.geoid);
-          return !!t && t.driveMin != null && t.driveMin <= DRIVE25_MIN;
-        },
-        style: () => ({ color: DRIVE25_COLOR, weight: 0, fillColor: DRIVE25_COLOR, fillOpacity: 0.18 }),
+      L.polygon(FC_ISO_25.map(([lng, lat]) => [lat, lng]) as any, {
+        interactive: false, color: DRIVE25_COLOR, weight: 1, opacity: 0.7,
+        fillColor: DRIVE25_COLOR, fillOpacity: 0.16,
       }).addTo(layer);
     }
 
@@ -348,6 +376,11 @@ export function CampusPlannerMap({
         interactive: false,
         style: { color: LV_COLOR, weight: 1.5, opacity: 0.85, fillColor: LV_COLOR, fillOpacity: 0.06 },
       }).addTo(map);
+      // 30-minute drive limit: a campus can't be sited beyond this (the dragged
+      // candidate is clamped to it). Drawn as a dashed boundary, always on.
+      L.polygon(FC_ISO_30.map(([lng, lat]) => [lat, lng]) as any, {
+        interactive: false, color: ISO30_COLOR, weight: 1.5, opacity: 0.6, dashArray: "6 4", fill: false,
+      }).addTo(map);
       const lvBounds = lvRef.current.getBounds();
       try { map.fitBounds(lvBounds, { padding: [12, 12] }); } catch { /* noop */ }
 
@@ -372,18 +405,24 @@ export function CampusPlannerMap({
         iconSize: [20, 20],
         iconAnchor: [10, 10],
       });
-      markerRef.current = L.marker([initial.lat, initial.lng], { draggable: true, icon, zIndexOffset: 1000 })
-        .bindTooltip("Drag me to test a campus location", { direction: "top" })
+      // Start inside the 30-min limit (clamp the suggested initial if needed).
+      const start = clampToRing(initial.lat, initial.lng, FC_ISO_30);
+      markerRef.current = L.marker([start.lat, start.lng], { draggable: true, icon, zIndexOffset: 1000 })
+        .bindTooltip("Drag me to test a campus location (within 30 min of FC)", { direction: "top" })
         .addTo(map);
-      setStats(compute(initial.lat, initial.lng));
+      setStats(compute(start.lat, start.lng));
       markerRef.current.on("drag", (e: any) => {
         const ll = e.target.getLatLng();
-        setStats(compute(ll.lat, ll.lng));
+        const c = clampToRing(ll.lat, ll.lng, FC_ISO_30);
+        if (c.lat !== ll.lat || c.lng !== ll.lng) e.target.setLatLng([c.lat, c.lng]);
+        setStats(compute(c.lat, c.lng));
       });
-      // On drop, update candidate position so the drive-time layer re-renders.
+      // On drop, snap inside the limit + update candidate so layers re-render.
       markerRef.current.on("dragend", (e: any) => {
         const ll = e.target.getLatLng();
-        setCandPos({ lat: ll.lat, lng: ll.lng });
+        const c = clampToRing(ll.lat, ll.lng, FC_ISO_30);
+        e.target.setLatLng([c.lat, c.lng]);
+        setCandPos({ lat: c.lat, lng: c.lng });
       });
       // Re-render overlay now that layers exist, using restored settings.
       setMapReady(true);
@@ -414,7 +453,7 @@ export function CampusPlannerMap({
     if (!stats) return;
     const c: SavedCandidate = {
       id: `${Date.now()}`, lat: stats.lat, lng: stats.lng,
-      seed: stats.seed, draw: Math.round(stats.expectedDraw), cost: stats.estCost, churches: stats.churches,
+      coreSeed: stats.coreSeed, draw: Math.round(stats.expectedDraw), cost: stats.estCost, churches: stats.churches,
     };
     const next = [c, ...saved].slice(0, 12);
     setSaved(next);
@@ -428,9 +467,10 @@ export function CampusPlannerMap({
   function goTo(lat: number, lng: number) {
     const m = markerRef.current, map = mapRef.current;
     if (!m || !map) return;
-    m.setLatLng([lat, lng]);
-    map.panTo([lat, lng]);
-    setStats(compute(lat, lng));
+    const c = clampToRing(lat, lng, FC_ISO_30); // keep inside the 30-min limit
+    m.setLatLng([c.lat, c.lng]);
+    map.panTo([c.lat, c.lng]);
+    setStats(compute(c.lat, c.lng));
   }
   function toggleDots() { const v = !showDots; setShowDots(v); lsSet("shepherdly.planner.dots", v); }
   function toggleRoads() { const v = !showRoads; setShowRoads(v); lsSet("shepherdly.planner.roads", v); }
@@ -474,7 +514,7 @@ export function CampusPlannerMap({
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={showDrive25} onChange={toggleDrive25} />
-              <span className="text-muted">≈25-min drive of FC</span>
+              <span className="text-muted">25-min drive blob (FC)</span>
             </label>
           </div>
           {showDots && (
@@ -528,7 +568,8 @@ export function CampusPlannerMap({
             <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#eab308", border: "1px solid #1f2937" }} />auto suggestions (fixed)</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: FC_COLOR }} />Faith Church</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />Lehigh Valley</span>
-            <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: `${DRIVE25_COLOR}40` }} />≈25-min drive of FC</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: `${DRIVE25_COLOR}40`, border: `1px solid ${DRIVE25_COLOR}` }} />25-min drive blob</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: ISO30_COLOR }} />30-min limit (candidate clamped)</span>
           </div>
         </div>
       </div>
@@ -550,9 +591,14 @@ export function CampusPlannerMap({
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             <Metric
-              label="Launch seed"
-              value={`${stats.seed.toLocaleString()} people`}
-              sub={`engaged & closer than FC — ${stats.byClass.shepherded ?? 0} shep · ${stats.byClass.active ?? 0} active · ${stats.byClass.present ?? 0} present`}
+              label="Core seed"
+              value={`${stats.coreSeed.toLocaleString()} people`}
+              sub="in a team/group or a member — closer than FC"
+            />
+            <Metric
+              label="Loose seed"
+              value={`${stats.looseSeed.toLocaleString()} people`}
+              sub={`engaged (shepherded ${stats.byClass.shepherded ?? 0} · active ${stats.byClass.active ?? 0}) — closer than FC`}
             />
             <Metric label="Avg distance to nearest campus" value={`${stats.avgNearest.toFixed(1)} mi`} sub={`vs ${stats.baselineAvg.toFixed(1)} mi to FC only`} />
             <Metric label="Est. land cost" value={stats.estCost != null ? usd(stats.estCost) : "—"} sub="median home value here" />
@@ -581,7 +627,7 @@ export function CampusPlannerMap({
                 <tr className="border-b border-border-soft">
                   <th className="text-left font-medium py-1.5 pr-3">Site</th>
                   <th className="text-left font-medium py-1.5 pr-3">Location</th>
-                  <th className="text-right font-medium py-1.5 pr-3">Seed</th>
+                  <th className="text-right font-medium py-1.5 pr-3">Core seed</th>
                   <th className="text-right font-medium py-1.5 pr-3">Est. draw</th>
                   <th className="text-right font-medium py-1.5 pr-3">Land cost</th>
                   <th className="text-left font-medium py-1.5 pr-3">Find properties</th>
@@ -597,7 +643,7 @@ export function CampusPlannerMap({
                         {s.lat.toFixed(4)}, {s.lng.toFixed(4)}
                       </button>
                     </td>
-                    <td className="py-2 pr-3 text-right tnum">{s.seed.toLocaleString()}</td>
+                    <td className="py-2 pr-3 text-right tnum">{s.coreSeed.toLocaleString()}</td>
                     <td className="py-2 pr-3 text-right tnum">~{Math.round(s.expectedDraw).toLocaleString()}</td>
                     <td className="py-2 pr-3 text-right tnum">{s.estCost != null ? usd(s.estCost) : "—"}</td>
                     <td className="py-2 pr-3">
@@ -618,7 +664,7 @@ export function CampusPlannerMap({
                         {s.lat.toFixed(4)}, {s.lng.toFixed(4)}
                       </button>
                     </td>
-                    <td className="py-2 pr-3 text-right tnum">{s.seed.toLocaleString()}</td>
+                    <td className="py-2 pr-3 text-right tnum">{s.coreSeed.toLocaleString()}</td>
                     <td className="py-2 pr-3 text-right tnum">~{s.draw.toLocaleString()}</td>
                     <td className="py-2 pr-3 text-right tnum">{s.cost != null ? usd(s.cost) : "—"}</td>
                     <td className="py-2 pr-3">
