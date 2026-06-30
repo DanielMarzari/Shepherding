@@ -50,6 +50,12 @@ const SECTIONS: MoreSection[] = [
     title: "Reports & insights",
     links: [
       {
+        href: "/demographics",
+        title: "Membership demographics",
+        description:
+          "Who makes up the church — membership status, age, gender, and whether they have kids — for everyone, the engaged population, people in groups, or people on teams.",
+      },
+      {
         href: "/attendance",
         title: "Attendance",
         description:

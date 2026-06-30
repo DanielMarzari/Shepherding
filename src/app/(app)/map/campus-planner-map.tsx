@@ -33,6 +33,27 @@ const CLASS_COLOR: Record<string, string> = {
 const FC_COLOR = "#dc2626";
 const LV_COLOR = "#7c3aed";
 const DOT_BLUE = "#2563eb";
+const DRIVE25_COLOR = "#16a34a";
+const DRIVE25_MIN = 25;
+
+const ENGAGED_CLASSES = new Set(["shepherded", "active", "present"]);
+// Overlapping people filters — multi-select; a dot shows if it matches ANY
+// selected chip (none selected = everyone).
+const PEOPLE_FILTERS: Array<{ key: string; label: string }> = [
+  { key: "inGroup", label: "In groups" },
+  { key: "member", label: "Members" },
+  { key: "nonmember", label: "Non-members" },
+  { key: "engaged", label: "Engaged" },
+];
+function pointMatches(p: MemberPoint, key: string): boolean {
+  switch (key) {
+    case "inGroup": return p.inGroup;
+    case "member": return p.isMember;
+    case "nonmember": return !p.isMember;
+    case "engaged": return ENGAGED_CLASSES.has(p.classification);
+    default: return false;
+  }
+}
 
 function hav(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const R = 3958.8;
@@ -166,6 +187,8 @@ export function CampusPlannerMap({
   const [showDots, setShowDots] = useState(true);
   const [metric, setMetric] = useState<CensusMetric | "none">("need");
   const [showRoads, setShowRoads] = useState(false);
+  const [showDrive25, setShowDrive25] = useState(false);
+  const [peopleFilter, setPeopleFilter] = useState<string[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [saved, setSaved] = useState<SavedCandidate[]>([]);
   const [mapReady, setMapReady] = useState(false);
@@ -176,6 +199,8 @@ export function CampusPlannerMap({
     setShowDots(lsGet("shepherdly.planner.dots", true));
     setMetric(lsGet("shepherdly.planner.metric", "need"));
     setShowRoads(lsGet("shepherdly.planner.roads", false));
+    setShowDrive25(lsGet("shepherdly.planner.drive25", false));
+    setPeopleFilter(lsGet("shepherdly.planner.peopleFilter", []));
     setSaved(lsGet("shepherdly.planner.saved", []));
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
@@ -271,12 +296,27 @@ export function CampusPlannerMap({
       }).addTo(layer);
     }
 
+    // ≈25-minute drive blob (Faith Church): the union of tracts whose drive
+    // time to FC is ≤ 25 min, filled — a real drive-shaped coverage area, not
+    // a circle. Overlaps with whatever else is on.
+    if (showDrive25) {
+      L.geoJSON(LV_TRACTS, {
+        interactive: false,
+        filter: (f: any) => {
+          const t = byGeoid.get(f.properties.geoid);
+          return !!t && t.driveMin != null && t.driveMin <= DRIVE25_MIN;
+        },
+        style: () => ({ color: DRIVE25_COLOR, weight: 0, fillColor: DRIVE25_COLOR, fillOpacity: 0.18 }),
+      }).addTo(layer);
+    }
+
     if (showRoads && mesh && mesh.roads.length) {
       L.polyline(mesh.roads.map((r) => r.coords), { color: "#1d4ed8", weight: 1.2, opacity: 0.5, interactive: false }).addTo(layer);
     }
 
     if (showDots) {
       for (const p of points) {
+        if (peopleFilter.length > 0 && !peopleFilter.some((k) => pointMatches(p, k))) continue;
         const c = CLASS_COLOR[p.classification] ?? CLASS_COLOR.inactive;
         L.circleMarker([p.lat, p.lng], { radius: 3, color: "#1f2937", weight: 0.4, fillColor: c, fillOpacity: 0.85 }).addTo(layer);
       }
@@ -368,7 +408,7 @@ export function CampusPlannerMap({
   useEffect(() => {
     if (mapReady) renderOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDots, metric, showRoads, mapReady, candPos]);
+  }, [showDots, metric, showRoads, showDrive25, peopleFilter, mapReady, candPos]);
 
   function lockIn() {
     if (!stats) return;
@@ -394,7 +434,15 @@ export function CampusPlannerMap({
   }
   function toggleDots() { const v = !showDots; setShowDots(v); lsSet("shepherdly.planner.dots", v); }
   function toggleRoads() { const v = !showRoads; setShowRoads(v); lsSet("shepherdly.planner.roads", v); }
+  function toggleDrive25() { const v = !showDrive25; setShowDrive25(v); lsSet("shepherdly.planner.drive25", v); }
   function pickMetric(m: CensusMetric | "none") { setMetric(m); lsSet("shepherdly.planner.metric", m); }
+  function togglePeople(key: string) {
+    setPeopleFilter((prev) => {
+      const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
+      lsSet("shepherdly.planner.peopleFilter", next);
+      return next;
+    });
+  }
 
   const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
 
@@ -424,7 +472,34 @@ export function CampusPlannerMap({
               <input type="checkbox" checked={showRoads} onChange={toggleRoads} disabled={!mesh?.roads.length} />
               <span className="text-muted">Roads driven</span>
             </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={showDrive25} onChange={toggleDrive25} />
+              <span className="text-muted">≈25-min drive of FC</span>
+            </label>
           </div>
+          {showDots && (
+            <div className="space-y-1.5">
+              <div className="text-muted font-medium">Filter people (overlap)</div>
+              <div className="flex flex-wrap gap-1.5">
+                {PEOPLE_FILTERS.map((f) => {
+                  const on = peopleFilter.includes(f.key);
+                  return (
+                    <button
+                      key={f.key}
+                      type="button"
+                      onClick={() => togglePeople(f.key)}
+                      className={`px-2.5 py-1 rounded-full border transition-colors cursor-pointer ${on ? "border-accent bg-bg-elev-2 text-fg" : "border-border-soft text-muted hover:text-fg"}`}
+                    >
+                      {f.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="text-subtle">
+                {peopleFilter.length === 0 ? "Showing everyone" : "Showing anyone matching a selected chip"}
+              </span>
+            </div>
+          )}
           <div className="space-y-1.5">
             <div className="text-muted font-medium">Shade tracts by</div>
             <div className="flex flex-wrap gap-1.5">
@@ -453,6 +528,7 @@ export function CampusPlannerMap({
             <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#eab308", border: "1px solid #1f2937" }} />auto suggestions (fixed)</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: FC_COLOR }} />Faith Church</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />Lehigh Valley</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: `${DRIVE25_COLOR}40` }} />≈25-min drive of FC</span>
           </div>
         </div>
       </div>

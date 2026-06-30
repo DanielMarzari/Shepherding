@@ -44,6 +44,8 @@ export interface MemberPoint {
   /** True when their PCO membership type marks them an actual member
    *  (vs. attender / visitor / non-member). */
   isMember: boolean;
+  /** True when they're in at least one active group. */
+  inGroup: boolean;
 }
 
 /** Heuristic: a "member" membership type (not non-/former-member). */
@@ -194,7 +196,8 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
   const rows = getDb()
     .prepare(
       `SELECT g.lat, g.lng, p.enc_pii AS encPii, p.membership_type AS mt,
-              COALESCE(pa.classification, 'inactive') AS classification
+              COALESCE(pa.classification, 'inactive') AS classification,
+              COALESCE(pa.active_group_count, 0) AS groupCount
          FROM person_geo g
          JOIN pco_people p
            ON p.org_id = g.org_id AND p.pco_id = g.person_id
@@ -208,6 +211,7 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
     encPii: string | null;
     mt: string | null;
     classification: string;
+    groupCount: number;
   }>;
   return rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
@@ -219,6 +223,7 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
       name,
       classification: r.classification,
       isMember: isMemberType(r.mt),
+      inGroup: r.groupCount > 0,
     };
   });
 }
