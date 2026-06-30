@@ -6,7 +6,14 @@ interface MoreLink {
   href: string;
   title: string;
   description: string;
+  /** Opens in a new tab (for tools hosted outside the app, e.g. SQL Admin). */
+  external?: boolean;
 }
+
+// The standard SQLite web GUI (sqlite-web), hosted on its own subdomain behind
+// Caddy basic-auth. Override with SQL_ADMIN_URL if the host changes.
+const SQL_ADMIN_URL =
+  process.env.SQL_ADMIN_URL ?? "https://shepherdly-sql.danmarzari.com";
 interface MoreSection {
   title: string;
   blurb?: string;
@@ -101,6 +108,13 @@ const SECTIONS: MoreSection[] = [
         description:
           "Internal style guide — the design tokens, component variants, and chart variants the rest of the app pulls from.",
       },
+      {
+        href: SQL_ADMIN_URL,
+        title: "SQL Admin",
+        description:
+          "Browse tables and views, inspect the schema, and run ad-hoc SQL against the live database (sqlite-web, hosted on its own subdomain behind a separate login). Opens in a new tab.",
+        external: true,
+      },
     ],
   },
 ];
@@ -129,12 +143,20 @@ export default function MorePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {section.links.map((l) => (
                 <Card key={l.href} className="p-5">
-                  <Link
-                    href={l.href}
-                    className="font-semibold hover:text-accent"
-                  >
-                    {l.title} →
-                  </Link>
+                  {l.external ? (
+                    <a
+                      href={l.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-semibold hover:text-accent"
+                    >
+                      {l.title} ↗
+                    </a>
+                  ) : (
+                    <Link href={l.href} className="font-semibold hover:text-accent">
+                      {l.title} →
+                    </Link>
+                  )}
                   <p className="text-xs text-muted leading-relaxed mt-2">
                     {l.description}
                   </p>
