@@ -31,6 +31,8 @@ export const SHELL_NAV = {
   credentials: [
     { href: "/pco", label: "PCO" },
     { href: "/pushpay", label: "PushPay" },
+    { href: "/constant-contact", label: "Constant Contact" },
+    { href: "/subsplash", label: "Subsplash" },
   ],
   dataMappings: [
     { href: "/shepherd-map", label: "Shepherd map" },
@@ -67,6 +69,8 @@ const OTHER_NAV_ITEMS = [
 const CREDENTIALS_NAV_ITEMS = [
   { href: "/pco", label: "PCO" },
   { href: "/pushpay", label: "PushPay" },
+  { href: "/constant-contact", label: "Constant Contact" },
+  { href: "/subsplash", label: "Subsplash" },
 ];
 
 const DATA_MAPPING_NAV_ITEMS = [
