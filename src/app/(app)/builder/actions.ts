@@ -35,11 +35,12 @@ export async function createPageAction(formData: FormData) {
   redirect(`/builder/${slug}?edit=1`);
 }
 
-export async function updatePageAction(id: number, title: string, description: string, slug: string) {
+export async function updatePageAction(id: number, title: string, description: string, slug: string, navSection?: string) {
   const s = await requireAdmin();
-  updateBuilderPage(s.orgId, id, title, description.trim() || null);
+  updateBuilderPage(s.orgId, id, title, description.trim() || null, navSection ?? null);
   revalidatePath(`/builder/${slug}`);
   revalidatePath("/builder");
+  revalidatePath("/", "layout"); // the sidebar (AppShell) reflects nav placement
 }
 
 export async function deletePageAction(id: number) {

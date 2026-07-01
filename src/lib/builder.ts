@@ -1,6 +1,7 @@
 import "server-only";
 import Database from "better-sqlite3";
 import { getDb } from "./db";
+import { NAV_SECTION_VALUES } from "./builder-nav";
 
 // ─── Read-only query engine ──────────────────────────────────────────
 // Blocks can surface ANY data, but only via a read-only connection so a
@@ -19,8 +20,11 @@ function roDb(): Database.Database {
 }
 
 const FORBIDDEN =
-  /\b(attach|detach|pragma|insert|update|delete|drop|alter|create|replace|vacuum|reindex|begin|commit|rollback|savepoint|release)\b/i;
+  /\b(attach|detach|pragma|insert|update|delete|drop|alter|create|replace|vacuum|reindex|begin|commit|rollback|savepoint|release|load_extension|edit|writefile|fts3_tokenizer)\b/i;
 const MAX_ROWS = 1000;
+/** A safe SQLite identifier — used to gate the only place we interpolate a name
+ *  (PRAGMA can't take a bound parameter) instead of trusting the string. */
+const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export interface QueryResult {
   columns: string[];
@@ -86,8 +90,12 @@ export function getDbSchema(): DbSchema {
   ).map((r) => r.name);
   const columns: Record<string, string[]> = {};
   for (const t of tables) {
+    // PRAGMA can't take a bound parameter, so we gate the interpolated name to a
+    // strict identifier (belt-and-suspenders: the name already comes from
+    // sqlite_master, never user input).
+    if (!SAFE_IDENT.test(t)) { columns[t] = []; continue; }
     try {
-      columns[t] = (ro.prepare(`PRAGMA table_info("${t.replace(/"/g, '""')}")`).all() as Array<{ name: string }>).map((c) => c.name);
+      columns[t] = (ro.prepare(`PRAGMA table_info("${t}")`).all() as Array<{ name: string }>).map((c) => c.name);
     } catch {
       columns[t] = [];
     }
@@ -115,6 +123,8 @@ export interface BuilderPage {
   slug: string;
   title: string;
   description: string | null;
+  /** Sidebar section key the page's link is placed in (null = not in the nav). */
+  navSection: string | null;
   updatedAt: string;
   blockCount: number;
 }
@@ -230,7 +240,7 @@ function slugify(s: string): string {
 export function listBuilderPages(orgId: number): BuilderPage[] {
   return getDb()
     .prepare(
-      `SELECT p.id, p.slug, p.title, p.description, p.updated_at AS updatedAt,
+      `SELECT p.id, p.slug, p.title, p.description, p.nav_section AS navSection, p.updated_at AS updatedAt,
               (SELECT COUNT(*) FROM builder_blocks b WHERE b.page_id = p.id) AS blockCount
          FROM builder_pages p
         WHERE p.org_id = ?
@@ -242,11 +252,23 @@ export function listBuilderPages(orgId: number): BuilderPage[] {
 export function getBuilderPage(orgId: number, slug: string): BuilderPage | null {
   const row = getDb()
     .prepare(
-      `SELECT id, slug, title, description, updated_at AS updatedAt
+      `SELECT id, slug, title, description, nav_section AS navSection, updated_at AS updatedAt
          FROM builder_pages WHERE org_id = ? AND slug = ?`,
     )
     .get(orgId, slug) as Omit<BuilderPage, "blockCount"> | undefined;
   return row ? { ...row, blockCount: 0 } : null;
+}
+
+/** Pages assigned to a sidebar section, for the left nav. */
+export function listNavPages(orgId: number): Array<{ slug: string; title: string; navSection: string }> {
+  return getDb()
+    .prepare(
+      `SELECT slug, title, nav_section AS navSection
+         FROM builder_pages
+        WHERE org_id = ? AND nav_section IS NOT NULL AND nav_section <> ''
+        ORDER BY title`,
+    )
+    .all(orgId) as Array<{ slug: string; title: string; navSection: string }>;
 }
 
 /** The saved SQL for one block, scoped to the org. Used by view-mode filtering
@@ -299,13 +321,14 @@ export function createBuilderPage(orgId: number, title: string): string {
   return slug;
 }
 
-export function updateBuilderPage(orgId: number, id: number, title: string, description: string | null): void {
+export function updateBuilderPage(orgId: number, id: number, title: string, description: string | null, navSection?: string | null): void {
+  const nav = navSection && NAV_SECTION_VALUES.has(navSection) ? navSection : null;
   getDb()
     .prepare(
-      `UPDATE builder_pages SET title = ?, description = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      `UPDATE builder_pages SET title = ?, description = ?, nav_section = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ? AND org_id = ?`,
     )
-    .run(title.trim() || "Untitled page", description, id, orgId);
+    .run(title.trim() || "Untitled page", description, nav, id, orgId);
 }
 
 export function deleteBuilderPage(orgId: number, id: number): void {

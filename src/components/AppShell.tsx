@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { getSession, listOrgs } from "@/lib/auth";
+import { listNavPages } from "@/lib/builder";
 import { logoutAction } from "@/app/orgs/actions";
 import { CollapsibleNavGroup } from "./CollapsibleNavGroup";
 import { SearchBar } from "./SearchBar";
@@ -101,6 +102,11 @@ export async function AppShell({
   const myOrgs = session ? listOrgs(session.user.id) : [];
   const otherOrgsExist = myOrgs.length > 1;
 
+  // Builder pages the admin has pinned to a sidebar section.
+  const navPages = session?.orgId ? listNavPages(session.orgId) : [];
+  const nb = (section: string): Array<{ href: string; label: string; badge?: number }> =>
+    navPages.filter((p) => p.navSection === section).map((p) => ({ href: `/builder/${p.slug}`, label: p.title }));
+
   return (
     <div className="flex min-h-screen bg-bg text-fg">
       {/* Sticky sidebar — pinned to the viewport height with its own
@@ -133,7 +139,7 @@ export async function AppShell({
         )}
         <div className="text-xs text-muted uppercase tracking-wider mb-2 px-2">Dashboard</div>
         <ul className="space-y-0.5">
-          {NAV_ITEMS.map((item) => {
+          {[...NAV_ITEMS, ...nb("dashboard")].map((item) => {
             const isActive = item.label === active;
             return (
               <li key={item.href}>
@@ -159,7 +165,7 @@ export async function AppShell({
           Leadership
         </div>
         <ul className="space-y-0.5">
-          {LEADERSHIP_NAV_ITEMS.map((item) => {
+          {[...LEADERSHIP_NAV_ITEMS, ...nb("leadership")].map((item) => {
             const isActive = item.label === active;
             return (
               <li key={item.href}>
@@ -180,7 +186,7 @@ export async function AppShell({
 
         <CollapsibleNavGroup
           label="PCO data"
-          items={PCO_DATA_NAV_ITEMS}
+          items={[...PCO_DATA_NAV_ITEMS, ...nb("pco")]}
           active={active}
         />
 
@@ -188,7 +194,7 @@ export async function AppShell({
           Next Steps Pathway
         </div>
         <ul className="space-y-0.5">
-          {NEXT_STEPS_NAV_ITEMS.map((item) => {
+          {[...NEXT_STEPS_NAV_ITEMS, ...nb("next-steps")].map((item) => {
             const isActive =
               item.label === active ||
               (item.label === "Activity overview" && active === "Activity / Lanes");
@@ -211,7 +217,7 @@ export async function AppShell({
 
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Other</div>
         <ul className="space-y-0.5">
-          {OTHER_NAV_ITEMS.map((item) => {
+          {[...OTHER_NAV_ITEMS, ...nb("more")].map((item) => {
             const isActive = item.label === active;
             return (
               <li key={item.href}>
@@ -238,13 +244,13 @@ export async function AppShell({
 
         <CollapsibleNavGroup
           label="Data Mappings"
-          items={DATA_MAPPING_NAV_ITEMS}
+          items={[...DATA_MAPPING_NAV_ITEMS, ...nb("mappings")]}
           active={active}
         />
 
         <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Settings</div>
         <ul className="space-y-0.5">
-          {SETTINGS_NAV_ITEMS.map((item) => {
+          {[...SETTINGS_NAV_ITEMS, ...nb("settings")].map((item) => {
             const isActive = item.label === active;
             return (
               <li key={item.href}>

@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { BlockConfig, BlockKind, DbSchema, QueryResult } from "@/lib/builder";
+import { NAV_SECTIONS } from "@/lib/builder-nav";
 import { BlockView, BLOCK_META } from "./blocks";
 import { CHART_TYPES, PICTO_ICONS } from "./echarts-block";
 import { FilterControl } from "./filter-control";
@@ -25,7 +26,7 @@ export interface ClientBlock {
   config: BlockConfig;
   result: QueryResult | null;
 }
-interface PageInfo { id: number; slug: string; title: string; description: string | null }
+interface PageInfo { id: number; slug: string; title: string; description: string | null; navSection: string | null }
 
 const PALETTE_GROUPS: Array<{ group: string; kinds: BlockKind[] }> = [
   { group: "Metrics", kinds: ["stat", "kpi", "progress"] },
@@ -202,19 +203,26 @@ function EmptyPage({ isAdmin, onEdit }: { isAdmin: boolean; onEdit: () => void }
 function PageSettings({ page, onDone, busy, mutate }: { page: PageInfo; onDone: () => void; busy: boolean; mutate: (fn: () => Promise<unknown>) => void }) {
   const [title, setTitle] = useState(page.title);
   const [desc, setDesc] = useState(page.description ?? "");
+  const [nav, setNav] = useState(page.navSection ?? "");
   return (
     <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4 space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="text-xs text-muted font-medium">Page — editing</div>
         <div className="flex items-center gap-2">
-          <button type="button" disabled={busy} onClick={() => mutate(async () => updatePageAction(page.id, title, desc, page.slug))} className="text-xs px-3 py-1.5 rounded-lg border border-border-soft text-fg hover:bg-bg-elev-2/60 cursor-pointer disabled:opacity-50">Save details</button>
+          <button type="button" disabled={busy} onClick={() => mutate(async () => updatePageAction(page.id, title, desc, page.slug, nav))} className="text-xs px-3 py-1.5 rounded-lg border border-border-soft text-fg hover:bg-bg-elev-2/60 cursor-pointer disabled:opacity-50">Save details</button>
           <button type="button" onClick={onDone} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-[var(--accent-fg)] font-medium cursor-pointer">Done</button>
           <button type="button" disabled={busy} onClick={() => { if (confirm("Delete this whole page?")) mutate(() => deletePageAction(page.id)); }} className="text-xs text-subtle hover:text-warn-soft-fg cursor-pointer">Delete page</button>
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Page title" className="bg-bg-elev-2 border border-border-soft rounded-lg px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
         <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Short description (optional)" className="bg-bg-elev-2 border border-border-soft rounded-lg px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
+        <label className="flex flex-col gap-1">
+          <select value={nav} onChange={(e) => setNav(e.target.value)} title="Where this page's link appears in the left sidebar"
+            className="bg-bg-elev-2 border border-border-soft rounded-lg px-3 py-2 text-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+            {NAV_SECTIONS.map((s) => <option key={s.value} value={s.value}>{s.value ? `Sidebar: ${s.label}` : s.label}</option>)}
+          </select>
+        </label>
       </div>
     </div>
   );
