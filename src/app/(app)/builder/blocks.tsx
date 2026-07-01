@@ -1,7 +1,11 @@
-import type { BlockConfig, BlockKind, QueryResult } from "@/lib/builder";
+import Link from "next/link";
+import type { BlockConfig, BlockKind, PageRef, QueryResult } from "@/lib/builder";
 import { renderMarkdown, MD_CLASS } from "@/lib/markdown";
 import { EChartsBlock } from "./echarts-block";
 import { BuilderMap } from "./builder-map";
+
+const MAP_H: Record<string, number> = { standard: 300, double: 560, triple: 840 };
+const CHART_H: Record<string, number> = { standard: 280, double: 520, triple: 780 };
 
 const fmt = (v: unknown): string => {
   if (v == null) return "—";
@@ -18,12 +22,21 @@ function Empty({ children }: { children: React.ReactNode }) {
 
 /** Renders a single block from its config + pre-run query result. Used in both
  *  the live editor preview and the finished page. */
-export function BlockView({ kind, config, result }: { kind: BlockKind; config: BlockConfig; result: QueryResult | null }) {
+export function BlockView({ kind, config, result, pages, childResults }: {
+  kind: BlockKind;
+  config: BlockConfig;
+  result: QueryResult | null;
+  pages?: PageRef[];
+  childResults?: (QueryResult | null)[];
+}) {
   const title = (config.title ?? "").trim();
 
   if (kind === "text") {
     return <div className={MD_CLASS} dangerouslySetInnerHTML={{ __html: renderMarkdown(config.text ?? "") }} />;
   }
+
+  if (kind === "pagelist") return <PageList config={config} pages={pages ?? []} />;
+  if (kind === "group") return <Group config={config} childResults={childResults} pages={pages} />;
 
   if (kind === "divider") {
     return (
@@ -42,7 +55,7 @@ export function BlockView({ kind, config, result }: { kind: BlockKind; config: B
     return (
       <div className="space-y-2">
         {title && <h3 className="text-sm font-semibold">{title}</h3>}
-        <EChartsBlock config={config} result={result} />
+        <EChartsBlock config={config} result={result} height={CHART_H[config.height ?? "standard"] ?? 280} />
       </div>
     );
   }
@@ -50,7 +63,7 @@ export function BlockView({ kind, config, result }: { kind: BlockKind; config: B
     return (
       <div className="space-y-2">
         {title && <h3 className="text-sm font-semibold">{title}</h3>}
-        <BuilderMap result={result} />
+        <BuilderMap result={result} height={MAP_H[config.height ?? "standard"] ?? 300} />
       </div>
     );
   }
@@ -248,6 +261,55 @@ function FilterPreview({ config, result }: { config: BlockConfig; result: QueryR
   );
 }
 
+function PageList({ config, pages }: { config: BlockConfig; pages: PageRef[] }) {
+  const title = (config.title ?? "").trim();
+  const bySlug = new Map(pages.map((p) => [p.slug, p]));
+  const items = (config.pages ?? []).map((s) => bySlug.get(s)).filter(Boolean) as PageRef[];
+  const grid = (config.layout ?? "grid") === "grid";
+  return (
+    <div className="space-y-2">
+      {title && <h3 className="text-sm font-semibold">{title}</h3>}
+      {items.length === 0 ? (
+        <Empty>No pages selected.</Empty>
+      ) : (
+        <div className={grid ? "grid grid-cols-1 sm:grid-cols-2 gap-2.5" : "space-y-2"}>
+          {items.map((p) => (
+            <Link key={p.slug} href={`/builder/${p.slug}`} className="group flex items-start justify-between gap-3 rounded-lg border border-border-soft bg-bg/40 px-3.5 py-3 hover:border-accent transition-colors">
+              <div className="min-w-0">
+                <div className="text-sm font-medium group-hover:text-accent truncate">{p.title}</div>
+                {p.description && <div className="text-xs text-subtle truncate">{p.description}</div>}
+              </div>
+              <svg viewBox="0 0 24 24" className="w-4 h-4 text-subtle shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><path d="M9 6l6 6-6 6" /></svg>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Group({ config, childResults, pages }: { config: BlockConfig; childResults?: (QueryResult | null)[]; pages?: PageRef[] }) {
+  const title = (config.title ?? "").trim();
+  const children = config.children ?? [];
+  const grid = config.layout === "grid";
+  return (
+    <div className="space-y-2">
+      {title && <h3 className="text-sm font-semibold">{title}</h3>}
+      {children.length === 0 ? (
+        <Empty>Empty group.</Empty>
+      ) : (
+        <div className={grid ? "grid grid-cols-2 gap-3" : "space-y-3"}>
+          {children.map((ch, i) => (
+            <div key={i} className="rounded-lg border border-border-soft/70 bg-bg/30 p-3">
+              <BlockView kind={ch.kind} config={ch.config} result={childResults?.[i] ?? null} pages={pages} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const BLOCK_META: Record<BlockKind, { label: string; hint: string; dataHint?: string }> = {
   stat: { label: "Stat", hint: "A single big number.", dataHint: "Return one row — the first cell is the number." },
   kpi: { label: "KPI + trend", hint: "Big number, % delta, and a sparkline.", dataHint: "col1 = period, col2 = value, ordered oldest → newest. Latest point is the number; delta is vs the previous point." },
@@ -260,4 +322,6 @@ export const BLOCK_META: Record<BlockKind, { label: string; hint: string; dataHi
   divider: { label: "Divider", hint: "A titled section separator." },
   embed: { label: "Image / embed", hint: "An image or an iframe embed." },
   filter: { label: "Filter", hint: "A control that feeds :param into other blocks.", dataHint: "Dropdown / chips: col1 = value, col2 = label (optional). Date / text need no query." },
+  pagelist: { label: "Page list", hint: "Link to other builder pages (a menu page)." },
+  group: { label: "Group", hint: "A container that nests other blocks (KPIs in a list…)." },
 };

@@ -293,7 +293,7 @@ function buildOption(type: string, result: QueryResult, opts: { icon?: string } 
   }
 }
 
-export function EChartsBlock({ config, result }: { config: BlockConfig; result: QueryResult | null }) {
+export function EChartsBlock({ config, result, height = 280 }: { config: BlockConfig; result: QueryResult | null; height?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const modRef = useRef<any>(null);
@@ -320,5 +320,5 @@ export function EChartsBlock({ config, result }: { config: BlockConfig; result: 
   if (!result) return <div className="py-6 text-center text-xs text-subtle">No data yet.</div>;
   if (result.error)
     return <div className="rounded-lg border border-warn-soft-bg bg-warn-soft-bg/30 px-3 py-2 text-xs text-warn-soft-fg">{result.error}</div>;
-  return <div ref={ref} style={{ width: "100%", height: 280 }} />;
+  return <div ref={ref} style={{ width: "100%", height }} />;
 }

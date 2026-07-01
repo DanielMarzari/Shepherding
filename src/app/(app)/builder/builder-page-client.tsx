@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { BlockConfig, BlockKind, DbSchema, QueryResult } from "@/lib/builder";
+import type { BlockConfig, BlockKind, DbSchema, PageRef, QueryResult } from "@/lib/builder";
+import { DEFAULT_CONFIG, LEAF_KINDS } from "@/lib/builder-defaults";
 import { NAV_SECTIONS } from "@/lib/builder-nav";
 import { BlockView, BLOCK_META } from "./blocks";
 import { CHART_TYPES, PICTO_ICONS } from "./echarts-block";
@@ -25,15 +26,19 @@ export interface ClientBlock {
   kind: BlockKind;
   config: BlockConfig;
   result: QueryResult | null;
+  childResults?: (QueryResult | null)[];
 }
 interface PageInfo { id: number; slug: string; title: string; description: string | null; navSection: string | null }
+interface SiblingRef { id: number; title: string; kind: BlockKind }
 
 const PALETTE_GROUPS: Array<{ group: string; kinds: BlockKind[] }> = [
   { group: "Metrics", kinds: ["stat", "kpi", "progress"] },
   { group: "Visuals", kinds: ["chart", "table", "leaderboard", "map"] },
   { group: "Content", kinds: ["text", "divider", "embed"] },
   { group: "Controls", kinds: ["filter"] },
+  { group: "Containers", kinds: ["group", "pagelist"] },
 ];
+const DATA_KINDS = new Set<BlockKind>(["stat", "kpi", "progress", "chart", "table", "leaderboard", "map"]);
 
 const SPAN: Record<number, string> = {
   1: "lg:col-span-1", 2: "lg:col-span-2", 3: "lg:col-span-3",
@@ -44,7 +49,7 @@ const chartHint = (id: string) => CHART_TYPES.flatMap((g) => g.items).find((i) =
 
 /** Whether a block kind (with its current config) is powered by a SQL query. */
 function blockHasSql(kind: BlockKind, cfg: BlockConfig): boolean {
-  if (kind === "text" || kind === "divider" || kind === "embed") return false;
+  if (kind === "text" || kind === "divider" || kind === "embed" || kind === "pagelist" || kind === "group") return false;
   if (kind === "filter") { const t = cfg.filterType ?? "dropdown"; return t === "dropdown" || t === "chips"; }
   return true;
 }
@@ -67,19 +72,23 @@ export function BuilderPageClient({
   isAdmin,
   initialEdit,
   schema,
+  pages,
 }: {
   page: PageInfo;
   blocks: ClientBlock[];
   isAdmin: boolean;
   initialEdit: boolean;
   schema: DbSchema;
+  pages: PageRef[];
 }) {
   const router = useRouter();
   const [edit, setEdit] = useState(isAdmin && initialEdit);
   const [pending, start] = useTransition();
   const mutate = (fn: () => Promise<unknown>) => start(async () => { await fn(); router.refresh(); });
 
-  if (!edit) return <ViewMode page={page} blocks={blocks} isAdmin={isAdmin} onEdit={() => setEdit(true)} />;
+  const siblings: SiblingRef[] = blocks.map((b) => ({ id: b.id, title: (b.config.title ?? "").trim() || BLOCK_META[b.kind].label, kind: b.kind }));
+
+  if (!edit) return <ViewMode page={page} blocks={blocks} isAdmin={isAdmin} pages={pages} onEdit={() => setEdit(true)} />;
 
   return (
     <div className="space-y-5">
@@ -109,7 +118,9 @@ export function BuilderPageClient({
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
           {blocks.map((b, i) => (
-            <BlockEditor key={b.id} block={b} slug={page.slug} schema={schema} isFirst={i === 0} isLast={i === blocks.length - 1} mutate={mutate} busy={pending} />
+            <BlockEditor key={b.id} block={b} slug={page.slug} schema={schema} pages={pages}
+              siblings={siblings.filter((s) => s.id !== b.id && DATA_KINDS.has(s.kind))}
+              isFirst={i === 0} isLast={i === blocks.length - 1} mutate={mutate} busy={pending} />
           ))}
         </div>
       )}
@@ -119,7 +130,7 @@ export function BuilderPageClient({
 
 // ── View mode (with live filter parameters) ──────────────────────────
 
-function ViewMode({ page, blocks, isAdmin, onEdit }: { page: PageInfo; blocks: ClientBlock[]; isAdmin: boolean; onEdit: () => void }) {
+function ViewMode({ page, blocks, isAdmin, pages, onEdit }: { page: PageInfo; blocks: ClientBlock[]; isAdmin: boolean; pages: PageRef[]; onEdit: () => void }) {
   const initialParams = useMemo(() => {
     const p: Record<string, string> = {};
     for (const b of blocks) if (b.kind === "filter" && b.config.param) p[b.config.param] = b.config.defaultValue ?? "";
@@ -130,11 +141,19 @@ function ViewMode({ page, blocks, isAdmin, onEdit }: { page: PageInfo; blocks: C
   const [loadingIds, setLoadingIds] = useState<Set<number>>(new Set());
 
   const deps = useMemo(() => blocks.map((b) => ({ id: b.id, sql: b.config.sql ?? "", params: paramsIn(b.config.sql ?? "") })), [blocks]);
+  const filterByParam = useMemo(() => {
+    const m = new Map<string, ClientBlock>();
+    for (const b of blocks) if (b.kind === "filter" && b.config.param) m.set(b.config.param, b);
+    return m;
+  }, [blocks]);
 
   function setParam(name: string, value: string) {
     const next = { ...params, [name]: value };
     setParams(next);
-    const affected = deps.filter((d) => d.sql.trim() && d.params.includes(name));
+    const targets = filterByParam.get(name)?.config.targets ?? [];
+    const affected = targets.length
+      ? deps.filter((d) => targets.includes(d.id) && d.sql.trim())
+      : deps.filter((d) => d.sql.trim() && d.params.includes(name));
     if (!affected.length) return;
     setLoadingIds((s) => { const n = new Set(s); affected.forEach((a) => n.add(a.id)); return n; });
     affected.forEach(async (a) => {
@@ -174,7 +193,7 @@ function ViewMode({ page, blocks, isAdmin, onEdit }: { page: PageInfo; blocks: C
                 {b.kind === "filter" ? (
                   <FilterControl config={b.config} result={results[b.id]} value={params[b.config.param ?? ""] ?? ""} onChange={(v) => setParam(b.config.param ?? "", v)} />
                 ) : (
-                  <BlockView kind={b.kind} config={b.config} result={results[b.id]} />
+                  <BlockView kind={b.kind} config={b.config} result={results[b.id]} pages={pages} childResults={b.childResults} />
                 )}
               </div>
             );
@@ -228,65 +247,30 @@ function PageSettings({ page, onDone, busy, mutate }: { page: PageInfo; onDone: 
   );
 }
 
-function BlockEditor({ block, slug, schema, isFirst, isLast, mutate, busy }: {
-  block: ClientBlock; slug: string; schema: DbSchema; isFirst: boolean; isLast: boolean; mutate: (fn: () => Promise<unknown>) => void; busy: boolean;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [cfg, setCfg] = useState<BlockConfig>(block.config);
-  const [result, setResult] = useState<QueryResult | null>(block.result);
-  const [running, setRunning] = useState(false);
-  const set = (patch: Partial<BlockConfig>) => setCfg((c) => ({ ...c, ...patch }));
-  const kind = block.kind;
-  const hasSql = blockHasSql(kind, cfg);
-  const meta = BLOCK_META[kind];
-
-  async function run() {
-    if (!hasSql) return;
-    setRunning(true);
-    try { setResult(await runQueryAction(cfg.sql ?? "")); } finally { setRunning(false); }
-  }
-  function save() { mutate(async () => { await updateBlockAction(block.id, cfg, slug); }); setEditing(false); }
-  function cancel() { setCfg(block.config); setResult(block.result); setEditing(false); }
-
-  const ctrl = (
-    <div className="flex items-center gap-1 text-muted" onClick={(e) => e.stopPropagation()}>
-      <button type="button" disabled={busy || isFirst} title="Move up" onClick={() => mutate(() => moveBlockAction(block.id, "up", slug))} className="w-6 h-6 rounded hover:bg-bg-elev-2 disabled:opacity-30 cursor-pointer">↑</button>
-      <button type="button" disabled={busy || isLast} title="Move down" onClick={() => mutate(() => moveBlockAction(block.id, "down", slug))} className="w-6 h-6 rounded hover:bg-bg-elev-2 disabled:opacity-30 cursor-pointer">↓</button>
-      <button type="button" disabled={busy} title="Delete block" onClick={() => mutate(() => deleteBlockAction(block.id, slug))} className="w-6 h-6 rounded hover:bg-bg-elev-2 hover:text-warn-soft-fg cursor-pointer">✕</button>
+function LayoutToggle({ cfg, set }: { cfg: BlockConfig; set: (p: Partial<BlockConfig>) => void }) {
+  const v = cfg.layout ?? "grid";
+  return (
+    <div className="inline-flex rounded-lg border border-border-soft overflow-hidden text-xs">
+      {(["list", "grid"] as const).map((o) => (
+        <button key={o} type="button" onClick={() => set({ layout: o })}
+          className={`px-2.5 py-1 cursor-pointer capitalize ${v === o ? "bg-accent text-[var(--accent-fg)]" : "text-muted hover:bg-bg-elev-2"}`}>{o}</button>
+      ))}
     </div>
   );
+}
 
-  // ── Collapsed: show the rendered block; click to edit ──────────────
-  if (!editing) {
-    return (
-      <div onClick={() => setEditing(true)} title="Click to edit"
-        className={`group relative rounded-xl border border-border-soft bg-bg-elev-2/40 p-5 cursor-pointer hover:border-accent transition-colors ${spanClass(cfg.span)}`}>
-        <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <span className="text-[10px] text-accent px-1.5 py-0.5 rounded bg-accent/10">edit</span>
-          {ctrl}
-        </div>
-        <BlockView kind={kind} config={cfg} result={result} />
-      </div>
-    );
-  }
-
-  // ── Expanded editor ────────────────────────────────────────────────
-  const titlePlaceholder = kind === "text" ? "Heading (optional)" : kind === "divider" ? "Section label" : kind === "filter" ? "Control label" : "Block title";
-
+/** The per-kind configuration fields, shared by the top-level editor and the
+ *  group child editor. */
+function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
+  kind: BlockKind; cfg: BlockConfig; set: (p: Partial<BlockConfig>) => void; schema: DbSchema;
+  pages?: PageRef[]; siblings?: SiblingRef[]; onSqlBlur?: () => void;
+}) {
+  const meta = BLOCK_META[kind];
+  const hasSql = blockHasSql(kind, cfg);
   return (
-    <div className={`rounded-xl border border-accent/50 bg-bg-elev-2/40 p-4 space-y-3 ${spanClass(cfg.span)}`}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted">
-          <span className="w-1.5 h-1.5 rounded-full bg-accent" />{meta.label}
-        </span>
-        {ctrl}
-      </div>
-
-      <input value={cfg.title ?? ""} onChange={(e) => set({ title: e.target.value })} placeholder={titlePlaceholder} className={INPUT} />
-
+    <>
       {meta.dataHint && kind !== "chart" && <div className="text-[10px] text-subtle leading-snug">{meta.dataHint}</div>}
 
-      {/* Chart type + pictogram icon */}
       {kind === "chart" && (
         <div className="space-y-1">
           <select value={cfg.chartType ?? "bar"} onChange={(e) => set({ chartType: e.target.value })} className={`${SELECT} w-full`}>
@@ -305,17 +289,14 @@ function BlockEditor({ block, slug, schema, isFirst, isLast, mutate, busy }: {
         </div>
       )}
 
-      {/* Rich text */}
       {kind === "text" && (
         <textarea value={cfg.text ?? ""} onChange={(e) => set({ text: e.target.value })} rows={5} placeholder="Write markdown…" className={`${INPUT} resize-y font-mono text-xs`} />
       )}
 
-      {/* Divider */}
       {kind === "divider" && (
         <input value={cfg.sub ?? ""} onChange={(e) => set({ sub: e.target.value })} placeholder="Right-aligned note (optional)" className={INPUT_SM} />
       )}
 
-      {/* Image / embed */}
       {kind === "embed" && (
         <>
           <select value={cfg.mode ?? "image"} onChange={(e) => set({ mode: e.target.value as "image" | "iframe" })} className={`${SELECT} w-full`}>
@@ -329,7 +310,27 @@ function BlockEditor({ block, slug, schema, isFirst, isLast, mutate, busy }: {
         </>
       )}
 
-      {/* Filter controls */}
+      {kind === "pagelist" && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-subtle">Pick pages to link</span>
+            <LayoutToggle cfg={cfg} set={set} />
+          </div>
+          <div className="max-h-44 overflow-auto rounded-lg border border-border-soft p-1.5 space-y-0.5">
+            {(pages ?? []).length === 0 && <div className="text-xs text-subtle px-1.5 py-1">No other pages yet — create more pages first.</div>}
+            {(pages ?? []).map((p) => {
+              const on = (cfg.pages ?? []).includes(p.slug);
+              return (
+                <label key={p.slug} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-bg-elev-2 cursor-pointer text-xs">
+                  <input type="checkbox" checked={on} onChange={() => set({ pages: on ? (cfg.pages ?? []).filter((s) => s !== p.slug) : [...(cfg.pages ?? []), p.slug] })} />
+                  <span className="truncate">{p.title}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {kind === "filter" && (
         <div className="grid grid-cols-2 gap-2">
           <label className="text-[10px] text-subtle col-span-2">Parameter name — reference it as <code className="px-1 rounded bg-bg">:{cfg.param || "name"}</code> in other blocks</label>
@@ -341,13 +342,27 @@ function BlockEditor({ block, slug, schema, isFirst, isLast, mutate, busy }: {
             <option value="text">Text</option>
           </select>
           <input value={cfg.defaultValue ?? ""} onChange={(e) => set({ defaultValue: e.target.value })} placeholder="Default value (optional)" className={`${INPUT_SM} col-span-2`} />
+          {siblings && siblings.length > 0 && (
+            <div className="col-span-2 space-y-1">
+              <div className="text-[10px] text-subtle">Affects which blocks? (none selected = every block whose SQL uses <code className="px-1 rounded bg-bg">:{cfg.param || "name"}</code>)</div>
+              <div className="flex flex-wrap gap-1.5">
+                {siblings.map((s) => {
+                  const on = (cfg.targets ?? []).includes(s.id);
+                  return (
+                    <button key={s.id} type="button" onClick={() => set({ targets: on ? (cfg.targets ?? []).filter((x) => x !== s.id) : [...(cfg.targets ?? []), s.id] })}
+                      className={`px-2 py-0.5 rounded-full text-[11px] border cursor-pointer transition-colors ${on ? "bg-accent text-[var(--accent-fg)] border-accent" : "bg-bg-elev-2 text-muted border-border-soft hover:text-fg"}`}>
+                      {s.title}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* SQL */}
-      {hasSql && <SqlField value={cfg.sql ?? ""} onChange={(v) => set({ sql: v })} onBlur={run} schema={schema} />}
+      {hasSql && <SqlField value={cfg.sql ?? ""} onChange={(v) => set({ sql: v })} onBlur={onSqlBlur} schema={schema} />}
 
-      {/* Post-SQL extras */}
       {(kind === "stat" || kind === "kpi") && (
         <input value={cfg.sub ?? ""} onChange={(e) => set({ sub: e.target.value })} placeholder="Sub-label (optional)" className={INPUT_SM} />
       )}
@@ -360,21 +375,163 @@ function BlockEditor({ block, slug, schema, isFirst, isLast, mutate, busy }: {
       {kind === "leaderboard" && (
         <input type="number" min={1} value={cfg.limit ?? 10} onChange={(e) => set({ limit: Math.max(1, Number(e.target.value)) })} placeholder="Show top N" className={INPUT_SM} />
       )}
+    </>
+  );
+}
 
-      <div className="flex items-center gap-2 text-xs">
+/** Editor for the child blocks nested inside a group container. */
+function GroupChildEditor({ cfg, set, schema }: { cfg: BlockConfig; set: (p: Partial<BlockConfig>) => void; schema: DbSchema }) {
+  const children = cfg.children ?? [];
+  const [childResults, setChildResults] = useState<Record<number, QueryResult | null>>({});
+  const [adding, setAdding] = useState<BlockKind>("kpi");
+  const ran = useRef(false);
+
+  const setChild = (i: number, patch: Partial<BlockConfig>) =>
+    set({ children: children.map((c, idx) => (idx === i ? { ...c, config: { ...c.config, ...patch } } : c)) });
+  const addChild = (k: BlockKind) => set({ children: [...children, { kind: k, config: { ...DEFAULT_CONFIG[k] } }] });
+  const removeChild = (i: number) => set({ children: children.filter((_, idx) => idx !== i) });
+  const moveChild = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= children.length) return;
+    const next = [...children];
+    [next[i], next[j]] = [next[j], next[i]];
+    set({ children: next });
+  };
+  async function runChild(i: number, sql: string) {
+    const res = await runQueryAction(sql);
+    setChildResults((r) => ({ ...r, [i]: res }));
+  }
+  // Run each child's query once when the group editor opens.
+  useEffect(() => {
+    if (ran.current) return;
+    ran.current = true;
+    children.forEach((c, i) => { if (blockHasSql(c.kind, c.config)) runChild(i, c.config.sql ?? ""); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-subtle">Layout</span>
+        <LayoutToggle cfg={cfg} set={set} />
+      </div>
+
+      {children.map((ch, i) => (
+        <div key={i} className="rounded-lg border border-border-soft bg-bg/40 p-2.5 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] uppercase tracking-wide text-muted">{BLOCK_META[ch.kind].label}</span>
+            <div className="flex items-center gap-1 text-muted">
+              <button type="button" title="Up" disabled={i === 0} onClick={() => moveChild(i, -1)} className="w-5 h-5 rounded hover:bg-bg-elev-2 disabled:opacity-30 cursor-pointer">↑</button>
+              <button type="button" title="Down" disabled={i === children.length - 1} onClick={() => moveChild(i, 1)} className="w-5 h-5 rounded hover:bg-bg-elev-2 disabled:opacity-30 cursor-pointer">↓</button>
+              <button type="button" title="Remove" onClick={() => removeChild(i)} className="w-5 h-5 rounded hover:bg-bg-elev-2 hover:text-warn-soft-fg cursor-pointer">✕</button>
+            </div>
+          </div>
+          <input value={ch.config.title ?? ""} onChange={(e) => setChild(i, { title: e.target.value })} placeholder="Title" className={INPUT_SM} />
+          <BlockFields kind={ch.kind} cfg={ch.config} set={(p) => setChild(i, p)} schema={schema} onSqlBlur={() => runChild(i, ch.config.sql ?? "")} />
+          <div className="rounded border border-border-soft/70 bg-bg/40 p-2">
+            <BlockView kind={ch.kind} config={ch.config} result={blockHasSql(ch.kind, ch.config) ? childResults[i] ?? null : null} />
+          </div>
+        </div>
+      ))}
+
+      <div className="flex items-center gap-2">
+        <select value={adding} onChange={(e) => setAdding(e.target.value as BlockKind)} className={SELECT}>
+          {LEAF_KINDS.map((k) => <option key={k} value={k}>{BLOCK_META[k].label}</option>)}
+        </select>
+        <button type="button" onClick={() => addChild(adding)} className="px-2.5 py-1 rounded-lg border border-border-soft text-xs text-muted hover:text-fg hover:border-accent cursor-pointer">+ Add to group</button>
+      </div>
+    </div>
+  );
+}
+
+function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mutate, busy }: {
+  block: ClientBlock; slug: string; schema: DbSchema; pages: PageRef[]; siblings: SiblingRef[];
+  isFirst: boolean; isLast: boolean; mutate: (fn: () => Promise<unknown>) => void; busy: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [cfg, setCfg] = useState<BlockConfig>(block.config);
+  const [result, setResult] = useState<QueryResult | null>(block.result);
+  const [running, setRunning] = useState(false);
+  const set = (patch: Partial<BlockConfig>) => setCfg((c) => ({ ...c, ...patch }));
+  const kind = block.kind;
+  const hasSql = blockHasSql(kind, cfg);
+  const meta = BLOCK_META[kind];
+  const showHeight = kind === "map" || kind === "chart";
+
+  async function run() {
+    if (!hasSql) return;
+    setRunning(true);
+    try { setResult(await runQueryAction(cfg.sql ?? "")); } finally { setRunning(false); }
+  }
+  function save() { mutate(async () => { await updateBlockAction(block.id, cfg, slug); }); setEditing(false); }
+  function cancel() { setCfg(block.config); setResult(block.result); setEditing(false); }
+
+  const ctrl = (
+    <div className="flex items-center gap-1 text-muted" onClick={(e) => e.stopPropagation()}>
+      <button type="button" disabled={busy || isFirst} title="Move up" onClick={() => mutate(() => moveBlockAction(block.id, "up", slug))} className="w-6 h-6 rounded hover:bg-bg-elev-2 disabled:opacity-30 cursor-pointer">↑</button>
+      <button type="button" disabled={busy || isLast} title="Move down" onClick={() => mutate(() => moveBlockAction(block.id, "down", slug))} className="w-6 h-6 rounded hover:bg-bg-elev-2 disabled:opacity-30 cursor-pointer">↓</button>
+      <button type="button" disabled={busy} title="Delete block" onClick={() => mutate(() => deleteBlockAction(block.id, slug))} className="w-6 h-6 rounded hover:bg-bg-elev-2 hover:text-warn-soft-fg cursor-pointer">✕</button>
+    </div>
+  );
+
+  if (!editing) {
+    return (
+      <div onClick={() => setEditing(true)} title="Click to edit"
+        className={`group relative rounded-xl border border-border-soft bg-bg-elev-2/40 p-5 cursor-pointer hover:border-accent transition-colors ${spanClass(cfg.span)}`}>
+        <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <span className="text-[10px] text-accent px-1.5 py-0.5 rounded bg-accent/10">edit</span>
+          {ctrl}
+        </div>
+        <BlockView kind={kind} config={cfg} result={result} pages={pages} />
+      </div>
+    );
+  }
+
+  const titlePlaceholder = kind === "text" ? "Heading (optional)" : kind === "divider" ? "Section label" : kind === "filter" ? "Control label" : "Block title";
+
+  return (
+    <div className={`rounded-xl border border-accent/50 bg-bg-elev-2/40 p-4 space-y-3 ${spanClass(cfg.span)}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent" />{meta.label}
+        </span>
+        {ctrl}
+      </div>
+
+      <input value={cfg.title ?? ""} onChange={(e) => set({ title: e.target.value })} placeholder={titlePlaceholder} className={INPUT} />
+
+      {kind === "group" ? (
+        <GroupChildEditor cfg={cfg} set={set} schema={schema} />
+      ) : (
+        <BlockFields kind={kind} cfg={cfg} set={set} schema={schema} pages={pages} siblings={siblings} onSqlBlur={run} />
+      )}
+
+      <div className="flex items-center gap-2 text-xs flex-wrap">
         <label className="text-subtle">Width</label>
         <select value={cfg.span ?? 2} onChange={(e) => set({ span: Number(e.target.value) })} className="bg-bg border border-border-soft rounded px-1.5 py-1 text-xs cursor-pointer">
           {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}/6</option>)}
         </select>
+        {showHeight && (
+          <>
+            <label className="text-subtle">Height</label>
+            <select value={cfg.height ?? "standard"} onChange={(e) => set({ height: e.target.value as BlockConfig["height"] })} className="bg-bg border border-border-soft rounded px-1.5 py-1 text-xs cursor-pointer">
+              <option value="standard">Thin</option>
+              <option value="double">Double</option>
+              <option value="triple">Triple</option>
+            </select>
+          </>
+        )}
         {hasSql && <button type="button" onClick={run} disabled={running} className="ml-auto px-2.5 py-1 rounded border border-border-soft text-muted hover:text-fg cursor-pointer disabled:opacity-50">{running ? "Running…" : "Run"}</button>}
         <button type="button" onClick={cancel} className={`px-2.5 py-1 rounded border border-border-soft text-muted hover:text-fg cursor-pointer ${hasSql ? "" : "ml-auto"}`}>Cancel</button>
         <button type="button" onClick={save} disabled={busy} className="px-3 py-1 rounded bg-accent text-[var(--accent-fg)] font-medium cursor-pointer disabled:opacity-50">Save</button>
       </div>
 
-      <div className="rounded-lg border border-border-soft bg-bg/40 p-3">
-        <div className="text-[10px] uppercase tracking-wide text-subtle mb-2">Preview</div>
-        <BlockView kind={kind} config={cfg} result={hasSql ? result : null} />
-      </div>
+      {kind !== "group" && (
+        <div className="rounded-lg border border-border-soft bg-bg/40 p-3">
+          <div className="text-[10px] uppercase tracking-wide text-subtle mb-2">Preview</div>
+          <BlockView kind={kind} config={cfg} result={hasSql ? result : null} pages={pages} />
+        </div>
+      )}
     </div>
   );
 }
