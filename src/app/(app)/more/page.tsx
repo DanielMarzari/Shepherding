@@ -109,6 +109,12 @@ const SECTIONS: MoreSection[] = [
     title: "Internal",
     links: [
       {
+        href: "/builder",
+        title: "Page Builder",
+        description:
+          "Build your own dashboards from blocks — stat cards, bar charts, tables, and text — each powered by a read-only SQL query. Arrange them in a bento grid and share the page.",
+      },
+      {
         href: "/examples",
         title: "Design references",
         description:
