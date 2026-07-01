@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { requireOrg } from "@/lib/auth";
-import { getBuilderBlocks, getBuilderPage, runBuilderQuery } from "@/lib/builder";
+import { getBuilderBlocks, getBuilderPage, getDbSchema, runBuilderQuery } from "@/lib/builder";
 import { BuilderPageClient, type ClientBlock } from "../builder-page-client";
 
 export default async function BuilderCustomPage({
@@ -33,6 +33,7 @@ export default async function BuilderCustomPage({
           blocks={blocks}
           isAdmin={session.role === "admin"}
           initialEdit={sp.edit === "1"}
+          schema={getDbSchema()}
         />
       </div>
     </AppShell>

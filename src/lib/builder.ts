@@ -47,9 +47,36 @@ export function runBuilderQuery(sql: string): QueryResult {
   }
 }
 
+/** Table + column names for the SQL editor's autocomplete. */
+export interface DbSchema {
+  tables: string[];
+  columns: Record<string, string[]>;
+}
+export function getDbSchema(): DbSchema {
+  const ro = roDb();
+  const tables = (
+    ro
+      .prepare(
+        `SELECT name FROM sqlite_master
+          WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'
+          ORDER BY name`,
+      )
+      .all() as Array<{ name: string }>
+  ).map((r) => r.name);
+  const columns: Record<string, string[]> = {};
+  for (const t of tables) {
+    try {
+      columns[t] = (ro.prepare(`PRAGMA table_info("${t.replace(/"/g, '""')}")`).all() as Array<{ name: string }>).map((c) => c.name);
+    } catch {
+      columns[t] = [];
+    }
+  }
+  return { tables, columns };
+}
+
 // ─── Page + block model ──────────────────────────────────────────────
 
-export type BlockKind = "stat" | "table" | "bar" | "text";
+export type BlockKind = "stat" | "table" | "chart" | "text";
 
 export interface BuilderPage {
   id: number;
@@ -73,7 +100,9 @@ export interface BlockConfig {
   sql?: string;
   sub?: string;
   text?: string;
-  /** Bento column span (1–3). */
+  /** Chart type (for kind === "chart"). */
+  chartType?: string;
+  /** Bento column span (1–6). */
   span?: number;
   [k: string]: unknown;
 }
@@ -85,11 +114,11 @@ export const DEFAULT_CONFIG: Record<BlockKind, BlockConfig> = {
     sub: "the value is the first column of the first row",
     span: 1,
   },
-  bar: {
+  chart: {
     title: "New chart",
     sql: "SELECT classification AS label, COUNT(*) AS value\nFROM person_activity\nGROUP BY classification\nORDER BY value DESC",
-    sub: "column 1 = label, column 2 = value",
-    span: 2,
+    chartType: "bar",
+    span: 3,
   },
   table: {
     title: "New table",

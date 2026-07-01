@@ -1,4 +1,5 @@
 import type { BlockConfig, BlockKind, QueryResult } from "@/lib/builder";
+import { EChartsBlock } from "./echarts-block";
 
 const fmt = (v: unknown): string => {
   if (v == null) return "—";
@@ -41,6 +42,15 @@ export function BlockView({
     );
   }
 
+  if (kind === "chart") {
+    return (
+      <div className="space-y-2">
+        {title && <h3 className="text-sm font-semibold">{title}</h3>}
+        <EChartsBlock config={config} result={result} />
+      </div>
+    );
+  }
+
   const body = () => {
     if (!result) return <Empty>No data yet.</Empty>;
     if (result.error) return <QueryError error={result.error} />;
@@ -51,25 +61,6 @@ export function BlockView({
         <div>
           <div className="tnum text-3xl font-semibold leading-tight">{fmt(v)}</div>
           {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
-        </div>
-      );
-    }
-
-    if (kind === "bar") {
-      const rows = result.rows.filter((r) => typeof r[1] === "number");
-      if (rows.length === 0) return <Empty>Query should return a label column and a numeric value column.</Empty>;
-      const max = Math.max(1, ...rows.map((r) => Number(r[1])));
-      return (
-        <div className="space-y-1.5">
-          {rows.slice(0, 30).map((r, i) => (
-            <div key={i} className="flex items-center gap-2 text-xs">
-              <span className="w-28 shrink-0 truncate text-muted" title={fmt(r[0])}>{fmt(r[0])}</span>
-              <div className="flex-1 h-4 rounded bg-bg-elev-2/60 overflow-hidden">
-                <div className="h-full rounded bg-accent" style={{ width: `${(Number(r[1]) / max) * 100}%` }} />
-              </div>
-              <span className="w-16 text-right tnum text-fg">{fmt(r[1])}</span>
-            </div>
-          ))}
         </div>
       );
     }
@@ -115,7 +106,7 @@ export function BlockView({
 
 export const BLOCK_META: Record<BlockKind, { label: string; hint: string }> = {
   stat: { label: "Stat", hint: "A single big number (first cell of the query)." },
-  bar: { label: "Bar chart", hint: "Label + numeric value per row." },
+  chart: { label: "Chart", hint: "30+ chart types — bar, line, pie, sankey, heatmap…" },
   table: { label: "Table", hint: "Any columns and rows." },
   text: { label: "Text", hint: "Notes / a heading — no query." },
 };
