@@ -17,12 +17,20 @@ export default async function BuilderCustomPage({
   const page = getBuilderPage(session.orgId, slug);
   if (!page) notFound();
 
-  const blocks: ClientBlock[] = getBuilderBlocks(page.id).map((b) => ({
+  const raw = getBuilderBlocks(page.id);
+
+  // Seed filter parameters from each filter's default so the first render is
+  // already filtered; the client re-runs affected blocks when a filter changes.
+  const initialParams: Record<string, string> = {};
+  for (const b of raw) if (b.kind === "filter" && b.config.param) initialParams[b.config.param] = b.config.defaultValue ?? "";
+
+  const NO_SQL = new Set(["text", "divider", "embed"]);
+  const blocks: ClientBlock[] = raw.map((b) => ({
     id: b.id,
     position: b.position,
     kind: b.kind,
     config: b.config,
-    result: b.kind === "text" ? null : runBuilderQuery(b.config.sql ?? ""),
+    result: NO_SQL.has(b.kind) ? null : runBuilderQuery(b.config.sql ?? "", initialParams),
   }));
 
   return (

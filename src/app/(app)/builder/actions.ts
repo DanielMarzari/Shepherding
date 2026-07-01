@@ -6,11 +6,13 @@ import { requireOrg } from "@/lib/auth";
 import {
   type BlockConfig,
   type BlockKind,
+  type QueryParams,
   type QueryResult,
   addBuilderBlock,
   createBuilderPage,
   deleteBuilderBlock,
   deleteBuilderPage,
+  getBuilderBlockSql,
   moveBuilderBlock,
   runBuilderQuery,
   updateBuilderBlock,
@@ -23,7 +25,7 @@ async function requireAdmin() {
   return s;
 }
 
-const VALID_KINDS: BlockKind[] = ["stat", "chart", "table", "text"];
+const VALID_KINDS: BlockKind[] = ["stat", "kpi", "progress", "chart", "table", "leaderboard", "map", "text", "divider", "embed", "filter"];
 
 export async function createPageAction(formData: FormData) {
   const s = await requireAdmin();
@@ -73,7 +75,16 @@ export async function moveBlockAction(id: number, dir: "up" | "down", slug: stri
 }
 
 /** Live-preview a query from the block editor (admin only, read-only). */
-export async function runQueryAction(sql: string): Promise<QueryResult> {
+export async function runQueryAction(sql: string, params?: QueryParams): Promise<QueryResult> {
   await requireAdmin();
-  return runBuilderQuery(sql);
+  return runBuilderQuery(sql, params);
+}
+
+/** Re-run a saved block with new filter params (any org member, read-only).
+ *  The SQL is looked up server-side so a viewer can never run arbitrary SQL. */
+export async function runBlockAction(blockId: number, params?: QueryParams): Promise<QueryResult> {
+  const s = await requireOrg();
+  const sql = getBuilderBlockSql(s.orgId, blockId);
+  if (sql == null) return { columns: [], rows: [], truncated: false, error: "Block not found." };
+  return runBuilderQuery(sql, params);
 }

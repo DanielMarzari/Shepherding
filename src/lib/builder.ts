@@ -29,8 +29,25 @@ export interface QueryResult {
   error?: string;
 }
 
-/** Run a single read-only SELECT/WITH statement, capped at MAX_ROWS. */
-export function runBuilderQuery(sql: string): QueryResult {
+/** Filter parameters injected into a query as :name placeholders. */
+export type QueryParams = Record<string, string>;
+
+/** Named `:param` tokens referenced in a statement, ignoring string literals
+ *  and comments so `strftime('%H:%M')` doesn't look like a `:M` parameter. */
+export function extractParams(sql: string): string[] {
+  const stripped = (sql ?? "")
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/"(?:[^"]|"")*"/g, '""')
+    .replace(/--[^\n]*/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+  const found = new Set<string>();
+  for (const m of stripped.matchAll(/:([a-zA-Z_]\w*)/g)) found.add(m[1]);
+  return [...found];
+}
+
+/** Run a single read-only SELECT/WITH statement, capped at MAX_ROWS.
+ *  Any `:name` placeholders are bound from `params` (SQL-injection-safe). */
+export function runBuilderQuery(sql: string, params?: QueryParams): QueryResult {
   const empty = (error: string): QueryResult => ({ columns: [], rows: [], truncated: false, error });
   const q = (sql ?? "").trim().replace(/;+\s*$/, "");
   if (!q) return empty("Write a SELECT query to power this block.");
@@ -39,8 +56,12 @@ export function runBuilderQuery(sql: string): QueryResult {
   if (FORBIDDEN.test(q)) return empty("That query uses a keyword that isn’t allowed (read-only).");
   try {
     const stmt = roDb().prepare(q);
+    const names = extractParams(q);
+    const bind: QueryParams = {};
+    for (const n of names) bind[n] = params?.[n] ?? "";
     const columns = stmt.columns().map((c) => c.name);
-    const all = stmt.raw(true).all() as unknown[][];
+    const raw = stmt.raw(true);
+    const all = (names.length ? raw.all(bind) : raw.all()) as unknown[][];
     return { columns, rows: all.slice(0, MAX_ROWS), truncated: all.length > MAX_ROWS };
   } catch (e) {
     return empty(e instanceof Error ? e.message : "Query failed.");
@@ -76,7 +97,18 @@ export function getDbSchema(): DbSchema {
 
 // ─── Page + block model ──────────────────────────────────────────────
 
-export type BlockKind = "stat" | "table" | "chart" | "text";
+export type BlockKind =
+  | "stat"
+  | "kpi"
+  | "progress"
+  | "chart"
+  | "table"
+  | "leaderboard"
+  | "map"
+  | "text"
+  | "divider"
+  | "embed"
+  | "filter";
 
 export interface BuilderPage {
   id: number;
@@ -102,6 +134,20 @@ export interface BlockConfig {
   text?: string;
   /** Chart type (for kind === "chart"). */
   chartType?: string;
+  /** Pictogram symbol id (for chartType === "pictogram"). */
+  icon?: string;
+  /** Target value for the progress / goal block. */
+  goal?: number;
+  /** Top-N cap for the leaderboard block. */
+  limit?: number;
+  /** Filter block: the parameter name injected into other queries as :name. */
+  param?: string;
+  filterType?: "dropdown" | "chips" | "date" | "text";
+  defaultValue?: string;
+  /** Embed block: image vs iframe. */
+  mode?: "image" | "iframe";
+  url?: string;
+  alt?: string;
   /** Bento column span (1–6). */
   span?: number;
   [k: string]: unknown;
@@ -114,6 +160,19 @@ export const DEFAULT_CONFIG: Record<BlockKind, BlockConfig> = {
     sub: "the value is the first column of the first row",
     span: 1,
   },
+  kpi: {
+    title: "New KPI",
+    sql: "SELECT classification AS period, COUNT(*) AS value\nFROM person_activity\nGROUP BY classification\nORDER BY value",
+    sub: "big number = latest point · delta = vs previous",
+    span: 2,
+  },
+  progress: {
+    title: "Goal progress",
+    sql: "SELECT COUNT(*) FROM person_activity WHERE classification IN ('shepherded','active')",
+    goal: 500,
+    sub: "engaged people toward the goal",
+    span: 2,
+  },
   chart: {
     title: "New chart",
     sql: "SELECT classification AS label, COUNT(*) AS value\nFROM person_activity\nGROUP BY classification\nORDER BY value DESC",
@@ -125,10 +184,42 @@ export const DEFAULT_CONFIG: Record<BlockKind, BlockConfig> = {
     sql: "SELECT classification, COUNT(*) AS people\nFROM person_activity\nGROUP BY classification\nORDER BY people DESC",
     span: 3,
   },
+  leaderboard: {
+    title: "Leaderboard",
+    sql: "SELECT classification AS label, COUNT(*) AS value\nFROM person_activity\nGROUP BY classification\nORDER BY value DESC",
+    limit: 10,
+    span: 3,
+  },
+  map: {
+    title: "Map",
+    sql: "SELECT lat, lng FROM geocode_cache\nWHERE ok = 1 AND lat IS NOT NULL\nLIMIT 500",
+    sub: "col1 = lat, col2 = lng, col3 = label (optional)",
+    span: 3,
+  },
   text: {
     title: "",
-    text: "Write notes here. This block has no query — it’s just text.",
+    text: "Write **markdown** here — `#` headings, **bold**, _italic_, [links](https://example.com), and `-` lists.",
+    span: 6,
+  },
+  divider: {
+    title: "Section",
+    sub: "",
+    span: 6,
+  },
+  embed: {
+    mode: "image",
+    url: "",
+    alt: "",
+    title: "",
     span: 3,
+  },
+  filter: {
+    title: "Filter",
+    param: "status",
+    filterType: "dropdown",
+    sql: "SELECT DISTINCT classification FROM person_activity ORDER BY classification",
+    defaultValue: "",
+    span: 2,
   },
 };
 
@@ -156,6 +247,16 @@ export function getBuilderPage(orgId: number, slug: string): BuilderPage | null 
     )
     .get(orgId, slug) as Omit<BuilderPage, "blockCount"> | undefined;
   return row ? { ...row, blockCount: 0 } : null;
+}
+
+/** The saved SQL for one block, scoped to the org. Used by view-mode filtering
+ *  so a viewer can only re-run a block that already exists — never arbitrary SQL. */
+export function getBuilderBlockSql(orgId: number, blockId: number): string | null {
+  const row = getDb()
+    .prepare("SELECT config FROM builder_blocks WHERE id = ? AND org_id = ?")
+    .get(blockId, orgId) as { config: string } | undefined;
+  if (!row) return null;
+  return safeParse(row.config).sql ?? null;
 }
 
 export function getBuilderBlocks(pageId: number): BuilderBlock[] {

@@ -1,5 +1,7 @@
 import type { BlockConfig, BlockKind, QueryResult } from "@/lib/builder";
+import { renderMarkdown, MD_CLASS } from "@/lib/markdown";
 import { EChartsBlock } from "./echarts-block";
+import { BuilderMap } from "./builder-map";
 
 const fmt = (v: unknown): string => {
   if (v == null) return "—";
@@ -8,11 +10,7 @@ const fmt = (v: unknown): string => {
 };
 
 function QueryError({ error }: { error: string }) {
-  return (
-    <div className="rounded-lg border border-warn-soft-bg bg-warn-soft-bg/30 px-3 py-2 text-xs text-warn-soft-fg">
-      {error}
-    </div>
-  );
+  return <div className="rounded-lg border border-warn-soft-bg bg-warn-soft-bg/30 px-3 py-2 text-xs text-warn-soft-fg">{error}</div>;
 }
 function Empty({ children }: { children: React.ReactNode }) {
   return <div className="py-6 text-center text-xs text-subtle">{children}</div>;
@@ -20,27 +18,25 @@ function Empty({ children }: { children: React.ReactNode }) {
 
 /** Renders a single block from its config + pre-run query result. Used in both
  *  the live editor preview and the finished page. */
-export function BlockView({
-  kind,
-  config,
-  result,
-}: {
-  kind: BlockKind;
-  config: BlockConfig;
-  result: QueryResult | null;
-}) {
+export function BlockView({ kind, config, result }: { kind: BlockKind; config: BlockConfig; result: QueryResult | null }) {
   const title = (config.title ?? "").trim();
 
   if (kind === "text") {
+    return <div className={MD_CLASS} dangerouslySetInnerHTML={{ __html: renderMarkdown(config.text ?? "") }} />;
+  }
+
+  if (kind === "divider") {
     return (
-      <div className="space-y-1.5">
-        {title && <h3 className="text-sm font-semibold">{title}</h3>}
-        <p className="text-sm text-muted leading-relaxed whitespace-pre-wrap">
-          {config.text || "…"}
-        </p>
+      <div className="flex items-center gap-3 py-1">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted whitespace-nowrap">{title || "Section"}</span>
+        <span className="h-px flex-1 bg-border-soft" />
+        {config.sub && <span className="text-[11px] text-subtle whitespace-nowrap">{config.sub}</span>}
       </div>
     );
   }
+
+  if (kind === "embed") return <EmbedView config={config} />;
+  if (kind === "filter") return <FilterPreview config={config} result={result} />;
 
   if (kind === "chart") {
     return (
@@ -50,20 +46,29 @@ export function BlockView({
       </div>
     );
   }
+  if (kind === "map") {
+    return (
+      <div className="space-y-2">
+        {title && <h3 className="text-sm font-semibold">{title}</h3>}
+        <BuilderMap result={result} />
+      </div>
+    );
+  }
 
   const body = () => {
     if (!result) return <Empty>No data yet.</Empty>;
     if (result.error) return <QueryError error={result.error} />;
-
     if (kind === "stat") {
-      const v = result.rows[0]?.[0];
       return (
         <div>
-          <div className="tnum text-3xl font-semibold leading-tight">{fmt(v)}</div>
+          <div className="tnum text-3xl font-semibold leading-tight">{fmt(result.rows[0]?.[0])}</div>
           {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
         </div>
       );
     }
+    if (kind === "kpi") return <Kpi config={config} result={result} />;
+    if (kind === "progress") return <Progress config={config} result={result} />;
+    if (kind === "leaderboard") return <Leaderboard config={config} result={result} />;
 
     // table
     if (result.columns.length === 0) return <Empty>No columns returned.</Empty>;
@@ -72,18 +77,14 @@ export function BlockView({
         <table className="w-full text-xs tnum border-collapse">
           <thead>
             <tr className="text-muted">
-              {result.columns.map((c) => (
-                <th key={c} className="text-left font-medium py-1 pr-3 whitespace-nowrap">{c}</th>
-              ))}
+              {result.columns.map((c) => <th key={c} className="text-left font-medium py-1 pr-3 whitespace-nowrap">{c}</th>)}
             </tr>
           </thead>
           <tbody>
             {result.rows.slice(0, 200).map((r, i) => (
               <tr key={i} className="border-t border-border-soft/60">
                 {r.map((cell, j) => (
-                  <td key={j} className={`py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : "text-fg"}`}>
-                    {fmt(cell)}
-                  </td>
+                  <td key={j} className={`py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : "text-fg"}`}>{fmt(cell)}</td>
                 ))}
               </tr>
             ))}
@@ -104,9 +105,159 @@ export function BlockView({
   );
 }
 
-export const BLOCK_META: Record<BlockKind, { label: string; hint: string }> = {
-  stat: { label: "Stat", hint: "A single big number (first cell of the query)." },
-  chart: { label: "Chart", hint: "30+ chart types — bar, line, pie, sankey, heatmap…" },
-  table: { label: "Table", hint: "Any columns and rows." },
-  text: { label: "Text", hint: "Notes / a heading — no query." },
+// ── Sub-renderers ────────────────────────────────────────────────────
+
+/** Column index holding the value: second column if present, else the first. */
+const valueIdx = (r: QueryResult) => (r.columns.length >= 2 ? 1 : 0);
+
+function DeltaBadge({ delta }: { delta: number }) {
+  const up = delta >= 0;
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-xs font-medium tnum ${up ? "text-[color:var(--good-soft-fg)]" : "text-warn-soft-fg"}`}>
+      <svg viewBox="0 0 12 12" className="w-3 h-3" fill="currentColor" aria-hidden>
+        <path d={up ? "M6 2l4 6H2z" : "M6 10L2 4h8z"} />
+      </svg>
+      {Math.abs(delta).toFixed(1)}%
+    </span>
+  );
+}
+
+function Sparkline({ vals, up }: { vals: number[]; up: boolean }) {
+  const w = 120, h = 32, pad = 2;
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const span = hi - lo || 1;
+  const pts = vals.map((v, i) => {
+    const x = pad + (i / Math.max(1, vals.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((v - lo) / span) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const color = up ? "#16a34a" : "#dc2626";
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full h-8 mt-1.5" aria-hidden>
+      <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function Kpi({ config, result }: { config: BlockConfig; result: QueryResult }) {
+  const idx = valueIdx(result);
+  const vals = result.rows.map((r) => Number(r[idx])).filter((n) => Number.isFinite(n));
+  const last = vals[vals.length - 1] ?? 0;
+  const prev = vals.length >= 2 ? vals[vals.length - 2] : undefined;
+  const delta = prev != null && prev !== 0 ? ((last - prev) / Math.abs(prev)) * 100 : null;
+  return (
+    <div>
+      <div className="flex items-end justify-between gap-2">
+        <div className="tnum text-3xl font-semibold leading-tight">{fmt(last)}</div>
+        {delta != null && <DeltaBadge delta={delta} />}
+      </div>
+      {vals.length > 1 && <Sparkline vals={vals} up={delta == null || delta >= 0} />}
+      {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
+    </div>
+  );
+}
+
+function Progress({ config, result }: { config: BlockConfig; result: QueryResult }) {
+  const cur = Number(result.rows[0]?.[0]) || 0;
+  const goalCell = result.columns.length >= 2 ? Number(result.rows[0]?.[1]) : NaN;
+  const goal = Number.isFinite(goalCell) && goalCell > 0 ? goalCell : (config.goal ?? 100);
+  const pct = goal ? Math.max(0, Math.min(100, (cur / goal) * 100)) : 0;
+  return (
+    <div>
+      <div className="flex items-end justify-between mb-1.5">
+        <div className="tnum text-2xl font-semibold">{fmt(cur)}</div>
+        <div className="text-xs text-subtle tnum">of {fmt(goal)} · {pct.toFixed(0)}%</div>
+      </div>
+      <div className="h-2.5 rounded-full bg-bg-elev-2 overflow-hidden">
+        <div className="h-full rounded-full bg-accent transition-[width] duration-500" style={{ width: `${pct}%` }} />
+      </div>
+      {config.sub && <div className="text-xs text-subtle mt-1.5">{config.sub}</div>}
+    </div>
+  );
+}
+
+function Leaderboard({ config, result }: { config: BlockConfig; result: QueryResult }) {
+  const idx = valueIdx(result);
+  const rows = result.rows.slice(0, config.limit ?? 10).map((r) => ({ label: String(r[0] ?? ""), value: Number(r[idx]) || 0 }));
+  if (rows.length === 0) return <Empty>No rows.</Empty>;
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  return (
+    <ol className="space-y-1.5">
+      {rows.map((r, i) => (
+        <li key={i} className="flex items-center gap-2.5">
+          <span className="tnum text-xs text-subtle w-4 text-right shrink-0">{i + 1}</span>
+          <span className="w-6 h-6 rounded-full bg-bg-elev-2 flex items-center justify-center text-[10px] font-semibold text-muted shrink-0">{(r.label[0] ?? "?").toUpperCase()}</span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm truncate">{r.label}</span>
+              <span className="tnum text-xs text-muted shrink-0">{fmt(r.value)}</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-bg-elev-2 mt-1 overflow-hidden">
+              <div className="h-full rounded-full bg-accent/70" style={{ width: `${(r.value / max) * 100}%` }} />
+            </div>
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function EmbedView({ config }: { config: BlockConfig }) {
+  const url = (config.url ?? "").trim();
+  const title = (config.title ?? "").trim();
+  if (!url) return <Empty>Add an image or embed URL below.</Empty>;
+  if (!/^(https?:|\/)/i.test(url)) return <QueryError error="URL must start with http(s):// or /." />;
+  return (
+    <div className="space-y-2">
+      {title && <h3 className="text-sm font-semibold">{title}</h3>}
+      {config.mode === "iframe" ? (
+        <iframe src={url} title={title || "embed"} className="w-full rounded-lg border border-border-soft" style={{ height: 300 }} sandbox="allow-scripts allow-same-origin allow-popups allow-forms" referrerPolicy="no-referrer" />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={url} alt={config.alt || title || "embedded image"} className="w-full rounded-lg border border-border-soft object-cover" />
+      )}
+    </div>
+  );
+}
+
+/** Static, non-interactive preview of a filter (used in the editor). The live
+ *  interactive control is FilterControl, rendered in view mode. */
+function FilterPreview({ config, result }: { config: BlockConfig; result: QueryResult | null }) {
+  const title = (config.title ?? "").trim();
+  const ft = config.filterType ?? "dropdown";
+  const opts = (result?.rows ?? []).slice(0, 6).map((r) => String(r[0] ?? ""));
+  return (
+    <div className="space-y-1.5">
+      {title && <div className="text-xs font-medium text-muted">{title}</div>}
+      {config.param && (
+        <div className="text-[10px] text-subtle">
+          sets <code className="px-1 py-0.5 rounded bg-bg-elev-2">:{config.param}</code> · {ft}
+        </div>
+      )}
+      {(ft === "dropdown" || ft === "chips") && (
+        <div className="flex flex-wrap gap-1.5">
+          <span className="px-2 py-0.5 rounded-full text-[11px] bg-accent/15 text-accent border border-accent/30">All</span>
+          {opts.map((o, i) => (
+            <span key={i} className="px-2 py-0.5 rounded-full text-[11px] bg-bg-elev-2 text-muted border border-border-soft">{o}</span>
+          ))}
+        </div>
+      )}
+      {ft === "date" && <span className="inline-block text-xs text-subtle border border-border-soft rounded px-2 py-1">date picker</span>}
+      {ft === "text" && <span className="inline-block text-xs text-subtle border border-border-soft rounded px-2 py-1">text input</span>}
+    </div>
+  );
+}
+
+export const BLOCK_META: Record<BlockKind, { label: string; hint: string; dataHint?: string }> = {
+  stat: { label: "Stat", hint: "A single big number.", dataHint: "Return one row — the first cell is the number." },
+  kpi: { label: "KPI + trend", hint: "Big number, % delta, and a sparkline.", dataHint: "col1 = period, col2 = value, ordered oldest → newest. Latest point is the number; delta is vs the previous point." },
+  progress: { label: "Progress", hint: "A goal bar with % complete.", dataHint: "col1 = current value; optional col2 = goal (otherwise set the goal below)." },
+  chart: { label: "Chart", hint: "30+ chart types — bar, line, pie, sankey, heatmap…", dataHint: "Shape depends on the chart type — shown once you pick one." },
+  table: { label: "Table", hint: "Any columns and rows.", dataHint: "Any SELECT — every returned column becomes a table column." },
+  leaderboard: { label: "Leaderboard", hint: "Ranked list with inline bars.", dataHint: "col1 = label, col2 = value, ordered highest → lowest." },
+  map: { label: "Map", hint: "Plot points on a map.", dataHint: "col1 = lat, col2 = lng, col3 = label (opt), col4 = size (opt)." },
+  text: { label: "Rich text", hint: "Markdown — headings, bold, links, lists." },
+  divider: { label: "Divider", hint: "A titled section separator." },
+  embed: { label: "Image / embed", hint: "An image or an iframe embed." },
+  filter: { label: "Filter", hint: "A control that feeds :param into other blocks.", dataHint: "Dropdown / chips: col1 = value, col2 = label (optional). Date / text need no query." },
 };

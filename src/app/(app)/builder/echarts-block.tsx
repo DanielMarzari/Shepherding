@@ -77,6 +77,30 @@ export const CHART_LABEL: Record<string, string> = Object.fromEntries(
   CHART_TYPES.flatMap((g) => g.items.map((i) => [i.id, i.label])),
 );
 
+/** SVG path glyphs used as the repeating unit for pictogram charts. */
+export const ICONS: Record<string, string> = {
+  person: "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+  people: "M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z",
+  home: "M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z",
+  car: "M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z",
+  heart: "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z",
+  star: "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z",
+  dollar: "M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z",
+  cross: "M14 6V2h-4v4H6v4h4v12h4V10h4V6z",
+  book: "M21 5c-1.11-.35-2.33-.5-3.5-.5-1.95 0-4.05.4-5.5 1.5-1.45-1.1-3.55-1.5-5.5-1.5S2.45 4.9 1 6v14.65c0 .25.25.5.5.5.1 0 .15-.05.25-.05C3.1 20.45 5.05 20 6.5 20c1.95 0 4.05.4 5.5 1.5 1.35-.85 3.8-1.5 5.5-1.5 1.65 0 3.35.3 4.75 1.05.1.05.15.05.25.05.25 0 .5-.25.5-.5V6c-.6-.45-1.25-.75-2-1z",
+};
+export const PICTO_ICONS: Array<{ id: string; label: string }> = [
+  { id: "person", label: "Person" },
+  { id: "people", label: "People" },
+  { id: "home", label: "Home" },
+  { id: "car", label: "Car" },
+  { id: "heart", label: "Heart" },
+  { id: "star", label: "Star" },
+  { id: "dollar", label: "Dollar" },
+  { id: "cross", label: "Cross" },
+  { id: "book", label: "Book" },
+];
+
 const num = (v: unknown): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -128,7 +152,7 @@ function buildTree(rows: unknown[][], levels: number, valueIdx: number): any[] {
   return root.children.map(strip);
 }
 
-function buildOption(type: string, result: QueryResult): any {
+function buildOption(type: string, result: QueryResult, opts: { icon?: string } = {}): any {
   const cols = result.columns;
   const rows = result.rows;
   if (rows.length === 0) return base({ title: { text: "No rows", left: "center", top: "middle", textStyle: { color: TEXT, fontSize: 12 } } });
@@ -187,10 +211,13 @@ function buildOption(type: string, result: QueryResult): any {
       const v = num(rows[0]?.[1]);
       return base({ tooltip: { show: false }, series: [{ type: "gauge", progress: { show: true, width: 12 }, axisLine: { lineStyle: { width: 12 } }, pointer: { show: false }, detail: { valueAnimation: true, color: "#e2e8f0", fontSize: 22 }, data: [{ value: v }] }] });
     }
-    case "pictogram": return base({
-      tooltip: { trigger: "axis" }, grid: { left: 8, right: 14, top: 16, bottom: 6, containLabel: true }, xAxis: axisStyle("category", cats), yAxis: axisStyle("value"),
-      series: [{ type: "pictorialBar", symbol: "circle", symbolRepeat: true, symbolSize: [10, 10], symbolClip: true, data: seriesData(0) }],
-    });
+    case "pictogram": {
+      const sym = ICONS[opts.icon ?? ""] ? `path://${ICONS[opts.icon as string]}` : "circle";
+      return base({
+        tooltip: { trigger: "axis" }, grid: { left: 8, right: 14, top: 16, bottom: 6, containLabel: true }, xAxis: axisStyle("category", cats), yAxis: axisStyle("value"),
+        series: [{ type: "pictorialBar", symbol: sym, symbolRepeat: true, symbolSize: [16, 16], symbolClip: true, itemStyle: { color: PALETTE[0] }, data: seriesData(0) }],
+      });
+    }
     case "radar": {
       const indicators = cats.map((c, i) => ({ name: c, max: Math.max(1, ...seriesNames.map((_, j) => num(rows[i][j + 1]))) }));
       return base({
@@ -278,10 +305,10 @@ export function EChartsBlock({ config, result }: { config: BlockConfig; result: 
       if (!modRef.current) modRef.current = await import("echarts");
       if (cancelled || !ref.current) return;
       if (!chartRef.current) chartRef.current = modRef.current.init(ref.current, null, { renderer: "canvas" });
-      try { chartRef.current.setOption(buildOption(config.chartType || "bar", result), true); } catch { /* bad shape */ }
+      try { chartRef.current.setOption(buildOption(config.chartType || "bar", result, { icon: config.icon }), true); } catch { /* bad shape */ }
     })();
     return () => { cancelled = true; };
-  }, [config.chartType, result]);
+  }, [config.chartType, config.icon, result]);
 
   useEffect(() => {
     const el = ref.current;
