@@ -46,7 +46,7 @@ export default async function BuilderCustomPage({
     <AppShell active={page.title} breadcrumb={`See more › Page Builder › ${page.title}`}>
       <div className="px-5 md:px-7 py-7">
         <BuilderPageClient
-          page={{ id: page.id, slug: page.slug, title: page.title, description: page.description, navSection: page.navSection }}
+          page={{ id: page.id, slug: page.slug, title: page.title, description: page.description, navSection: page.navSection, moreSection: page.moreSection }}
           blocks={blocks}
           isAdmin={session.role === "admin"}
           initialEdit={sp.edit === "1"}

@@ -141,6 +141,8 @@ export interface BuilderPage {
   description: string | null;
   /** Sidebar section key the page's link is placed in (null = not in the nav). */
   navSection: string | null;
+  /** "See More" page heading the page's link is listed under (null = not listed). */
+  moreSection: string | null;
   updatedAt: string;
   blockCount: number;
 }
@@ -197,7 +199,7 @@ function slugify(s: string): string {
 export function listBuilderPages(orgId: number): BuilderPage[] {
   return getDb()
     .prepare(
-      `SELECT p.id, p.slug, p.title, p.description, p.nav_section AS navSection, p.updated_at AS updatedAt,
+      `SELECT p.id, p.slug, p.title, p.description, p.nav_section AS navSection, p.more_section AS moreSection, p.updated_at AS updatedAt,
               (SELECT COUNT(*) FROM builder_blocks b WHERE b.page_id = p.id) AS blockCount
          FROM builder_pages p
         WHERE p.org_id = ?
@@ -209,7 +211,7 @@ export function listBuilderPages(orgId: number): BuilderPage[] {
 export function getBuilderPage(orgId: number, slug: string): BuilderPage | null {
   const row = getDb()
     .prepare(
-      `SELECT id, slug, title, description, nav_section AS navSection, updated_at AS updatedAt
+      `SELECT id, slug, title, description, nav_section AS navSection, more_section AS moreSection, updated_at AS updatedAt
          FROM builder_pages WHERE org_id = ? AND slug = ?`,
     )
     .get(orgId, slug) as Omit<BuilderPage, "blockCount"> | undefined;
@@ -226,6 +228,18 @@ export function listNavPages(orgId: number): Array<{ slug: string; title: string
         ORDER BY title`,
     )
     .all(orgId) as Array<{ slug: string; title: string; navSection: string }>;
+}
+
+/** Pages listed on the "See More" page, grouped by their heading. */
+export function listMorePages(orgId: number): Array<{ slug: string; title: string; description: string | null; moreSection: string }> {
+  return getDb()
+    .prepare(
+      `SELECT slug, title, description, more_section AS moreSection
+         FROM builder_pages
+        WHERE org_id = ? AND more_section IS NOT NULL AND more_section <> ''
+        ORDER BY more_section, title`,
+    )
+    .all(orgId) as Array<{ slug: string; title: string; description: string | null; moreSection: string }>;
 }
 
 /** The saved SQL for one block, scoped to the org. Used by view-mode filtering
@@ -278,14 +292,15 @@ export function createBuilderPage(orgId: number, title: string): string {
   return slug;
 }
 
-export function updateBuilderPage(orgId: number, id: number, title: string, description: string | null, navSection?: string | null): void {
+export function updateBuilderPage(orgId: number, id: number, title: string, description: string | null, navSection?: string | null, moreSection?: string | null): void {
   const nav = navSection && NAV_SECTION_VALUES.has(navSection) ? navSection : null;
+  const more = moreSection && moreSection.trim() ? moreSection.trim().slice(0, 40) : null;
   getDb()
     .prepare(
-      `UPDATE builder_pages SET title = ?, description = ?, nav_section = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      `UPDATE builder_pages SET title = ?, description = ?, nav_section = ?, more_section = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ? AND org_id = ?`,
     )
-    .run(title.trim() || "Untitled page", description, nav, id, orgId);
+    .run(title.trim() || "Untitled page", description, nav, more, id, orgId);
 }
 
 export function deleteBuilderPage(orgId: number, id: number): void {

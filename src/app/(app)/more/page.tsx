@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
+import { requireOrg } from "@/lib/auth";
+import { listMorePages } from "@/lib/builder";
 
 interface MoreLink {
   href: string;
@@ -143,7 +145,27 @@ const SECTIONS: MoreSection[] = [
   },
 ];
 
-export default function MorePage() {
+export default async function MorePage() {
+  const session = await requireOrg();
+
+  // Merge in builder pages the admin listed on See More, grouped by their
+  // heading — matching an existing section title, or creating a new one.
+  const morePages = session?.orgId ? listMorePages(session.orgId) : [];
+  const groups = new Map<string, MoreLink[]>();
+  for (const p of morePages) {
+    const link: MoreLink = { href: `/builder/${p.slug}`, title: p.title, description: p.description ?? "Custom page." };
+    if (!groups.has(p.moreSection)) groups.set(p.moreSection, []);
+    groups.get(p.moreSection)!.push(link);
+  }
+  const sections: MoreSection[] = SECTIONS.map((sec) => {
+    const key = [...groups.keys()].find((k) => k.toLowerCase() === sec.title.toLowerCase());
+    if (!key) return sec;
+    const links = [...sec.links, ...groups.get(key)!];
+    groups.delete(key);
+    return { ...sec, links };
+  });
+  for (const [heading, links] of groups) sections.push({ title: heading, links });
+
   return (
     <AppShell active="See more" breadcrumb="See more">
       <div className="px-5 md:px-7 py-7 space-y-8">
@@ -154,7 +176,7 @@ export default function MorePage() {
             or the lane pathway.
           </p>
         </div>
-        {SECTIONS.map((section) => (
+        {sections.map((section) => (
           <section key={section.title} className="space-y-3">
             <div>
               <h2 className="text-sm font-semibold uppercase tracking-wider text-muted">
