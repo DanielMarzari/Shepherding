@@ -277,6 +277,70 @@ export function getTopClickedLinks(orgId: number, limit = 15): Array<{ url: stri
   ).all(orgId, limit) as Array<{ url: string; clicks: number }>;
 }
 
+/** Bucket a clicked URL into a destination category (Faith Church specific). */
+function linkCategory(url: string): string {
+  const u = url.toLowerCase();
+  if (u.includes("churchcenter.com/registrations")) return "Event registrations";
+  if (u.includes("faithchurchpa.com/groups")) return "Groups";
+  if (u.includes("instagram.com")) return "Instagram";
+  if (u.includes("youtube.com") || u.includes("youtu.be")) return "YouTube";
+  if (u.includes("extraordinarygiving")) return "Extraordinary giving";
+  if (u.includes("faithchurchpa.com/resource")) return "Resources";
+  if (u.includes("apps.apple.com") || u.includes("play.google.com")) return "Faith Church app";
+  if (u.includes("churchcenter.com/giving") || u.includes("/give") || u.includes("pushpay")) return "Giving";
+  if (u.includes("facebook.com")) return "Facebook";
+  if (u.includes("faithchurchpa.com")) return "Website (other)";
+  if (u.includes("churchcenter.com")) return "Church Center (other)";
+  return "Other";
+}
+
+/** Clicks grouped by destination category. */
+export function getClicksByCategory(orgId: number): Array<{ category: string; clicks: number }> {
+  const rows = getDb().prepare(
+    `SELECT link_url AS url, COUNT(*) AS clicks FROM cc_contact_activity
+      WHERE org_id = ? AND activity_type = 'click' AND link_url <> '' GROUP BY link_url`,
+  ).all(orgId) as Array<{ url: string; clicks: number }>;
+  const map = new Map<string, number>();
+  for (const r of rows) { const c = linkCategory(r.url); map.set(c, (map.get(c) ?? 0) + r.clicks); }
+  return [...map.entries()].map(([category, clicks]) => ({ category, clicks })).sort((a, b) => b.clicks - a.clicks);
+}
+
+/** Bucket a campaign into a ministry / series category from its name. Order
+ *  matters — "women" is checked before "men". */
+function campaignCategory(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes("instant access")) return "Instant Access";
+  if (n.includes("women")) return "Women's Ministry";
+  if (n.includes(" men") || n.startsWith("men") || n.includes("men's")) return "Men's Ministry";
+  if (n.includes("study sheet") || n.includes("small group")) return "Small Groups";
+  if (n.includes("prayer")) return "Prayer Network";
+  if (n.includes("first-time guest") || n.includes("first time guest") || n.includes("guest follow")) return "First-Time Guest Follow-Up";
+  if (n.includes("faith kids") || n.includes("parent connection")) return "Faith Kids";
+  if (n.includes("baptism")) return "Baptism";
+  if (n.includes("serve") || n.includes("volunteer")) return "Serving";
+  if (n.includes("giving") || n.includes("give")) return "Giving";
+  if (n.includes("newsletter") || n.includes("weekly")) return "Newsletter";
+  if (n.includes("student") || n.includes("youth")) return "Students / Youth";
+  return "Other";
+}
+
+/** Aggregated performance grouped by campaign category. */
+export function getCampaignGroupPerf(orgId: number): Array<{ category: string; campaigns: number; sends: number; openRate: number | null; clickRate: number | null }> {
+  const rows = getDb().prepare(
+    `SELECT name, stat_sends AS sends, stat_opens AS opens, stat_clicks AS clicks FROM cc_campaigns WHERE org_id = ? AND stat_sends > 0`,
+  ).all(orgId) as Array<{ name: string | null; sends: number; opens: number; clicks: number }>;
+  const agg = new Map<string, { campaigns: number; sends: number; opens: number; clicks: number }>();
+  for (const r of rows) {
+    const c = campaignCategory(r.name ?? "");
+    const a = agg.get(c) ?? { campaigns: 0, sends: 0, opens: 0, clicks: 0 };
+    a.campaigns++; a.sends += r.sends ?? 0; a.opens += r.opens ?? 0; a.clicks += r.clicks ?? 0;
+    agg.set(c, a);
+  }
+  return [...agg.entries()]
+    .map(([category, a]) => ({ category, campaigns: a.campaigns, sends: a.sends, openRate: a.sends ? a.opens / a.sends : null, clickRate: a.sends ? a.clicks / a.sends : null }))
+    .sort((a, b) => b.sends - a.sends);
+}
+
 /** Goal (d): do people who engage with our email take next steps more? Compares
  *  the PCO activity classification of email-engaged vs non-engaged linked people. */
 export function getNextStepEffectiveness(orgId: number): NextStepEffect {

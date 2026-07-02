@@ -198,7 +198,7 @@ function buildOption(type: string, result: QueryResult, opts: { icon?: string } 
     });
     case "pie":
     case "donut": return base({
-      series: [{ type: "pie", radius: type === "donut" ? ["45%", "70%"] : "68%", data: rows.map(nameValue), label: { color: TEXT }, itemStyle: { borderColor: "#0b1220", borderWidth: 1 } }],
+      series: [{ type: "pie", radius: type === "donut" ? ["45%", "70%"] : "68%", data: rows.map(nameValue), label: { color: TEXT }, itemStyle: { borderWidth: 0 } }],
     });
     case "nested-pie": return base({
       series: [

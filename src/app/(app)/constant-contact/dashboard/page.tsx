@@ -8,9 +8,10 @@ import {
   getActiveNeverOpen,
   getAllChurchTiers,
   getBounceOptoutOverTime,
+  getCampaignGroupPerf,
   getCampaignPerformance,
-  getCampaignTypePerf,
   getCcOverview,
+  getClicksByCategory,
   getConsentBreakdown,
   getCtor,
   getEngagedCcCoverage,
@@ -20,19 +21,18 @@ import {
   getRateOverTime,
   getReachGapPeople,
   getSubscriberGrowth,
-  getTopClickedLinks,
   getTopEngaged,
   getTopLists,
   getWinBack,
   type PersonRow,
 } from "@/lib/constant-contact-read";
 import { CcChart, CcSeriesChart } from "./charts";
+import { SortableTable } from "./sortable-table";
 
 export const metadata = { title: "Email dashboard · Constant Contact" };
 
 const pct = (x: number | null) => (x == null ? "—" : `${(x * 100).toFixed(1)}%`);
 const num = (x: number) => x.toLocaleString();
-const shortUrl = (u: string) => { try { const p = new URL(u); return (p.host + p.pathname).replace(/\/$/, ""); } catch { return u; } };
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
 function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -95,7 +95,7 @@ export default async function CcDashboardPage() {
   const engaged = empty ? [] : getTopEngaged(session.orgId);
   const coverage = empty ? null : getEngagedCcCoverage(session.orgId);
   const tiers = empty ? null : getAllChurchTiers(session.orgId);
-  const topLinks = empty ? [] : getTopClickedLinks(session.orgId);
+  const clicksByCat = empty ? [] : getClicksByCategory(session.orgId);
   const campaignBar = campaigns
     .filter((c) => c.openRate != null)
     .slice(0, 12)
@@ -106,7 +106,7 @@ export default async function CcDashboardPage() {
   const subGrowth = empty ? [] : getSubscriberGrowth(session.orgId);
   const opensByDow = empty ? [] : getOpensByDow(session.orgId);
   const bounceTrend = empty ? { columns: [], rows: [] } : getBounceOptoutOverTime(session.orgId);
-  const typePerf = empty ? [] : getCampaignTypePerf(session.orgId);
+  const campaignGroups = empty ? [] : getCampaignGroupPerf(session.orgId);
   const reachGap = empty ? [] : getReachGapPeople(session.orgId);
   const neverOpen = empty ? [] : getActiveNeverOpen(session.orgId);
   const engagedNotInGroup = empty ? [] : getEngagedNotInGroup(session.orgId);
@@ -114,7 +114,7 @@ export default async function CcDashboardPage() {
 
   return (
     <AppShell active="Constant Contact dashboard" breadcrumb="See more › Constant Contact › Dashboard">
-      <div className="px-5 md:px-7 py-7 space-y-6 max-w-6xl">
+      <div className="px-5 md:px-7 py-7 space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Email dashboard</h1>
@@ -202,23 +202,13 @@ export default async function CcDashboardPage() {
                 <CcChart type="bar" data={campaignBar} height={300} />
               </Card>
               <Card className="p-5 space-y-2">
-                <h2 className="text-sm font-semibold">Most-clicked links</h2>
-                {topLinks.length === 0 ? (
-                  <p className="text-xs text-subtle">No link clicks synced yet.</p>
-                ) : (
-                  <table className="w-full text-xs">
-                    <tbody>
-                      {topLinks.map((l, i) => (
-                        <tr key={i} className="border-t border-border-soft/60">
-                          <td className="py-1 pr-3 max-w-[280px] truncate">
-                            <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{shortUrl(l.url)}</a>
-                          </td>
-                          <td className="py-1 text-right tnum">{num(l.clicks)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                <h2 className="text-sm font-semibold">Clicks by destination</h2>
+                <p className="text-xs text-subtle">Where clicks go — registrations, groups, socials, app, giving…</p>
+                <SortableTable
+                  columns={[{ key: "category", label: "Destination" }, { key: "clicks", label: "Clicks", align: "right", format: "num" }]}
+                  rows={clicksByCat}
+                  initial={{ key: "clicks", dir: "desc" }}
+                />
               </Card>
             </div>
 
@@ -263,79 +253,55 @@ export default async function CcDashboardPage() {
                 <CcChart type="donut" data={consent.map((c) => ({ label: c.permission, value: c.count }))} />
               </Card>
               <Card className="p-5 space-y-2">
-                <h2 className="text-sm font-semibold">Performance by campaign type</h2>
-                {typePerf.length === 0 ? <p className="text-xs text-subtle">No stats yet.</p> : (
-                  <table className="w-full text-xs">
-                    <thead><tr className="text-muted text-left"><th className="py-1 pr-3">Type</th><th className="py-1 pr-3 text-right">Campaigns</th><th className="py-1 pr-3 text-right">Open</th><th className="py-1 pr-3 text-right">Click</th></tr></thead>
-                    <tbody>
-                      {typePerf.map((t, i) => (
-                        <tr key={i} className="border-t border-border-soft/60">
-                          <td className="py-1 pr-3">{t.type}</td>
-                          <td className="py-1 pr-3 text-right tnum">{num(t.campaigns)}</td>
-                          <td className="py-1 pr-3 text-right tnum">{pct(t.openRate)}</td>
-                          <td className="py-1 pr-3 text-right tnum">{pct(t.clickRate)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                <h2 className="text-sm font-semibold">Performance by campaign group</h2>
+                <p className="text-xs text-subtle">Instant Access, Women&apos;s / Men&apos;s Ministry, Small Groups, Prayer, Guest Follow-Up, Faith Kids…</p>
+                <SortableTable
+                  columns={[
+                    { key: "category", label: "Group" },
+                    { key: "campaigns", label: "Campaigns", align: "right", format: "num" },
+                    { key: "sends", label: "Sends", align: "right", format: "num" },
+                    { key: "openRate", label: "Open", align: "right", format: "pct" },
+                    { key: "clickRate", label: "Click", align: "right", format: "pct" },
+                  ]}
+                  rows={campaignGroups}
+                  initial={{ key: "sends", dir: "desc" }}
+                />
               </Card>
             </div>
 
             <Card className="p-5 space-y-3">
               <h2 className="text-sm font-semibold">Campaign performance</h2>
-              {campaigns.length === 0 ? <p className="text-xs text-subtle">No campaign stats synced yet.</p> : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead><tr className="text-muted text-left">
-                      <th className="py-1 pr-3">Campaign</th><th className="py-1 pr-3 text-right">Sends</th>
-                      <th className="py-1 pr-3 text-right">Open</th><th className="py-1 pr-3 text-right">Click</th>
-                      <th className="py-1 pr-3 text-right">Bounce</th><th className="py-1 pr-3 text-right">Opt-out</th>
-                    </tr></thead>
-                    <tbody>
-                      {campaigns.map((c, i) => (
-                        <tr key={i} className="border-t border-border-soft/60">
-                          <td className="py-1 pr-3 max-w-[280px] truncate">{c.name}</td>
-                          <td className="py-1 pr-3 text-right tnum">{num(c.sends)}</td>
-                          <td className="py-1 pr-3 text-right tnum">{pct(c.openRate)}</td>
-                          <td className="py-1 pr-3 text-right tnum">{pct(c.clickRate)}</td>
-                          <td className="py-1 pr-3 text-right tnum">{pct(c.bounceRate)}</td>
-                          <td className="py-1 pr-3 text-right tnum">{pct(c.optOutRate)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <SortableTable
+                columns={[
+                  { key: "name", label: "Campaign" },
+                  { key: "sends", label: "Sends", align: "right", format: "num" },
+                  { key: "open", label: "Open", align: "right", format: "pct" },
+                  { key: "click", label: "Click", align: "right", format: "pct" },
+                  { key: "bounce", label: "Bounce", align: "right", format: "pct" },
+                  { key: "optout", label: "Opt-out", align: "right", format: "pct" },
+                ]}
+                rows={campaigns.map((c) => ({ name: c.name, sends: c.sends, open: c.openRate, click: c.clickRate, bounce: c.bounceRate, optout: c.optOutRate }))}
+                initial={{ key: "sends", dir: "desc" }}
+              />
             </Card>
 
             <div className="grid lg:grid-cols-2 gap-6 items-start">
               <Card className="p-5 space-y-3">
                 <h2 className="text-sm font-semibold">Lists (what people opted into)</h2>
-                {lists.map((l, i) => (
-                  <div key={i} className="flex items-center justify-between text-xs">
-                    <span className="text-muted truncate max-w-[70%]">{l.name}</span>
-                    <span className="tnum">{num(l.count)}</span>
-                  </div>
-                ))}
+                <SortableTable
+                  columns={[{ key: "name", label: "List" }, { key: "count", label: "Members", align: "right", format: "num" }]}
+                  rows={lists}
+                  initial={{ key: "count", dir: "desc" }}
+                />
               </Card>
 
               <Card className="p-5 space-y-2">
                 <h2 className="text-sm font-semibold">Most email-engaged people</h2>
-                {engaged.length === 0 ? <p className="text-xs text-subtle">No per-contact engagement synced yet.</p> : (
-                  <table className="w-full text-xs">
-                    <thead><tr className="text-muted text-left"><th className="py-1 pr-3">Person</th><th className="py-1 pr-3 text-right">Opens</th><th className="py-1 pr-3 text-right">Clicks</th></tr></thead>
-                    <tbody>
-                      {engaged.map((p, i) => (
-                        <tr key={i} className="border-t border-border-soft/60">
-                          <td className="py-1 pr-3 truncate max-w-[220px]">{p.name}</td>
-                          <td className="py-1 pr-3 text-right tnum">{num(p.opens)}</td>
-                          <td className="py-1 pr-3 text-right tnum">{num(p.clicks)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                <SortableTable
+                  columns={[{ key: "name", label: "Person" }, { key: "opens", label: "Opens", align: "right", format: "num" }, { key: "clicks", label: "Clicks", align: "right", format: "num" }]}
+                  rows={engaged}
+                  initial={{ key: "opens", dir: "desc" }}
+                />
               </Card>
             </div>
           </>
