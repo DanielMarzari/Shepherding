@@ -21,20 +21,18 @@ export async function saveConstantContactCredentialsAction(
     return { status: "error", message: "Only admins can change Constant Contact credentials." };
   }
   const apiKey = String(formData.get("apiKey") ?? "").trim();
-  const appSecret = String(formData.get("appSecret") ?? "").trim();
-  const refreshRaw = String(formData.get("refreshToken") ?? "").trim();
-  const refreshToken = refreshRaw === "" ? null : refreshRaw;
+  const appSecretRaw = String(formData.get("appSecret") ?? "").trim();
+  const appSecret = appSecretRaw === "" ? null : appSecretRaw;
 
-  if (!apiKey || !appSecret) {
-    return { status: "error", message: "API Key and App Secret are required." };
+  if (!apiKey) {
+    return { status: "error", message: "API Key is required." };
   }
 
-  // No Constant Contact API call yet — we just store the credentials securely.
-  saveConstantContactCreds(s.orgId, apiKey, appSecret, refreshToken);
+  saveConstantContactCreds(s.orgId, apiKey, appSecret);
   revalidatePath("/constant-contact");
   return {
     status: "saved",
-    message: "Credentials stored securely. Email sync will be wired up next.",
+    message: 'Saved. Now click "Connect Constant Contact" to authorize.',
   };
 }
 

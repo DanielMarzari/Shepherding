@@ -4,10 +4,26 @@ import { requireOrg } from "@/lib/auth";
 import { getStoredConstantContactCreds } from "@/lib/constant-contact";
 import { ConstantContactCredentialsCard } from "./credentials-card";
 
-export default async function ConstantContactPage() {
+const CC_ERRORS: Record<string, string> = {
+  admin_only: "Only admins can connect Constant Contact.",
+  no_api_key: "Save your API key first, then click Connect.",
+  bad_state: "The authorization link was invalid — please click Connect again.",
+  state_mismatch: "The authorization link didn’t match — please click Connect again.",
+  expired: "The authorization link expired — please click Connect again.",
+  access_denied: "Authorization was declined in Constant Contact.",
+};
+
+export default async function ConstantContactPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cc_connected?: string; cc_error?: string }>;
+}) {
   const session = await requireOrg();
   const creds = getStoredConstantContactCreds(session.orgId);
   const isAdmin = session.role === "admin";
+  const sp = await searchParams;
+  const connectedNotice = sp.cc_connected === "1";
+  const errorNotice = sp.cc_error ? (CC_ERRORS[sp.cc_error] ?? `Couldn’t connect: ${sp.cc_error}`) : null;
 
   return (
     <AppShell active="Constant Contact" breadcrumb="Credentials › Constant Contact">
@@ -16,18 +32,29 @@ export default async function ConstantContactPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Constant Contact</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
             Connect Constant Contact so we can send targeted, personalized email
-            to the right people and read back who opened and clicked. Right now
-            this only stores your credentials securely — the email sync
-            isn&apos;t built yet.
+            to the right people and read back who opened and clicked. Save your
+            API key, then click Connect to authorize.
           </p>
         </div>
+
+        {connectedNotice && (
+          <div className="rounded-lg border border-good-soft-bg bg-good-soft-bg/30 px-4 py-2.5 text-sm text-good-soft-fg">
+            Connected to Constant Contact — the app will manage the access tokens from here.
+          </div>
+        )}
+        {errorNotice && (
+          <div className="rounded-lg border border-warn-soft-bg bg-warn-soft-bg/30 px-4 py-2.5 text-sm text-warn-soft-fg">
+            {errorNotice}
+          </div>
+        )}
 
         <ConstantContactCredentialsCard
           initial={{
             hasCreds: creds.hasCreds,
+            connected: creds.connected,
             apiKeyLast4: creds.apiKeyLast4,
             appSecretLast4: creds.appSecretLast4,
-            refreshTokenLast4: creds.refreshTokenLast4,
+            verifiedAt: creds.verifiedAt,
             updatedAt: creds.updatedAt,
           }}
           isAdmin={isAdmin}

@@ -10,9 +10,10 @@ import {
 
 interface InitialCreds {
   hasCreds: boolean;
+  connected: boolean;
   apiKeyLast4: string | null;
   appSecretLast4: string | null;
-  refreshTokenLast4: string | null;
+  verifiedAt: string | null;
   updatedAt: string | null;
 }
 
@@ -29,7 +30,6 @@ export function ConstantContactCredentialsCard({
   const [editing, setEditing] = useState(!initial.hasCreds);
   const [apiKey, setApiKey] = useState("");
   const [appSecret, setAppSecret] = useState("");
-  const [refreshToken, setRefreshToken] = useState("");
   const [saveState, saveAction, saving] = useActionState<SaveState | null, FormData>(
     saveConstantContactCredentialsAction,
     null,
@@ -41,7 +41,6 @@ export function ConstantContactCredentialsCard({
     setEditing(true);
     setApiKey("");
     setAppSecret("");
-    setRefreshToken("");
   }
 
   return (
@@ -49,20 +48,21 @@ export function ConstantContactCredentialsCard({
       <CardHeader
         title="Constant Contact credentials"
         badge={
-          initial.hasCreds ? (
-            <Pill tone="muted">stored</Pill>
+          initial.connected ? (
+            <Pill tone="good">connected</Pill>
+          ) : initial.hasCreds ? (
+            <Pill tone="warn">not connected</Pill>
           ) : (
-            <Pill tone="muted">not connected</Pill>
+            <Pill tone="muted">no API key</Pill>
           )
         }
       />
       <div className="p-5 space-y-4">
         <p className="text-xs text-muted leading-relaxed">
-          From your Constant Contact Developer Portal (V3 API) app — the API Key
-          and App Secret. We store these encrypted at rest (AES-256-GCM) — only
-          the last 4 characters are ever shown. Saving doesn&apos;t test the
-          connection yet; the targeted-email + open/click sync gets wired up once
-          the OAuth flow is finalized.
+          Paste the <strong>API Key</strong> (client ID) from your Constant Contact V3 app.
+          The App Secret is only needed if your app uses the confidential
+          Authorization-Code flow — leave it blank for a PKCE app. Everything is
+          encrypted at rest (AES-256-GCM); only the last 4 characters are shown.
         </p>
 
         <form action={saveAction} className="space-y-3">
@@ -75,21 +75,12 @@ export function ConstantContactCredentialsCard({
             placeholder="Constant Contact API key (client ID)"
           />
           <Field
-            label="App Secret"
+            label="App Secret (optional)"
             name="appSecret"
             value={editing ? appSecret : masked(initial.appSecretLast4)}
             onChange={setAppSecret}
             disabled={!editing || !isAdmin}
-            placeholder="Constant Contact app secret"
-            type={editing ? "password" : "text"}
-          />
-          <Field
-            label="Refresh token (optional)"
-            name="refreshToken"
-            value={editing ? refreshToken : masked(initial.refreshTokenLast4)}
-            onChange={setRefreshToken}
-            disabled={!editing || !isAdmin}
-            placeholder="OAuth2 refresh token, if you have one"
+            placeholder="Only if your app requires a client secret"
             type={editing ? "password" : "text"}
           />
 
@@ -133,6 +124,38 @@ export function ConstantContactCredentialsCard({
             </div>
           )}
         </form>
+
+        {/* OAuth connect */}
+        {isAdmin && initial.hasCreds && !editing && (
+          <div className="pt-2 border-t border-border-soft space-y-2">
+            {initial.connected ? (
+              <>
+                <p className="text-xs text-good-soft-fg">
+                  Connected{initial.verifiedAt ? ` on ${initial.verifiedAt.slice(0, 10)}` : ""}. The app manages the tokens from here.
+                </p>
+                <a
+                  href="/constant-contact/connect"
+                  className="inline-block px-3 py-1.5 rounded-lg border border-border-soft text-muted hover:text-fg text-xs cursor-pointer"
+                >
+                  Reconnect
+                </a>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-muted">
+                  Next: authorize the app with Constant Contact. You&apos;ll be
+                  taken to Constant Contact to approve, then sent back here.
+                </p>
+                <a
+                  href="/constant-contact/connect"
+                  className="inline-block px-3.5 py-1.5 rounded-lg bg-accent text-[var(--accent-fg)] text-xs font-semibold cursor-pointer"
+                >
+                  Connect Constant Contact
+                </a>
+              </>
+            )}
+          </div>
+        )}
 
         {isAdmin && initial.hasCreds && !editing && (
           <form action={removeConstantContactCredentialsAction} className="pt-1">
