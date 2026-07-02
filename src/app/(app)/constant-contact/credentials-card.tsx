@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import {
   type SaveState,
@@ -34,6 +34,12 @@ export function ConstantContactCredentialsCard({
     saveConstantContactCredentialsAction,
     null,
   );
+
+  // On a successful save, drop out of edit mode so the Connect button shows.
+  const justSaved = saveState?.status === "saved";
+  useEffect(() => {
+    if (justSaved) setEditing(false);
+  }, [justSaved]);
 
   const masked = (l4: string | null) => (l4 ? `••••••••••••${l4}` : "");
 
@@ -126,7 +132,7 @@ export function ConstantContactCredentialsCard({
         </form>
 
         {/* OAuth connect */}
-        {isAdmin && initial.hasCreds && !editing && (
+        {isAdmin && (initial.hasCreds || justSaved) && !editing && (
           <div className="pt-2 border-t border-border-soft space-y-2">
             {initial.connected ? (
               <>

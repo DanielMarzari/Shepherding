@@ -61,24 +61,38 @@ export default async function ConstantContactPage({
         />
 
         <Card className="p-5">
-          <h2 className="text-sm font-semibold mb-2">What&apos;s next</h2>
-          <ul className="text-sm text-muted space-y-1.5 leading-relaxed list-disc pl-5">
+          <h2 className="text-sm font-semibold mb-3">How to connect</h2>
+          <ol className="text-sm text-muted space-y-3 leading-relaxed list-decimal pl-5">
             <li>
-              Complete the OAuth2 flow and show the connected Constant Contact
-              account.
+              In your Constant Contact V3 app settings, add this <strong>exact</strong> Redirect URI and save:
+              <code className="mt-1.5 block w-full break-all rounded-md bg-bg-elev-2 border border-border-soft px-2.5 py-1.5 text-xs text-fg">
+                https://shepherdly.danmarzari.com/constant-contact/callback
+              </code>
             </li>
             <li>
-              Push targeted segments (e.g. &ldquo;next step = group, Center
-              campus&rdquo;) out as campaigns.
+              In the card above, paste your <strong>API Key</strong> (client ID) and click <strong>Save credentials</strong>.
+              Leave <strong>App Secret</strong> blank unless your app uses the confidential Authorization-Code flow (a PKCE app needs no secret).
             </li>
             <li>
-              Pull per-contact opens / clicks / bounces back as engagement
-              signals to close the loop on the engagement model.
+              Click <strong>Connect Constant Contact</strong> — you&apos;ll be taken to Constant Contact to approve access.
             </li>
+            <li>
+              Approve, and you&apos;ll be sent back here with the status set to <strong>Connected</strong>. The app manages the access tokens from then on.
+            </li>
+          </ol>
+
+          <h3 className="text-xs font-semibold mt-5 mb-2 text-muted uppercase tracking-wide">If a red error appears</h3>
+          <ul className="text-xs text-subtle space-y-1.5 leading-relaxed list-disc pl-5">
+            <li><strong>redirect_uri mismatch</strong> — the URI in step 1 doesn&apos;t match exactly (watch for a trailing slash).</li>
+            <li><strong>invalid_client</strong> / client authentication required — your app needs a secret: reveal the App Secret in Constant Contact, paste it above, save, and click <strong>Reconnect</strong>.</li>
+            <li><strong>invalid_scope</strong> — the app is missing required scopes (contact_data, campaign_data, offline_access); enable them in Constant Contact.</li>
           </ul>
-          <p className="text-xs text-subtle mt-3">
-            Credentials are encrypted at rest with the app key — the same
-            protection used for PCO and all PII.
+
+          <p className="text-xs text-subtle mt-4">
+            Once connected, the next build is the email sync: push targeted
+            segments out as campaigns and pull opens / clicks / bounces back as
+            engagement signals. Credentials are encrypted at rest with the app
+            key — the same protection used for PCO and all PII.
           </p>
         </Card>
       </div>
