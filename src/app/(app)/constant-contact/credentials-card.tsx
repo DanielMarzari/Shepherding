@@ -38,6 +38,7 @@ export function ConstantContactCredentialsCard({
   // On a successful save, drop out of edit mode so the Connect button shows.
   const justSaved = saveState?.status === "saved";
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (justSaved) setEditing(false);
   }, [justSaved]);
 

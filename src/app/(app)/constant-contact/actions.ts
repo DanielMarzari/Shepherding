@@ -6,6 +6,7 @@ import {
   deleteConstantContactCreds,
   saveConstantContactCreds,
 } from "@/lib/constant-contact";
+import { runCcSync } from "@/lib/constant-contact-sync";
 
 export interface SaveState {
   status: "idle" | "saved" | "error";
@@ -41,4 +42,14 @@ export async function removeConstantContactCredentialsAction() {
   if (s.role !== "admin") throw new Error("Admin only");
   deleteConstantContactCreds(s.orgId);
   revalidatePath("/constant-contact");
+}
+
+export async function syncConstantContactAction(
+  fullRefresh: boolean,
+): Promise<{ ok: boolean; error?: string; requests?: number; capped?: boolean }> {
+  const s = await requireOrg();
+  if (s.role !== "admin") return { ok: false, error: "Only admins can sync." };
+  const r = await runCcSync(s.orgId, "manual", { fullRefresh });
+  revalidatePath("/constant-contact/dashboard");
+  return { ok: r.ok, error: r.error, requests: r.requests, capped: r.capped };
 }

@@ -106,6 +106,18 @@ const SECTIONS: MoreSection[] = [
     ],
   },
   {
+    title: "Constant Contact",
+    blurb: "Email engagement from Constant Contact, joined to your PCO people.",
+    links: [
+      {
+        href: "/constant-contact/dashboard",
+        title: "Email dashboard",
+        description:
+          "Contacts, lists, campaigns, and per-person opens / clicks / bounces — linked to PCO people by email. Shows what people opted into, how they engage, and whether email-engaged people take next steps more.",
+      },
+    ],
+  },
+  {
     title: "Internal",
     links: [
       {

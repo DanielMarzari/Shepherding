@@ -8,6 +8,8 @@ import { startDriveRun } from "@/lib/drive-runner";
 import { startMeshRun } from "@/lib/mesh-runner";
 import { refreshRetentionReturns } from "@/lib/retention-read";
 import { refreshGeoAssignments } from "@/lib/census-analysis";
+import { getStoredConstantContactCreds } from "@/lib/constant-contact";
+import { runCcSync } from "@/lib/constant-contact-sync";
 
 /**
  * Cron-tickable endpoint. The Oracle host runs a system crontab every
@@ -82,6 +84,15 @@ export async function GET(req: Request) {
           await refreshRetentionReturns(id);
         } catch (e) {
           console.error("refreshRetentionReturns failed", id, e);
+        }
+        // Constant Contact: deep sync once, then a 3-month incremental. Its own
+        // cursor keeps it cheap after the first run; never let it break the cron.
+        if (getStoredConstantContactCreds(id).connected) {
+          try {
+            await runCcSync(id, "auto");
+          } catch (e) {
+            console.error("runCcSync failed", id, e);
+          }
         }
       }
     } catch (e) {
