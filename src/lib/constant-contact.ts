@@ -172,7 +172,15 @@ async function ccTokenRequest(body: URLSearchParams, clientId: string, clientSec
     "Content-Type": "application/x-www-form-urlencoded",
     Accept: "application/json",
   };
-  if (clientSecret) headers.Authorization = "Basic " + Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  // Supply client credentials exactly ONE way, or Okta rejects with "Cannot
+  // supply multiple client credentials": Basic header for a confidential client
+  // (has a secret), otherwise client_id in the body for a PKCE public client.
+  body.delete("client_id");
+  if (clientSecret) {
+    headers.Authorization = "Basic " + Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  } else {
+    body.set("client_id", clientId);
+  }
   let res: Response;
   try {
     res = await fetch(CC_TOKEN_URL, { method: "POST", headers, body });
