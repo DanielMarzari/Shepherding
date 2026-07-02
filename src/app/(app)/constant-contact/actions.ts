@@ -3,8 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
 import {
+  type CcSyncSettings,
   deleteConstantContactCreds,
   saveConstantContactCreds,
+  saveCcSyncSettings,
 } from "@/lib/constant-contact";
 import { runCcSync } from "@/lib/constant-contact-sync";
 
@@ -50,6 +52,15 @@ export async function syncConstantContactAction(
   const s = await requireOrg();
   if (s.role !== "admin") return { ok: false, error: "Only admins can sync." };
   const r = await runCcSync(s.orgId, "manual", { fullRefresh });
+  revalidatePath("/constant-contact");
   revalidatePath("/constant-contact/dashboard");
   return { ok: r.ok, error: r.error, requests: r.requests, capped: r.capped };
+}
+
+export async function saveCcScheduleAction(settings: CcSyncSettings): Promise<{ ok: boolean }> {
+  const s = await requireOrg();
+  if (s.role !== "admin") return { ok: false };
+  saveCcSyncSettings(s.orgId, settings);
+  revalidatePath("/constant-contact");
+  return { ok: true };
 }

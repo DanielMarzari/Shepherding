@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import { getDb } from "./db";
 import { decrypt, encrypt, last4 } from "./encryption";
+import { nextScheduledRun } from "./pco-schedule";
 
 // Constant Contact credential storage. Mirrors the PCO / PushPay pattern:
 // secrets are AES-256-GCM encrypted at rest (same ENCRYPTION_KEY), with a
@@ -264,6 +265,51 @@ export async function ccApiGet<T = unknown>(orgId: number, path: string): Promis
   }
   const data = (await res.json().catch(() => ({}))) as T;
   return { ok: true, data };
+}
+
+// ─── Auto-sync schedule (mirrors PCO) ────────────────────────────────
+export interface CcSyncSettings {
+  enabled: boolean;
+  frequency: "daily" | "weekly" | "monthly";
+  runAtHour: number;
+  runAtDow: number;
+  runAtDom: number;
+}
+
+export function getCcSyncSettings(orgId: number): CcSyncSettings {
+  const row = getDb()
+    .prepare("SELECT enabled, frequency, run_at_hour AS runAtHour, run_at_dow AS runAtDow, run_at_dom AS runAtDom FROM cc_sync_settings WHERE org_id = ?")
+    .get(orgId) as { enabled: number; frequency: string; runAtHour: number; runAtDow: number; runAtDom: number } | undefined;
+  if (!row) return { enabled: false, frequency: "daily", runAtHour: 3, runAtDow: 1, runAtDom: 1 };
+  return { enabled: !!row.enabled, frequency: (row.frequency as CcSyncSettings["frequency"]) ?? "daily", runAtHour: row.runAtHour, runAtDow: row.runAtDow, runAtDom: row.runAtDom };
+}
+
+export function saveCcSyncSettings(orgId: number, s: CcSyncSettings): void {
+  getDb()
+    .prepare(
+      `INSERT INTO cc_sync_settings (org_id, enabled, frequency, run_at_hour, run_at_dow, run_at_dom, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       ON CONFLICT(org_id) DO UPDATE SET enabled=excluded.enabled, frequency=excluded.frequency,
+         run_at_hour=excluded.run_at_hour, run_at_dow=excluded.run_at_dow, run_at_dom=excluded.run_at_dom, updated_at=excluded.updated_at`,
+    )
+    .run(orgId, s.enabled ? 1 : 0, s.frequency, s.runAtHour, s.runAtDow, s.runAtDom);
+}
+
+export interface CcSyncRun { id: number; startedAt: string; finishedAt: string | null; status: string; requests: number; details: string | null }
+export function listRecentCcSyncs(orgId: number, limit = 8): CcSyncRun[] {
+  return getDb()
+    .prepare("SELECT id, started_at AS startedAt, finished_at AS finishedAt, status, requests, details FROM cc_sync_runs WHERE org_id = ? ORDER BY id DESC LIMIT ?")
+    .all(orgId, limit) as CcSyncRun[];
+}
+
+/** Has the next-scheduled CC sync arrived since the last run? */
+export function isCcSyncDue(orgId: number, settings: CcSyncSettings): boolean {
+  if (!settings.enabled) return false;
+  const row = getDb()
+    .prepare("SELECT started_at FROM cc_sync_runs WHERE org_id = ? AND status IN ('ok','partial','running') ORDER BY id DESC LIMIT 1")
+    .get(orgId) as { started_at: string } | undefined;
+  const refMs = row ? new Date(row.started_at).getTime() : Date.now() - 7 * 24 * 60 * 60 * 1000;
+  return Date.now() >= nextScheduledRun(settings, refMs).getTime();
 }
 
 export function deleteConstantContactCreds(orgId: number) {

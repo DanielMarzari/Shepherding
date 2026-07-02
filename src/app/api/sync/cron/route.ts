@@ -8,7 +8,7 @@ import { startDriveRun } from "@/lib/drive-runner";
 import { startMeshRun } from "@/lib/mesh-runner";
 import { refreshRetentionReturns } from "@/lib/retention-read";
 import { refreshGeoAssignments } from "@/lib/census-analysis";
-import { getStoredConstantContactCreds } from "@/lib/constant-contact";
+import { getCcSyncSettings, getStoredConstantContactCreds, isCcSyncDue } from "@/lib/constant-contact";
 import { runCcSync } from "@/lib/constant-contact-sync";
 
 /**
@@ -53,6 +53,17 @@ export async function GET(req: Request) {
     } catch (e) {
       console.error("refreshGeoAssignments failed", id, e);
     }
+
+    // Constant Contact runs on its own schedule, independent of the PCO sync.
+    // Deep sync once, then a rolling 3-month window; never let it break the cron.
+    try {
+      if (getStoredConstantContactCreds(id).connected && isCcSyncDue(id, getCcSyncSettings(id))) {
+        await runCcSync(id, "auto");
+      }
+    } catch (e) {
+      console.error("runCcSync failed", id, e);
+    }
+
     const settings = getSyncSettings(id);
     if (!settings.enabled) {
       results.push({ orgId: id, skipped: true, reason: "auto-sync disabled" });
@@ -84,15 +95,6 @@ export async function GET(req: Request) {
           await refreshRetentionReturns(id);
         } catch (e) {
           console.error("refreshRetentionReturns failed", id, e);
-        }
-        // Constant Contact: deep sync once, then a 3-month incremental. Its own
-        // cursor keeps it cheap after the first run; never let it break the cron.
-        if (getStoredConstantContactCreds(id).connected) {
-          try {
-            await runCcSync(id, "auto");
-          } catch (e) {
-            console.error("runCcSync failed", id, e);
-          }
         }
       }
     } catch (e) {

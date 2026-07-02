@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { syncConstantContactAction } from "../actions";
+import { syncConstantContactAction } from "./actions";
 
 export function CcSyncButton() {
   const router = useRouter();

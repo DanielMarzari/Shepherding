@@ -139,114 +139,104 @@ async function syncContacts(orgId: number, budget: Budget, full: boolean): Promi
   return count;
 }
 
-const statVal = (row: any, ...keys: string[]): number | null => {
-  const src = row?.stats && typeof row.stats === "object" ? { ...row, ...row.stats } : row;
-  for (const k of keys) if (src[k] != null) return n(src[k]);
-  return null;
-};
-
 async function syncCampaigns(orgId: number, budget: Budget): Promise<number> {
   const up = getDb().prepare(
     `INSERT INTO cc_campaigns (org_id, campaign_id, campaign_activity_id, name, current_status, type, created_at, updated_at, synced_at)
      VALUES (@org, @id, @actId, @name, @status, @type, @created, @updated, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-     ON CONFLICT(org_id, campaign_id) DO UPDATE SET campaign_activity_id=excluded.campaign_activity_id, name=excluded.name,
+     ON CONFLICT(org_id, campaign_id) DO UPDATE SET name=excluded.name,
        current_status=excluded.current_status, type=excluded.type, updated_at=excluded.updated_at, synced_at=excluded.synced_at`,
   );
+  // The /emails list endpoint doesn't include activities — the campaign_activity_id
+  // is resolved later in syncCampaignActivity via /emails/{campaign_id}.
   let count = 0;
   for await (const page of ccPages(orgId, "/v3/emails?limit=500", budget)) {
     for (const c of firstArray(page)) {
-      const acts: any[] = Array.isArray(c.campaign_activities) ? c.campaign_activities : [];
-      const primary = acts.find((a) => String(a.role ?? "").includes("primary")) ?? acts[0];
-      up.run({ org: orgId, id: s(c.campaign_id), actId: s(primary?.campaign_activity_id), name: s(c.name), status: s(c.current_status), type: s(c.type), created: s(c.created_at), updated: s(c.updated_at) });
+      up.run({ org: orgId, id: s(c.campaign_id), actId: null, name: s(c.name), status: s(c.current_status), type: s(c.type), created: s(c.created_at), updated: s(c.updated_at) });
       count++;
     }
   }
   return count;
 }
 
+/** Per-campaign summary stats. CC keys these by campaign_id (not activity id)
+ *  with counts under `unique_counts`, so we fold them into cc_campaigns. */
 async function syncCampaignStats(orgId: number, budget: Budget): Promise<number> {
   const up = getDb().prepare(
-    `INSERT INTO cc_campaign_stats (org_id, campaign_activity_id, sends, opens, unique_opens, clicks, unique_clicks, bounces, opt_outs, abuse, did_not_open, forwards, updated_at)
-     VALUES (@org, @id, @sends, @opens, @uopens, @clicks, @uclicks, @bounces, @optouts, @abuse, @dno, @fwd, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-     ON CONFLICT(org_id, campaign_activity_id) DO UPDATE SET sends=excluded.sends, opens=excluded.opens, unique_opens=excluded.unique_opens,
-       clicks=excluded.clicks, unique_clicks=excluded.unique_clicks, bounces=excluded.bounces, opt_outs=excluded.opt_outs,
-       abuse=excluded.abuse, did_not_open=excluded.did_not_open, forwards=excluded.forwards, updated_at=excluded.updated_at`,
+    `UPDATE cc_campaigns SET
+        stat_sends = @sends, stat_opens = @opens, stat_clicks = @clicks, stat_bounces = @bounces,
+        stat_optouts = @optouts, stat_forwards = @fwd, stat_abuse = @abuse, stat_not_opened = @dno,
+        last_sent_date = COALESCE(@sent, last_sent_date), stats_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE org_id = @org AND campaign_id = @id`,
   );
   let count = 0;
   for await (const page of ccPages(orgId, "/v3/reports/summary_reports/email_campaign_summaries?limit=500", budget)) {
     for (const r of firstArray(page)) {
-      const id = s(r.campaign_activity_id);
+      const id = s(r.campaign_id);
       if (!id) continue;
-      up.run({
-        org: orgId, id,
-        sends: statVal(r, "em_sends", "sends", "sent"),
-        opens: statVal(r, "em_opens", "opens"),
-        uopens: statVal(r, "em_unique_opens", "unique_opens"),
-        clicks: statVal(r, "em_clicks", "clicks"),
-        uclicks: statVal(r, "em_unique_clicks", "unique_clicks"),
-        bounces: statVal(r, "em_bounces", "bounces"),
-        optouts: statVal(r, "em_optouts", "opt_outs", "optouts"),
-        abuse: statVal(r, "em_abuse", "abuse"),
-        dno: statVal(r, "em_not_opened", "did_not_open"),
-        fwd: statVal(r, "em_forwards", "forwards"),
+      const u = r.unique_counts && typeof r.unique_counts === "object" ? r.unique_counts : {};
+      const info = up.run({
+        org: orgId, id, sent: s(r.last_sent_date),
+        sends: n(u.sends), opens: n(u.opens), clicks: n(u.clicks), bounces: n(u.bounces),
+        optouts: n(u.optouts), fwd: n(u.forwards), abuse: n(u.abuse), dno: n(u.not_opened),
       });
-      count++;
+      if (info.changes) count++;
     }
   }
   return count;
 }
 
-const ACTIVITY_TYPES: Array<{ path: string; type: string }> = [
-  { path: "opens", type: "open" },
-  { path: "clicks", type: "click" },
-  { path: "bounces", type: "bounce" },
-  { path: "optouts", type: "optout" },
-];
+const TRACK: Array<[string, string]> = [["opens", "open"], ["clicks", "click"], ["bounces", "bounce"], ["optouts", "optout"]];
 
-/** Per-contact tracking for campaigns whose activity we haven't pulled yet (or
- *  that changed inside the lookback window). Best-effort + budget-capped. */
-async function syncContactActivity(orgId: number, budget: Budget, full: boolean): Promise<{ campaigns: number; rows: number; errors: number }> {
+/** Per-contact tracking for recently-sent campaigns we haven't pulled yet.
+ *  For each: resolve the primary_email activity id, its target lists, then the
+ *  open/click/bounce/optout tracking. Budget-capped; converges over runs. */
+async function syncCampaignActivity(orgId: number, budget: Budget, full: boolean): Promise<{ campaigns: number; rows: number; errors: number }> {
   const db = getDb();
-  const after = cutoff(orgId, "activity", full);
-  const rows = db.prepare(
-    `SELECT campaign_id, campaign_activity_id, updated_at FROM cc_campaigns
-      WHERE org_id = ? AND campaign_activity_id IS NOT NULL
-        AND (activity_synced_at IS NULL ${after ? "OR updated_at > ?" : ""} ${full ? "OR 1=1" : ""})
-      ORDER BY updated_at DESC`,
-  ).all(...(after ? [orgId, after] : [orgId])) as Array<{ campaign_id: string; campaign_activity_id: string; updated_at: string | null }>;
+  const window = new Date(Date.now() - LOOKBACK_MS * 4).toISOString(); // ~12 months of sent campaigns
+  const candidates = db.prepare(
+    `SELECT campaign_id FROM cc_campaigns
+      WHERE org_id = ? AND last_sent_date IS NOT NULL AND last_sent_date > ?
+        AND (activity_synced_at IS NULL ${full ? "OR 1 = 1" : "OR last_sent_date > activity_synced_at"})
+      ORDER BY last_sent_date DESC`,
+  ).all(orgId, window) as Array<{ campaign_id: string }>;
 
-  const insAct = db.prepare("INSERT OR IGNORE INTO cc_contact_activity (org_id, campaign_activity_id, contact_id, activity_type, activity_time, link_url) VALUES (?,?,?,?,?,?)");
+  const setActId = db.prepare("UPDATE cc_campaigns SET campaign_activity_id = ? WHERE org_id = ? AND campaign_id = ?");
   const insCampList = db.prepare("INSERT OR IGNORE INTO cc_campaign_lists (org_id, campaign_activity_id, list_id) VALUES (?,?,?)");
+  const insAct = db.prepare("INSERT OR IGNORE INTO cc_contact_activity (org_id, campaign_activity_id, contact_id, activity_type, activity_time, link_url) VALUES (?,?,?,?,?,?)");
   const markDone = db.prepare("UPDATE cc_campaigns SET activity_synced_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ? AND campaign_id = ?");
 
   let campaigns = 0, rowCount = 0, errors = 0;
-  for (const c of rows) {
+  for (const c of candidates) {
     if (budget.count >= REQUEST_BUDGET) { budget.capped = true; break; }
-    const actId = c.campaign_activity_id;
     try {
-      // Which lists/segments this campaign was sent to.
+      budget.count++;
+      const email = await ccGet(orgId, `/v3/emails/${c.campaign_id}`);
+      await sleep(PACE_MS);
+      const acts: any[] = Array.isArray(email?.campaign_activities) ? email.campaign_activities : [];
+      const actId = s((acts.find((a) => String(a.role ?? "").includes("primary")) ?? acts[0])?.campaign_activity_id);
+      if (!actId) { markDone.run(orgId, c.campaign_id); continue; }
+      setActId.run(actId, orgId, c.campaign_id);
+
       budget.count++;
       const detail = await ccGet(orgId, `/v3/emails/activities/${actId}`).catch(() => null);
       await sleep(PACE_MS);
       for (const lid of (detail?.contact_list_ids ?? []) as any[]) insCampList.run(orgId, actId, s(lid));
 
-      for (const at of ACTIVITY_TYPES) {
-        for await (const page of ccPages(orgId, `/v3/emails/activities/${actId}/tracking/${at.path}?limit=500`, budget)) {
+      for (const [path, type] of TRACK) {
+        for await (const page of ccPages(orgId, `/v3/reports/email_reports/${actId}/tracking/${path}?limit=500`, budget)) {
           for (const a of firstArray(page)) {
-            insAct.run(orgId, actId, s(a.contact_id), at.type, s(a.activity_time ?? a.created_time), s(a.url ?? a.link_url) ?? "");
+            insAct.run(orgId, actId, s(a.contact_id), type, s(a.activity_time ?? a.created_time ?? a.tracking_activity_time), s(a.url ?? a.link_url) ?? "");
             rowCount++;
           }
           if (budget.capped) break;
         }
         if (budget.capped) break;
       }
-      markDone.run(orgId, c.campaign_id);
-      campaigns++;
+      if (!budget.capped) { markDone.run(orgId, c.campaign_id); campaigns++; }
     } catch {
       errors++;
     }
   }
-  if (!budget.capped) writeCursor(orgId, "activity", new Date().toISOString());
   return { campaigns, rows: rowCount, errors };
 }
 
@@ -287,7 +277,7 @@ export async function runCcSync(orgId: number, trigger: "manual" | "auto" = "man
     details.contacts = await syncContacts(orgId, budget, full);
     details.campaigns = await syncCampaigns(orgId, budget);
     details.campaignStats = await syncCampaignStats(orgId, budget);
-    details.activity = await syncContactActivity(orgId, budget, full);
+    details.activity = await syncCampaignActivity(orgId, budget, full);
     details.relinked = relinkContacts(orgId);
     details.capped = budget.capped;
     db.prepare("UPDATE cc_sync_runs SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), status = ?, requests = ?, details = ? WHERE id = ?")

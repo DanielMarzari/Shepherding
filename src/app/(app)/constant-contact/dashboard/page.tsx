@@ -12,7 +12,6 @@ import {
   getTopEngaged,
   getTopLists,
 } from "@/lib/constant-contact-read";
-import { CcSyncButton } from "./sync-button";
 
 export const metadata = { title: "Email dashboard · Constant Contact" };
 
@@ -69,13 +68,17 @@ export default async function CcDashboardPage() {
               engaged people take next steps.
             </p>
           </div>
-          {isAdmin && <CcSyncButton />}
+          {isAdmin && (
+            <Link href="/constant-contact" className="shrink-0 text-xs px-3 py-1.5 rounded-lg border border-border-soft text-muted hover:text-fg cursor-pointer">
+              Sync settings →
+            </Link>
+          )}
         </div>
 
         <div className="text-xs text-subtle">
           {lastRun
             ? `Last sync: ${lastRun.status}${lastRun.finishedAt ? ` at ${lastRun.finishedAt.slice(0, 16).replace("T", " ")}` : " (running…)"} · ${num(lastRun.requests)} API calls`
-            : "Never synced yet — click Sync now."}
+            : "Never synced yet — run a sync from Sync settings."}
         </div>
 
         {empty ? (

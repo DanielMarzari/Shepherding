@@ -12,7 +12,7 @@ import type { SyncSettings } from "./pco";
  *    - monthly → runAtDom @ runAtHour, this month if pending, else next
  */
 export function nextScheduledRun(
-  settings: SyncSettings,
+  settings: Pick<SyncSettings, "frequency" | "runAtHour" | "runAtDow" | "runAtDom">,
   referenceMs: number,
 ): Date {
   const ref = new Date(referenceMs);

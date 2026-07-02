@@ -20,7 +20,7 @@ export function getCcOverview(orgId: number): CcOverview {
     linked: one("SELECT COUNT(*) n FROM cc_contacts WHERE org_id = ? AND person_id IS NOT NULL"),
     lists: one("SELECT COUNT(*) n FROM cc_lists WHERE org_id = ?"),
     campaigns: one("SELECT COUNT(*) n FROM cc_campaigns WHERE org_id = ?"),
-    campaignsWithStats: one("SELECT COUNT(*) n FROM cc_campaign_stats WHERE org_id = ?"),
+    campaignsWithStats: one("SELECT COUNT(*) n FROM cc_campaigns WHERE org_id = ? AND stat_sends IS NOT NULL"),
     activityRows: one("SELECT COUNT(*) n FROM cc_contact_activity WHERE org_id = ?"),
     engagedPeople: one(
       `SELECT COUNT(DISTINCT cc.person_id) n FROM cc_contact_activity a
@@ -57,13 +57,12 @@ export interface CampaignPerf {
 
 export function getCampaignPerformance(orgId: number, limit = 50): CampaignPerf[] {
   const rows = getDb().prepare(
-    `SELECT c.name, c.current_status AS status, c.updated_at AS updatedAt,
-            COALESCE(st.sends, 0) AS sends, st.unique_opens AS uopens, st.unique_clicks AS uclicks,
-            st.bounces, st.opt_outs AS optouts
-       FROM cc_campaigns c
-       JOIN cc_campaign_stats st ON st.org_id = c.org_id AND st.campaign_activity_id = c.campaign_activity_id
-      WHERE c.org_id = ?
-      ORDER BY c.updated_at DESC LIMIT ?`,
+    `SELECT name, current_status AS status, last_sent_date AS updatedAt,
+            COALESCE(stat_sends, 0) AS sends, stat_opens AS uopens, stat_clicks AS uclicks,
+            stat_bounces AS bounces, stat_optouts AS optouts
+       FROM cc_campaigns
+      WHERE org_id = ? AND stat_sends IS NOT NULL
+      ORDER BY last_sent_date DESC LIMIT ?`,
   ).all(orgId, limit) as Array<{ name: string | null; status: string | null; updatedAt: string | null; sends: number; uopens: number | null; uclicks: number | null; bounces: number | null; optouts: number | null }>;
   const rate = (num: number | null, den: number) => (den > 0 && num != null ? num / den : null);
   return rows.map((r) => ({
