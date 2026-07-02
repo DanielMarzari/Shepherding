@@ -238,6 +238,34 @@ export async function getCcAccessToken(orgId: number): Promise<string | null> {
   return t.access_token;
 }
 
+// ─── API reads ───────────────────────────────────────────────────────
+export const CC_API_BASE = "https://api.cc.email/v3";
+
+export type CcApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; status: number; error: string };
+
+/** GET a Constant Contact v3 API path with a fresh bearer token. */
+export async function ccApiGet<T = unknown>(orgId: number, path: string): Promise<CcApiResult<T>> {
+  const token = await getCcAccessToken(orgId);
+  if (!token) return { ok: false, status: 401, error: "Not connected to Constant Contact." };
+  let res: Response;
+  try {
+    res = await fetch(`${CC_API_BASE}${path}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      cache: "no-store",
+    });
+  } catch (e) {
+    return { ok: false, status: 0, error: e instanceof Error ? e.message : "request failed" };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    return { ok: false, status: res.status, error: body.slice(0, 400) || res.statusText };
+  }
+  const data = (await res.json().catch(() => ({}))) as T;
+  return { ok: true, data };
+}
+
 export function deleteConstantContactCreds(orgId: number) {
   getDb().prepare("DELETE FROM constantcontact_credentials WHERE org_id = ?").run(orgId);
 }

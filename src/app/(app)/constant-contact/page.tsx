@@ -27,14 +27,20 @@ export default async function ConstantContactPage({
 
   return (
     <AppShell active="Constant Contact" breadcrumb="Credentials › Constant Contact">
-      <div className="px-5 md:px-7 py-7 space-y-6 max-w-3xl">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Constant Contact</h1>
-          <p className="text-muted text-sm mt-1 max-w-2xl">
-            Connect Constant Contact so we can send targeted, personalized email
-            to the right people and read back who opened and clicked. Save your
-            API key, then click Connect to authorize.
-          </p>
+      <div className="px-5 md:px-7 py-7 space-y-6 max-w-5xl">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Constant Contact</h1>
+            <p className="text-muted text-sm mt-1 max-w-2xl">
+              Connect Constant Contact so we can send targeted, personalized email
+              to the right people and read back who opened and clicked.
+            </p>
+          </div>
+          {creds.connected && (
+            <a href="/constant-contact/explore" className="shrink-0 text-xs px-3.5 py-1.5 rounded-lg bg-accent text-[var(--accent-fg)] font-semibold cursor-pointer">
+              Explore the data →
+            </a>
+          )}
         </div>
 
         {connectedNotice && (
@@ -48,6 +54,7 @@ export default async function ConstantContactPage({
           </div>
         )}
 
+        <div className="grid lg:grid-cols-2 gap-6 items-start">
         <ConstantContactCredentialsCard
           initial={{
             hasCreds: creds.hasCreds,
@@ -95,6 +102,7 @@ export default async function ConstantContactPage({
             key — the same protection used for PCO and all PII.
           </p>
         </Card>
+        </div>
       </div>
     </AppShell>
   );
