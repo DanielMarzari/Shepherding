@@ -5,17 +5,28 @@ import { requireOrg } from "@/lib/auth";
 import { getStoredConstantContactCreds } from "@/lib/constant-contact";
 import { getLastCcSyncRun } from "@/lib/constant-contact-sync";
 import {
+  getActiveNeverOpen,
   getAllChurchTiers,
+  getBounceOptoutOverTime,
   getCampaignPerformance,
+  getCampaignTypePerf,
   getCcOverview,
   getConsentBreakdown,
+  getCtor,
   getEngagedCcCoverage,
+  getEngagedNotInGroup,
   getNextStepEffectiveness,
+  getOpensByDow,
+  getRateOverTime,
+  getReachGapPeople,
+  getSubscriberGrowth,
   getTopClickedLinks,
   getTopEngaged,
   getTopLists,
+  getWinBack,
+  type PersonRow,
 } from "@/lib/constant-contact-read";
-import { CcChart } from "./charts";
+import { CcChart, CcSeriesChart } from "./charts";
 
 export const metadata = { title: "Email dashboard · Constant Contact" };
 
@@ -30,6 +41,27 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
       <div className="text-xs text-muted">{label}</div>
       <div className="tnum text-2xl font-semibold mt-1">{value}</div>
       {sub && <div className="text-[11px] text-subtle mt-0.5">{sub}</div>}
+    </Card>
+  );
+}
+
+function PeopleCard({ title, subtitle, people }: { title: string; subtitle: string; people: PersonRow[] }) {
+  return (
+    <Card className="p-4">
+      <div className="text-sm font-semibold">{title}</div>
+      <div className="text-[11px] text-subtle mb-2">{subtitle}</div>
+      {people.length === 0 ? (
+        <p className="text-xs text-subtle">None (or not synced yet).</p>
+      ) : (
+        <ul className="space-y-1">
+          {people.slice(0, 12).map((p, i) => (
+            <li key={i} className="flex items-center justify-between gap-2 text-xs">
+              <span className="truncate">{p.name}</span>
+              <span className="text-subtle shrink-0">{p.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </Card>
   );
 }
@@ -68,6 +100,17 @@ export default async function CcDashboardPage() {
     .filter((c) => c.openRate != null)
     .slice(0, 12)
     .map((c) => ({ label: clip(c.name, 22), value: Math.round((c.openRate ?? 0) * 1000) / 10 }));
+
+  const ctor = empty ? null : getCtor(session.orgId);
+  const rateOverTime = empty ? { columns: [], rows: [] } : getRateOverTime(session.orgId);
+  const subGrowth = empty ? [] : getSubscriberGrowth(session.orgId);
+  const opensByDow = empty ? [] : getOpensByDow(session.orgId);
+  const bounceTrend = empty ? { columns: [], rows: [] } : getBounceOptoutOverTime(session.orgId);
+  const typePerf = empty ? [] : getCampaignTypePerf(session.orgId);
+  const reachGap = empty ? [] : getReachGapPeople(session.orgId);
+  const neverOpen = empty ? [] : getActiveNeverOpen(session.orgId);
+  const engagedNotInGroup = empty ? [] : getEngagedNotInGroup(session.orgId);
+  const winBack = empty ? { count: 0, people: [] } : getWinBack(session.orgId);
 
   return (
     <AppShell active="Constant Contact dashboard" breadcrumb="See more › Constant Contact › Dashboard">
@@ -179,6 +222,66 @@ export default async function CcDashboardPage() {
               </Card>
             </div>
 
+            <div>
+              <h2 className="text-sm font-semibold mb-2">Reach &amp; assimilation — action lists</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <PeopleCard title="Engaged, not in CC" subtitle="add these to email" people={reachGap} />
+                <PeopleCard title="In CC, never opens" subtitle="reachable but tuning out" people={neverOpen} />
+                <PeopleCard title="Engaged, no group/team" subtitle="warm next-step targets" people={engagedNotInGroup} />
+                <PeopleCard title={`Win-back — ${num(winBack.count)}`} subtitle="6+ months, no opens" people={winBack.people} />
+              </div>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-6 items-start">
+              <Card className="p-5 space-y-2">
+                <div className="flex items-baseline justify-between">
+                  <h2 className="text-sm font-semibold">Open &amp; click rate over time</h2>
+                  {ctor?.ctor != null && <span className="text-xs text-muted">CTOR {pct(ctor.ctor)}</span>}
+                </div>
+                <CcSeriesChart type="line" columns={rateOverTime.columns} rows={rateOverTime.rows} />
+              </Card>
+              <Card className="p-5 space-y-2">
+                <h2 className="text-sm font-semibold">Opens by day of week</h2>
+                <CcChart type="bar" data={opensByDow} />
+              </Card>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-6 items-start">
+              <Card className="p-5 space-y-2">
+                <h2 className="text-sm font-semibold">New subscribers by month</h2>
+                <CcChart type="bar" data={subGrowth} />
+              </Card>
+              <Card className="p-5 space-y-2">
+                <h2 className="text-sm font-semibold">Bounces &amp; opt-outs by month</h2>
+                <CcSeriesChart type="bar" columns={bounceTrend.columns} rows={bounceTrend.rows} />
+              </Card>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-6 items-start">
+              <Card className="p-5 space-y-2">
+                <h2 className="text-sm font-semibold">Consent (permission to send)</h2>
+                <CcChart type="donut" data={consent.map((c) => ({ label: c.permission, value: c.count }))} />
+              </Card>
+              <Card className="p-5 space-y-2">
+                <h2 className="text-sm font-semibold">Performance by campaign type</h2>
+                {typePerf.length === 0 ? <p className="text-xs text-subtle">No stats yet.</p> : (
+                  <table className="w-full text-xs">
+                    <thead><tr className="text-muted text-left"><th className="py-1 pr-3">Type</th><th className="py-1 pr-3 text-right">Campaigns</th><th className="py-1 pr-3 text-right">Open</th><th className="py-1 pr-3 text-right">Click</th></tr></thead>
+                    <tbody>
+                      {typePerf.map((t, i) => (
+                        <tr key={i} className="border-t border-border-soft/60">
+                          <td className="py-1 pr-3">{t.type}</td>
+                          <td className="py-1 pr-3 text-right tnum">{num(t.campaigns)}</td>
+                          <td className="py-1 pr-3 text-right tnum">{pct(t.openRate)}</td>
+                          <td className="py-1 pr-3 text-right tnum">{pct(t.clickRate)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </Card>
+            </div>
+
             <Card className="p-5 space-y-3">
               <h2 className="text-sm font-semibold">Campaign performance</h2>
               {campaigns.length === 0 ? <p className="text-xs text-subtle">No campaign stats synced yet.</p> : (
@@ -208,14 +311,7 @@ export default async function CcDashboardPage() {
 
             <div className="grid lg:grid-cols-2 gap-6 items-start">
               <Card className="p-5 space-y-3">
-                <h2 className="text-sm font-semibold">Consent (permission to send)</h2>
-                {consent.map((c) => (
-                  <div key={c.permission} className="flex items-center justify-between text-xs">
-                    <span className="text-muted">{c.permission}</span>
-                    <span className="tnum">{num(c.count)}</span>
-                  </div>
-                ))}
-                <h2 className="text-sm font-semibold pt-3 border-t border-border-soft">Lists (what people opted into)</h2>
+                <h2 className="text-sm font-semibold">Lists (what people opted into)</h2>
                 {lists.map((l, i) => (
                   <div key={i} className="flex items-center justify-between text-xs">
                     <span className="text-muted truncate max-w-[70%]">{l.name}</span>

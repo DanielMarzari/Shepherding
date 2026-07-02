@@ -22,3 +22,19 @@ export function CcChart({
   if (data.length === 0) return <div className="py-8 text-center text-xs text-subtle">Not enough data yet.</div>;
   return <EChartsBlock config={{ chartType: type }} result={toResult(data)} height={height} />;
 }
+
+/** Chart from a multi-column result (e.g. a line with several series). */
+export function CcSeriesChart({
+  type,
+  columns,
+  rows,
+  height = 280,
+}: {
+  type: string;
+  columns: string[];
+  rows: Array<Array<string | number>>;
+  height?: number;
+}) {
+  if (rows.length === 0) return <div className="py-8 text-center text-xs text-subtle">Not enough data yet.</div>;
+  return <EChartsBlock config={{ chartType: type }} result={{ columns, rows, truncated: false }} height={height} />;
+}
