@@ -5,18 +5,24 @@ import { requireOrg } from "@/lib/auth";
 import { getStoredConstantContactCreds } from "@/lib/constant-contact";
 import { getLastCcSyncRun } from "@/lib/constant-contact-sync";
 import {
+  getAllChurchTiers,
   getCampaignPerformance,
   getCcOverview,
   getConsentBreakdown,
+  getEngagedCcCoverage,
   getNextStepEffectiveness,
+  getTopClickedLinks,
   getTopEngaged,
   getTopLists,
 } from "@/lib/constant-contact-read";
+import { CcChart } from "./charts";
 
 export const metadata = { title: "Email dashboard · Constant Contact" };
 
 const pct = (x: number | null) => (x == null ? "—" : `${(x * 100).toFixed(1)}%`);
 const num = (x: number) => x.toLocaleString();
+const shortUrl = (u: string) => { try { const p = new URL(u); return (p.host + p.pathname).replace(/\/$/, ""); } catch { return u; } };
+const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
 function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -55,6 +61,13 @@ export default async function CcDashboardPage() {
   const consent = empty ? [] : getConsentBreakdown(session.orgId);
   const lists = empty ? [] : getTopLists(session.orgId);
   const engaged = empty ? [] : getTopEngaged(session.orgId);
+  const coverage = empty ? null : getEngagedCcCoverage(session.orgId);
+  const tiers = empty ? null : getAllChurchTiers(session.orgId);
+  const topLinks = empty ? [] : getTopClickedLinks(session.orgId);
+  const campaignBar = campaigns
+    .filter((c) => c.openRate != null)
+    .slice(0, 12)
+    .map((c) => ({ label: clip(c.name, 22), value: Math.round((c.openRate ?? 0) * 1000) / 10 }));
 
   return (
     <AppShell active="Constant Contact dashboard" breadcrumb="See more › Constant Contact › Dashboard">
@@ -122,6 +135,49 @@ export default async function CcDashboardPage() {
                 )}
               </Card>
             )}
+
+            <div className="grid lg:grid-cols-2 gap-6 items-start">
+              <Card className="p-5 space-y-1.5">
+                <h2 className="text-sm font-semibold">Engaged church people — reachable by email?</h2>
+                <p className="text-xs text-subtle">Shepherded / active / present in PCO, and whether they&apos;re in Constant Contact.</p>
+                <CcChart type="donut" data={coverage?.data ?? []} />
+                {coverage && coverage.gap > 0 && (
+                  <p className="text-xs text-muted"><span className="font-semibold text-fg">{num(coverage.gap)}</span> engaged people aren&apos;t in Constant Contact — an email-reach gap.</p>
+                )}
+              </Card>
+              <Card className="p-5 space-y-1.5">
+                <h2 className="text-sm font-semibold">{tiers?.listName ? `“${clip(tiers.listName, 28)}” subscribers` : "Subscribers"} by engagement</h2>
+                <p className="text-xs text-subtle">Clicked vs opened vs dormant, from synced tracking.</p>
+                <CcChart type="pie" data={tiers?.data ?? []} />
+              </Card>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-6 items-start">
+              <Card className="p-5 space-y-1.5">
+                <h2 className="text-sm font-semibold">Open rate by recent campaign</h2>
+                <p className="text-xs text-subtle">Unique opens ÷ sends, most recent sends.</p>
+                <CcChart type="bar" data={campaignBar} height={300} />
+              </Card>
+              <Card className="p-5 space-y-2">
+                <h2 className="text-sm font-semibold">Most-clicked links</h2>
+                {topLinks.length === 0 ? (
+                  <p className="text-xs text-subtle">No link clicks synced yet.</p>
+                ) : (
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {topLinks.map((l, i) => (
+                        <tr key={i} className="border-t border-border-soft/60">
+                          <td className="py-1 pr-3 max-w-[280px] truncate">
+                            <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{shortUrl(l.url)}</a>
+                          </td>
+                          <td className="py-1 text-right tnum">{num(l.clicks)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </Card>
+            </div>
 
             <Card className="p-5 space-y-3">
               <h2 className="text-sm font-semibold">Campaign performance</h2>

@@ -106,6 +106,60 @@ export interface NextStepEffect {
   notEngagedActivePct: number | null;
 }
 
+export interface Slice { label: string; value: number }
+
+/** Engagement tiers of the people on the church's main list (best-guess "all
+ *  church" list: a name match, else the largest). Tier from per-contact opens/clicks. */
+export function getAllChurchTiers(orgId: number): { listName: string | null; data: Slice[] } {
+  const db = getDb();
+  const list = db.prepare(
+    `SELECT list_id, name FROM cc_lists WHERE org_id = ?
+      ORDER BY (CASE WHEN lower(name) LIKE '%all%church%' THEN 0 WHEN lower(name) LIKE '%all%' THEN 1 ELSE 2 END),
+               COALESCE(membership_count, 0) DESC LIMIT 1`,
+  ).get(orgId) as { list_id: string; name: string } | undefined;
+  if (!list) return { listName: null, data: [] };
+  const rows = db.prepare(
+    `WITH members AS (SELECT contact_id FROM cc_contact_lists WHERE org_id = @org AND list_id = @lid),
+      eng AS (
+        SELECT contact_id, MAX(activity_type = 'click') AS clicked, MAX(activity_type IN ('open','click')) AS opened
+          FROM cc_contact_activity WHERE org_id = @org GROUP BY contact_id
+      )
+      SELECT CASE WHEN e.clicked = 1 THEN 'Clicked a link'
+                  WHEN e.opened = 1 THEN 'Opened only'
+                  ELSE 'No opens/clicks' END AS tier, COUNT(*) AS n
+        FROM members m LEFT JOIN eng e ON e.contact_id = m.contact_id
+       GROUP BY tier`,
+  ).all({ org: orgId, lid: list.list_id }) as Array<{ tier: string; n: number }>;
+  const order = ["Clicked a link", "Opened only", "No opens/clicks"];
+  const map = new Map(rows.map((r) => [r.tier, r.n]));
+  return { listName: list.name, data: order.map((t) => ({ label: t, value: map.get(t) ?? 0 })).filter((d) => d.value > 0) };
+}
+
+/** Of the church's engaged people (shepherded / active / present in PCO), how
+ *  many are reachable in Constant Contact vs not — an email-coverage gap. */
+export function getEngagedCcCoverage(orgId: number): { data: Slice[]; inCc: number; gap: number; total: number } {
+  const rows = getDb().prepare(
+    `SELECT CASE WHEN cc.pid IS NOT NULL THEN 'In Constant Contact' ELSE 'Not in Constant Contact' END AS grp, COUNT(*) AS n
+       FROM person_activity pa
+       LEFT JOIN (SELECT DISTINCT person_id AS pid FROM cc_contacts WHERE org_id = @org AND person_id IS NOT NULL) cc
+         ON cc.pid = pa.person_id
+      WHERE pa.org_id = @org AND pa.classification IN ('shepherded','active','present')
+      GROUP BY grp`,
+  ).all({ org: orgId }) as Array<{ grp: string; n: number }>;
+  const inCc = rows.find((r) => r.grp === "In Constant Contact")?.n ?? 0;
+  const gap = rows.find((r) => r.grp === "Not in Constant Contact")?.n ?? 0;
+  return { data: rows.map((r) => ({ label: r.grp, value: r.n })), inCc, gap, total: inCc + gap };
+}
+
+/** Most-clicked links across all synced campaigns. */
+export function getTopClickedLinks(orgId: number, limit = 15): Array<{ url: string; clicks: number }> {
+  return getDb().prepare(
+    `SELECT link_url AS url, COUNT(*) AS clicks FROM cc_contact_activity
+      WHERE org_id = ? AND activity_type = 'click' AND link_url <> ''
+      GROUP BY link_url ORDER BY clicks DESC LIMIT ?`,
+  ).all(orgId, limit) as Array<{ url: string; clicks: number }>;
+}
+
 /** Goal (d): do people who engage with our email take next steps more? Compares
  *  the PCO activity classification of email-engaged vs non-engaged linked people. */
 export function getNextStepEffectiveness(orgId: number): NextStepEffect {
