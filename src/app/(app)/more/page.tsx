@@ -82,6 +82,12 @@ const SECTIONS: MoreSection[] = [
           "An interactive node-web of everyone in the church. Lines connect people who shepherd one another through group / team leadership or a care roster.",
       },
       {
+        href: "/intake-graph",
+        title: "Who knows who",
+        description:
+          "The relationship webs from the “who do you know” forms — /know and /present as separate graphs, shepherd team in blue and everyone else grey — plus coverage stats (% of active / present people someone flags they know).",
+      },
+      {
         href: "/retention",
         title: "Retention",
         description:

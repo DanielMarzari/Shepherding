@@ -161,6 +161,7 @@ export function listIntakeCandidates(
            ON k.org_id = pa.org_id
           AND k.shepherd_person_id = ?
           AND k.person_id = pa.person_id
+          AND k.source = 'know'
         WHERE pa.org_id = ?
           -- JUST 'active' — matches the "Active" count on /people.
           -- Not 'present' (PCO record merely edited) and not
@@ -208,19 +209,20 @@ export function setKnown(
   shepherdPersonId: string,
   personId: string,
   known: boolean,
+  source: "know" | "present" = "know",
 ): void {
   const db = getDb();
   if (known) {
     db.prepare(
       `INSERT OR IGNORE INTO shepherd_known_people
-         (org_id, shepherd_person_id, person_id)
-       VALUES (?, ?, ?)`,
-    ).run(orgId, shepherdPersonId, personId);
+         (org_id, shepherd_person_id, person_id, source)
+       VALUES (?, ?, ?, ?)`,
+    ).run(orgId, shepherdPersonId, personId, source);
   } else {
     db.prepare(
       `DELETE FROM shepherd_known_people
-        WHERE org_id = ? AND shepherd_person_id = ? AND person_id = ?`,
-    ).run(orgId, shepherdPersonId, personId);
+        WHERE org_id = ? AND shepherd_person_id = ? AND person_id = ? AND source = ?`,
+    ).run(orgId, shepherdPersonId, personId, source);
   }
 }
 
@@ -243,7 +245,7 @@ export function listKnownMarksByPerson(
          FROM shepherd_known_people k
          LEFT JOIN pco_people sp
            ON sp.org_id = k.org_id AND sp.pco_id = k.shepherd_person_id
-        WHERE k.org_id = ?`,
+        WHERE k.org_id = ? AND k.source = 'know'`,
     )
     .all(orgId) as Array<{
     personId: string;

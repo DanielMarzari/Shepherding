@@ -84,9 +84,9 @@ export async function getPresentSession(): Promise<PresentSession | null> {
   return { orgId, personId, fullName: [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") || `(#${personId})` };
 }
 
-/** Re-uses setKnown (shared table) so marks work like /know. */
+/** Marks stored under the 'present' source so /know and /present stay separate. */
 export function setKnownPresent(orgId: number, shepherdPersonId: string, personId: string, known: boolean): void {
-  setKnown(orgId, shepherdPersonId, personId, known);
+  setKnown(orgId, shepherdPersonId, personId, known, "present");
 }
 
 /** 'present' adults the person can mark — mirrors listIntakeCandidates but for
@@ -101,7 +101,7 @@ export function listPresentCandidates(orgId: number, viewerPersonId: string): In
          FROM person_activity pa
          JOIN pco_people p ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
          LEFT JOIN shepherd_known_people k
-           ON k.org_id = pa.org_id AND k.shepherd_person_id = ? AND k.person_id = pa.person_id
+           ON k.org_id = pa.org_id AND k.shepherd_person_id = ? AND k.person_id = pa.person_id AND k.source = 'present'
         WHERE pa.org_id = ?
           AND pa.classification = 'present'
           AND p.is_minor = 0
