@@ -5,6 +5,7 @@ import type { MemberPoint } from "@/lib/geocode";
 import type { RoadLine } from "@/lib/road-mesh";
 import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
 import { LV_TRACTS } from "@/lib/lv-census";
+import { LV_CHURCHES } from "@/lib/lv-churches";
 import { FC_ISO_25, FC_ISO_30 } from "@/lib/fc-isochrones";
 import {
   loadLeaflet,
@@ -23,6 +24,15 @@ import {
 export interface PlannerTract extends CensusTractView {
   clat: number;
   clng: number;
+  zip?: string | null;
+}
+
+// Church names by tract, so the "churches nearby" count can expand to names.
+const CHURCHES_BY_GEOID = new Map<string, string[]>();
+for (const c of LV_CHURCHES) {
+  const arr = CHURCHES_BY_GEOID.get(c.geoid) ?? [];
+  arr.push(c.name);
+  CHURCHES_BY_GEOID.set(c.geoid, arr);
 }
 
 const CLASS_COLOR: Record<string, string> = {
@@ -130,6 +140,7 @@ interface Stats {
   drawChurched: number; // expected draw from the already-churched (transfer)
   expectedDraw: number; // total
   churches: number;
+  churchNames: string[];
 }
 
 interface SavedCandidate {
@@ -224,6 +235,7 @@ export function CampusPlannerMap({
   const [saved, setSaved] = useState<SavedCandidate[]>([]);
   const [mapReady, setMapReady] = useState(false);
   const [candPos, setCandPos] = useState(initial); // candidate location (for the drive-time layer)
+  const [showChurches, setShowChurches] = useState(false); // expand church names under the count
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
@@ -253,6 +265,7 @@ export function CampusPlannerMap({
       }
     }
     let unchurchedWithin = 0, churchedWithin = 0, churches = 0;
+    const churchNames: string[] = [];
     for (const t of tracts) {
       const dNew = hav(t.clat, t.clng, lat, lng);
       // Catchment = our average main-campus member distance.
@@ -260,8 +273,12 @@ export function CampusPlannerMap({
         unchurchedWithin += t.unchurched;
         churchedWithin += Math.max(0, t.pop - t.unchurched);
       }
-      if (dNew <= 3) churches += t.churches; // within ~3 miles
+      if (dNew <= 3) { // within ~3 miles
+        churches += t.churches;
+        for (const nm of CHURCHES_BY_GEOID.get(t.geoid) ?? []) churchNames.push(nm);
+      }
     }
+    churchNames.sort((a, b) => a.localeCompare(b));
     const n = points.length || 1;
     // At the same penetration we achieve around the main campus, a campus here
     // would draw from BOTH the unchurched (valley benefit) and the already-
@@ -274,7 +291,7 @@ export function CampusPlannerMap({
       baselineAvg: baseSum / n,
       estCost: tractCostAt(lat, lng, byGeoid),
       drawUnchurched, drawChurched, expectedDraw: drawUnchurched + drawChurched,
-      churches,
+      churches, churchNames,
     };
   }
 
@@ -324,7 +341,7 @@ export function CampusPlannerMap({
         },
         onEachFeature: (f: any, ly: any) => {
           const t = byGeoid.get(f.properties.geoid);
-          if (t) ly.bindTooltip(`<b>${t.name}</b><br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched · ${t.churches} Protestant churches<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}% of pop)<br>${t.income != null ? "income $" + Math.round(t.income).toLocaleString() : "income n/a"} · age ${t.age ?? "n/a"} · ${t.driveMin != null ? t.driveMin + " min" : "drive n/a"} · land $${Math.round(t.cost).toLocaleString()}`, { sticky: true });
+          if (t) ly.bindTooltip(`<b>${t.name}</b>${t.zip ? ` · ZIP ${t.zip}` : ""}<br>pop ${Math.round(t.pop).toLocaleString()} · ~${Math.round(t.unchurched).toLocaleString()} unchurched · ${t.churches} Protestant churches<br>${t.ourCount} of our people (${t.reachPct.toFixed(1)}% of pop)<br>${t.income != null ? "income $" + Math.round(t.income).toLocaleString() : "income n/a"} · age ${t.age ?? "n/a"} · ${t.driveMin != null ? t.driveMin + " min" : "drive n/a"} · land $${Math.round(t.cost).toLocaleString()}`, { sticky: true });
         },
       }).addTo(layer);
     }
@@ -607,8 +624,24 @@ export function CampusPlannerMap({
               value={`~${Math.round(stats.expectedDraw).toLocaleString()}`}
               sub={`~${Math.round(stats.drawUnchurched).toLocaleString()} unchurched + ~${Math.round(stats.drawChurched).toLocaleString()} transfer · within ~${Math.round(model.radiusMi)} mi @ ${(model.captureRate * 100).toFixed(1)}%`}
             />
-            <Metric label="Protestant churches nearby" value={`${stats.churches}`} sub="within ~3 miles" />
+            <button type="button" onClick={() => setShowChurches((v) => !v)} className="w-full text-left cursor-pointer">
+              <Metric label="Protestant churches nearby" value={`${stats.churches}`} sub={`within ~3 miles · click to ${showChurches ? "hide" : "list names"}`} />
+            </button>
           </div>
+          {showChurches && (
+            <div className="mt-3 rounded-lg border border-border-soft bg-bg/40 p-3 text-xs">
+              {stats.churchNames.length === 0 ? (
+                <span className="text-subtle">No named churches on file within ~3 miles of this site.</span>
+              ) : (
+                <>
+                  <div className="text-muted mb-1.5">{stats.churchNames.length} Protestant churches within ~3 miles of this site:</div>
+                  <div className="columns-2 sm:columns-3 gap-4">
+                    {stats.churchNames.map((nm, i) => <div key={i} className="break-inside-avoid text-fg py-0.5">{nm}</div>)}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
