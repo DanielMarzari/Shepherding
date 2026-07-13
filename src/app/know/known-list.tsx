@@ -18,7 +18,13 @@ function initialOf(c: IntakeCandidate): string {
  *  time with a progress bar and a "names to go" counter; everyone you
  *  check collects in a side panel. Search jumps straight to a person;
  *  the A-Z rail jumps the window to that letter. Optimistic toggles. */
-export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
+export function KnownList({
+  initial,
+  toggleAction = toggleKnownAction,
+}: {
+  initial: IntakeCandidate[];
+  toggleAction?: (personId: string, known: boolean) => Promise<{ ok: boolean }>;
+}) {
   const [known, setKnownState] = useState<Record<string, boolean>>(() => {
     const m: Record<string, boolean> = {};
     for (const c of initial) m[c.personId] = c.known;
@@ -125,7 +131,7 @@ export function KnownList({ initial }: { initial: IntakeCandidate[] }) {
     setKnownState((p) => ({ ...p, [personId]: next }));
     setError(null);
     startTransition(async () => {
-      const res = await toggleKnownAction(personId, next);
+      const res = await toggleAction(personId, next);
       if (!res.ok) {
         setKnownState((p) => ({ ...p, [personId]: !next }));
         setError("Your session expired — refresh and sign in again.");
