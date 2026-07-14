@@ -368,6 +368,14 @@ async function rebuildPersonActivityAsync(
 ): Promise<void> {
   const db = getDb();
   const nowIso = new Date().toISOString();
+  // Filters apply at the snapshot source: people with an excluded membership
+  // type (e.g. "SYSTEM USE - Do Not Delete") never enter person_activity, so
+  // every consumer — dashboards, maps, intake forms, graphs — excludes them.
+  // The data audits read pco_people directly and still see everything.
+  const excludedMem = getExcludedMembershipTypes(orgId);
+  const excludedMemClause = excludedMem.length
+    ? `AND (p.membership_type IS NULL OR p.membership_type NOT IN (${excludedMem.map(() => "?").join(",")}))`
+    : "";
 
   const drop = () =>
     db.exec(`
@@ -513,8 +521,8 @@ async function rebuildPersonActivityAsync(
      LEFT JOIN _pa_first_serv  fs ON fs.person_id = p.pco_id
      LEFT JOIN _pa_wors_grp    wg ON wg.person_id = p.pco_id
      LEFT JOIN _pa_wors_plan   wp ON wp.person_id = p.pco_id
-     WHERE p.org_id = ?`,
-  ).run(nowIso, nowIso, nowIso, orgId);
+     WHERE p.org_id = ? ${excludedMemClause}`,
+  ).run(nowIso, nowIso, nowIso, orgId, ...excludedMem);
   await yieldTick();
 
   // Atomic swap: tiny transaction, just data movement from the temp

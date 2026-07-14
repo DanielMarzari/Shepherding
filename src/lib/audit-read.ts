@@ -923,11 +923,18 @@ function toCross(r: AuditScanRow): CrossAuditRow {
   };
 }
 
+// Placeholder words that are never a real first/last name when they are the
+// ENTIRE field — "Test", "Tester", "Unknown", "NA", etc.
+const PLACEHOLDER_NAMES = new Set([
+  "test", "tester", "testing", "unknown", "na", "n/a", "none", "tbd", "xxx",
+]);
+
 function isJunkNameLocal(name: string | null): boolean {
   if (!name) return false;
   const trimmed = name.trim();
   if (trimmed.length === 0) return false;
   if (!/\p{L}/u.test(trimmed)) return true;
   if (!/^\p{L}/u.test(trimmed)) return true;
+  if (PLACEHOLDER_NAMES.has(trimmed.toLowerCase())) return true;
   return false;
 }

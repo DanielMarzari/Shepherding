@@ -1,6 +1,7 @@
 import "server-only";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
+import { getExcludedMembershipTypes } from "./pco";
 import { SHEPHERD_TEAM_LIST_NAME } from "./assignments-read";
 
 interface PII { first_name?: string | null; last_name?: string | null }
@@ -30,16 +31,43 @@ function shepherdTeamSet(orgId: number): Set<string> {
   return new Set(rows.map((r) => r.pid));
 }
 
-export interface GraphNode { id: string; name: string; onTeam: boolean; degree: number }
+export interface GraphNode {
+  id: string;
+  name: string;
+  onTeam: boolean;
+  degree: number;
+  /** Belongs to the classification pool this graph covers (active / present) —
+   *  false for markers who aren't themselves in the pool. */
+  inPool: boolean;
+}
 export interface GraphData { nodes: GraphNode[]; links: Array<{ source: string; target: string }> }
 
-/** The who-knows-who web for one source. Nodes = every person appearing in a
- *  mark (as marker or marked); shepherd-team members are flagged for coloring. */
+/** The who-knows-who web for one source. Nodes = EVERYONE in the source's
+ *  classification pool (so un-known people show as an unconnected field) plus
+ *  anyone who marked someone; shepherd-team members are flagged for coloring. */
 export function getIntakeGraph(orgId: number, source: IntakeSource): GraphData {
-  const marks = getDb()
+  const db = getDb();
+  const cls = source === "know" ? "active" : "present";
+  const excludedMem = getExcludedMembershipTypes(orgId);
+  const memClause = excludedMem.length
+    ? `AND (p.membership_type IS NULL OR p.membership_type NOT IN (${excludedMem.map(() => "?").join(",")}))`
+    : "";
+  const pool = db
+    .prepare(
+      `SELECT pa.person_id AS pid FROM person_activity pa
+         JOIN pco_people p ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
+        WHERE pa.org_id = ? AND pa.classification = ?
+          AND p.is_minor = 0
+          AND lower(coalesce(p.status,'')) != 'inactive'
+          AND p.inactivated_at IS NULL ${memClause}`,
+    )
+    .all(orgId, cls, ...excludedMem) as Array<{ pid: string }>;
+  const poolSet = new Set(pool.map((r) => r.pid));
+
+  const marks = db
     .prepare("SELECT shepherd_person_id AS s, person_id AS p FROM shepherd_known_people WHERE org_id = ? AND source = ?")
     .all(orgId, source) as Array<{ s: string; p: string }>;
-  const ids = new Set<string>();
+  const ids = new Set<string>(poolSet);
   const degree = new Map<string, number>();
   for (const m of marks) {
     ids.add(m.s); ids.add(m.p);
@@ -48,7 +76,13 @@ export function getIntakeGraph(orgId: number, source: IntakeSource): GraphData {
   }
   const names = nameMap(orgId, [...ids]);
   const team = shepherdTeamSet(orgId);
-  const nodes = [...ids].map((id) => ({ id, name: names.get(id) ?? `#${id}`, onTeam: team.has(id), degree: degree.get(id) ?? 0 }));
+  const nodes = [...ids].map((id) => ({
+    id,
+    name: names.get(id) ?? `#${id}`,
+    onTeam: team.has(id),
+    degree: degree.get(id) ?? 0,
+    inPool: poolSet.has(id),
+  }));
   return { nodes, links: marks.map((m) => ({ source: m.s, target: m.p })) };
 }
 

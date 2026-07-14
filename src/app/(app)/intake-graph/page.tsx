@@ -24,6 +24,9 @@ function GraphSection({ title, blurb, data, markers }: {
   data: ReturnType<typeof getIntakeGraph>;
   markers: Array<{ name: string; count: number }>;
 }) {
+  const pool = data.nodes.filter((n) => n.inPool);
+  const known = pool.filter((n) => n.degree > 0).length;
+  const notKnown = pool.length - known;
   return (
     <Card className="p-5 space-y-3">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -32,19 +35,27 @@ function GraphSection({ title, blurb, data, markers }: {
           <p className="text-xs text-subtle mt-0.5">{blurb}</p>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-muted">
-          <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#2563eb" }} />Shepherd team</span>
-          <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#9ca3af" }} />Everyone else</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#4c8dff", boxShadow: "0 0 6px rgba(76,141,255,.7)" }} />Shepherd team</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#c8ccd4" }} />Known</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-full" style={{ background: "#4a5160" }} />Not yet known</span>
         </div>
       </div>
       <IntakeGraphView data={data} />
-      {markers.length > 0 && (
-        <div className="text-xs text-muted">
-          <span className="text-subtle">Most connections: </span>
-          {markers.slice(0, 6).map((m, i) => (
-            <span key={i}>{i > 0 ? " · " : ""}{m.name} ({m.count})</span>
-          ))}
-        </div>
-      )}
+      <div className="flex items-center justify-between gap-4 flex-wrap text-xs text-muted">
+        <span>
+          <span className="tnum font-medium text-fg">{known.toLocaleString()}</span> of{" "}
+          <span className="tnum">{pool.length.toLocaleString()}</span> known ·{" "}
+          <span className="tnum font-medium text-fg">{notKnown.toLocaleString()}</span> not yet known by anyone
+        </span>
+        {markers.length > 0 && (
+          <span>
+            <span className="text-subtle">Most connections: </span>
+            {markers.slice(0, 6).map((m, i) => (
+              <span key={i}>{i > 0 ? " · " : ""}{m.name} ({m.count})</span>
+            ))}
+          </span>
+        )}
+      </div>
     </Card>
   );
 }
