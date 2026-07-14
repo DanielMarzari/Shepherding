@@ -5,11 +5,11 @@ import type { GraphData, GraphNode } from "@/lib/intake-graph";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-// Obsidian-style palette
-const C_TEAM = "#4c8dff"; // shepherd team — blue
-const C_KNOWN = "#c8ccd4"; // connected, not on team — light grey
-const C_UNKNOWN = "#4a5160"; // not yet known — dim grey field
-const C_EDGE = "rgba(148, 163, 184, 0.22)";
+// Obsidian-style palette (light mode)
+const C_TEAM = "#2563eb"; // shepherd team — blue
+const C_KNOWN = "#475569"; // connected, not on team — dark slate
+const C_UNKNOWN = "#c3c9d4"; // not yet known — pale grey field
+const C_EDGE = "rgba(100, 116, 139, 0.28)";
 
 interface Pos { x: number; y: number }
 
@@ -94,7 +94,7 @@ function category(nd: GraphNode): number {
 /** Obsidian-style "who knows who" web: static layout, pan/zoom roam, hover to
  *  light up a node's neighborhood. Blue = shepherd team, grey = known, dim
  *  field = not yet known by anyone. */
-export function IntakeGraphView({ data, height = 520 }: { data: GraphData; height?: number }) {
+export function IntakeGraphView({ data, height = 780 }: { data: GraphData; height?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const modRef = useRef<any>(null);
@@ -115,7 +115,7 @@ export function IntakeGraphView({ data, height = 520 }: { data: GraphData; heigh
         backgroundColor: "transparent",
         tooltip: {
           formatter: (p: any) => (p.dataType === "node" ? p.data.displayName : ""),
-          backgroundColor: "#0b1220", borderColor: "rgba(148,163,184,0.3)", textStyle: { color: "#e2e8f0", fontSize: 12 },
+          backgroundColor: "#ffffff", borderColor: "rgba(100,116,139,0.35)", textStyle: { color: "#0f172a", fontSize: 12 },
         },
         series: [{
           type: "graph",
@@ -139,10 +139,10 @@ export function IntakeGraphView({ data, height = 520 }: { data: GraphData; heigh
               y: p.y,
               symbolSize: cat === 0 ? Math.min(26, 10 + nd.degree * 2) : cat === 1 ? Math.min(18, 7 + nd.degree * 1.5) : 3.5,
               itemStyle: cat === 2
-                ? { color: C_UNKNOWN, opacity: 0.75 }
-                : { color: cat === 0 ? C_TEAM : C_KNOWN, shadowBlur: 14, shadowColor: cat === 0 ? "rgba(76,141,255,0.55)" : "rgba(200,204,212,0.35)" },
+                ? { color: C_UNKNOWN, opacity: 0.85 }
+                : { color: cat === 0 ? C_TEAM : C_KNOWN, shadowBlur: 10, shadowColor: cat === 0 ? "rgba(37,99,235,0.45)" : "rgba(71,85,105,0.3)" },
               label: cat !== 2 && showLabels
-                ? { show: true, position: "right", color: "#8b93a3", fontSize: 10, formatter: nd.name }
+                ? { show: true, position: "right", color: "#475569", fontSize: 10, formatter: nd.name }
                 : { show: false },
             };
           }),
@@ -150,10 +150,10 @@ export function IntakeGraphView({ data, height = 520 }: { data: GraphData; heigh
           lineStyle: { color: C_EDGE, width: 1, curveness: 0.12 },
           emphasis: {
             focus: "adjacency",
-            label: { show: true, color: "#e2e8f0", fontSize: 11, formatter: (p: any) => p.data.displayName },
-            lineStyle: { width: 2, color: "rgba(76,141,255,0.7)" },
+            label: { show: true, color: "#0f172a", fontSize: 11, formatter: (p: any) => p.data.displayName },
+            lineStyle: { width: 2, color: "rgba(37,99,235,0.65)" },
           },
-          blur: { itemStyle: { opacity: 0.15 }, lineStyle: { opacity: 0.05 } },
+          blur: { itemStyle: { opacity: 0.12 }, lineStyle: { opacity: 0.04 } },
         }],
       }, true);
     })();
@@ -171,7 +171,7 @@ export function IntakeGraphView({ data, height = 520 }: { data: GraphData; heigh
     return <div className="py-14 text-center text-sm text-subtle">No one to show yet.</div>;
   }
   return (
-    <div className="rounded-lg overflow-hidden border border-border-soft" style={{ background: "#0a0e17" }}>
+    <div className="rounded-lg overflow-hidden border border-border-soft" style={{ background: "#f8fafc" }}>
       <div ref={ref} style={{ width: "100%", height }} />
     </div>
   );

@@ -35,9 +35,9 @@ function GraphSection({ title, blurb, data, markers }: {
           <p className="text-xs text-subtle mt-0.5">{blurb}</p>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-muted">
-          <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#4c8dff", boxShadow: "0 0 6px rgba(76,141,255,.7)" }} />Shepherd team</span>
-          <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#c8ccd4" }} />Known</span>
-          <span className="flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-full" style={{ background: "#4a5160" }} />Not yet known</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#2563eb", boxShadow: "0 0 6px rgba(37,99,235,.6)" }} />Shepherd team</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#475569" }} />Known</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-full" style={{ background: "#c3c9d4" }} />Not yet known</span>
         </div>
       </div>
       <IntakeGraphView data={data} />
