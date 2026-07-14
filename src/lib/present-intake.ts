@@ -2,6 +2,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { getDb } from "./db";
 import { decryptJson, hmac, sign, verifySigned } from "./encryption";
+import { getExcludedMembershipTypes } from "./pco";
 import { setKnown, type IntakeCandidate } from "./shepherd-intake";
 
 // A second, temporary shepherd-intake page — same flow as /know, but it lists
@@ -92,6 +93,12 @@ export function setKnownPresent(orgId: number, shepherdPersonId: string, personI
 /** 'present' adults the person can mark — mirrors listIntakeCandidates but for
  *  classification = 'present' instead of 'active'. */
 export function listPresentCandidates(orgId: number, viewerPersonId: string): IntakeCandidate[] {
+  // Honor the Filters config — e.g. the "SYSTEM USE - Do Not Delete" membership
+  // type — so system accounts never appear here.
+  const excludedMem = getExcludedMembershipTypes(orgId);
+  const memClause = excludedMem.length
+    ? `AND (p.membership_type IS NULL OR p.membership_type NOT IN (${excludedMem.map(() => "?").join(",")}))`
+    : "";
   const rows = getDb()
     .prepare(
       `SELECT p.pco_id AS personId, p.enc_pii AS encPii,
@@ -107,9 +114,9 @@ export function listPresentCandidates(orgId: number, viewerPersonId: string): In
           AND p.is_minor = 0
           AND p.pco_id != ?
           AND lower(coalesce(p.status,'')) != 'inactive'
-          AND p.inactivated_at IS NULL`,
+          AND p.inactivated_at IS NULL ${memClause}`,
     )
-    .all(viewerPersonId, orgId, viewerPersonId) as Array<{ personId: string; encPii: string | null; known: number; householdId: string | null }>;
+    .all(viewerPersonId, orgId, viewerPersonId, ...excludedMem) as Array<{ personId: string; encPii: string | null; known: number; householdId: string | null }>;
   const out = rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
     const first = pii?.first_name ?? null;

@@ -2,6 +2,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { getDb } from "./db";
 import { decryptJson, hmac, sign, verifySigned } from "./encryption";
+import { getExcludedMembershipTypes } from "./pco";
 import { SHEPHERD_TEAM_LIST_NAME } from "./assignments-read";
 
 const INTAKE_COOKIE = "shepherd_intake";
@@ -147,6 +148,10 @@ export function listIntakeCandidates(
   shepherdPersonId: string,
 ): IntakeCandidate[] {
   const db = getDb();
+  const excludedMem = getExcludedMembershipTypes(orgId);
+  const memClause = excludedMem.length
+    ? `AND (p.membership_type IS NULL OR p.membership_type NOT IN (${excludedMem.map(() => "?").join(",")}))`
+    : "";
   const rows = db
     .prepare(
       `SELECT p.pco_id AS personId, p.enc_pii AS encPii,
@@ -173,9 +178,9 @@ export function listIntakeCandidates(
           -- here (not just via pa.classification) so it's correct even
           -- before the next snapshot rebuild applies the same override.
           AND lower(coalesce(p.status,'')) != 'inactive'
-          AND p.inactivated_at IS NULL`,
+          AND p.inactivated_at IS NULL ${memClause}`,
     )
-    .all(shepherdPersonId, orgId, shepherdPersonId) as Array<{
+    .all(shepherdPersonId, orgId, shepherdPersonId, ...excludedMem) as Array<{
     personId: string;
     encPii: string | null;
     known: number;
