@@ -57,6 +57,7 @@ const PEOPLE_FILTERS: Array<{ key: string; label: string }> = [
   { key: "member", label: "Members" },
   { key: "nonmember", label: "Non-members" },
   { key: "engaged", label: "Engaged" },
+  { key: "family", label: "Families" },
 ];
 function pointMatches(p: MemberPoint, key: string): boolean {
   switch (key) {
@@ -65,6 +66,7 @@ function pointMatches(p: MemberPoint, key: string): boolean {
     case "member": return p.isMember;
     case "nonmember": return !p.isMember;
     case "engaged": return ENGAGED_CLASSES.has(p.classification);
+    case "family": return p.hasHousehold;
     default: return false;
   }
 }
@@ -133,6 +135,8 @@ interface Stats {
   coreSeed: number;
   /** Loose seed: anyone engaged (shepherded or active), closer than FC. */
   looseSeed: number;
+  /** How many of the closer people belong to a PCO household (family proxy). */
+  familyClose: number;
   avgNearest: number;
   baselineAvg: number;
   estCost: number | null;
@@ -250,7 +254,7 @@ export function CampusPlannerMap({
 
   function compute(lat: number, lng: number): Stats {
     const byClass: Record<string, number> = { shepherded: 0, active: 0, present: 0, inactive: 0 };
-    let closer = 0, nearestSum = 0, baseSum = 0, coreSeed = 0, looseSeed = 0;
+    let closer = 0, nearestSum = 0, baseSum = 0, coreSeed = 0, looseSeed = 0, familyClose = 0;
     for (const p of points) {
       const dNew = hav(p.lat, p.lng, lat, lng);
       const dFc = hav(p.lat, p.lng, church.lat, church.lng);
@@ -262,6 +266,8 @@ export function CampusPlannerMap({
         // Core = committed (team/group/membership); loose = engaged (shep/active).
         if (p.inTeam || p.inGroup || p.isMember) coreSeed++;
         if (LOOSE_CLASSES.has(p.classification)) looseSeed++;
+        // Family = belongs to a PCO household — singles vs families in the seed.
+        if (p.hasHousehold) familyClose++;
       }
     }
     let unchurchedWithin = 0, churchedWithin = 0, churches = 0;
@@ -286,7 +292,7 @@ export function CampusPlannerMap({
     const drawUnchurched = unchurchedWithin * model.captureRate;
     const drawChurched = churchedWithin * model.captureRate;
     return {
-      lat, lng, closer, byClass, coreSeed, looseSeed,
+      lat, lng, closer, byClass, coreSeed, looseSeed, familyClose,
       avgNearest: nearestSum / n,
       baselineAvg: baseSum / n,
       estCost: tractCostAt(lat, lng, byGeoid),
@@ -616,6 +622,11 @@ export function CampusPlannerMap({
               label="Loose seed"
               value={`${stats.looseSeed.toLocaleString()} people`}
               sub={`engaged (shepherded ${stats.byClass.shepherded ?? 0} · active ${stats.byClass.active ?? 0}) — closer than FC`}
+            />
+            <Metric
+              label="Seed: families vs singles"
+              value={`${stats.familyClose.toLocaleString()} in families`}
+              sub={`${(stats.closer - stats.familyClose).toLocaleString()} singles · ${stats.closer > 0 ? Math.round((stats.familyClose / stats.closer) * 100) : 0}% in a household · of ${stats.closer.toLocaleString()} closer`}
             />
             <Metric label="Avg distance to nearest campus" value={`${stats.avgNearest.toFixed(1)} mi`} sub={`vs ${stats.baselineAvg.toFixed(1)} mi to FC only`} />
             <Metric label="Est. land cost" value={stats.estCost != null ? usd(stats.estCost) : "—"} sub="median home value here" />

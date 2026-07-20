@@ -48,6 +48,8 @@ export interface MemberPoint {
   inGroup: boolean;
   /** True when they're on at least one active team. */
   inTeam: boolean;
+  /** True when they belong to a PCO household (a proxy for "family"). */
+  hasHousehold: boolean;
 }
 
 /** Heuristic: a "member" membership type (not non-/former-member). */
@@ -200,7 +202,11 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
       `SELECT g.lat, g.lng, p.enc_pii AS encPii, p.membership_type AS mt,
               COALESCE(pa.classification, 'inactive') AS classification,
               COALESCE(pa.active_group_count, 0) AS groupCount,
-              COALESCE(pa.active_team_count, 0) AS teamCount
+              COALESCE(pa.active_team_count, 0) AS teamCount,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM pco_household_memberships hm
+                 WHERE hm.org_id = g.org_id AND hm.person_id = g.person_id
+              ) THEN 1 ELSE 0 END AS inHousehold
          FROM person_geo g
          JOIN pco_people p
            ON p.org_id = g.org_id AND p.pco_id = g.person_id
@@ -216,6 +222,7 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
     classification: string;
     groupCount: number;
     teamCount: number;
+    inHousehold: number;
   }>;
   return rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
@@ -229,6 +236,7 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
       isMember: isMemberType(r.mt),
       inGroup: r.groupCount > 0,
       inTeam: r.teamCount > 0,
+      hasHousehold: r.inHousehold === 1,
     };
   });
 }
