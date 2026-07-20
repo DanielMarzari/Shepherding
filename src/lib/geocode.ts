@@ -50,6 +50,12 @@ export interface MemberPoint {
   inTeam: boolean;
   /** True when they belong to a PCO household (a proxy for "family"). */
   hasHousehold: boolean;
+  /** Raw PCO gender string (e.g. "Male" / "Female"), or null. */
+  gender: string | null;
+  /** Birth year (for age brackets), or null. */
+  birthYear: number | null;
+  /** True when PCO marks them a parent. */
+  isParent: boolean;
 }
 
 /** Heuristic: a "member" membership type (not non-/former-member). */
@@ -200,6 +206,7 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
   const rows = getDb()
     .prepare(
       `SELECT g.lat, g.lng, p.enc_pii AS encPii, p.membership_type AS mt,
+              p.gender AS gender, p.birth_year AS birthYear, p.is_parent AS isParent,
               COALESCE(pa.classification, 'inactive') AS classification,
               COALESCE(pa.active_group_count, 0) AS groupCount,
               COALESCE(pa.active_team_count, 0) AS teamCount,
@@ -223,6 +230,9 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
     groupCount: number;
     teamCount: number;
     inHousehold: number;
+    gender: string | null;
+    birthYear: number | null;
+    isParent: number | null;
   }>;
   return rows.map((r) => {
     const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
@@ -237,6 +247,9 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
       inGroup: r.groupCount > 0,
       inTeam: r.teamCount > 0,
       hasHousehold: r.inHousehold === 1,
+      gender: r.gender,
+      birthYear: r.birthYear,
+      isParent: r.isParent === 1,
     };
   });
 }

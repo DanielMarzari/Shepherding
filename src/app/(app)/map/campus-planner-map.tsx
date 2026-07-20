@@ -126,6 +126,31 @@ function tractCostAt(lat: number, lng: number, byGeoid: Map<string, PlannerTract
   return null;
 }
 
+// ── Seed demographics ────────────────────────────────────────────────
+const CUR_YEAR = new Date().getFullYear();
+const AGE_LABELS = ["<18", "18–29", "30–49", "50–64", "65+", "Unknown"];
+function ageIdx(by: number | null): number {
+  if (!by) return 5;
+  const a = CUR_YEAR - by;
+  return a < 18 ? 0 : a < 30 ? 1 : a < 50 ? 2 : a < 65 ? 3 : 4;
+}
+export interface SeedDemo {
+  count: number;
+  male: number; female: number; genderUnknown: number;
+  ages: number[]; // by AGE_LABELS index
+  parents: number; families: number; members: number;
+}
+const emptyDemo = (): SeedDemo => ({ count: 0, male: 0, female: 0, genderUnknown: 0, ages: [0, 0, 0, 0, 0, 0], parents: 0, families: 0, members: 0 });
+function addToDemo(d: SeedDemo, p: MemberPoint): void {
+  d.count++;
+  const g = (p.gender ?? "").trim().toLowerCase();
+  if (g.startsWith("m")) d.male++; else if (g.startsWith("f")) d.female++; else d.genderUnknown++;
+  d.ages[ageIdx(p.birthYear)]++;
+  if (p.isParent) d.parents++;
+  if (p.hasHousehold) d.families++;
+  if (p.isMember) d.members++;
+}
+
 interface Stats {
   lat: number;
   lng: number;
@@ -137,6 +162,8 @@ interface Stats {
   looseSeed: number;
   /** How many of the closer people belong to a PCO household (family proxy). */
   familyClose: number;
+  coreDemo: SeedDemo;
+  looseDemo: SeedDemo;
   avgNearest: number;
   baselineAvg: number;
   estCost: number | null;
@@ -255,6 +282,7 @@ export function CampusPlannerMap({
   function compute(lat: number, lng: number): Stats {
     const byClass: Record<string, number> = { shepherded: 0, active: 0, present: 0, inactive: 0 };
     let closer = 0, nearestSum = 0, baseSum = 0, coreSeed = 0, looseSeed = 0, familyClose = 0;
+    const coreDemo = emptyDemo(), looseDemo = emptyDemo();
     for (const p of points) {
       const dNew = hav(p.lat, p.lng, lat, lng);
       const dFc = hav(p.lat, p.lng, church.lat, church.lng);
@@ -264,8 +292,8 @@ export function CampusPlannerMap({
         closer++;
         byClass[p.classification] = (byClass[p.classification] ?? 0) + 1;
         // Core = committed (team/group/membership); loose = engaged (shep/active).
-        if (p.inTeam || p.inGroup || p.isMember) coreSeed++;
-        if (LOOSE_CLASSES.has(p.classification)) looseSeed++;
+        if (p.inTeam || p.inGroup || p.isMember) { coreSeed++; addToDemo(coreDemo, p); }
+        if (LOOSE_CLASSES.has(p.classification)) { looseSeed++; addToDemo(looseDemo, p); }
         // Family = belongs to a PCO household — singles vs families in the seed.
         if (p.hasHousehold) familyClose++;
       }
@@ -292,7 +320,7 @@ export function CampusPlannerMap({
     const drawUnchurched = unchurchedWithin * model.captureRate;
     const drawChurched = churchedWithin * model.captureRate;
     return {
-      lat, lng, closer, byClass, coreSeed, looseSeed, familyClose,
+      lat, lng, closer, byClass, coreSeed, looseSeed, familyClose, coreDemo, looseDemo,
       avgNearest: nearestSum / n,
       baselineAvg: baseSum / n,
       estCost: tractCostAt(lat, lng, byGeoid),
@@ -653,6 +681,14 @@ export function CampusPlannerMap({
               )}
             </div>
           )}
+
+          <div className="mt-4 pt-4 border-t border-border-soft">
+            <div className="text-xs text-muted font-medium mb-2">Seed demographics — who this campus would gather</div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <DemoCard title="Core seed" subtitle="in a team/group or a member" demo={stats.coreDemo} />
+              <DemoCard title="Loose seed" subtitle="anyone engaged (shepherded / active)" demo={stats.looseDemo} />
+            </div>
+          </div>
         </div>
       )}
 
@@ -738,6 +774,55 @@ function Metric({ label, value, sub }: { label: string; value: string; sub: stri
       <div className="text-[11px] text-muted mb-1">{label}</div>
       <div className="tnum text-base font-semibold">{value}</div>
       <div className="text-[11px] text-subtle mt-0.5">{sub}</div>
+    </div>
+  );
+}
+
+function DemoCard({ title, subtitle, demo }: { title: string; subtitle: string; demo: SeedDemo }) {
+  const total = demo.count || 1;
+  const pct = (x: number) => Math.round((x / total) * 100);
+  return (
+    <div className="rounded-lg border border-border-soft bg-bg/40 p-3.5 space-y-3">
+      <div>
+        <div className="text-sm font-semibold">{title} · <span className="tnum">{demo.count.toLocaleString()}</span></div>
+        <div className="text-[11px] text-subtle">{subtitle}</div>
+      </div>
+      {demo.count === 0 ? (
+        <div className="text-xs text-subtle py-3">No one in this seed here yet.</div>
+      ) : (
+        <>
+          <div>
+            <div className="text-[11px] text-muted mb-1">Gender</div>
+            <div className="flex h-2.5 rounded-full overflow-hidden bg-bg-elev-2">
+              <div style={{ width: `${pct(demo.male)}%`, background: "#2563eb" }} title={`Male ${demo.male}`} />
+              <div style={{ width: `${pct(demo.female)}%`, background: "#db2777" }} title={`Female ${demo.female}`} />
+              <div style={{ width: `${pct(demo.genderUnknown)}%`, background: "#9ca3af" }} title={`Unknown ${demo.genderUnknown}`} />
+            </div>
+            <div className="flex gap-3 text-[10px] text-subtle mt-1">
+              <span><span className="inline-block w-2 h-2 rounded-full align-middle mr-1" style={{ background: "#2563eb" }} />M {pct(demo.male)}%</span>
+              <span><span className="inline-block w-2 h-2 rounded-full align-middle mr-1" style={{ background: "#db2777" }} />F {pct(demo.female)}%</span>
+              {demo.genderUnknown > 0 && <span><span className="inline-block w-2 h-2 rounded-full align-middle mr-1" style={{ background: "#9ca3af" }} />? {pct(demo.genderUnknown)}%</span>}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] text-muted mb-1">Age</div>
+            <div className="space-y-1">
+              {AGE_LABELS.map((lbl, i) => demo.ages[i] > 0 && (
+                <div key={i} className="flex items-center gap-2 text-[10px]">
+                  <span className="w-12 text-subtle shrink-0">{lbl}</span>
+                  <div className="flex-1 h-2 rounded-full bg-bg-elev-2 overflow-hidden"><div className="h-full rounded-full bg-accent/70" style={{ width: `${pct(demo.ages[i])}%` }} /></div>
+                  <span className="w-16 text-right tnum text-muted">{demo.ages[i]} · {pct(demo.ages[i])}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
+            <span>In families <span className="text-fg tnum">{pct(demo.families)}%</span></span>
+            <span>Parents <span className="text-fg tnum">{pct(demo.parents)}%</span></span>
+            <span>Members <span className="text-fg tnum">{pct(demo.members)}%</span></span>
+          </div>
+        </>
+      )}
     </div>
   );
 }
