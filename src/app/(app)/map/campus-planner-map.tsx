@@ -6,6 +6,7 @@ import type { RoadLine } from "@/lib/road-mesh";
 import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
 import { LV_TRACTS } from "@/lib/lv-census";
 import { LV_CHURCHES } from "@/lib/lv-churches";
+import { LVPC_NEW_HOMES, LVPC_NEW_HOMES_AS_OF } from "@/lib/lvpc-residential";
 import { FC_ISO_25, FC_ISO_30 } from "@/lib/fc-isochrones";
 import {
   loadLeaflet,
@@ -46,6 +47,7 @@ const LV_COLOR = "#7c3aed";
 const DOT_BLUE = "#2563eb";
 const DRIVE25_COLOR = "#16a34a"; // 25-min isochrone blob
 const ISO30_COLOR = "#dc2626"; // 30-min campus limit
+const HOME_COLOR = "#ea580c"; // LVPC new-home developments (orange)
 
 const ENGAGED_CLASSES = new Set(["shepherded", "active", "present"]);
 const LOOSE_CLASSES = new Set(["shepherded", "active"]);
@@ -172,6 +174,8 @@ interface Stats {
   launchDraw: number; // realistic opening size (sending core + early community)
   launchNew: number; // just the early community draw at launch
   matureDraw: number; // steady-state ceiling if it reached FC's penetration
+  newHomeProjects: number; // LVPC residential developments in the catchment
+  newHomeUnits: number; // planned housing units across those developments
   churches: number;
   churchNames: string[];
 }
@@ -263,6 +267,7 @@ export function CampusPlannerMap({
   const [metric, setMetric] = useState<CensusMetric | "none">("need");
   const [showRoads, setShowRoads] = useState(false);
   const [showDrive25, setShowDrive25] = useState(false);
+  const [showHomes, setShowHomes] = useState(false);
   const [peopleFilter, setPeopleFilter] = useState<string[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [saved, setSaved] = useState<SavedCandidate[]>([]);
@@ -276,6 +281,7 @@ export function CampusPlannerMap({
     setMetric(lsGet("shepherdly.planner.metric", "need"));
     setShowRoads(lsGet("shepherdly.planner.roads", false));
     setShowDrive25(lsGet("shepherdly.planner.drive25", false));
+    setShowHomes(lsGet("shepherdly.planner.homes", false));
     setPeopleFilter(lsGet("shepherdly.planner.peopleFilter", []));
     setSaved(lsGet("shepherdly.planner.saved", []));
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -313,6 +319,11 @@ export function CampusPlannerMap({
       }
     }
     churchNames.sort((a, b) => a.localeCompare(b));
+    // LVPC new-home pipeline within the same catchment — future families moving in.
+    let newHomeProjects = 0, newHomeUnits = 0;
+    for (const h of LVPC_NEW_HOMES) {
+      if (hav(h.lat, h.lng, lat, lng) <= model.radiusMi) { newHomeProjects++; newHomeUnits += h.units; }
+    }
     const n = points.length || 1;
     // Steady-state ceiling: at the mature penetration we achieve around the
     // main campus, a campus here would eventually reach this many across the
@@ -329,6 +340,7 @@ export function CampusPlannerMap({
       baselineAvg: baseSum / n,
       estCost: tractCostAt(lat, lng, byGeoid),
       launchDraw, launchNew, matureDraw,
+      newHomeProjects, newHomeUnits,
       churches, churchNames,
     };
   }
@@ -402,6 +414,17 @@ export function CampusPlannerMap({
         if (peopleFilter.length > 0 && !peopleFilter.some((k) => pointMatches(p, k))) continue;
         const c = CLASS_COLOR[p.classification] ?? CLASS_COLOR.inactive;
         L.circleMarker([p.lat, p.lng], { radius: 3, color: "#1f2937", weight: 0.4, fillColor: c, fillOpacity: 0.85 }).addTo(layer);
+      }
+    }
+
+    // LVPC new-home pipeline: approved / in-progress residential developments,
+    // sized by planned units — where future families will live.
+    if (showHomes) {
+      for (const h of LVPC_NEW_HOMES) {
+        const r = Math.max(3, Math.min(12, 2 + Math.sqrt(h.units)));
+        L.circleMarker([h.lat, h.lng], { radius: r, color: "#7c2d12", weight: 0.7, fillColor: HOME_COLOR, fillOpacity: 0.6 })
+          .bindTooltip(`<b>${h.name}</b><br>${h.units.toLocaleString()} units · ${h.type}<br>${h.muni}`, { sticky: true })
+          .addTo(layer);
       }
     }
 
@@ -502,7 +525,7 @@ export function CampusPlannerMap({
   useEffect(() => {
     if (mapReady) renderOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDots, metric, showRoads, showDrive25, peopleFilter, mapReady, candPos]);
+  }, [showDots, metric, showRoads, showDrive25, showHomes, peopleFilter, mapReady, candPos]);
 
   function lockIn() {
     if (!stats) return;
@@ -530,6 +553,7 @@ export function CampusPlannerMap({
   function toggleDots() { const v = !showDots; setShowDots(v); lsSet("shepherdly.planner.dots", v); }
   function toggleRoads() { const v = !showRoads; setShowRoads(v); lsSet("shepherdly.planner.roads", v); }
   function toggleDrive25() { const v = !showDrive25; setShowDrive25(v); lsSet("shepherdly.planner.drive25", v); }
+  function toggleHomes() { const v = !showHomes; setShowHomes(v); lsSet("shepherdly.planner.homes", v); }
   function pickMetric(m: CensusMetric | "none") { setMetric(m); lsSet("shepherdly.planner.metric", m); }
   function togglePeople(key: string) {
     setPeopleFilter((prev) => {
@@ -570,6 +594,10 @@ export function CampusPlannerMap({
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={showDrive25} onChange={toggleDrive25} />
               <span className="text-muted">25-min drive blob (FC)</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={showHomes} onChange={toggleHomes} />
+              <span className="text-muted">New homes (LVPC)</span>
             </label>
           </div>
           {showDots && (
@@ -621,6 +649,7 @@ export function CampusPlannerMap({
             <div className="font-medium">Legend</div>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3.5 h-3.5 rounded-full" style={{ background: DOT_BLUE, border: "2px solid #fff", boxShadow: "0 0 0 1px #0006" }} />candidate campus (drag)</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#eab308", border: "1px solid #1f2937" }} />auto suggestions (fixed)</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: HOME_COLOR, border: "1px solid #7c2d12" }} />new homes · sized by units (LVPC)</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: FC_COLOR }} />Faith Church</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />Lehigh Valley</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: `${DRIVE25_COLOR}40`, border: `1px solid ${DRIVE25_COLOR}` }} />25-min drive blob</span>
@@ -666,6 +695,11 @@ export function CampusPlannerMap({
               label="Est. draw at launch"
               value={`~${Math.round(stats.launchDraw).toLocaleString()}`}
               sub={`~${stats.coreSeed.toLocaleString()} sending core + ~${Math.round(stats.launchNew).toLocaleString()} new · grows toward ~${Math.round(stats.matureDraw).toLocaleString()} at maturity`}
+            />
+            <Metric
+              label="New homes coming nearby"
+              value={`~${stats.newHomeUnits.toLocaleString()} units`}
+              sub={`${stats.newHomeProjects} LVPC development${stats.newHomeProjects === 1 ? "" : "s"} within ~${Math.round(model.radiusMi)} mi · future families (${LVPC_NEW_HOMES_AS_OF})`}
             />
             <button type="button" onClick={() => setShowChurches((v) => !v)} className="w-full text-left cursor-pointer">
               <Metric label="Protestant churches nearby" value={`${stats.churches}`} sub={`within ~3 miles · click to ${showChurches ? "hide" : "list names"}`} />

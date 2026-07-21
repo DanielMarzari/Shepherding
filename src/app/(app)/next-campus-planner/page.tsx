@@ -91,10 +91,10 @@ export default async function NextCampusPlannerPage() {
             group, or membership who&rsquo;d be closer than FC), the{" "}
             <em>loose seed</em> (anyone engaged who&rsquo;d be closer), distance
             to the nearest campus, land cost, unreached people served, and
-            churches nearby. Stack any layers — our people (filter by groups /
-            teams / membership / engaged), roads driven, the 25-minute drive
-            blob, and tract shading by need / unchurched / reach / land price /
-            churches.
+            churches nearby, and the new-home pipeline. Stack any layers — our
+            people (filter by groups / teams / membership / engaged), roads
+            driven, the 25-minute drive blob, LVPC new-home developments, and
+            tract shading by need / unchurched / reach / land price / churches.
           </p>
           <CampusPlannerMap
             church={CHURCH}
