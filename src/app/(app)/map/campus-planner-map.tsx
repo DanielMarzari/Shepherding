@@ -49,6 +49,10 @@ const ISO30_COLOR = "#dc2626"; // 30-min campus limit
 
 const ENGAGED_CLASSES = new Set(["shepherded", "active", "present"]);
 const LOOSE_CLASSES = new Set(["shepherded", "active"]);
+// A church plant opens with its sending core and grows into the community over
+// years — it does NOT reach the main campus's mature penetration on day one.
+// The "starting out" community draw is a small fraction of that ceiling.
+const LAUNCH_RAMP = 0.15;
 // Overlapping people filters — multi-select; a dot shows if it matches ANY
 // selected chip (none selected = everyone).
 const PEOPLE_FILTERS: Array<{ key: string; label: string }> = [
@@ -160,16 +164,14 @@ interface Stats {
   coreSeed: number;
   /** Loose seed: anyone engaged (shepherded or active), closer than FC. */
   looseSeed: number;
-  /** How many of the closer people belong to a PCO household (family proxy). */
-  familyClose: number;
   coreDemo: SeedDemo;
   looseDemo: SeedDemo;
   avgNearest: number;
   baselineAvg: number;
   estCost: number | null;
-  drawUnchurched: number; // expected draw from the unchurched (valley benefit)
-  drawChurched: number; // expected draw from the already-churched (transfer)
-  expectedDraw: number; // total
+  launchDraw: number; // realistic opening size (sending core + early community)
+  launchNew: number; // just the early community draw at launch
+  matureDraw: number; // steady-state ceiling if it reached FC's penetration
   churches: number;
   churchNames: string[];
 }
@@ -281,7 +283,7 @@ export function CampusPlannerMap({
 
   function compute(lat: number, lng: number): Stats {
     const byClass: Record<string, number> = { shepherded: 0, active: 0, present: 0, inactive: 0 };
-    let closer = 0, nearestSum = 0, baseSum = 0, coreSeed = 0, looseSeed = 0, familyClose = 0;
+    let closer = 0, nearestSum = 0, baseSum = 0, coreSeed = 0, looseSeed = 0;
     const coreDemo = emptyDemo(), looseDemo = emptyDemo();
     for (const p of points) {
       const dNew = hav(p.lat, p.lng, lat, lng);
@@ -294,8 +296,6 @@ export function CampusPlannerMap({
         // Core = committed (team/group/membership); loose = engaged (shep/active).
         if (p.inTeam || p.inGroup || p.isMember) { coreSeed++; addToDemo(coreDemo, p); }
         if (LOOSE_CLASSES.has(p.classification)) { looseSeed++; addToDemo(looseDemo, p); }
-        // Family = belongs to a PCO household — singles vs families in the seed.
-        if (p.hasHousehold) familyClose++;
       }
     }
     let unchurchedWithin = 0, churchedWithin = 0, churches = 0;
@@ -314,17 +314,21 @@ export function CampusPlannerMap({
     }
     churchNames.sort((a, b) => a.localeCompare(b));
     const n = points.length || 1;
-    // At the same penetration we achieve around the main campus, a campus here
-    // would draw from BOTH the unchurched (valley benefit) and the already-
-    // churched (transfer from other congregations).
-    const drawUnchurched = unchurchedWithin * model.captureRate;
-    const drawChurched = churchedWithin * model.captureRate;
+    // Steady-state ceiling: at the mature penetration we achieve around the
+    // main campus, a campus here would eventually reach this many across the
+    // unchurched (valley benefit) and already-churched (transfer). That's the
+    // MAX, not the opening — a plant takes years to get there.
+    const matureDraw = (unchurchedWithin + churchedWithin) * model.captureRate;
+    // Starting out: the plant opens with its sending core (committed FC people
+    // who'd be closer here) plus a small early slice of the reachable community.
+    const launchNew = unchurchedWithin * model.captureRate * LAUNCH_RAMP;
+    const launchDraw = coreSeed + launchNew;
     return {
-      lat, lng, closer, byClass, coreSeed, looseSeed, familyClose, coreDemo, looseDemo,
+      lat, lng, closer, byClass, coreSeed, looseSeed, coreDemo, looseDemo,
       avgNearest: nearestSum / n,
       baselineAvg: baseSum / n,
       estCost: tractCostAt(lat, lng, byGeoid),
-      drawUnchurched, drawChurched, expectedDraw: drawUnchurched + drawChurched,
+      launchDraw, launchNew, matureDraw,
       churches, churchNames,
     };
   }
@@ -504,7 +508,7 @@ export function CampusPlannerMap({
     if (!stats) return;
     const c: SavedCandidate = {
       id: `${Date.now()}`, lat: stats.lat, lng: stats.lng,
-      coreSeed: stats.coreSeed, draw: Math.round(stats.expectedDraw), cost: stats.estCost, churches: stats.churches,
+      coreSeed: stats.coreSeed, draw: Math.round(stats.launchDraw), cost: stats.estCost, churches: stats.churches,
     };
     const next = [c, ...saved].slice(0, 12);
     setSaved(next);
@@ -652,16 +656,16 @@ export function CampusPlannerMap({
               sub={`engaged (shepherded ${stats.byClass.shepherded ?? 0} · active ${stats.byClass.active ?? 0}) — closer than FC`}
             />
             <Metric
-              label="Seed: families vs singles"
-              value={`${stats.familyClose.toLocaleString()} in families`}
-              sub={`${(stats.closer - stats.familyClose).toLocaleString()} singles · ${stats.closer > 0 ? Math.round((stats.familyClose / stats.closer) * 100) : 0}% in a household · of ${stats.closer.toLocaleString()} closer`}
+              label="Families in the seed"
+              value={`${stats.looseDemo.families.toLocaleString()} of ${stats.looseSeed.toLocaleString()} loose`}
+              sub={`core: ${stats.coreDemo.families.toLocaleString()} of ${stats.coreSeed.toLocaleString()} in a household — engaged families who'd be closer`}
             />
             <Metric label="Avg distance to nearest campus" value={`${stats.avgNearest.toFixed(1)} mi`} sub={`vs ${stats.baselineAvg.toFixed(1)} mi to FC only`} />
             <Metric label="Est. land cost" value={stats.estCost != null ? usd(stats.estCost) : "—"} sub="median home value here" />
             <Metric
-              label="Est. people we'd draw"
-              value={`~${Math.round(stats.expectedDraw).toLocaleString()}`}
-              sub={`~${Math.round(stats.drawUnchurched).toLocaleString()} unchurched + ~${Math.round(stats.drawChurched).toLocaleString()} transfer · within ~${Math.round(model.radiusMi)} mi @ ${(model.captureRate * 100).toFixed(1)}%`}
+              label="Est. draw at launch"
+              value={`~${Math.round(stats.launchDraw).toLocaleString()}`}
+              sub={`~${stats.coreSeed.toLocaleString()} sending core + ~${Math.round(stats.launchNew).toLocaleString()} new · grows toward ~${Math.round(stats.matureDraw).toLocaleString()} at maturity`}
             />
             <button type="button" onClick={() => setShowChurches((v) => !v)} className="w-full text-left cursor-pointer">
               <Metric label="Protestant churches nearby" value={`${stats.churches}`} sub={`within ~3 miles · click to ${showChurches ? "hide" : "list names"}`} />
@@ -708,7 +712,7 @@ export function CampusPlannerMap({
                   <th className="text-left font-medium py-1.5 pr-3">Site</th>
                   <th className="text-left font-medium py-1.5 pr-3">Location</th>
                   <th className="text-right font-medium py-1.5 pr-3">Core seed</th>
-                  <th className="text-right font-medium py-1.5 pr-3">Est. draw</th>
+                  <th className="text-right font-medium py-1.5 pr-3">Launch draw</th>
                   <th className="text-right font-medium py-1.5 pr-3">Land cost</th>
                   <th className="text-left font-medium py-1.5 pr-3">Find properties</th>
                   <th className="py-1.5" />
@@ -724,7 +728,7 @@ export function CampusPlannerMap({
                       </button>
                     </td>
                     <td className="py-2 pr-3 text-right tnum">{s.coreSeed.toLocaleString()}</td>
-                    <td className="py-2 pr-3 text-right tnum">~{Math.round(s.expectedDraw).toLocaleString()}</td>
+                    <td className="py-2 pr-3 text-right tnum">~{Math.round(s.launchDraw).toLocaleString()}</td>
                     <td className="py-2 pr-3 text-right tnum">{s.estCost != null ? usd(s.estCost) : "—"}</td>
                     <td className="py-2 pr-3">
                       <span className="flex flex-wrap gap-2">

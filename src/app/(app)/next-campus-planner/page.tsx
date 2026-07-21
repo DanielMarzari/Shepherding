@@ -13,7 +13,10 @@ const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
 
 export default async function NextCampusPlannerPage() {
   const session = await requireOrg();
-  const points = getMemberGeoPoints(session.orgId);
+  // Planning is about who we're actually engaging — drop inactive people so
+  // the seed, distances, and dots reflect the living congregation, not people
+  // who've drifted away.
+  const points = getMemberGeoPoints(session.orgId).filter((p) => p.classification !== "inactive");
   const mapSettings = getMapSettings(session.orgId);
   const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
   const census = analyzeCensus(session.orgId);
