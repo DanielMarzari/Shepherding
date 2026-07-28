@@ -14,7 +14,7 @@ import {
   deleteBuilderPage,
   getBuilderBlockSql,
   moveBuilderBlock,
-  runBuilderQuery,
+  runBuilderQueryForOrg,
   updateBuilderBlock,
   updateBuilderPage,
 } from "@/lib/builder";
@@ -78,8 +78,8 @@ export async function moveBlockAction(id: number, dir: "up" | "down", slug: stri
 
 /** Live-preview a query from the block editor (admin only, read-only). */
 export async function runQueryAction(sql: string, params?: QueryParams): Promise<QueryResult> {
-  await requireAdmin();
-  return runBuilderQuery(sql, params);
+  const s = await requireAdmin();
+  return runBuilderQueryForOrg(s.orgId, sql, params);
 }
 
 /** Re-run a saved block with new filter params (any org member, read-only).
@@ -88,5 +88,5 @@ export async function runBlockAction(blockId: number, params?: QueryParams): Pro
   const s = await requireOrg();
   const sql = getBuilderBlockSql(s.orgId, blockId);
   if (sql == null) return { columns: [], rows: [], truncated: false, error: "Block not found." };
-  return runBuilderQuery(sql, params);
+  return runBuilderQueryForOrg(s.orgId, sql, params);
 }

@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Archived original page designs — kept as reference, never compiled.
+    "reference/**",
   ]),
 ]);
 

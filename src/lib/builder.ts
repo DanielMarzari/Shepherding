@@ -73,6 +73,13 @@ export function runBuilderQuery(sql: string, params?: QueryParams): QueryResult 
   }
 }
 
+/** Run a builder query with the current org auto-bound as `:orgId`, so seed /
+ *  block SQL can scope itself (`WHERE org_id = :orgId`) without the engine
+ *  knowing about orgs. `orgId` is a reserved parameter name. */
+export function runBuilderQueryForOrg(orgId: number, sql: string, params?: QueryParams): QueryResult {
+  return runBuilderQuery(sql, { ...(params ?? {}), orgId: String(orgId) });
+}
+
 /** Table + column names for the SQL editor's autocomplete. */
 export interface DbSchema {
   tables: string[];
