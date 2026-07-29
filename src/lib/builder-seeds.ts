@@ -655,6 +655,20 @@ const peopleSeed: SeedPage = {
   ],
 };
 
+const staffSeed: SeedPage = {
+  slug: "staff",
+  title: "Church staff",
+  description: "People on the church staff reference list.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Staff", span: 3, sub: "on the staff reference list",
+      sql: `SELECT COUNT(*) FROM pco_list_memberships lm JOIN pco_lists l ON l.org_id=lm.org_id AND l.pco_id=lm.list_id
+             WHERE lm.org_id=:orgId AND l.name='REFERENCE - Church Staff'` } },
+    { kind: "table", config: { title: "Staff directory", span: 12, density: "normal", source: "staff_directory",
+      columnColors: { Membership: "low", Engagement: "low" } } },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
@@ -663,6 +677,7 @@ export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [teamsSeed.slug]: teamsSeed,
   [homeSeed.slug]: homeSeed,
   [peopleSeed.slug]: peopleSeed,
+  [staffSeed.slug]: staffSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────

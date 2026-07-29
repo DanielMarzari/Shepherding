@@ -61,6 +61,21 @@ const SOURCES: Record<string, SourceFn> = {
       rows.map((r) => [nameOf(r.enc), r.cls, r.mt ?? "—", r.gc, r.tc]),
     );
   },
+
+  staff_directory: (orgId) => {
+    const rows = getDb()
+      .prepare(
+        `SELECT p.enc_pii AS enc, p.membership_type AS mt, COALESCE(pa.classification,'inactive') AS cls
+           FROM pco_list_memberships lm
+           JOIN pco_lists l ON l.org_id = lm.org_id AND l.pco_id = lm.list_id
+           JOIN pco_people p ON p.org_id = lm.org_id AND p.pco_id = lm.person_id
+           LEFT JOIN person_activity pa ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
+          WHERE lm.org_id = ? AND l.name = 'REFERENCE - Church Staff'
+          ORDER BY p.membership_type, p.pco_id`,
+      )
+      .all(orgId) as Array<{ enc: string | null; mt: string | null; cls: string }>;
+    return R(["Name", "Membership", "Engagement"], rows.map((r) => [nameOf(r.enc), r.mt ?? "—", r.cls]));
+  },
 };
 
 /** Run a named source, returning a QueryResult (columns/rows) like the SQL engine. */

@@ -36,6 +36,12 @@ export const SOURCE_META: SourceMeta[] = [
     description: "Top shepherds by flock size: Shepherd, Flock, Units led.",
     kinds: ["table", "leaderboard"],
   },
+  {
+    id: "staff_directory",
+    label: "Staff directory",
+    description: "People on the 'REFERENCE - Church Staff' list: Name, Membership, Engagement.",
+    kinds: ["table"],
+  },
 ];
 
 export const sourceMeta = (id: string | undefined): SourceMeta | undefined =>
