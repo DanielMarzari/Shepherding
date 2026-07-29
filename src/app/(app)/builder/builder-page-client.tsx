@@ -315,6 +315,12 @@ function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
               {PICTO_ICONS.map((ic) => <option key={ic.id} value={ic.id}>{ic.label}</option>)}
             </select>
           )}
+          {(cfg.chartType ?? "bar") === "bar" && (
+            <label className="flex items-center gap-2 text-[11px] text-muted cursor-pointer">
+              <input type="checkbox" checked={!!cfg.colorByCategory} onChange={(e) => set({ colorByCategory: e.target.checked })} />
+              Color each bar by category
+            </label>
+          )}
           <div className="text-[10px] text-subtle">{chartHint(cfg.chartType ?? "bar")}</div>
         </div>
       )}

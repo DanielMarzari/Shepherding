@@ -169,6 +169,8 @@ export interface BlockConfig {
   text?: string;
   /** Chart type (for kind === "chart"). */
   chartType?: string;
+  /** Bar charts: give each bar its own color from the palette (vs one color). */
+  colorByCategory?: boolean;
   /** Pictogram symbol id (for chartType === "pictogram"). */
   icon?: string;
   /** Target value for the progress / goal block. */

@@ -160,7 +160,7 @@ const demographicsSeed: SeedPage = {
   title: "Membership demographics",
   description:
     "Who makes up the church — membership status, age, gender, and whether they have kids — for whichever slice you pick below. Drawn from PCO profile data.",
-  revision: 2,
+  revision: 3,
   blocks: [
     {
       kind: "filter",
@@ -206,6 +206,7 @@ const demographicsSeed: SeedPage = {
       config: {
         title: "Gender",
         chartType: "bar",
+        colorByCategory: true,
         span: 3,
         sql: `${SCOPE_CTE}
               SELECT CASE
@@ -223,6 +224,7 @@ const demographicsSeed: SeedPage = {
       config: {
         title: "Age",
         chartType: "bar",
+        colorByCategory: true,
         span: 3,
         sql: `${SCOPE_CTE}
               SELECT CASE
@@ -244,6 +246,7 @@ const demographicsSeed: SeedPage = {
       config: {
         title: "Parents",
         chartType: "bar",
+        colorByCategory: true,
         span: 3,
         sql: `${SCOPE_CTE}
               SELECT CASE WHEN p.is_parent = 1 THEN 'Parent' ELSE 'No kids' END AS "Household",

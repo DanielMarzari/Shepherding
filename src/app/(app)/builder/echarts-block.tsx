@@ -152,7 +152,7 @@ function buildTree(rows: unknown[][], levels: number, valueIdx: number): any[] {
   return root.children.map(strip);
 }
 
-function buildOption(type: string, result: QueryResult, opts: { icon?: string } = {}): any {
+function buildOption(type: string, result: QueryResult, opts: { icon?: string; colorByCategory?: boolean } = {}): any {
   const cols = result.columns;
   const rows = result.rows;
   if (rows.length === 0) return base({ title: { text: "No rows", left: "center", top: "middle", textStyle: { color: TEXT, fontSize: 12 } } });
@@ -160,7 +160,7 @@ function buildOption(type: string, result: QueryResult, opts: { icon?: string } 
   const seriesNames = cols.slice(1);
   const seriesData = (j: number) => rows.map((r) => num(r[j + 1]));
 
-  const catValue = (opts: { area?: boolean; stack?: boolean; step?: boolean; smooth?: boolean; lineType?: boolean }) =>
+  const catValue = (o: { area?: boolean; stack?: boolean; step?: boolean; smooth?: boolean; lineType?: boolean; colorByData?: boolean }) =>
     base({
       tooltip: { trigger: "axis" },
       legend: { top: 0, textStyle: { color: TEXT }, type: "scroll" },
@@ -168,19 +168,22 @@ function buildOption(type: string, result: QueryResult, opts: { icon?: string } 
       xAxis: axisStyle("category", cats),
       yAxis: axisStyle("value"),
       series: seriesNames.map((name, j) => ({
-        name, type: opts.lineType ? "line" : "bar",
+        name, type: o.lineType ? "line" : "bar",
         data: seriesData(j),
-        ...(opts.stack ? { stack: "total" } : {}),
-        ...(opts.area ? { areaStyle: { opacity: 0.25 } } : {}),
-        ...(opts.step ? { step: "middle" } : {}),
-        ...(opts.smooth ? { smooth: true } : {}),
+        // One color per bar (vs one per series) — only meaningful for a single
+        // category series, matching the original hand-coded bar charts.
+        ...(o.colorByData ? { colorBy: "data" } : {}),
+        ...(o.stack ? { stack: "total" } : {}),
+        ...(o.area ? { areaStyle: { opacity: 0.25 } } : {}),
+        ...(o.step ? { step: "middle" } : {}),
+        ...(o.smooth ? { smooth: true } : {}),
       })),
     });
 
   const nameValue = (r: unknown[]) => ({ name: String(r[0] ?? ""), value: num(r[1]) });
 
   switch (type) {
-    case "bar": return catValue({});
+    case "bar": return catValue({ colorByData: opts.colorByCategory && seriesNames.length === 1 });
     case "stacked-bar": return catValue({ stack: true });
     case "line": return catValue({ lineType: true, smooth: true });
     case "timeline": return catValue({ lineType: true, smooth: true });
@@ -305,10 +308,10 @@ export function EChartsBlock({ config, result, height = 280 }: { config: BlockCo
       if (!modRef.current) modRef.current = await import("echarts");
       if (cancelled || !ref.current) return;
       if (!chartRef.current) chartRef.current = modRef.current.init(ref.current, null, { renderer: "canvas" });
-      try { chartRef.current.setOption(buildOption(config.chartType || "bar", result, { icon: config.icon }), true); } catch { /* bad shape */ }
+      try { chartRef.current.setOption(buildOption(config.chartType || "bar", result, { icon: config.icon, colorByCategory: config.colorByCategory }), true); } catch { /* bad shape */ }
     })();
     return () => { cancelled = true; };
-  }, [config.chartType, config.icon, result]);
+  }, [config.chartType, config.icon, config.colorByCategory, result]);
 
   useEffect(() => {
     const el = ref.current;
