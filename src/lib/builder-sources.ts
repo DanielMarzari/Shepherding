@@ -11,6 +11,8 @@ import { TARGET_KIND_LABELS } from "./assignments-types";
 import { getListByName } from "./lists-read";
 import { getShepherdTeamBreakdown } from "./shepherd-team-read";
 import { type AuditFlag, auditMembershipType, findNameIssuesAcrossOrg, listDuplicatePairs } from "./audit-read";
+import { buildRelationshipGraph } from "./graph-read";
+import { getIntakeGraph } from "./intake-graph";
 
 const SHEPHERD_TEAM_LIST = "REFERENCE - Shepherd Team";
 
@@ -68,6 +70,19 @@ const AUDIT_FLAG_META: Record<AuditFlag, { label: string; tone: LinkCardTag["ton
   "stale-pco-record": { label: "stale 6mo+", tone: "low" },
   "no-activity-no-rosters": { label: "no activity", tone: "low" },
 };
+
+/** Relationship graph (cached — decrypts every engaged person's name). */
+const relationshipGraph = cache((orgId: number) => buildRelationshipGraph(orgId));
+
+/** Stable id → label map that disambiguates shared names (the network chart
+ *  keys nodes by their label string, so two "John Smith"s must differ). */
+function labelMap(nodes: Array<{ id: string; name: string }>): Map<string, string> {
+  const nameCount = new Map<string, number>();
+  for (const n of nodes) nameCount.set(n.name, (nameCount.get(n.name) ?? 0) + 1);
+  const out = new Map<string, string>();
+  for (const n of nodes) out.set(n.id, (nameCount.get(n.name) ?? 0) > 1 ? `${n.name} #${n.id.slice(-4)}` : n.name);
+  return out;
+}
 
 /** Shepherd-team assignments grouped by shepherd person id (cached). */
 const assignmentsByShepherd = cache((orgId: number) => {
@@ -263,6 +278,39 @@ const SOURCES: Record<string, SourceFn> = {
         const tags: LinkCardTag[] = r.flags.map((f) => ({ label: AUDIT_FLAG_META[f].label, tone: AUDIT_FLAG_META[f].tone }));
         return [[{ name: r.fullName, pcoId: r.pcoId, initials: r.initials, badge }], ctx, tags];
       }),
+    );
+  },
+
+  // Relationship web (group/team co-membership + oversight) as network edges:
+  // [Source, Target, Weight]. The network chart is fully interactive (drag /
+  // zoom / hover). Capped so the force layout stays responsive.
+  relationship_graph: (orgId) => {
+    const g = relationshipGraph(orgId);
+    const label = labelMap(g.nodes);
+    const MAX = 2500;
+    const edges = g.edges.slice(0, MAX);
+    return {
+      columns: ["Source", "Target", "Weight"],
+      rows: edges.map(([si, ti]) => [label.get(g.nodes[si]?.id ?? "") ?? "?", label.get(g.nodes[ti]?.id ?? "") ?? "?", 1]),
+      truncated: g.edges.length > MAX,
+    };
+  },
+
+  relationship_graph_overview: (orgId) => {
+    const g = relationshipGraph(orgId);
+    const byCls = (c: string) => g.nodes.filter((n) => n.cls === c).length;
+    return R(["People", "Connections", "Shepherded", "Active"], [[g.nodes.length, g.edges.length, byCls("shepherded"), byCls("active")]]);
+  },
+
+  // "Who knows who" from the intake marks. :source = know (active pool) or
+  // present (present pool). Edges are shepherd → the person they marked.
+  intake_graph: (orgId, params) => {
+    const source = (params.source ?? "").trim() === "present" ? "present" : "know";
+    const g = getIntakeGraph(orgId, source);
+    const label = labelMap(g.nodes);
+    return R(
+      ["Source", "Target", "Weight"],
+      g.links.map((l) => [label.get(l.source) ?? "?", label.get(l.target) ?? "?", 1]),
     );
   },
 

@@ -90,6 +90,24 @@ export const SOURCE_META: SourceMeta[] = [
     description: "Junk / weird names across the org as People/PCO cards, tagged by issue.",
     kinds: ["linkcard"],
   },
+  {
+    id: "relationship_graph",
+    label: "Relationship graph (network)",
+    description: "Group/team co-membership + oversight as network edges (Source, Target, Weight). Use with a Network chart. Capped at 2,500 edges. Decrypted names.",
+    kinds: ["chart"],
+  },
+  {
+    id: "relationship_graph_overview",
+    label: "Relationship graph (counts)",
+    description: "One row: People, Connections, Shepherded, Active. Read a column via a stat's Value-column setting.",
+    kinds: ["stat"],
+  },
+  {
+    id: "intake_graph",
+    label: "Who-knows-who (network)",
+    description: "Intake marks as network edges (Source, Target, Weight). :source = know (active) or present. Use with a Network chart. Decrypted names.",
+    kinds: ["chart"],
+  },
 ];
 
 export const sourceMeta = (id: string | undefined): SourceMeta | undefined =>

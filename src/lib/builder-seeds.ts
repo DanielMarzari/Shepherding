@@ -858,6 +858,39 @@ const attendanceSeed: SeedPage = {
   ],
 };
 
+// ── Relationship graph (network) ─────────────────────────────────────
+const relationshipGraphSeed: SeedPage = {
+  slug: "relationship-graph",
+  title: "Relationship graph",
+  description: "Everyone engaged, linked by the groups and teams they share and the oversight between them. Drag nodes, zoom, and hover — the force graph is interactive.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "People on graph", span: 3, source: "relationship_graph_overview", valueColumn: 0, sub: "engaged + leadership" } },
+    { kind: "stat", config: { title: "Connections", span: 3, color: "low", source: "relationship_graph_overview", valueColumn: 1, sub: "shared group/team + oversight" } },
+    { kind: "stat", config: { title: "Shepherded", span: 3, color: "success", source: "relationship_graph_overview", valueColumn: 2, sub: "in a group or team" } },
+    { kind: "stat", config: { title: "Active", span: 3, color: "warning", source: "relationship_graph_overview", valueColumn: 3, sub: "engaging, not yet shepherded" } },
+    { kind: "chart", config: { title: "Relationship web", chartType: "network", span: 12, height: "triple", source: "relationship_graph",
+      sub: "drag / zoom / hover · capped at 2,500 connections for responsiveness" } },
+  ],
+};
+
+// ── Who-knows-who (intake network) ───────────────────────────────────
+const whoKnowsWhoSeed: SeedPage = {
+  slug: "who-knows-who",
+  title: "Who knows who",
+  description: "The intake web — who on the shepherd team said they know each active / present person. Interactive force graph.",
+  revision: 1,
+  blocks: [
+    { kind: "filter", config: { title: "Pool", span: 12, param: "source", filterType: "tabs", defaultValue: "know",
+      sql: `SELECT value, label FROM (
+              SELECT 1 AS o, 'know' AS value, 'Active pool (know)' AS label
+              UNION ALL SELECT 2, 'present', 'Present pool'
+            ) ORDER BY o` } },
+    { kind: "chart", config: { title: "Who knows who", chartType: "network", span: 12, height: "triple", source: "intake_graph",
+      sub: "shepherd → the person they marked · drag / zoom / hover" } },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
@@ -874,6 +907,8 @@ export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [nameAuditSeed.slug]: nameAuditSeed,
   [memberMapSeed.slug]: memberMapSeed,
   [attendanceSeed.slug]: attendanceSeed,
+  [relationshipGraphSeed.slug]: relationshipGraphSeed,
+  [whoKnowsWhoSeed.slug]: whoKnowsWhoSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────
