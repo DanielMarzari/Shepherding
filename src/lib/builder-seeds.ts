@@ -825,6 +825,39 @@ const memberMapSeed: SeedPage = {
   ],
 };
 
+// ── Attendance (weekly trend) ────────────────────────────────────────
+// The SQL-able core of /attendance (imported weekly + per-service counts).
+// The weather / forecast / seasonal / preacher analytics stay on the original.
+const attendanceSeed: SeedPage = {
+  slug: "attendance",
+  title: "Attendance",
+  description: "Weekly worship attendance from the imported rollups — in-person vs online, the congregation mix, and by room. Weather / forecast / preacher analytics stay on the original page.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "In-person · 12mo avg", span: 3, sub: "weekly total",
+      sql: `SELECT ROUND(AVG(in_person_total)) FROM attendance_weekly
+             WHERE org_id=:orgId AND in_person_total IS NOT NULL AND week_date >= date('now','-12 months')` } },
+    { kind: "stat", config: { title: "Peak week", span: 3, color: "success", sub: "highest in-person week, 12mo",
+      sql: `SELECT MAX(in_person_total) FROM attendance_weekly
+             WHERE org_id=:orgId AND week_date >= date('now','-12 months')` } },
+    { kind: "stat", config: { title: "Online live · 12mo avg", span: 3, color: "low", sub: "weekly livestream",
+      sql: `SELECT ROUND(AVG(online_live)) FROM attendance_weekly
+             WHERE org_id=:orgId AND online_live IS NOT NULL AND week_date >= date('now','-12 months')` } },
+    { kind: "stat", config: { title: "Weeks on file", span: 3, color: "low", sub: "imported rollups",
+      sql: `SELECT COUNT(*) FROM attendance_weekly WHERE org_id=:orgId` } },
+    { kind: "chart", config: { title: "Attendance over time", chartType: "line", span: 12,
+      sql: `SELECT week_date AS "Week", in_person_total AS "In person", online_live AS "Online live"
+              FROM attendance_weekly WHERE org_id=:orgId AND week_date >= date('now','-24 months') ORDER BY week_date` } },
+    { kind: "chart", config: { title: "Congregation mix", chartType: "line", span: 6,
+      sql: `SELECT week_date AS "Week", adult_total AS "Adults", student_total AS "Students", kids_total AS "Kids"
+              FROM attendance_weekly WHERE org_id=:orgId AND week_date >= date('now','-24 months') ORDER BY week_date` } },
+    { kind: "chart", config: { title: "By room · last 3 months", chartType: "bar", colorByCategory: true, span: 6,
+      sql: `SELECT room AS "Room", SUM(count) AS "Attendance"
+              FROM attendance_service WHERE org_id=:orgId AND week_date >= date('now','-3 months')
+             GROUP BY room ORDER BY 2 DESC` } },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
@@ -840,6 +873,7 @@ export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [membershipAuditSeed.slug]: membershipAuditSeed,
   [nameAuditSeed.slug]: nameAuditSeed,
   [memberMapSeed.slug]: memberMapSeed,
+  [attendanceSeed.slug]: attendanceSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────

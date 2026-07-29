@@ -24,6 +24,7 @@ Next Campus Planner is intentionally excluded.
 | `/audit/membership-new` | `-new` (slug `audit-membership`) | flagged/scanned stats + membership-type dropdown + issue chips + flagged-people **linkcard** via `membership_audit` (`auditMembershipType`) |
 | `/audit/names-new` | `-new` (slug `audit-names`) | junk/weird-name **linkcard** via `name_audit` (`findNameIssuesAcrossOrg`) |
 | `/map-new` | `-new` (slug `member-map`) | mapped-count stat + engagement donut + **map block** of geocoded members (static; the reach / second-campus tooling stays on `/map`) |
+| `/attendance-new` | `-new` (slug `attendance`) | 4 stats + attendance-over-time + congregation-mix line charts + by-room bar (SQL-able core; weather/forecast/preacher analytics stay on `/attendance`) |
 
 ## 🟡 Quick follow-ups — reuse existing patterns (decrypt sources exist)
 
@@ -35,22 +36,22 @@ Next Campus Planner is intentionally excluded.
 
 | Page | Why |
 |------|-----|
-| `/retention` | cohort decay / seasonality — multi-step retention math |
+| `/retention` | cohort decay / seasonality — multi-step retention math; a monthly cohort-retention heatmap is a feasible builder approximation |
 | `/pipeline` | interest→action funnel timing, cohorted by month |
-| `/attendance` | weather, forecast, seasonal, holiday, preacher analytics |
 | `/lanes/*` | community/serve lane pipelines (partly PII) |
 | `/metrics` | mostly threshold/map/serving-form **settings** (writes) — keep hand-coded; could add a read-only KPI strip |
 
-## 🔵 Interactive / bespoke — need builder map/graph blocks (data is SQL-able)
+## 🔵 Interactive / bespoke — a static builder version is a real downgrade
 
-| Page | Builder path |
-|------|--------------|
-| `/map`, `/care-map`, `/shepherd-map`, `/reaching-the-valley` | the **map block** (points from `geocode_cache` / member geo) — no drag/isochrone |
-| `/graph`, `/intake-graph` | **network** chart from `shepherd_known_people` |
-| `/movement` | **sankey** chart from movement/classification transitions |
+| Page | Why the interactive original wins |
+|------|-----------------------------------|
+| `/reaching-the-valley` | census/reach overlays + LV_CENSUS_META constants — not SQL; map block alone loses the point |
+| `/graph`, `/intake-graph` | force-graph over **all** engaged people (hundreds–thousands of nodes/edges) — an echarts network of that size is unreadable & janky. A *scoped* network (one shepherd's immediate connections) would be a worthwhile new feature, not a static dump |
+| `/movement` | **sankey** chart from movement/classification transitions — feasible if desired |
+| `/care-map`, `/shepherd-map` | drag-to-assign / isochrone — inherently interactive |
 
-These render *static* approximations of the interactive originals; the drag-to-test
-map and live force-graph aren't expressible as builder blocks.
+`/map-new` shows a clean static points map because points-on-a-map survives being
+static; a force-graph does not. Recommend keeping the graph/reach pages interactive.
 
 ## ⚪ Keep hand-coded — not dashboards (OAuth / config / write / uploads)
 
