@@ -13,6 +13,8 @@ import { getShepherdTeamBreakdown } from "./shepherd-team-read";
 import { type AuditFlag, auditMembershipType, findNameIssuesAcrossOrg, listDuplicatePairs } from "./audit-read";
 import { buildRelationshipGraph } from "./graph-read";
 import { getIntakeGraph } from "./intake-graph";
+import { getRetention } from "./retention-read";
+import { getGroupPipeline, getGroupStagePoints } from "./pipeline-read";
 
 const SHEPHERD_TEAM_LIST = "REFERENCE - Shepherd Team";
 
@@ -73,6 +75,9 @@ const AUDIT_FLAG_META: Record<AuditFlag, { label: string; tone: LinkCardTag["ton
 
 /** Relationship graph (cached — decrypts every engaged person's name). */
 const relationshipGraph = cache((orgId: number) => buildRelationshipGraph(orgId));
+/** Retention summary + group pipeline (cached; each drives several blocks). */
+const retention = cache((orgId: number) => getRetention(orgId));
+const groupPipeline = cache((orgId: number) => getGroupPipeline(orgId));
 
 /** Stable id → label map that disambiguates shared names (the network chart
  *  keys nodes by their label string, so two "John Smith"s must differ). */
@@ -313,6 +318,41 @@ const SOURCES: Record<string, SourceFn> = {
       g.links.map((l) => [label.get(l.source) ?? "?", label.get(l.target) ?? "?", 1]),
     );
   },
+
+  // ── Retention (wraps getRetention; each block reads the cached summary) ──
+  retention_overview: (orgId) => {
+    const r = retention(orgId);
+    const pct = r.overallJoined ? Math.round((100 * r.overallRetained) / r.overallJoined) : 0;
+    return R(["Retention %", "Joined", "Retained", "Annual decay %"], [[pct, r.overallJoined, r.overallRetained, r.annualDecayPct ?? 0]]);
+  },
+  retention_by_year: (orgId) => R(["Join year", "Retention %"], retention(orgId).byYear.filter((p) => !p.pending).map((p) => [p.label, p.pct])),
+  retention_seasonality: (orgId) => R(["Month", "Avg retention %"], retention(orgId).seasonality.map((m) => [m.label, m.avg5 ?? m.pct])),
+  // Heatmap: x = year measured, y = join cohort, value = % still retained.
+  retention_decay: (orgId) => {
+    const rows: unknown[][] = [];
+    for (const c of retention(orgId).decay) for (const p of c.points) rows.push([String(p.year), c.label, p.pct]);
+    return R(["Measured", "Cohort", "Retained %"], rows);
+  },
+
+  // ── Group pipeline (wraps getGroupPipeline / getGroupStagePoints) ──
+  pipeline_overview: (orgId) => {
+    const g = groupPipeline(orgId);
+    return R(["People", "Apply→join median (d)", "Join→attend median (d)", "Overall median (d)"],
+      [[g.overall.count, g.stages.applyToJoin.medianDays ?? 0, g.stages.joinToAttend.medianDays ?? 0, g.overall.medianDays ?? 0]]);
+  },
+  pipeline_by_type: (orgId) => R(
+    ["Group type", "People", "Median days", "P75 days"],
+    groupPipeline(orgId).byGroupType.map((d) => [d.name, d.stats.count, d.stats.medianDays ?? 0, d.stats.p75Days ?? 0]),
+  ),
+  pipeline_history: (orgId) => R(
+    ["Month", "Median days", "People"],
+    groupPipeline(orgId).history.map((b) => [b.month, b.stats.medianDays ?? 0, b.stats.count]),
+  ),
+  // Bubble: x = apply→join days, y = join→attend days, size = total.
+  pipeline_stage_points: (orgId) => R(
+    ["Apply→join (d)", "Join→attend (d)", "Total (d)"],
+    getGroupStagePoints(orgId).map((p) => [p.stage1, p.stage2, p.total]),
+  ),
 
   staff_directory: (orgId) => {
     const rows = getDb()

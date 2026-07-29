@@ -891,6 +891,84 @@ const whoKnowsWhoSeed: SeedPage = {
   ],
 };
 
+// ── Email dashboard (Constant Contact) ───────────────────────────────
+// All SQL against the synced cc_* tables — no OAuth needed at view time.
+const emailDashboardSeed: SeedPage = {
+  slug: "email-dashboard",
+  title: "Email dashboard",
+  description: "Constant Contact at a glance — audience size, send performance over time, and per-campaign open / click / bounce rates. From the synced data.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Contacts", span: 3, sub: "in Constant Contact",
+      sql: `SELECT COUNT(*) FROM cc_contacts WHERE org_id=:orgId` } },
+    { kind: "stat", config: { title: "Campaigns sent", span: 3, color: "low", sub: "with send stats",
+      sql: `SELECT COUNT(*) FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
+    { kind: "stat", config: { title: "Avg open %", span: 3, color: "success", sub: "opens ÷ sends, all campaigns",
+      sql: `SELECT ROUND(100.0*SUM(stat_opens)/NULLIF(SUM(stat_sends),0),1) FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
+    { kind: "stat", config: { title: "Avg click %", span: 3, color: "warning", sub: "clicks ÷ sends",
+      sql: `SELECT ROUND(100.0*SUM(stat_clicks)/NULLIF(SUM(stat_sends),0),1) FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
+    { kind: "chart", config: { title: "Open / Click % over time", chartType: "line", span: 8,
+      sql: `SELECT substr(last_sent_date,1,7) AS "Month",
+              ROUND(100.0*SUM(stat_opens)/NULLIF(SUM(stat_sends),0),1) AS "Open %",
+              ROUND(100.0*SUM(stat_clicks)/NULLIF(SUM(stat_sends),0),1) AS "Click %"
+              FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0 AND last_sent_date IS NOT NULL
+             GROUP BY 1 ORDER BY 1` } },
+    { kind: "chart", config: { title: "New contacts by month", chartType: "bar", span: 4,
+      sql: `SELECT substr(created_at,1,7) AS "Month", COUNT(*) AS "New"
+              FROM cc_contacts WHERE org_id=:orgId AND created_at IS NOT NULL AND created_at >= date('now','-24 months')
+             GROUP BY 1 ORDER BY 1` } },
+    { kind: "table", config: { title: "Campaign performance", span: 12, density: "normal", sortable: true, limit: 100,
+      columnColors: { Status: "low", Sent: "low" },
+      columnThresholds: { "Open %": { base: 35, band: 10 }, "Click %": { base: 5, band: 3 }, "Bounce %": { base: 2, band: 1, invert: true } },
+      sub: "most recent first · open/click green above target, bounce red when high",
+      sql: `SELECT name AS "Campaign", current_status AS "Status", substr(last_sent_date,1,10) AS "Sent",
+                   stat_sends AS "Sends",
+                   ROUND(100.0*stat_opens/NULLIF(stat_sends,0),1) AS "Open %",
+                   ROUND(100.0*stat_clicks/NULLIF(stat_sends,0),1) AS "Click %",
+                   ROUND(100.0*stat_bounces/NULLIF(stat_sends,0),1) AS "Bounce %"
+              FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0
+             ORDER BY last_sent_date DESC LIMIT 100` } },
+  ],
+};
+
+// ── Retention ────────────────────────────────────────────────────────
+const retentionSeed: SeedPage = {
+  slug: "retention",
+  title: "Retention",
+  description: "How well engaged people stick — retention by join year, the calendar-month seasonality, and per-cohort decay. Wraps the same math as the original page.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Retention", span: 3, format: "number", source: "retention_overview", valueColumn: 0, sub: "% of settled cohorts still engaged" } },
+    { kind: "stat", config: { title: "Joined", span: 3, color: "low", source: "retention_overview", valueColumn: 1, sub: "settled cohorts" } },
+    { kind: "stat", config: { title: "Retained", span: 3, color: "success", source: "retention_overview", valueColumn: 2, sub: "still engaged" } },
+    { kind: "stat", config: { title: "Annual decay", span: 3, color: "warning", source: "retention_overview", valueColumn: 3, sub: "% lost per year" } },
+    { kind: "chart", config: { title: "Retention by join year", chartType: "bar", colorByCategory: true, span: 6, source: "retention_by_year" } },
+    { kind: "chart", config: { title: "Retention by month joined", chartType: "bar", colorByCategory: true, span: 6, source: "retention_seasonality" } },
+    { kind: "chart", config: { title: "Cohort decay", chartType: "heatmap", span: 12, height: "double", source: "retention_decay",
+      sub: "each join-year cohort (row) and how much of it is still engaged as of each later year (column)" } },
+  ],
+};
+
+// ── Group pipeline ───────────────────────────────────────────────────
+const pipelineSeed: SeedPage = {
+  slug: "group-pipeline",
+  title: "Group pipeline",
+  description: "How long people take to move from applying to a group, to joining, to showing up — overall, by group type, over time, and where the time goes. (The serving pipeline stays on the original page.)",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "People", span: 3, source: "pipeline_overview", valueColumn: 0, sub: "with a measurable journey" } },
+    { kind: "stat", config: { title: "Apply → join", span: 3, color: "warning", source: "pipeline_overview", valueColumn: 1, sub: "median days" } },
+    { kind: "stat", config: { title: "Join → attend", span: 3, color: "warning", source: "pipeline_overview", valueColumn: 2, sub: "median days" } },
+    { kind: "stat", config: { title: "Overall", span: 3, color: "low", source: "pipeline_overview", valueColumn: 3, sub: "median days end-to-end" } },
+    { kind: "chart", config: { title: "Median days over time", chartType: "line", span: 8, source: "pipeline_history" } },
+    { kind: "chart", config: { title: "Where the time goes", chartType: "bubble", span: 4, source: "pipeline_stage_points",
+      sub: "apply→join (x) vs join→attend (y) days" } },
+    { kind: "table", config: { title: "By group type", span: 12, density: "normal", sortable: true, source: "pipeline_by_type",
+      columnThresholds: { "Median days": { base: 30, band: 20, invert: true }, "P75 days": { base: 60, band: 30, invert: true } },
+      sub: "faster (fewer days) is greener" } },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
@@ -909,6 +987,9 @@ export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [attendanceSeed.slug]: attendanceSeed,
   [relationshipGraphSeed.slug]: relationshipGraphSeed,
   [whoKnowsWhoSeed.slug]: whoKnowsWhoSeed,
+  [emailDashboardSeed.slug]: emailDashboardSeed,
+  [retentionSeed.slug]: retentionSeed,
+  [pipelineSeed.slug]: pipelineSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────

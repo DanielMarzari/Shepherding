@@ -25,33 +25,38 @@ Next Campus Planner is intentionally excluded.
 | `/audit/names-new` | `-new` (slug `audit-names`) | junk/weird-name **linkcard** via `name_audit` (`findNameIssuesAcrossOrg`) |
 | `/map-new` | `-new` (slug `member-map`) | mapped-count stat + engagement donut + **map block** of geocoded members (static; the reach / second-campus tooling stays on `/map`) |
 | `/attendance-new` | `-new` (slug `attendance`) | 4 stats + attendance-over-time + congregation-mix line charts + by-room bar (SQL-able core; weather/forecast/preacher analytics stay on `/attendance`) |
+| `/graph-new` | `-new` (slug `relationship-graph`) | overview stats + **interactive Network chart** (`relationship_graph`, capped 2,500 edges, names disambiguated) |
+| `/intake-graph-new` | `-new` (slug `who-knows-who`) | know/present tabs + **interactive Network chart** (`intake_graph`) |
+| `/constant-contact/dashboard-new` | `-new` (slug `email-dashboard`) | audience + open/click stats, open/click-%-over-time line, new-contacts bar, campaign-performance table (banded) — all SQL over `cc_*` |
+| `/retention-new` | `-new` (slug `retention`) | retention stats + by-join-year + month-seasonality bars + cohort-decay **heatmap** (wraps `getRetention`) |
+| `/pipeline-new` | `-new` (slug `group-pipeline`) | apply→join→attend median stats + over-time line + "where the time goes" **bubble** + by-type table (wraps `getGroupPipeline`; serving pipeline stays on `/pipeline`) |
+
+Note: the ECharts network chart and the Leaflet map block **are** interactive
+(drag / zoom / hover / pan / click) — the earlier "static" framing was wrong.
+The only genuinely-interactive-only pieces are the bespoke tools below.
 
 ## 🟡 Quick follow-ups — reuse existing patterns (decrypt sources exist)
 
 | Page | Plan |
 |------|------|
 | `/care-queue` | **original is mock data** (`@/lib/mock`) — needs real care logic first (`listCareCandidates` exists in care-read.ts) |
+| `/reaching-the-valley` | member map + a small reach-context source (LV_CENSUS_META numbers) — feasible, just not built yet |
 
-## 🟠 Complex analytics — need their TS logic ported to SQL/sources (bigger)
+## 🟠 Complex analytics — not yet converted
 
 | Page | Why |
 |------|-----|
-| `/retention` | cohort decay / seasonality — multi-step retention math; a monthly cohort-retention heatmap is a feasible builder approximation |
-| `/pipeline` | interest→action funnel timing, cohorted by month |
+| `/pipeline` (serving side) | the serving pipeline needs a `:serviceType` param; only the group pipeline is converted so far |
 | `/lanes/*` | community/serve lane pipelines (partly PII) |
 | `/metrics` | mostly threshold/map/serving-form **settings** (writes) — keep hand-coded; could add a read-only KPI strip |
+| `/movement` | **sankey** from movement/classification transitions — feasible if desired |
 
-## 🔵 Interactive / bespoke — a static builder version is a real downgrade
+## 🚫 Intentionally excluded / bespoke-interaction-only
 
-| Page | Why the interactive original wins |
-|------|-----------------------------------|
-| `/reaching-the-valley` | census/reach overlays + LV_CENSUS_META constants — not SQL; map block alone loses the point |
-| `/graph`, `/intake-graph` | force-graph over **all** engaged people (hundreds–thousands of nodes/edges) — an echarts network of that size is unreadable & janky. A *scoped* network (one shepherd's immediate connections) would be a worthwhile new feature, not a static dump |
-| `/movement` | **sankey** chart from movement/classification transitions — feasible if desired |
-| `/care-map`, `/shepherd-map` | drag-to-assign / isochrone — inherently interactive |
-
-`/map-new` shows a clean static points map because points-on-a-map survives being
-static; a force-graph does not. Recommend keeping the graph/reach pages interactive.
+| Page | Why |
+|------|-----|
+| `/next-campus-planner` | **excluded** (Dan, confirmed 2026-07-29) — flagship draw-to-test / isochrone / LVPC tool; a builder page can't host it |
+| `/care-map`, `/shepherd-map` | drag-to-assign / isochrone editing — inherently interactive write tools |
 
 ## ⚪ Keep hand-coded — not dashboards (OAuth / config / write / uploads)
 

@@ -108,6 +108,54 @@ export const SOURCE_META: SourceMeta[] = [
     description: "Intake marks as network edges (Source, Target, Weight). :source = know (active) or present. Use with a Network chart. Decrypted names.",
     kinds: ["chart"],
   },
+  {
+    id: "retention_overview",
+    label: "Retention (counts)",
+    description: "One row: Retention %, Joined, Retained, Annual decay %. Read a column via a stat's Value-column setting.",
+    kinds: ["stat"],
+  },
+  {
+    id: "retention_by_year",
+    label: "Retention by join year",
+    description: "Join year → retention % (settled cohorts). Use with a bar or line chart.",
+    kinds: ["chart"],
+  },
+  {
+    id: "retention_seasonality",
+    label: "Retention by month-of-year",
+    description: "Calendar month → average retention %. Use with a bar chart.",
+    kinds: ["chart"],
+  },
+  {
+    id: "retention_decay",
+    label: "Cohort decay (heatmap)",
+    description: "Measured-year × join-cohort → % still retained. Use with a Heatmap chart.",
+    kinds: ["chart"],
+  },
+  {
+    id: "pipeline_overview",
+    label: "Group pipeline (counts)",
+    description: "One row: People, Apply→join median days, Join→attend median days, Overall median. Read a column via a stat's Value-column setting.",
+    kinds: ["stat"],
+  },
+  {
+    id: "pipeline_by_type",
+    label: "Group pipeline by type",
+    description: "Group type → People, Median days, P75 days. Use with a table.",
+    kinds: ["table"],
+  },
+  {
+    id: "pipeline_history",
+    label: "Group pipeline over time",
+    description: "Month → median apply→attend days + people. Use with a line chart.",
+    kinds: ["chart"],
+  },
+  {
+    id: "pipeline_stage_points",
+    label: "Group pipeline stage points (bubble)",
+    description: "Apply→join days × Join→attend days × total, one dot per person/group. Use with a Bubble chart.",
+    kinds: ["chart"],
+  },
 ];
 
 export const sourceMeta = (id: string | undefined): SourceMeta | undefined =>
