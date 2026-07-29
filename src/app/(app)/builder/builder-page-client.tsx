@@ -57,7 +57,7 @@ const chartHint = (id: string) => CHART_TYPES.flatMap((g) => g.items).find((i) =
 /** Whether a block kind (with its current config) is powered by a SQL query. */
 function blockHasSql(kind: BlockKind, cfg: BlockConfig): boolean {
   if (kind === "text" || kind === "divider" || kind === "embed" || kind === "pagelist" || kind === "group") return false;
-  if (kind === "filter") { const t = cfg.filterType ?? "dropdown"; return t === "dropdown" || t === "chips"; }
+  if (kind === "filter") { const t = cfg.filterType ?? "dropdown"; return t === "dropdown" || t === "chips" || t === "tabs"; }
   return true;
 }
 
@@ -165,7 +165,7 @@ function ViewMode({ page, blocks, isAdmin, pages, onEdit }: { page: PageInfo; bl
   const [results, setResults] = useState<Record<number, QueryResult | null>>(() => Object.fromEntries(blocks.map((b) => [b.id, b.result])));
   const [loadingIds, setLoadingIds] = useState<Set<number>>(new Set());
 
-  const deps = useMemo(() => blocks.map((b) => ({ id: b.id, sql: b.config.sql ?? "", params: paramsIn(b.config.sql ?? "") })), [blocks]);
+  const deps = useMemo(() => blocks.map((b) => ({ id: b.id, sql: b.config.sql ?? "", source: b.config.source, params: paramsIn(b.config.sql ?? "") })), [blocks]);
   const filterByParam = useMemo(() => {
     const m = new Map<string, ClientBlock>();
     for (const b of blocks) if (b.kind === "filter" && b.config.param) m.set(b.config.param, b);
@@ -176,9 +176,11 @@ function ViewMode({ page, blocks, isAdmin, pages, onEdit }: { page: PageInfo; bl
     const next = { ...params, [name]: value };
     setParams(next);
     const targets = filterByParam.get(name)?.config.targets ?? [];
+    // Source-backed blocks receive every param (they use what they need), so
+    // any filter change re-runs them; SQL blocks re-run when they reference :name.
     const affected = targets.length
-      ? deps.filter((d) => targets.includes(d.id) && d.sql.trim())
-      : deps.filter((d) => d.sql.trim() && d.params.includes(name));
+      ? deps.filter((d) => targets.includes(d.id) && (d.sql.trim() || d.source))
+      : deps.filter((d) => (d.sql.trim() && d.params.includes(name)) || !!d.source);
     if (!affected.length) return;
     setLoadingIds((s) => { const n = new Set(s); affected.forEach((a) => n.add(a.id)); return n; });
     affected.forEach(async (a) => {
@@ -211,7 +213,7 @@ function ViewMode({ page, blocks, isAdmin, pages, onEdit }: { page: PageInfo; bl
               return <div key={b.id} className={`py-1 ${spanClass(12)}`}><BlockView kind="divider" config={b.config} result={null} /></div>;
             }
             return (
-              <div key={b.id} className={`relative rounded-xl border border-border-soft bg-bg-elev-2/40 p-5 ${spanClass(b.config.span)}`}>
+              <div key={b.id} className={`relative rounded-xl border border-border-soft bg-bg-elev p-5 ${spanClass(b.config.span)}`}>
                 {loadingIds.has(b.id) && (
                   <div className="absolute inset-0 rounded-xl bg-bg/40 backdrop-blur-[1px] flex items-center justify-center text-[11px] text-muted z-10">updating…</div>
                 )}
@@ -376,6 +378,7 @@ function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
           <select value={cfg.filterType ?? "dropdown"} onChange={(e) => set({ filterType: e.target.value as BlockConfig["filterType"] })} className={`${SELECT} w-full`}>
             <option value="dropdown">Dropdown</option>
             <option value="chips">Chips</option>
+            <option value="tabs">Tabs</option>
             <option value="date">Date</option>
             <option value="text">Text</option>
           </select>
@@ -417,6 +420,9 @@ function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
           <option value="ratio">Show as: ratio (1 : x) — normalizes every number the query returns</option>
           <option value="list">Show as: list (a · b · c) — the query&apos;s numbers, raw</option>
         </select>
+      )}
+      {kind === "stat" && (cfg.format ?? "number") === "number" && (
+        <input value={cfg.secondaryLabel ?? ""} onChange={(e) => set({ secondaryLabel: e.target.value || undefined })} placeholder={`"+N" label — uses the query's 2nd column (e.g. "kids")`} className={INPUT_SM} />
       )}
       {(kind === "stat" || kind === "kpi") && (
         <input value={cfg.sub ?? ""} onChange={(e) => set({ sub: e.target.value })} placeholder="Sub-label (optional)" className={INPUT_SM} />
@@ -532,7 +538,7 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
   if (!editing) {
     return (
       <div onClick={() => setEditing(true)} title="Click to edit"
-        className={`group relative rounded-xl border border-border-soft bg-bg-elev-2/40 p-5 cursor-pointer hover:border-accent transition-colors ${spanClass(cfg.span)}`}>
+        className={`group relative rounded-xl border border-border-soft bg-bg-elev p-5 cursor-pointer hover:border-accent transition-colors ${spanClass(cfg.span)}`}>
         <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <span className="text-[10px] text-accent px-1.5 py-0.5 rounded bg-accent/10">edit</span>
           {ctrl}
@@ -636,6 +642,9 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
               <option value="condensed">Condensed</option>
               <option value="normal">Normal (spacious)</option>
             </select>
+            <label className="flex items-center gap-1 text-subtle cursor-pointer"><input type="checkbox" checked={!!cfg.sortable} onChange={(e) => set({ sortable: e.target.checked })} />Sortable</label>
+            <label className="text-subtle">Max rows</label>
+            <input type="number" min={1} value={cfg.limit ?? ""} placeholder="all" onChange={(e) => set({ limit: e.target.value === "" ? undefined : Math.max(1, Number(e.target.value)) })} className="w-16 bg-bg border border-border-soft rounded px-1.5 py-1 text-xs" />
           </>
         )}
         {COLORABLE.has(kind) && (

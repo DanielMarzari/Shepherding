@@ -549,12 +549,25 @@ const TEAMS_BASE = `WITH cutoffs AS (
         ELSE 'steady' END AS state
     FROM derived
   )`;
+// Distinct people on a confirmed plan, last 12 months, grouped by month —
+// the FROM/WHERE tail shared by the demographic serving-trend charts. Each
+// chart supplies its own `substr(pl.sort_date,1,7) AS "Month"` + per-band
+// COUNT(DISTINCT …) projections, mirroring AttendanceTrendCard (teams scope).
+const TEAMS_SERVE_TAIL = `
+    FROM pco_plan_people pp
+    JOIN pco_plans pl ON pl.org_id=pp.org_id AND pl.pco_id=pp.plan_id
+    JOIN pco_people p ON p.org_id=pp.org_id AND p.pco_id=pp.person_id
+   WHERE pp.org_id=:orgId AND pp.person_id != '' AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
+     AND pl.sort_date >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-12 months')
+   GROUP BY 1 ORDER BY 1`;
+// Reused age expression (whole years, valid birth years only).
+const SERVE_AGE = `(CAST(strftime('%Y','now') AS INTEGER) - p.birth_year)`;
 
 const teamsSeed: SeedPage = {
   slug: "teams",
   title: "Teams",
   description: "Active serving teams, their rosters and health, and the demographics of the people who serve.",
-  revision: 1,
+  revision: 2,
   blocks: [
     { kind: "stat", config: { title: "Roster size", span: 2, sub: "unique adults on team rosters",
       sql: `SELECT COUNT(DISTINCT m.person_id) ${TEAMS_ROSTER} AND COALESCE(p.is_minor,0)=0` } },
@@ -593,13 +606,29 @@ const teamsSeed: SeedPage = {
       sql: `${TEAMS_SP} SELECT CASE WHEN lower(coalesce(p.gender,'')) IN ('m','male') THEN 'Male' WHEN lower(coalesce(p.gender,'')) IN ('f','female') THEN 'Female' ELSE 'Unknown' END AS "Gender", COUNT(*) AS "People" FROM pco_people p JOIN sp ON sp.person_id=p.pco_id WHERE p.org_id=:orgId GROUP BY 1` } },
     { kind: "chart", config: { title: "Parents", chartType: "bar", colorByCategory: true, span: 3,
       sql: `${TEAMS_SP} SELECT CASE WHEN p.is_parent=1 THEN 'Parent' ELSE 'No kids' END AS "Household", COUNT(*) AS "People" FROM pco_people p JOIN sp ON sp.person_id=p.pco_id WHERE p.org_id=:orgId GROUP BY 1` } },
-    { kind: "divider", config: { title: "Serving trend", span: 12 } },
+    { kind: "divider", config: { title: "Serving trends across demographics", span: 12, sub: "distinct people on a confirmed plan per month · last 12 months" } },
     { kind: "chart", config: { title: "People serving", chartType: "line", span: 12,
-      sql: `SELECT substr(pl.sort_date,1,7) AS "Month", COUNT(DISTINCT pp.person_id) AS "Served"
-              FROM pco_plan_people pp JOIN pco_plans pl ON pl.org_id=pp.org_id AND pl.pco_id=pp.plan_id
-             WHERE pp.org_id=:orgId AND pp.person_id != '' AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
-               AND pl.sort_date >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-12 months')
-             GROUP BY 1 ORDER BY 1` } },
+      sql: `SELECT substr(pl.sort_date,1,7) AS "Month", COUNT(DISTINCT pp.person_id) AS "Served" ${TEAMS_SERVE_TAIL}` } },
+    { kind: "chart", config: { title: "Serving by age", chartType: "line", span: 4,
+      sql: `SELECT substr(pl.sort_date,1,7) AS "Month",
+              COUNT(DISTINCT CASE WHEN p.birth_year>=1900 AND ${SERVE_AGE} < 30 THEN pp.person_id END) AS "Under 30",
+              COUNT(DISTINCT CASE WHEN p.birth_year>=1900 AND ${SERVE_AGE} BETWEEN 30 AND 49 THEN pp.person_id END) AS "30–49",
+              COUNT(DISTINCT CASE WHEN p.birth_year>=1900 AND ${SERVE_AGE} BETWEEN 50 AND 64 THEN pp.person_id END) AS "50–64",
+              COUNT(DISTINCT CASE WHEN p.birth_year>=1900 AND ${SERVE_AGE} >= 65 THEN pp.person_id END) AS "65+",
+              COUNT(DISTINCT CASE WHEN p.birth_year IS NULL OR p.birth_year<1900 THEN pp.person_id END) AS "Unknown"
+              ${TEAMS_SERVE_TAIL}` } },
+    { kind: "chart", config: { title: "Serving by gender", chartType: "line", span: 4,
+      sql: `SELECT substr(pl.sort_date,1,7) AS "Month",
+              COUNT(DISTINCT CASE WHEN lower(coalesce(p.gender,'')) IN ('m','male') THEN pp.person_id END) AS "Male",
+              COUNT(DISTINCT CASE WHEN lower(coalesce(p.gender,'')) IN ('f','female') THEN pp.person_id END) AS "Female",
+              COUNT(DISTINCT CASE WHEN lower(coalesce(p.gender,'')) NOT IN ('m','male','f','female') THEN pp.person_id END) AS "Unknown"
+              ${TEAMS_SERVE_TAIL}` } },
+    { kind: "chart", config: { title: "Serving by parent status", chartType: "line", span: 4,
+      sql: `SELECT substr(pl.sort_date,1,7) AS "Month",
+              COUNT(DISTINCT CASE WHEN p.is_parent=1 AND coalesce(p.is_minor,0)=0 THEN pp.person_id END) AS "Has kids",
+              COUNT(DISTINCT CASE WHEN coalesce(p.is_parent,0)=0 AND coalesce(p.is_minor,0)=0 THEN pp.person_id END) AS "No kids",
+              COUNT(DISTINCT CASE WHEN p.is_minor=1 THEN pp.person_id END) AS "Minor"
+              ${TEAMS_SERVE_TAIL}` } },
   ],
 };
 
@@ -610,21 +639,24 @@ const homeSeed: SeedPage = {
   slug: "home",
   title: "Home",
   description: "Who's drifting, who's ready for a step forward, and how the flock is moving.",
-  revision: 1,
+  revision: 2,
   blocks: [
-    { kind: "stat", config: { title: "Engaged people", span: 3, sub: "adults, shepherded / active / present",
+    { kind: "stat", config: { title: "Engaged people", span: 4, sub: "adults, shepherded / active / present",
       sql: `SELECT COUNT(*) FROM person_activity pa JOIN pco_people p ON p.org_id=pa.org_id AND p.pco_id=pa.person_id
              WHERE pa.org_id=:orgId AND pa.classification IN ('shepherded','active','present') AND p.is_minor=0` } },
-    { kind: "stat", config: { title: "Shepherded", span: 3, color: "success", sub: "in a group or team",
+    { kind: "stat", config: { title: "Shepherded", span: 2, color: "success", sub: "in a group/team",
       sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='shepherded'` } },
-    { kind: "stat", config: { title: "Active", span: 3, color: "warning", sub: "engaging, not yet shepherded",
+    { kind: "stat", config: { title: "Active", span: 2, color: "warning", sub: "not yet shepherded",
       sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='active'` } },
-    { kind: "stat", config: { title: "Present", span: 3, color: "low", sub: "on the books, no measured engagement",
+    { kind: "stat", config: { title: "Present", span: 2, color: "low", sub: "no engagement",
       sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='present'` } },
-    { kind: "table", config: { title: "Falling through the cracks", span: 8, density: "normal", source: "falling_through_cracks",
+    { kind: "stat", config: { title: "Unshepherded", span: 2, color: "warning", sub: "active + present adults",
+      sql: `SELECT COUNT(*) FROM person_activity pa JOIN pco_people p ON p.org_id=pa.org_id AND p.pco_id=pa.person_id
+             WHERE pa.org_id=:orgId AND pa.classification IN ('active','present') AND p.is_minor=0` } },
+    { kind: "table", config: { title: "Falling through the cracks", span: 8, density: "normal", source: "falling_through_cracks", limit: 8,
       columnColors: { Context: "low", "Last touch": "low" },
       columnThresholds: { "Days silent": { base: 200, band: 165, invert: true } },
-      sub: "on a roster but lapsed past your thresholds" } },
+      sub: "on a roster but lapsed past your thresholds · top 8" } },
     { kind: "chart", config: { title: "People mix", chartType: "donut", span: 4,
       sql: `SELECT classification AS "Mix", COUNT(*) AS "People" FROM person_activity
              WHERE org_id=:orgId AND classification IN ('shepherded','active','present')
@@ -643,15 +675,22 @@ const peopleSeed: SeedPage = {
   slug: "people",
   title: "People",
   description: "The directory — everyone on file, their engagement classification, and where they're plugged in.",
-  revision: 1,
+  revision: 2,
   blocks: [
     { kind: "stat", config: { title: "Shepherded", span: 3, color: "success", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='shepherded'` } },
     { kind: "stat", config: { title: "Active", span: 3, color: "warning", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='active'` } },
     { kind: "stat", config: { title: "Present", span: 3, color: "low", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='present'` } },
     { kind: "stat", config: { title: "Inactive", span: 3, color: "low", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='inactive'` } },
-    { kind: "table", config: { title: "Directory", span: 12, density: "normal", source: "people_directory",
+    { kind: "filter", config: { title: "Show", span: 12, param: "classification", filterType: "tabs",
+      sql: `SELECT value, label FROM (
+              SELECT 1 AS o, 'shepherded' AS value, 'Shepherded' AS label
+              UNION ALL SELECT 2, 'active', 'Active'
+              UNION ALL SELECT 3, 'present', 'Present'
+              UNION ALL SELECT 4, 'inactive', 'Inactive'
+            ) ORDER BY o` } },
+    { kind: "table", config: { title: "Directory", span: 12, density: "normal", source: "people_directory", sortable: true, limit: 200,
       columnColors: { Membership: "low", Groups: "low", Teams: "low" },
-      sub: "adults on file · sorted by engagement · first 1,000" } },
+      sub: "adults on file · sorted by engagement · first 1,000 (All = everyone engaged)" } },
   ],
 };
 

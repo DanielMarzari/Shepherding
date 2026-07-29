@@ -43,6 +43,15 @@ export function FilterControl({
         </div>
       )}
 
+      {ft === "tabs" && (
+        <div className="flex flex-wrap items-end gap-x-1 border-b border-border-soft">
+          <Tab active={value === ""} onClick={() => onChange("")}>All</Tab>
+          {options.map((o) => (
+            <Tab key={o.value} active={value === o.value} onClick={() => onChange(o.value)}>{o.label}</Tab>
+          ))}
+        </div>
+      )}
+
       {ft === "date" && (
         <input type="date" value={value} onChange={(e) => onChange(e.target.value)} className={`${input} w-full`} />
       )}
@@ -51,6 +60,20 @@ export function FilterControl({
         <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder="Type to filter…" className={`${input} w-full`} />
       )}
     </div>
+  );
+}
+
+function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-3 py-1.5 text-sm -mb-px border-b-2 cursor-pointer transition-colors ${
+        active ? "border-accent text-fg font-medium" : "border-transparent text-muted hover:text-fg"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 

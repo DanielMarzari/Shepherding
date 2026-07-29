@@ -182,7 +182,7 @@ export interface BlockConfig {
   limit?: number;
   /** Filter block: the parameter name injected into other queries as :name. */
   param?: string;
-  filterType?: "dropdown" | "chips" | "date" | "text";
+  filterType?: "dropdown" | "chips" | "tabs" | "date" | "text";
   defaultValue?: string;
   /** Embed block: image vs iframe. */
   mode?: "image" | "iframe";
@@ -208,6 +208,10 @@ export interface BlockConfig {
   format?: "number" | "ratio" | "list";
   /** For ratio/list stats: a preset color per segment (e.g. green joined · red left). */
   segmentColors?: string[];
+  /** Stat: label for a secondary "+N" value (the query's 2nd column), e.g. "kids". */
+  secondaryLabel?: string;
+  /** Table: click column headers to sort. */
+  sortable?: boolean;
   /** Per-table-column preset text color, keyed by column name (a "parts" override). */
   columnColors?: Record<string, string>;
   /** Per-table-column threshold coloring, keyed by column name: cells at/above

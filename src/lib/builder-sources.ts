@@ -38,7 +38,11 @@ const SOURCES: Record<string, SourceFn> = {
     return R(["Shepherd", "Flock", "Units led"], top.map((s) => [s.fullName, s.flockSize, s.unitsLed]));
   },
 
-  people_directory: (orgId) => {
+  people_directory: (orgId, params) => {
+    // Optional :classification filter (from a tabs/dropdown filter). Empty =
+    // everyone except inactive; a value = exactly that classification.
+    const cls = (params.classification ?? "").trim().toLowerCase();
+    const clsArg = ["shepherded", "active", "present", "inactive"].includes(cls) ? cls : "";
     const rows = getDb()
       .prepare(
         `SELECT p.enc_pii AS enc,
@@ -49,13 +53,14 @@ const SOURCES: Record<string, SourceFn> = {
            FROM pco_people p
            LEFT JOIN person_activity pa ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
           WHERE p.org_id = ? AND p.is_minor = 0
-            AND lower(coalesce(p.status,'')) != 'inactive' AND p.inactivated_at IS NULL
             AND (p.membership_type IS NULL OR lower(p.membership_type) NOT LIKE '%system use%')
+            AND ( (? = '' AND COALESCE(pa.classification,'inactive') != 'inactive')
+                  OR COALESCE(pa.classification,'inactive') = ? )
           ORDER BY CASE COALESCE(pa.classification,'inactive')
                      WHEN 'shepherded' THEN 0 WHEN 'active' THEN 1 WHEN 'present' THEN 2 ELSE 3 END
           LIMIT 1000`,
       )
-      .all(orgId) as Array<{ enc: string | null; cls: string; mt: string | null; gc: number; tc: number }>;
+      .all(orgId, clsArg, clsArg) as Array<{ enc: string | null; cls: string; mt: string | null; gc: number; tc: number }>;
     return R(
       ["Name", "Classification", "Membership", "Groups", "Teams"],
       rows.map((r) => [nameOf(r.enc), r.cls, r.mt ?? "—", r.gc, r.tc]),

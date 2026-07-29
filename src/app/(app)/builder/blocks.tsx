@@ -3,7 +3,9 @@ import type { BlockConfig, BlockKind, PageRef, QueryResult } from "@/lib/builder
 import { colorClass } from "@/lib/builder-defaults";
 import { renderMarkdown, MD_CLASS } from "@/lib/markdown";
 import { EChartsBlock } from "./echarts-block";
+import { BarChart, PieChart } from "@/components/charts";
 import { BuilderMap } from "./builder-map";
+import { TableView } from "./table-view";
 
 const MAP_H: Record<string, number> = { standard: 300, double: 560, triple: 840 };
 const CHART_H: Record<string, number> = { standard: 280, double: 520, triple: 780 };
@@ -27,14 +29,6 @@ const listSegments = (row: unknown[]): string[] => {
   return nums.length ? nums.map((n) => n.toLocaleString()) : ["—"];
 };
 
-/** Amber/green/red preset for a cell against a per-column threshold band. */
-function bandClass(v: number, t: { base: number; band?: number; invert?: boolean }): string {
-  const band = t.band ?? 0;
-  const hi = v >= t.base + band, lo = v <= t.base - band;
-  const good = t.invert ? "text-bad-soft-fg" : "text-good-soft-fg";
-  const bad = t.invert ? "text-good-soft-fg" : "text-bad-soft-fg";
-  return hi ? good : lo ? bad : "text-warn-soft-fg";
-}
 
 function QueryError({ error }: { error: string }) {
   return <div className="rounded-lg border border-warn-soft-bg bg-warn-soft-bg/30 px-3 py-2 text-xs text-warn-soft-fg">{error}</div>;
@@ -75,10 +69,20 @@ export function BlockView({ kind, config, result, pages, childResults }: {
   if (kind === "filter") return <FilterPreview config={config} result={result} />;
 
   if (kind === "chart") {
+    // Simple 2-column bar / pie / donut render with the same hand-coded SVG
+    // charts the rest of the app uses (labelled, per-category colors, legend) —
+    // the look matches /teams etc. Everything else uses ECharts.
+    const ct = config.chartType || "bar";
+    const twoCol = !!result && !result.error && result.columns.length === 2 && result.rows.length > 0;
+    const datum = () => result!.rows.map((r) => ({ label: String(r[0] ?? ""), count: Number(r[1]) || 0 }));
+    let inner: React.ReactNode;
+    if (twoCol && ct === "bar") inner = <BarChart data={datum()} />;
+    else if (twoCol && (ct === "pie" || ct === "donut")) inner = <PieChart data={datum()} maxSlices={8} preserveOrder />;
+    else inner = <EChartsBlock config={config} result={result} height={CHART_H[config.height ?? "standard"] ?? 280} />;
     return (
       <div className="space-y-2">
         {title && <h3 className="text-sm font-semibold">{title}</h3>}
-        <EChartsBlock config={config} result={result} height={CHART_H[config.height ?? "standard"] ?? 280} />
+        {inner}
       </div>
     );
   }
@@ -115,7 +119,12 @@ export function BlockView({ kind, config, result, pages, childResults }: {
       }
       return (
         <div>
-          <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>{fmt(row[0])}</div>
+          <div className="flex items-baseline gap-2">
+            <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>{fmt(row[0])}</div>
+            {config.secondaryLabel && row[1] != null && (
+              <div className="tnum text-xs text-subtle">+ {fmt(row[1])} {config.secondaryLabel}</div>
+            )}
+          </div>
           {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
         </div>
       );
@@ -124,51 +133,8 @@ export function BlockView({ kind, config, result, pages, childResults }: {
     if (kind === "progress") return <Progress config={config} result={result} />;
     if (kind === "leaderboard") return <Leaderboard config={config} result={result} />;
 
-    // table — "condensed" (tight, the default) or "normal" (spacious, like the
-    // original hand-coded page tables): larger text, roomy padding, a header
-    // rule and row hover, with text columns left-aligned and numeric columns
-    // right-aligned (NOT centered).
-    if (result.columns.length === 0) return <Empty>No columns returned.</Empty>;
-    const normal = config.density === "normal";
-    // A column is numeric if its first non-null cell is a number — used to
-    // right-align number columns (header + cells) in normal mode.
-    const colNum = result.columns.map((_, j) => typeof result.rows.find((r) => r[j] != null)?.[j] === "number");
-    // Preset text color per column: an explicit column override wins, else the
-    // block-wide color, else default text.
-    const colColor = (j: number): string => colorClass(config.columnColors?.[result.columns[j]]) || colorClass(config.color);
-    // Per-cell threshold band (overrides the column's flat color for that cell).
-    const cellColor = (j: number, cell: unknown): string => {
-      const t = config.columnThresholds?.[result.columns[j]];
-      if (t && typeof cell === "number") return bandClass(cell, t);
-      return colColor(j);
-    };
-    return (
-      <div className="overflow-x-auto">
-        <table className={`w-full tnum border-collapse ${normal ? "text-sm" : "text-xs"}`}>
-          <thead>
-            <tr className={`text-muted ${normal ? "border-b border-border-soft" : ""}`}>
-              {result.columns.map((c, j) => (
-                <th key={c} className={`font-medium whitespace-nowrap ${normal ? `px-4 py-2.5 ${colNum[j] ? "text-right" : "text-left"}` : "text-left py-1 pr-3"}`}>{c}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {result.rows.slice(0, 200).map((r, i) => (
-              <tr key={i} className={`border-t border-border-soft/60 ${normal ? "hover:bg-bg-elev-2/50 transition-colors" : ""}`}>
-                {r.map((cell, j) => (
-                  <td key={j} className={normal
-                    ? `px-4 py-2.5 whitespace-nowrap ${colNum[j] ? "text-right tnum" : "text-left"} ${cellColor(j, cell) || "text-fg"}`
-                    : `py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : ""} ${cellColor(j, cell) || "text-fg"}`}>{fmt(cell)}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {(result.truncated || result.rows.length > 200) && (
-          <div className="text-[10px] text-subtle mt-1.5">Showing the first {Math.min(result.rows.length, 200).toLocaleString()} rows.</div>
-        )}
-      </div>
-    );
+    // table — density, per-column/threshold coloring, optional sort + row limit.
+    return <TableView config={config} result={result} />;
   };
 
   return (
