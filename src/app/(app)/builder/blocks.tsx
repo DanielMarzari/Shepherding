@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { BlockConfig, BlockKind, PageRef, QueryResult } from "@/lib/builder";
+import { colorClass } from "@/lib/builder-defaults";
 import { renderMarkdown, MD_CLASS } from "@/lib/markdown";
 import { EChartsBlock } from "./echarts-block";
 import { BuilderMap } from "./builder-map";
@@ -32,7 +33,7 @@ export function BlockView({ kind, config, result, pages, childResults }: {
   const title = (config.title ?? "").trim();
 
   if (kind === "text") {
-    return <div className={MD_CLASS} dangerouslySetInnerHTML={{ __html: renderMarkdown(config.text ?? "") }} />;
+    return <div className={`${MD_CLASS} ${colorClass(config.color)}`} dangerouslySetInnerHTML={{ __html: renderMarkdown(config.text ?? "") }} />;
   }
 
   if (kind === "pagelist") return <PageList config={config} pages={pages ?? []} />;
@@ -41,7 +42,7 @@ export function BlockView({ kind, config, result, pages, childResults }: {
   if (kind === "divider") {
     return (
       <div className="flex items-center gap-3 py-1">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted whitespace-nowrap">{title || "Section"}</span>
+        <span className={`text-xs font-semibold uppercase tracking-wide whitespace-nowrap ${colorClass(config.color) || "text-muted"}`}>{title || "Section"}</span>
         <span className="h-px flex-1 bg-border-soft" />
         {config.sub && <span className="text-[11px] text-subtle whitespace-nowrap">{config.sub}</span>}
       </div>
@@ -74,7 +75,7 @@ export function BlockView({ kind, config, result, pages, childResults }: {
     if (kind === "stat") {
       return (
         <div>
-          <div className="tnum text-3xl font-semibold leading-tight">{fmt(result.rows[0]?.[0])}</div>
+          <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>{fmt(result.rows[0]?.[0])}</div>
           {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
         </div>
       );
@@ -92,6 +93,9 @@ export function BlockView({ kind, config, result, pages, childResults }: {
     // A column is numeric if its first non-null cell is a number — used to
     // right-align number columns (header + cells) in normal mode.
     const colNum = result.columns.map((_, j) => typeof result.rows.find((r) => r[j] != null)?.[j] === "number");
+    // Preset text color per column: an explicit column override wins, else the
+    // block-wide color, else default text.
+    const colColor = (j: number): string => colorClass(config.columnColors?.[result.columns[j]]) || colorClass(config.color);
     return (
       <div className="overflow-x-auto">
         <table className={`w-full tnum border-collapse ${normal ? "text-sm" : "text-xs"}`}>
@@ -107,8 +111,8 @@ export function BlockView({ kind, config, result, pages, childResults }: {
               <tr key={i} className={`border-t border-border-soft/60 ${normal ? "hover:bg-bg-elev-2/50 transition-colors" : ""}`}>
                 {r.map((cell, j) => (
                   <td key={j} className={normal
-                    ? `px-4 py-2.5 whitespace-nowrap ${colNum[j] ? "text-right tnum" : "text-fg"}`
-                    : `py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : "text-fg"}`}>{fmt(cell)}</td>
+                    ? `px-4 py-2.5 whitespace-nowrap ${colNum[j] ? "text-right tnum" : "text-left"} ${colColor(j) || "text-fg"}`
+                    : `py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : ""} ${colColor(j) || "text-fg"}`}>{fmt(cell)}</td>
                 ))}
               </tr>
             ))}
@@ -172,7 +176,7 @@ function Kpi({ config, result }: { config: BlockConfig; result: QueryResult }) {
   return (
     <div>
       <div className="flex items-end justify-between gap-2">
-        <div className="tnum text-3xl font-semibold leading-tight">{fmt(last)}</div>
+        <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>{fmt(last)}</div>
         {delta != null && <DeltaBadge delta={delta} />}
       </div>
       {vals.length > 1 && <Sparkline vals={vals} up={delta == null || delta >= 0} />}
@@ -189,7 +193,7 @@ function Progress({ config, result }: { config: BlockConfig; result: QueryResult
   return (
     <div>
       <div className="flex items-end justify-between mb-1.5">
-        <div className="tnum text-2xl font-semibold">{fmt(cur)}</div>
+        <div className={`tnum text-2xl font-semibold ${colorClass(config.color)}`}>{fmt(cur)}</div>
         <div className="text-xs text-subtle tnum">of {fmt(goal)} · {pct.toFixed(0)}%</div>
       </div>
       <div className="h-2.5 rounded-full bg-bg-elev-2 overflow-hidden">

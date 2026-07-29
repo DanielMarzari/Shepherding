@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { BlockConfig, BlockKind, DbSchema, PageRef, QueryResult } from "@/lib/builder";
-import { DEFAULT_CONFIG, LEAF_KINDS } from "@/lib/builder-defaults";
+import { DEFAULT_CONFIG, LEAF_KINDS, COLOR_PRESETS } from "@/lib/builder-defaults";
 import { NAV_SECTIONS } from "@/lib/builder-nav";
 import { BlockView, BLOCK_META } from "./blocks";
 import { CHART_TYPES, PICTO_ICONS } from "./echarts-block";
@@ -39,6 +39,8 @@ const PALETTE_GROUPS: Array<{ group: string; kinds: BlockKind[] }> = [
   { group: "Containers", kinds: ["group", "pagelist"] },
 ];
 const DATA_KINDS = new Set<BlockKind>(["stat", "kpi", "progress", "chart", "table", "leaderboard", "map"]);
+/** Kinds that support a whole-element preset text color. */
+const COLORABLE = new Set<BlockKind>(["stat", "kpi", "progress", "text", "divider", "leaderboard", "table"]);
 
 // 12-column bento: fine enough for quarters/thirds (KPI rows of 4, etc.).
 const SPAN: Record<number, string> = {
@@ -515,6 +517,24 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
         <BlockFields kind={kind} cfg={cfg} set={set} schema={schema} pages={pages} siblings={siblings} onSqlBlur={run} />
       )}
 
+      {kind === "table" && result?.columns && result.columns.length > 0 && (
+        <div className="rounded-lg border border-border-soft/70 p-2 space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wide text-subtle">Per-column color</div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            {result.columns.map((c) => (
+              <label key={c} className="flex items-center gap-1.5 text-xs min-w-0">
+                <span className="truncate flex-1" title={c}>{c}</span>
+                <select value={cfg.columnColors?.[c] ?? "normal"}
+                  onChange={(e) => set({ columnColors: { ...(cfg.columnColors ?? {}), [c]: e.target.value } })}
+                  className="bg-bg border border-border-soft rounded px-1 py-0.5 text-[11px] cursor-pointer">
+                  {COLOR_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-2 text-xs flex-wrap">
         <label className="text-subtle">Width</label>
         <select value={cfg.span ?? 4} onChange={(e) => set({ span: Number(e.target.value) })} className="bg-bg border border-border-soft rounded px-1.5 py-1 text-xs cursor-pointer">
@@ -536,6 +556,14 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
             <select value={cfg.density ?? "condensed"} onChange={(e) => set({ density: e.target.value as BlockConfig["density"] })} className="bg-bg border border-border-soft rounded px-1.5 py-1 text-xs cursor-pointer">
               <option value="condensed">Condensed</option>
               <option value="normal">Normal (spacious)</option>
+            </select>
+          </>
+        )}
+        {COLORABLE.has(kind) && (
+          <>
+            <label className="text-subtle">Color</label>
+            <select value={cfg.color ?? "normal"} onChange={(e) => set({ color: e.target.value as BlockConfig["color"] })} className="bg-bg border border-border-soft rounded px-1.5 py-1 text-xs cursor-pointer">
+              {COLOR_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
           </>
         )}

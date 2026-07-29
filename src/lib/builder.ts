@@ -196,6 +196,10 @@ export interface BlockConfig {
   height?: "standard" | "double" | "triple";
   /** Table density: condensed (tight, default) or normal (spacious, centered). */
   density?: "condensed" | "normal";
+  /** Whole-element preset text color (normal | low | success | warning | error | highlight). */
+  color?: "normal" | "low" | "success" | "warning" | "error" | "highlight";
+  /** Per-table-column preset text color, keyed by column name (a "parts" override). */
+  columnColors?: Record<string, string>;
   /** Bento column span (1–6). */
   span?: number;
   [k: string]: unknown;

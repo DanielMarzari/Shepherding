@@ -6,6 +6,21 @@ import type { BlockConfig, BlockKind } from "./builder";
 /** Block kinds that can be nested inside a group container. */
 export const LEAF_KINDS: BlockKind[] = ["stat", "kpi", "progress", "chart", "table", "leaderboard", "map", "text", "embed"];
 
+/** Preset semantic text colors — a fixed palette (no arbitrary colors) so pages
+ *  stay on-theme. Used for whole-element coloring and per-table-column coloring. */
+export type ColorPreset = "normal" | "low" | "success" | "warning" | "error" | "highlight";
+export const COLOR_PRESETS: Array<{ id: ColorPreset; label: string; className: string }> = [
+  { id: "normal", label: "Normal", className: "" },
+  { id: "low", label: "Low (grey)", className: "text-muted" },
+  { id: "success", label: "Success", className: "text-good-soft-fg" },
+  { id: "warning", label: "Warning", className: "text-warn-soft-fg" },
+  { id: "error", label: "Error", className: "text-bad-soft-fg" },
+  { id: "highlight", label: "Highlight", className: "text-accent" },
+];
+/** Tailwind text-color class for a preset id (empty = default text color). */
+export const colorClass = (c: string | undefined): string =>
+  COLOR_PRESETS.find((p) => p.id === c)?.className ?? "";
+
 export const DEFAULT_CONFIG: Record<BlockKind, BlockConfig> = {
   stat: {
     title: "New stat",

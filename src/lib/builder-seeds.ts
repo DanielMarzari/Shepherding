@@ -40,13 +40,14 @@ const checkinsSeed: SeedPage = {
   title: "Check-ins",
   description:
     "Tag events as Kid / Adult / Ignore under Filters → Check-in events. Ignored events don't appear here.",
-  revision: 3,
+  revision: 4,
   blocks: [
     {
       kind: "stat",
       config: {
         title: "This week",
         span: 3,
+        color: "success",
         sub: "distinct people · last 7 days",
         sql: `SELECT COUNT(DISTINCT person_id)
                 FROM pco_check_ins
@@ -85,6 +86,7 @@ const checkinsSeed: SeedPage = {
       config: {
         title: "Ignored events",
         span: 3,
+        color: "warning",
         sub: "hidden from this page",
         sql: `SELECT COUNT(*) FROM (${EXCLUDED_CHECKIN_EVENTS})`,
       },
@@ -95,6 +97,7 @@ const checkinsSeed: SeedPage = {
         title: "Check-in events",
         span: 12,
         density: "normal",
+        columnColors: { Frequency: "low", "People (30d)": "low", "All-time": "low", "Last": "low" },
         sub: "active events · sorted by all-time check-ins (ignored events hidden)",
         sql: `WITH event_stats AS (
                 SELECT event_id,
