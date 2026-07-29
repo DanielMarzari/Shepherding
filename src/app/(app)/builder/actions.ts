@@ -12,6 +12,7 @@ import {
   createBuilderPage,
   deleteBuilderBlock,
   deleteBuilderPage,
+  getBuilderBlockConfig,
   getBuilderBlockSql,
   moveBuilderBlock,
   pageIdOfBlock,
@@ -101,10 +102,23 @@ export async function runQueryAction(sql: string, params?: QueryParams): Promise
   return runBuilderQueryForOrg(s.orgId, sql, params);
 }
 
+/** Live-preview a named data source from the block editor (admin only). */
+export async function runSourceAction(sourceId: string, params?: QueryParams): Promise<QueryResult> {
+  const s = await requireAdmin();
+  const { runSource } = await import("@/lib/builder-sources");
+  return runSource(s.orgId, sourceId, params);
+}
+
 /** Re-run a saved block with new filter params (any org member, read-only).
  *  The SQL is looked up server-side so a viewer can never run arbitrary SQL. */
 export async function runBlockAction(blockId: number, params?: QueryParams): Promise<QueryResult> {
   const s = await requireOrg();
+  const cfg = getBuilderBlockConfig(s.orgId, blockId);
+  if (!cfg) return { columns: [], rows: [], truncated: false, error: "Block not found." };
+  if (cfg.source) {
+    const { runSource } = await import("@/lib/builder-sources");
+    return runSource(s.orgId, cfg.source, params);
+  }
   const sql = getBuilderBlockSql(s.orgId, blockId);
   if (sql == null) return { columns: [], rows: [], truncated: false, error: "Block not found." };
   return runBuilderQueryForOrg(s.orgId, sql, params);

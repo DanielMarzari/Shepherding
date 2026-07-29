@@ -10,6 +10,7 @@ import {
   runBuilderQueryForOrg,
 } from "@/lib/builder";
 import { ensureSeededPage } from "@/lib/builder-seeds";
+import { runSource } from "@/lib/builder-sources";
 import { BuilderPageClient, type ClientBlock } from "./builder-page-client";
 
 const NO_SQL = new Set(["text", "divider", "embed", "pagelist", "group"]);
@@ -52,9 +53,14 @@ export async function renderBuilderRoute({
     position: b.position,
     kind: b.kind,
     config: b.config,
-    result: NO_SQL.has(b.kind) ? null : runBuilderQueryForOrg(session.orgId, b.config.sql ?? "", initialParams),
+    result: NO_SQL.has(b.kind)
+      ? null
+      : b.config.source
+        ? runSource(session.orgId, b.config.source, initialParams)
+        : runBuilderQueryForOrg(session.orgId, b.config.sql ?? "", initialParams),
     childResults: b.kind === "group"
-      ? (b.config.children ?? []).map((ch) => (NO_SQL.has(ch.kind) ? null : runBuilderQueryForOrg(session.orgId, ch.config.sql ?? "", initialParams)))
+      ? (b.config.children ?? []).map((ch) =>
+          NO_SQL.has(ch.kind) ? null : ch.config.source ? runSource(session.orgId, ch.config.source, initialParams) : runBuilderQueryForOrg(session.orgId, ch.config.sql ?? "", initialParams))
       : undefined,
   }));
 

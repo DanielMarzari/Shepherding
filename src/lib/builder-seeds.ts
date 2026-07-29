@@ -603,12 +603,66 @@ const teamsSeed: SeedPage = {
   ],
 };
 
+// ── Home (dashboard) ─────────────────────────────────────────────────
+// Aggregate counts via SQL; the people-name sections (falling through cracks,
+// movement, shepherd workload) via decrypt-capable data sources.
+const homeSeed: SeedPage = {
+  slug: "home",
+  title: "Home",
+  description: "Who's drifting, who's ready for a step forward, and how the flock is moving.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Engaged people", span: 3, sub: "adults, shepherded / active / present",
+      sql: `SELECT COUNT(*) FROM person_activity pa JOIN pco_people p ON p.org_id=pa.org_id AND p.pco_id=pa.person_id
+             WHERE pa.org_id=:orgId AND pa.classification IN ('shepherded','active','present') AND p.is_minor=0` } },
+    { kind: "stat", config: { title: "Shepherded", span: 3, color: "success", sub: "in a group or team",
+      sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='shepherded'` } },
+    { kind: "stat", config: { title: "Active", span: 3, color: "warning", sub: "engaging, not yet shepherded",
+      sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='active'` } },
+    { kind: "stat", config: { title: "Present", span: 3, color: "low", sub: "on the books, no measured engagement",
+      sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='present'` } },
+    { kind: "table", config: { title: "Falling through the cracks", span: 8, density: "normal", source: "falling_through_cracks",
+      columnColors: { Context: "low", "Last touch": "low" },
+      columnThresholds: { "Days silent": { base: 200, band: 165, invert: true } },
+      sub: "on a roster but lapsed past your thresholds" } },
+    { kind: "chart", config: { title: "People mix", chartType: "donut", span: 4,
+      sql: `SELECT classification AS "Mix", COUNT(*) AS "People" FROM person_activity
+             WHERE org_id=:orgId AND classification IN ('shepherded','active','present')
+             GROUP BY 1 ORDER BY CASE classification WHEN 'shepherded' THEN 1 WHEN 'active' THEN 2 ELSE 3 END` } },
+    { kind: "table", config: { title: "Recent movement · 14 days", span: 4, density: "normal", source: "recent_movement", sub: "joins & departures" } },
+    { kind: "leaderboard", config: { title: "Shepherd workload", span: 4, source: "shepherd_workload", limit: 8, sub: "top shepherds by flock size" } },
+    { kind: "table", config: { title: "Group health", span: 4, density: "normal",
+      columnColors: { State: "low" },
+      sub: "largest active groups",
+      sql: `${GROUPS_BASE} SELECT name AS "Group", members AS "Members", state AS "State" FROM base ORDER BY members DESC, name ASC LIMIT 6` } },
+  ],
+};
+
+// ── People (directory) ───────────────────────────────────────────────
+const peopleSeed: SeedPage = {
+  slug: "people",
+  title: "People",
+  description: "The directory — everyone on file, their engagement classification, and where they're plugged in.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Shepherded", span: 3, color: "success", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='shepherded'` } },
+    { kind: "stat", config: { title: "Active", span: 3, color: "warning", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='active'` } },
+    { kind: "stat", config: { title: "Present", span: 3, color: "low", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='present'` } },
+    { kind: "stat", config: { title: "Inactive", span: 3, color: "low", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='inactive'` } },
+    { kind: "table", config: { title: "Directory", span: 12, density: "normal", source: "people_directory",
+      columnColors: { Membership: "low", Groups: "low", Teams: "low" },
+      sub: "adults on file · sorted by engagement · first 1,000" } },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
   [demographicsSeed.slug]: demographicsSeed,
   [groupsSeed.slug]: groupsSeed,
   [teamsSeed.slug]: teamsSeed,
+  [homeSeed.slug]: homeSeed,
+  [peopleSeed.slug]: peopleSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────

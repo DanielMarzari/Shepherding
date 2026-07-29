@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { BlockConfig, BlockKind, DbSchema, PageRef, QueryResult } from "@/lib/builder";
 import { DEFAULT_CONFIG, LEAF_KINDS, COLOR_PRESETS } from "@/lib/builder-defaults";
+import { SOURCE_META, sourceMeta } from "@/lib/builder-source-meta";
 import { NAV_SECTIONS } from "@/lib/builder-nav";
 import { BlockView, BLOCK_META } from "./blocks";
 import { CHART_TYPES, PICTO_ICONS } from "./echarts-block";
@@ -16,6 +17,7 @@ import {
   moveBlockAction,
   runBlockAction,
   runQueryAction,
+  runSourceAction,
   undoPageAction,
   updateBlockAction,
   updatePageAction,
@@ -397,7 +399,17 @@ function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
         </div>
       )}
 
-      {hasSql && <SqlField value={cfg.sql ?? ""} onChange={(v) => set({ sql: v })} onBlur={onSqlBlur} schema={schema} />}
+      {DATA_KINDS.has(kind) && (
+        <div className="space-y-1">
+          <select value={cfg.source ?? ""} onChange={(e) => set({ source: e.target.value || undefined })} className={`${SELECT} w-full`}>
+            <option value="">Data from: SQL query</option>
+            {SOURCE_META.map((s) => <option key={s.id} value={s.id}>Data from: {s.label}</option>)}
+          </select>
+          {cfg.source && <div className="text-[10px] text-subtle leading-snug">{sourceMeta(cfg.source)?.description}</div>}
+        </div>
+      )}
+
+      {hasSql && !cfg.source && <SqlField value={cfg.sql ?? ""} onChange={(v) => set({ sql: v })} onBlur={onSqlBlur} schema={schema} />}
 
       {kind === "stat" && (
         <select value={cfg.format ?? "number"} onChange={(e) => set({ format: e.target.value as BlockConfig["format"] })} className={`${SELECT} w-full`}>
@@ -502,9 +514,9 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
   const showHeight = kind === "map" || kind === "chart";
 
   async function run() {
-    if (!hasSql) return;
+    if (!hasSql && !cfg.source) return;
     setRunning(true);
-    try { setResult(await runQueryAction(cfg.sql ?? "")); } finally { setRunning(false); }
+    try { setResult(cfg.source ? await runSourceAction(cfg.source) : await runQueryAction(cfg.sql ?? "")); } finally { setRunning(false); }
   }
   function save() { mutate(async () => { await updateBlockAction(block.id, cfg, slug); }); setEditing(false); }
   function cancel() { setCfg(block.config); setResult(block.result); setEditing(false); }

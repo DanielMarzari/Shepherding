@@ -165,6 +165,9 @@ export interface BuilderBlock {
 export interface BlockConfig {
   title?: string;
   sql?: string;
+  /** Named server-side data source (decrypt-capable) instead of raw SQL. See
+   *  builder-sources.ts. When set, the block's data comes from the source. */
+  source?: string;
   sub?: string;
   text?: string;
   /** Chart type (for kind === "chart"). */
@@ -274,6 +277,15 @@ export function getBuilderBlockSql(orgId: number, blockId: number): string | nul
     .get(blockId, orgId) as { config: string } | undefined;
   if (!row) return null;
   return safeParse(row.config).sql ?? null;
+}
+
+/** A block's full config, org-scoped. Used by view-mode re-runs to dispatch to
+ *  the right data path (SQL vs named source) with the viewer's filter params. */
+export function getBuilderBlockConfig(orgId: number, blockId: number): BlockConfig | null {
+  const row = getDb()
+    .prepare("SELECT config FROM builder_blocks WHERE id = ? AND org_id = ?")
+    .get(blockId, orgId) as { config: string } | undefined;
+  return row ? safeParse(row.config) : null;
 }
 
 export function getBuilderBlocks(pageId: number): BuilderBlock[] {
