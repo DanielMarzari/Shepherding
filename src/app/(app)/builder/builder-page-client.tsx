@@ -528,6 +528,15 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
             </select>
           </>
         )}
+        {kind === "table" && (
+          <>
+            <label className="text-subtle">Density</label>
+            <select value={cfg.density ?? "condensed"} onChange={(e) => set({ density: e.target.value as BlockConfig["density"] })} className="bg-bg border border-border-soft rounded px-1.5 py-1 text-xs cursor-pointer">
+              <option value="condensed">Condensed</option>
+              <option value="normal">Normal (spacious)</option>
+            </select>
+          </>
+        )}
         {hasSql && <button type="button" onClick={run} disabled={running} className="ml-auto px-2.5 py-1 rounded border border-border-soft text-muted hover:text-fg cursor-pointer disabled:opacity-50">{running ? "Running…" : "Run"}</button>}
         <button type="button" onClick={cancel} className={`px-2.5 py-1 rounded border border-border-soft text-muted hover:text-fg cursor-pointer ${hasSql ? "" : "ml-auto"}`}>Cancel</button>
         <button type="button" onClick={save} disabled={busy} className="px-3 py-1 rounded bg-accent text-[var(--accent-fg)] font-medium cursor-pointer disabled:opacity-50">Save</button>

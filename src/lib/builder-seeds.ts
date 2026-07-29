@@ -15,6 +15,9 @@ export interface SeedPage {
   slug: string;
   title: string;
   description?: string;
+  /** Bump when the block definition below changes. A pristine (never-edited)
+   *  seeded page is refreshed to the new definition; edited pages are left as-is. */
+  revision: number;
   /** Left-nav section — usually null: overridden routes keep their existing
    *  hand-coded sidebar link, so setting this would duplicate the nav entry. */
   navSection?: string | null;
@@ -37,6 +40,7 @@ const checkinsSeed: SeedPage = {
   title: "Check-ins",
   description:
     "Tag events as Kid / Adult / Ignore under Filters → Check-in events. Ignored events don't appear here.",
+  revision: 2,
   blocks: [
     {
       kind: "stat",
@@ -90,6 +94,7 @@ const checkinsSeed: SeedPage = {
       config: {
         title: "Check-in events",
         span: 6,
+        density: "normal",
         sub: "active events · sorted by all-time check-ins (ignored events hidden)",
         sql: `WITH event_stats AS (
                 SELECT event_id,
@@ -125,31 +130,60 @@ export const BUILDER_SEEDS: Record<string, SeedPage> = {
 
 // ─── Seeder ──────────────────────────────────────────────────────────
 
-/** Create the seeded page + blocks for `slug` if the org doesn't have it yet.
- *  Idempotent and non-destructive: once the page exists (seeded or edited), it
- *  is left untouched so admin edits always win. No-op for unknown slugs. */
-export function seedPageIfMissing(orgId: number, slug: string): void {
+function insertBlocks(db: ReturnType<typeof getDb>, orgId: number, pageId: number, seed: SeedPage): void {
+  const insBlock = db.prepare(
+    `INSERT INTO builder_blocks (page_id, org_id, position, kind, config) VALUES (?, ?, ?, ?, ?)`,
+  );
+  seed.blocks.forEach((b, i) => insBlock.run(pageId, orgId, i, b.kind, JSON.stringify(b.config)));
+}
+
+/** Ensure the seeded page for `slug` exists and, if it was never edited, is up
+ *  to date with the current seed revision.
+ *
+ *  - Missing → create page + blocks at the seed's revision.
+ *  - Present but PRISTINE (updated_at ≈ created_at) and the code seed advanced →
+ *    replace its blocks with the new definition and stamp the new revision,
+ *    keeping updated_at = created_at so future revisions can still refresh it.
+ *  - Present and edited → left untouched, so admin edits always win.
+ *  No-op for unknown slugs. */
+export function ensureSeededPage(orgId: number, slug: string): void {
   const seed = BUILDER_SEEDS[slug];
   if (!seed) return;
   const db = getDb();
-  const existing = db
-    .prepare("SELECT 1 FROM builder_pages WHERE org_id = ? AND slug = ?")
-    .get(orgId, slug);
-  if (existing) return;
+  const row = db
+    .prepare(
+      `SELECT id, created_at AS createdAt, updated_at AS updatedAt, seed_revision AS seedRevision
+         FROM builder_pages WHERE org_id = ? AND slug = ?`,
+    )
+    .get(orgId, slug) as
+    | { id: number; createdAt: string; updatedAt: string; seedRevision: number | null }
+    | undefined;
 
-  const tx = db.transaction(() => {
-    const info = db
-      .prepare(
-        `INSERT INTO builder_pages (org_id, slug, title, description, nav_section, more_section)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(orgId, seed.slug, seed.title, seed.description ?? null, seed.navSection ?? null, seed.moreSection ?? null);
-    const pageId = Number(info.lastInsertRowid);
-    const insBlock = db.prepare(
-      `INSERT INTO builder_blocks (page_id, org_id, position, kind, config)
-       VALUES (?, ?, ?, ?, ?)`,
-    );
-    seed.blocks.forEach((b, i) => insBlock.run(pageId, orgId, i, b.kind, JSON.stringify(b.config)));
-  });
-  tx();
+  if (!row) {
+    const tx = db.transaction(() => {
+      const info = db
+        .prepare(
+          `INSERT INTO builder_pages (org_id, slug, title, description, nav_section, more_section, seed_revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(orgId, seed.slug, seed.title, seed.description ?? null, seed.navSection ?? null, seed.moreSection ?? null, seed.revision);
+      insertBlocks(db, orgId, Number(info.lastInsertRowid), seed);
+    });
+    tx();
+    return;
+  }
+
+  const storedRev = row.seedRevision ?? 1;
+  const editedSecs = Math.abs((new Date(row.updatedAt).getTime() - new Date(row.createdAt).getTime()) / 1000);
+  const pristine = Number.isFinite(editedSecs) && editedSecs < 5;
+  if (seed.revision > storedRev && pristine) {
+    const tx = db.transaction(() => {
+      db.prepare("DELETE FROM builder_blocks WHERE page_id = ?").run(row.id);
+      insertBlocks(db, orgId, row.id, seed);
+      db.prepare(
+        `UPDATE builder_pages SET title = ?, description = ?, seed_revision = ?, updated_at = created_at WHERE id = ?`,
+      ).run(seed.title, seed.description ?? null, seed.revision, row.id);
+    });
+    tx();
+  }
 }

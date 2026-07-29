@@ -194,6 +194,8 @@ export interface BlockConfig {
   layout?: "list" | "grid";
   /** Block height: standard | double | triple (mainly for maps). */
   height?: "standard" | "double" | "triple";
+  /** Table density: condensed (tight, default) or normal (spacious, centered). */
+  density?: "condensed" | "normal";
   /** Bento column span (1–6). */
   span?: number;
   [k: string]: unknown;

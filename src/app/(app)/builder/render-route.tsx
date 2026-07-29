@@ -8,7 +8,7 @@ import {
   listBuilderPages,
   runBuilderQueryForOrg,
 } from "@/lib/builder";
-import { seedPageIfMissing } from "@/lib/builder-seeds";
+import { ensureSeededPage } from "@/lib/builder-seeds";
 import { BuilderPageClient, type ClientBlock } from "./builder-page-client";
 
 const NO_SQL = new Set(["text", "divider", "embed", "pagelist", "group"]);
@@ -34,7 +34,7 @@ export async function renderBuilderRoute({
   active?: string;
   breadcrumb?: string;
 }) {
-  if (seed) seedPageIfMissing(session.orgId, slug);
+  if (seed) ensureSeededPage(session.orgId, slug);
 
   const page = getBuilderPage(session.orgId, slug);
   if (!page) notFound();

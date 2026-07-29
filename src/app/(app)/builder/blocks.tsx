@@ -83,28 +83,33 @@ export function BlockView({ kind, config, result, pages, childResults }: {
     if (kind === "progress") return <Progress config={config} result={result} />;
     if (kind === "leaderboard") return <Leaderboard config={config} result={result} />;
 
-    // table
+    // table — "condensed" (tight, left/right-aligned) or "normal" (spacious, centered)
     if (result.columns.length === 0) return <Empty>No columns returned.</Empty>;
+    const normal = config.density === "normal";
     return (
       <div className="overflow-x-auto">
-        <table className="w-full text-xs tnum border-collapse">
+        <table className={`w-full tnum border-collapse ${normal ? "text-sm" : "text-xs"}`}>
           <thead>
-            <tr className="text-muted">
-              {result.columns.map((c) => <th key={c} className="text-left font-medium py-1 pr-3 whitespace-nowrap">{c}</th>)}
+            <tr className={`text-muted ${normal ? "border-b border-border-soft" : ""}`}>
+              {result.columns.map((c) => (
+                <th key={c} className={`font-medium whitespace-nowrap ${normal ? "text-center px-4 py-2.5" : "text-left py-1 pr-3"}`}>{c}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {result.rows.slice(0, 200).map((r, i) => (
-              <tr key={i} className="border-t border-border-soft/60">
+              <tr key={i} className={`border-t border-border-soft/60 ${normal ? "hover:bg-bg-elev-2/40 transition-colors" : ""}`}>
                 {r.map((cell, j) => (
-                  <td key={j} className={`py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : "text-fg"}`}>{fmt(cell)}</td>
+                  <td key={j} className={normal
+                    ? "px-4 py-2.5 whitespace-nowrap text-center"
+                    : `py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : "text-fg"}`}>{fmt(cell)}</td>
                 ))}
               </tr>
             ))}
           </tbody>
         </table>
         {(result.truncated || result.rows.length > 200) && (
-          <div className="text-[10px] text-subtle mt-1.5">Showing the first {Math.min(result.rows.length, 200).toLocaleString()} rows.</div>
+          <div className={`text-[10px] text-subtle mt-1.5 ${normal ? "text-center" : ""}`}>Showing the first {Math.min(result.rows.length, 200).toLocaleString()} rows.</div>
         )}
       </div>
     );
