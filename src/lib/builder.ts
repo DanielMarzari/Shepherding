@@ -200,10 +200,15 @@ export interface BlockConfig {
   density?: "condensed" | "normal";
   /** Whole-element preset text color (normal | low | success | warning | error | highlight). */
   color?: "normal" | "low" | "success" | "warning" | "error" | "highlight";
-  /** Stat display: a plain number, or a normalized ratio across the row's numbers (1 : 3 : 5). */
-  format?: "number" | "ratio";
+  /** Stat display: a plain number, a normalized ratio (1 : 3 : 5), or the row's
+   *  numbers listed raw (15 · 43 · 17). */
+  format?: "number" | "ratio" | "list";
   /** Per-table-column preset text color, keyed by column name (a "parts" override). */
   columnColors?: Record<string, string>;
+  /** Per-table-column threshold coloring, keyed by column name: cells at/above
+   *  base+band are green, at/below base−band are red, in-between amber (invert
+   *  flips green/red for lower-is-better columns). */
+  columnThresholds?: Record<string, { base: number; band?: number; invert?: boolean }>;
   /** Bento column span (1–6). */
   span?: number;
   [k: string]: unknown;

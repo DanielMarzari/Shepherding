@@ -336,33 +336,33 @@ const groupsSeed: SeedPage = {
   slug: "groups",
   title: "Groups",
   description: "Active groups, who's in them, their health, and the demographics of the people they gather.",
-  revision: 2,
+  revision: 3,
   blocks: [
     {
       kind: "stat",
       config: {
-        title: "Active members", span: 3, sub: "unique adults in groups",
+        title: "Active members", span: 2, sub: "unique adults in groups",
         sql: `SELECT COUNT(DISTINCT m.person_id) ${GROUPS_ROSTER} AND COALESCE(p.is_minor,0)=0`,
       },
     },
     {
       kind: "stat",
       config: {
-        title: "Kids in groups", span: 3, sub: "unique minors", color: "low",
+        title: "Kids", span: 2, sub: "unique minors", color: "low",
         sql: `SELECT COUNT(DISTINCT m.person_id) ${GROUPS_ROSTER} AND p.is_minor=1`,
       },
     },
     {
       kind: "stat",
       config: {
-        title: "Leaders", span: 3, sub: "unique leaders", color: "highlight",
+        title: "Leaders", span: 2, sub: "unique leaders", color: "highlight",
         sql: `SELECT COUNT(DISTINCT m.person_id) ${GROUPS_ROSTER} AND lower(coalesce(m.role,'')) LIKE '%leader%'`,
       },
     },
     {
       kind: "stat",
       config: {
-        title: "Leader : member ratio", span: 3, format: "ratio", sub: "people per leader",
+        title: "Leader : member", span: 2, format: "ratio", sub: "people per leader",
         sql: `SELECT
                 COUNT(DISTINCT CASE WHEN lower(coalesce(m.role,'')) LIKE '%leader%' THEN m.person_id END) AS leaders,
                 COUNT(DISTINCT m.person_id) AS people
@@ -370,26 +370,18 @@ const groupsSeed: SeedPage = {
       },
     },
     {
-      kind: "chart",
+      kind: "stat",
       config: {
-        title: "Members by group type", chartType: "bar", colorByCategory: true, span: 6,
-        sql: `SELECT COALESCE(t.name, '(no type)') AS "Type", COUNT(DISTINCT m.person_id) AS "Members"
-                FROM pco_groups g
-                JOIN pco_group_memberships m ON m.org_id = g.org_id AND m.group_id = g.pco_id AND m.archived_at IS NULL
-                LEFT JOIN pco_group_types t ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
-               WHERE g.org_id = :orgId AND g.archived_at IS NULL
-                 AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${EXC_GT}))
-               GROUP BY 1 ORDER BY 2 DESC`,
+        title: "Joined · Left", span: 2, format: "list", color: "success", sub: "in the activity window",
+        sql: `${GROUPS_BASE} SELECT SUM(joined), SUM(leftr) FROM base`,
       },
     },
     {
-      kind: "chart",
+      kind: "stat",
       config: {
-        title: "Group health", chartType: "bar", colorByCategory: true, span: 6,
+        title: "Group health", span: 2, format: "list", sub: "growing · steady · shrink/paused",
         sql: `${GROUPS_BASE}
-              SELECT state AS "Health", COUNT(*) AS "Groups" FROM base
-               GROUP BY 1
-               ORDER BY CASE state WHEN 'growing' THEN 1 WHEN 'steady' THEN 2 WHEN 'shrinking' THEN 3 ELSE 4 END`,
+              SELECT SUM(state='growing'), SUM(state='steady'), SUM(state IN ('shrinking','paused')) FROM base`,
       },
     },
     {
@@ -397,6 +389,7 @@ const groupsSeed: SeedPage = {
       config: {
         title: "Groups", span: 12, density: "normal",
         columnColors: { Type: "low", Leaders: "low", "Attend taken %": "low", Events: "low" },
+        columnThresholds: { "Attend %": { base: 60, band: 15 } },
         sub: "active groups · membership, leaders, attendance, and joins/leaves in the activity window",
         sql: `${GROUPS_BASE}
               SELECT name AS "Group",

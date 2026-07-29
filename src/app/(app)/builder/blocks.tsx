@@ -21,6 +21,20 @@ const asRatio = (row: unknown[]): string => {
   if (!nums.length || !(mn > 0)) return "—";
   return nums.map((n) => { const r = n / mn; return Number.isInteger(r) ? String(r) : r.toFixed(1); }).join(" : ");
 };
+/** List the row's numbers raw, separated by " · " (15 · 43 · 17). */
+const asList = (row: unknown[]): string => {
+  const nums = row.map(Number).filter((n) => Number.isFinite(n));
+  return nums.length ? nums.map((n) => n.toLocaleString()).join(" · ") : "—";
+};
+
+/** Amber/green/red preset for a cell against a per-column threshold band. */
+function bandClass(v: number, t: { base: number; band?: number; invert?: boolean }): string {
+  const band = t.band ?? 0;
+  const hi = v >= t.base + band, lo = v <= t.base - band;
+  const good = t.invert ? "text-bad-soft-fg" : "text-good-soft-fg";
+  const bad = t.invert ? "text-good-soft-fg" : "text-bad-soft-fg";
+  return hi ? good : lo ? bad : "text-warn-soft-fg";
+}
 
 function QueryError({ error }: { error: string }) {
   return <div className="rounded-lg border border-warn-soft-bg bg-warn-soft-bg/30 px-3 py-2 text-xs text-warn-soft-fg">{error}</div>;
@@ -81,11 +95,12 @@ export function BlockView({ kind, config, result, pages, childResults }: {
     if (!result) return <Empty>No data yet.</Empty>;
     if (result.error) return <QueryError error={result.error} />;
     if (kind === "stat") {
+      const row = result.rows[0] ?? [];
+      const multi = config.format === "ratio" || config.format === "list";
+      const value = config.format === "ratio" ? asRatio(row) : config.format === "list" ? asList(row) : fmt(row[0]);
       return (
         <div>
-          <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>
-            {config.format === "ratio" ? asRatio(result.rows[0] ?? []) : fmt(result.rows[0]?.[0])}
-          </div>
+          <div className={`tnum font-semibold leading-tight ${multi ? "text-2xl" : "text-3xl"} ${colorClass(config.color)}`}>{value}</div>
           {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
         </div>
       );
@@ -106,6 +121,12 @@ export function BlockView({ kind, config, result, pages, childResults }: {
     // Preset text color per column: an explicit column override wins, else the
     // block-wide color, else default text.
     const colColor = (j: number): string => colorClass(config.columnColors?.[result.columns[j]]) || colorClass(config.color);
+    // Per-cell threshold band (overrides the column's flat color for that cell).
+    const cellColor = (j: number, cell: unknown): string => {
+      const t = config.columnThresholds?.[result.columns[j]];
+      if (t && typeof cell === "number") return bandClass(cell, t);
+      return colColor(j);
+    };
     return (
       <div className="overflow-x-auto">
         <table className={`w-full tnum border-collapse ${normal ? "text-sm" : "text-xs"}`}>
@@ -121,8 +142,8 @@ export function BlockView({ kind, config, result, pages, childResults }: {
               <tr key={i} className={`border-t border-border-soft/60 ${normal ? "hover:bg-bg-elev-2/50 transition-colors" : ""}`}>
                 {r.map((cell, j) => (
                   <td key={j} className={normal
-                    ? `px-4 py-2.5 whitespace-nowrap ${colNum[j] ? "text-right tnum" : "text-left"} ${colColor(j) || "text-fg"}`
-                    : `py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : ""} ${colColor(j) || "text-fg"}`}>{fmt(cell)}</td>
+                    ? `px-4 py-2.5 whitespace-nowrap ${colNum[j] ? "text-right tnum" : "text-left"} ${cellColor(j, cell) || "text-fg"}`
+                    : `py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : ""} ${cellColor(j, cell) || "text-fg"}`}>{fmt(cell)}</td>
                 ))}
               </tr>
             ))}

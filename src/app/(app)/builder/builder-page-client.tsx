@@ -402,7 +402,8 @@ function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
       {kind === "stat" && (
         <select value={cfg.format ?? "number"} onChange={(e) => set({ format: e.target.value as BlockConfig["format"] })} className={`${SELECT} w-full`}>
           <option value="number">Show as: number</option>
-          <option value="ratio">Show as: ratio (1 : x) — uses every number the query returns</option>
+          <option value="ratio">Show as: ratio (1 : x) — normalizes every number the query returns</option>
+          <option value="list">Show as: list (a · b · c) — the query&apos;s numbers, raw</option>
         </select>
       )}
       {(kind === "stat" || kind === "kpi") && (
@@ -550,18 +551,38 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
 
       {kind === "table" && result?.columns && result.columns.length > 0 && (
         <div className="rounded-lg border border-border-soft/70 p-2 space-y-1.5">
-          <div className="text-[10px] uppercase tracking-wide text-subtle">Per-column color</div>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-            {result.columns.map((c) => (
-              <label key={c} className="flex items-center gap-1.5 text-xs min-w-0">
-                <span className="truncate flex-1" title={c}>{c}</span>
-                <select value={cfg.columnColors?.[c] ?? "normal"}
-                  onChange={(e) => set({ columnColors: { ...(cfg.columnColors ?? {}), [c]: e.target.value } })}
-                  className="bg-bg border border-border-soft rounded px-1 py-0.5 text-[11px] cursor-pointer">
-                  {COLOR_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-                </select>
-              </label>
-            ))}
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-subtle">
+            <span>Per-column color</span>
+            <span className="normal-case tracking-normal">bands: base ± band color cells green/amber/red · ✓ = lower is better</span>
+          </div>
+          <div className="space-y-1">
+            {result.columns.map((c) => {
+              const th = cfg.columnThresholds?.[c];
+              const setTh = (patch: Partial<{ base: number; band: number; invert: boolean }> | null) => {
+                const next = { ...(cfg.columnThresholds ?? {}) };
+                if (patch === null) delete next[c];
+                else next[c] = { ...(next[c] ?? { base: 0 }), ...patch };
+                set({ columnThresholds: next });
+              };
+              return (
+                <div key={c} className="flex items-center gap-1.5 text-xs min-w-0">
+                  <span className="truncate w-28 shrink-0" title={c}>{c}</span>
+                  <select value={cfg.columnColors?.[c] ?? "normal"}
+                    onChange={(e) => set({ columnColors: { ...(cfg.columnColors ?? {}), [c]: e.target.value } })}
+                    className="bg-bg border border-border-soft rounded px-1 py-0.5 text-[11px] cursor-pointer">
+                    {COLOR_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                  <input type="number" placeholder="base" value={th?.base ?? ""}
+                    onChange={(e) => (e.target.value === "" ? setTh(null) : setTh({ base: Number(e.target.value) }))}
+                    className="w-14 bg-bg border border-border-soft rounded px-1 py-0.5 text-[11px]" />
+                  <input type="number" placeholder="±band" value={th?.band ?? ""} disabled={!th}
+                    onChange={(e) => setTh({ band: Number(e.target.value) })}
+                    className="w-14 bg-bg border border-border-soft rounded px-1 py-0.5 text-[11px] disabled:opacity-40" />
+                  <input type="checkbox" checked={!!th?.invert} disabled={!th} title="lower is better (flip green/red)"
+                    onChange={(e) => setTh({ invert: e.target.checked })} className="cursor-pointer disabled:opacity-40" />
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
