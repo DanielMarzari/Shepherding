@@ -203,6 +203,8 @@ export interface BlockConfig {
   /** Stat display: a plain number, a normalized ratio (1 : 3 : 5), or the row's
    *  numbers listed raw (15 · 43 · 17). */
   format?: "number" | "ratio" | "list";
+  /** For ratio/list stats: a preset color per segment (e.g. green joined · red left). */
+  segmentColors?: string[];
   /** Per-table-column preset text color, keyed by column name (a "parts" override). */
   columnColors?: Record<string, string>;
   /** Per-table-column threshold coloring, keyed by column name: cells at/above

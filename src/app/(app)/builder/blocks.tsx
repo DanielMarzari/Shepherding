@@ -14,17 +14,17 @@ const fmt = (v: unknown): string => {
   return String(v);
 };
 
-/** Normalize a row of numbers to a ratio against the smallest (1 : 3 : 5, or 1 : 3.5). */
-const asRatio = (row: unknown[]): string => {
+/** Row → ratio segments normalized to the smallest (["1","3.5"]). */
+const ratioSegments = (row: unknown[]): string[] => {
   const nums = row.map(Number).filter((n) => Number.isFinite(n));
   const mn = Math.min(...nums);
-  if (!nums.length || !(mn > 0)) return "—";
-  return nums.map((n) => { const r = n / mn; return Number.isInteger(r) ? String(r) : r.toFixed(1); }).join(" : ");
+  if (!nums.length || !(mn > 0)) return ["—"];
+  return nums.map((n) => { const r = n / mn; return Number.isInteger(r) ? String(r) : r.toFixed(1); });
 };
-/** List the row's numbers raw, separated by " · " (15 · 43 · 17). */
-const asList = (row: unknown[]): string => {
+/** Row → raw number segments (["15","43","17"]). */
+const listSegments = (row: unknown[]): string[] => {
   const nums = row.map(Number).filter((n) => Number.isFinite(n));
-  return nums.length ? nums.map((n) => n.toLocaleString()).join(" · ") : "—";
+  return nums.length ? nums.map((n) => n.toLocaleString()) : ["—"];
 };
 
 /** Amber/green/red preset for a cell against a per-column threshold band. */
@@ -96,11 +96,26 @@ export function BlockView({ kind, config, result, pages, childResults }: {
     if (result.error) return <QueryError error={result.error} />;
     if (kind === "stat") {
       const row = result.rows[0] ?? [];
-      const multi = config.format === "ratio" || config.format === "list";
-      const value = config.format === "ratio" ? asRatio(row) : config.format === "list" ? asList(row) : fmt(row[0]);
+      if (config.format === "ratio" || config.format === "list") {
+        const segs = config.format === "ratio" ? ratioSegments(row) : listSegments(row);
+        const sep = config.format === "ratio" ? " : " : " · ";
+        return (
+          <div>
+            <div className="tnum text-2xl font-semibold leading-tight">
+              {segs.map((s, i) => (
+                <span key={i}>
+                  {i > 0 && <span className="text-subtle font-normal">{sep}</span>}
+                  <span className={colorClass(config.segmentColors?.[i]) || colorClass(config.color)}>{s}</span>
+                </span>
+              ))}
+            </div>
+            {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
+          </div>
+        );
+      }
       return (
         <div>
-          <div className={`tnum font-semibold leading-tight ${multi ? "text-2xl" : "text-3xl"} ${colorClass(config.color)}`}>{value}</div>
+          <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>{fmt(row[0])}</div>
           {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
         </div>
       );

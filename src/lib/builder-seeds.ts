@@ -336,7 +336,7 @@ const groupsSeed: SeedPage = {
   slug: "groups",
   title: "Groups",
   description: "Active groups, who's in them, their health, and the demographics of the people they gather.",
-  revision: 3,
+  revision: 4,
   blocks: [
     {
       kind: "stat",
@@ -372,14 +372,14 @@ const groupsSeed: SeedPage = {
     {
       kind: "stat",
       config: {
-        title: "Joined · Left", span: 2, format: "list", color: "success", sub: "in the activity window",
+        title: "Joined · Left", span: 2, format: "list", segmentColors: ["success", "error"], sub: "in the activity window",
         sql: `${GROUPS_BASE} SELECT SUM(joined), SUM(leftr) FROM base`,
       },
     },
     {
       kind: "stat",
       config: {
-        title: "Group health", span: 2, format: "list", sub: "growing · steady · shrink/paused",
+        title: "Group health", span: 2, format: "list", segmentColors: ["success", "normal", "warning"], sub: "growing · steady · shrink/paused",
         sql: `${GROUPS_BASE}
               SELECT SUM(state='growing'), SUM(state='steady'), SUM(state IN ('shrinking','paused')) FROM base`,
       },
@@ -459,6 +459,147 @@ const groupsSeed: SeedPage = {
                GROUP BY 1`,
       },
     },
+    { kind: "divider", config: { title: "Attendance trend", span: 12 } },
+    {
+      kind: "chart",
+      config: {
+        title: "Group attendance", chartType: "line", span: 12,
+        sql: `SELECT substr(a.event_starts_at, 1, 7) AS "Month", COUNT(DISTINCT a.person_id) AS "Attendees"
+                FROM pco_event_attendances a
+               WHERE a.org_id = :orgId AND a.attended = 1 AND a.event_starts_at IS NOT NULL
+                 AND a.group_id IS NOT NULL
+                 AND a.event_starts_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-12 months')
+               GROUP BY 1 ORDER BY 1`,
+      },
+    },
+  ],
+};
+
+// ── Teams (serving) ──────────────────────────────────────────────────
+const EXC_TT = `SELECT je.value FROM pco_sync_settings ss, json_each(coalesce(ss.excluded_team_types, '[]')) je WHERE ss.org_id = :orgId`;
+const TEAMS_ROSTER = `FROM pco_team_memberships m
+    JOIN pco_teams t ON t.org_id = m.org_id AND t.pco_id = m.team_id
+    LEFT JOIN pco_people p ON p.org_id = m.org_id AND p.pco_id = m.person_id
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+     AND t.archived_at IS NULL AND t.deleted_at IS NULL
+     AND coalesce(t.service_type_id,'') NOT IN (${EXC_TT})`;
+const TEAMS_SP = `WITH sp AS (
+  SELECT DISTINCT m.person_id FROM pco_team_memberships m
+    JOIN pco_teams t ON t.org_id = m.org_id AND t.pco_id = m.team_id
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+     AND t.archived_at IS NULL AND t.deleted_at IS NULL
+)`;
+// Per-team roster/serving/health, reproducing lib/serve-lane.ts listTeams
+// (members/kids/leaders, served & joined in the window, lapsed, plans, and the
+// growing/steady/shrinking/paused state). `base` = one row per active team.
+const TEAMS_BASE = `WITH cutoffs AS (
+    SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now','-'||COALESCE((SELECT activity_tracking_months FROM pco_sync_settings WHERE org_id=:orgId),3)||' months') AS act,
+           strftime('%Y-%m-%dT%H:%M:%fZ','now','-'||COALESCE((SELECT lapsed_from_team_months FROM pco_sync_settings WHERE org_id=:orgId),6)||' months') AS lapse,
+           COALESCE((SELECT lapsed_from_team_events FROM pco_sync_settings WHERE org_id=:orgId),3) AS lapseEvents
+  ),
+  roster AS (
+    SELECT m.team_id,
+      COUNT(DISTINCT m.person_id) AS members,
+      COUNT(DISTINCT CASE WHEN p.is_minor=1 THEN m.person_id END) AS kids,
+      COUNT(DISTINCT CASE WHEN m.is_team_leader=1 THEN m.person_id END) AS leaders,
+      COUNT(DISTINCT CASE WHEN m.last_served_at IS NULL OR m.last_served_at < (SELECT lapse FROM cutoffs) THEN m.person_id END) AS lapsedCandidates
+    FROM pco_team_memberships m LEFT JOIN pco_people p ON p.org_id=m.org_id AND p.pco_id=m.person_id
+    WHERE m.org_id=:orgId AND m.archived_at IS NULL AND m.person_id != '' GROUP BY m.team_id
+  ),
+  served AS (
+    SELECT pp.team_id, COUNT(DISTINCT pp.person_id) AS n
+    FROM pco_plan_people pp JOIN pco_plans p ON p.org_id=pp.org_id AND p.pco_id=pp.plan_id
+    WHERE pp.org_id=:orgId AND pp.person_id != '' AND p.sort_date >= (SELECT act FROM cutoffs) AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
+    GROUP BY pp.team_id
+  ),
+  tpl AS (
+    SELECT pp.team_id FROM pco_plan_people pp JOIN pco_plans p ON p.org_id=pp.org_id AND p.pco_id=pp.plan_id
+    WHERE pp.org_id=:orgId AND p.sort_date >= (SELECT lapse FROM cutoffs) GROUP BY pp.team_id HAVING COUNT(DISTINCT p.pco_id) >= (SELECT lapseEvents FROM cutoffs)
+  ),
+  tpa AS (
+    SELECT pp.team_id, COUNT(DISTINCT p.pco_id) AS n FROM pco_plan_people pp JOIN pco_plans p ON p.org_id=pp.org_id AND p.pco_id=pp.plan_id
+    WHERE pp.org_id=:orgId AND p.sort_date >= (SELECT act FROM cutoffs) GROUP BY pp.team_id
+  ),
+  fspp AS (
+    SELECT pp.team_id, pp.person_id, MIN(p.sort_date) AS firstServed FROM pco_plan_people pp JOIN pco_plans p ON p.org_id=pp.org_id AND p.pco_id=pp.plan_id
+    WHERE pp.org_id=:orgId AND pp.person_id != '' AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined') GROUP BY pp.team_id, pp.person_id
+  ),
+  joinedt AS (SELECT team_id, COUNT(*) AS n FROM fspp WHERE firstServed >= (SELECT act FROM cutoffs) GROUP BY team_id),
+  derived AS (
+    SELECT t.pco_id, t.name, st.name AS type_name,
+      COALESCE(r.members,0) AS members, COALESCE(r.kids,0) AS kids, COALESCE(r.leaders,0) AS leaders,
+      COALESCE(s.n,0) AS served, COALESCE(j.n,0) AS joined,
+      CASE WHEN tpl.team_id IS NOT NULL THEN COALESCE(r.lapsedCandidates,0) ELSE 0 END AS lapsed,
+      COALESCE(tpa.n,0) AS plans
+    FROM pco_teams t
+    LEFT JOIN pco_service_types st ON st.org_id=t.org_id AND st.pco_id=t.service_type_id
+    LEFT JOIN roster r ON r.team_id=t.pco_id
+    LEFT JOIN served s ON s.team_id=t.pco_id
+    LEFT JOIN joinedt j ON j.team_id=t.pco_id
+    LEFT JOIN tpl ON tpl.team_id=t.pco_id
+    LEFT JOIN tpa ON tpa.team_id=t.pco_id
+    WHERE t.org_id=:orgId AND t.deleted_at IS NULL AND t.archived_at IS NULL
+      AND coalesce(t.service_type_id,'') NOT IN (${EXC_TT})
+  ),
+  base AS (
+    SELECT *, CASE
+        WHEN served=0 OR members=0 THEN 'paused'
+        WHEN CAST(lapsed AS REAL)/members >= 0.5 THEN 'shrinking'
+        WHEN served >= members*0.6 THEN 'growing'
+        ELSE 'steady' END AS state
+    FROM derived
+  )`;
+
+const teamsSeed: SeedPage = {
+  slug: "teams",
+  title: "Teams",
+  description: "Active serving teams, their rosters and health, and the demographics of the people who serve.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Roster size", span: 2, sub: "unique adults on team rosters",
+      sql: `SELECT COUNT(DISTINCT m.person_id) ${TEAMS_ROSTER} AND COALESCE(p.is_minor,0)=0` } },
+    { kind: "stat", config: { title: "Kids", span: 2, color: "low", sub: "unique minors",
+      sql: `SELECT COUNT(DISTINCT m.person_id) ${TEAMS_ROSTER} AND p.is_minor=1` } },
+    { kind: "stat", config: { title: "Leaders", span: 2, color: "highlight", sub: "unique team leaders",
+      sql: `SELECT COUNT(DISTINCT m.person_id) ${TEAMS_ROSTER} AND m.is_team_leader=1` } },
+    { kind: "stat", config: { title: "Leader : member", span: 2, format: "ratio", sub: "people per leader",
+      sql: `SELECT COUNT(DISTINCT CASE WHEN m.is_team_leader=1 THEN m.person_id END) AS leaders, COUNT(DISTINCT m.person_id) AS people ${TEAMS_ROSTER}` } },
+    { kind: "stat", config: { title: "Joined · Lapsed", span: 2, format: "list", segmentColors: ["success", "error"], sub: "in the activity window",
+      sql: `${TEAMS_BASE} SELECT SUM(joined), SUM(lapsed) FROM base` } },
+    { kind: "stat", config: { title: "Team health", span: 2, format: "list", segmentColors: ["success", "normal", "warning"], sub: "growing · steady · shrink/paused",
+      sql: `${TEAMS_BASE} SELECT SUM(state='growing'), SUM(state='steady'), SUM(state IN ('shrinking','paused')) FROM base` } },
+    { kind: "table", config: {
+      title: "Teams", span: 12, density: "normal",
+      columnColors: { "Service type": "low", Leaders: "low", Plans: "low" },
+      sub: "active teams · roster, leaders, serving, joins/lapses in the activity window",
+      sql: `${TEAMS_BASE}
+            SELECT name AS "Team", COALESCE(type_name, '(no type)') AS "Service type", state AS "State",
+                   members AS "Members", leaders AS "Leaders", served AS "Served", joined AS "Joined", lapsed AS "Lapsed", plans AS "Plans"
+              FROM base ORDER BY members DESC, name ASC` } },
+    { kind: "divider", config: { title: "Demographics — people on teams", span: 12 } },
+    { kind: "chart", config: { title: "Membership status", chartType: "pie", span: 3,
+      sql: `${TEAMS_SP} SELECT COALESCE(p.membership_type,'(unknown)') AS "Membership", COUNT(*) AS "People" FROM pco_people p JOIN sp ON sp.person_id=p.pco_id WHERE p.org_id=:orgId GROUP BY p.membership_type ORDER BY COUNT(*) DESC` } },
+    { kind: "chart", config: { title: "Age", chartType: "bar", colorByCategory: true, span: 3,
+      sql: `${TEAMS_SP}
+            SELECT CASE
+                     WHEN p.birth_year IS NULL OR p.birth_year < 1900 THEN 'Unknown'
+                     WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 18 THEN '<18'
+                     WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 30 THEN '18–29'
+                     WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 50 THEN '30–49'
+                     WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 65 THEN '50–64'
+                     ELSE '65+' END AS "Age", COUNT(*) AS "People"
+              FROM pco_people p JOIN sp ON sp.person_id=p.pco_id WHERE p.org_id=:orgId GROUP BY 1 ORDER BY MIN(${AGE_ORD})` } },
+    { kind: "chart", config: { title: "Gender", chartType: "bar", colorByCategory: true, span: 3,
+      sql: `${TEAMS_SP} SELECT CASE WHEN lower(coalesce(p.gender,'')) IN ('m','male') THEN 'Male' WHEN lower(coalesce(p.gender,'')) IN ('f','female') THEN 'Female' ELSE 'Unknown' END AS "Gender", COUNT(*) AS "People" FROM pco_people p JOIN sp ON sp.person_id=p.pco_id WHERE p.org_id=:orgId GROUP BY 1` } },
+    { kind: "chart", config: { title: "Parents", chartType: "bar", colorByCategory: true, span: 3,
+      sql: `${TEAMS_SP} SELECT CASE WHEN p.is_parent=1 THEN 'Parent' ELSE 'No kids' END AS "Household", COUNT(*) AS "People" FROM pco_people p JOIN sp ON sp.person_id=p.pco_id WHERE p.org_id=:orgId GROUP BY 1` } },
+    { kind: "divider", config: { title: "Serving trend", span: 12 } },
+    { kind: "chart", config: { title: "People serving", chartType: "line", span: 12,
+      sql: `SELECT substr(pl.sort_date,1,7) AS "Month", COUNT(DISTINCT pp.person_id) AS "Served"
+              FROM pco_plan_people pp JOIN pco_plans pl ON pl.org_id=pp.org_id AND pl.pco_id=pp.plan_id
+             WHERE pp.org_id=:orgId AND pp.person_id != '' AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')
+               AND pl.sort_date >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-12 months')
+             GROUP BY 1 ORDER BY 1` } },
   ],
 };
 
@@ -467,6 +608,7 @@ export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
   [demographicsSeed.slug]: demographicsSeed,
   [groupsSeed.slug]: groupsSeed,
+  [teamsSeed.slug]: teamsSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────

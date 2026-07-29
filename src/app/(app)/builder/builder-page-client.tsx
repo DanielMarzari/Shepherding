@@ -549,6 +549,21 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
         <BlockFields kind={kind} cfg={cfg} set={set} schema={schema} pages={pages} siblings={siblings} onSqlBlur={run} />
       )}
 
+      {kind === "stat" && (cfg.format === "ratio" || cfg.format === "list") && (result?.rows?.[0]?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-border-soft/70 p-2 space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wide text-subtle">Segment colors (run the query first)</div>
+          <div className="flex flex-wrap gap-1.5">
+            {(result?.rows?.[0] ?? []).filter((v) => Number.isFinite(Number(v))).map((_, i) => (
+              <select key={i} value={cfg.segmentColors?.[i] ?? "normal"}
+                onChange={(e) => { const a = [...(cfg.segmentColors ?? [])]; while (a.length <= i) a.push("normal"); a[i] = e.target.value; set({ segmentColors: a }); }}
+                className="bg-bg border border-border-soft rounded px-1 py-0.5 text-[11px] cursor-pointer">
+                {COLOR_PRESETS.map((p) => <option key={p.id} value={p.id}>{`#${i + 1}: ${p.label}`}</option>)}
+              </select>
+            ))}
+          </div>
+        </div>
+      )}
+
       {kind === "table" && result?.columns && result.columns.length > 0 && (
         <div className="rounded-lg border border-border-soft/70 p-2 space-y-1.5">
           <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-subtle">
