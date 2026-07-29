@@ -399,6 +399,12 @@ function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
 
       {hasSql && <SqlField value={cfg.sql ?? ""} onChange={(v) => set({ sql: v })} onBlur={onSqlBlur} schema={schema} />}
 
+      {kind === "stat" && (
+        <select value={cfg.format ?? "number"} onChange={(e) => set({ format: e.target.value as BlockConfig["format"] })} className={`${SELECT} w-full`}>
+          <option value="number">Show as: number</option>
+          <option value="ratio">Show as: ratio (1 : x) — uses every number the query returns</option>
+        </select>
+      )}
       {(kind === "stat" || kind === "kpi") && (
         <input value={cfg.sub ?? ""} onChange={(e) => set({ sub: e.target.value })} placeholder="Sub-label (optional)" className={INPUT_SM} />
       )}

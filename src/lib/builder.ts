@@ -200,6 +200,8 @@ export interface BlockConfig {
   density?: "condensed" | "normal";
   /** Whole-element preset text color (normal | low | success | warning | error | highlight). */
   color?: "normal" | "low" | "success" | "warning" | "error" | "highlight";
+  /** Stat display: a plain number, or a normalized ratio across the row's numbers (1 : 3 : 5). */
+  format?: "number" | "ratio";
   /** Per-table-column preset text color, keyed by column name (a "parts" override). */
   columnColors?: Record<string, string>;
   /** Bento column span (1–6). */

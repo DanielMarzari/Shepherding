@@ -267,26 +267,106 @@ const GROUPS_SP = `WITH sp AS (
    WHERE m.org_id = :orgId AND m.archived_at IS NULL AND g.archived_at IS NULL
 )`;
 
+// Excluded group types (settings JSON) — a subquery reused as a NOT IN filter.
+const EXC_GT = `SELECT je.value FROM pco_sync_settings ss, json_each(coalesce(ss.excluded_group_types, '[]')) je WHERE ss.org_id = :orgId`;
+
+// Per-group activity/health, reproducing lib/community-lane.ts listGroups: members
+// / kids / leaders, joined & left in the settings window, events, attendance, and
+// the derived growing/steady/shrinking/paused state. The window + lapsed cutoffs
+// come from pco_sync_settings. `base` exposes one row per active group with `state`.
+const GROUPS_BASE = `WITH cutoffs AS (
+    SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now','-'||COALESCE((SELECT activity_tracking_months FROM pco_sync_settings WHERE org_id=:orgId),3)||' months') AS track,
+           strftime('%Y-%m-%dT%H:%M:%fZ','now','-'||COALESCE((SELECT lapsed_weeks FROM pco_sync_settings WHERE org_id=:orgId),10)||' weeks') AS lapse
+  ),
+  arl AS (SELECT group_id, person_id, 1 AS active FROM pco_group_memberships WHERE org_id=:orgId AND archived_at IS NULL),
+  mpg AS (
+    SELECT m.group_id,
+      SUM(CASE WHEN m.archived_at IS NULL THEN 1 ELSE 0 END) AS members,
+      SUM(CASE WHEN m.archived_at IS NULL AND p.is_minor=1 THEN 1 ELSE 0 END) AS kids,
+      SUM(CASE WHEN m.archived_at IS NULL AND lower(coalesce(m.role,'')) LIKE '%leader%' THEN 1 ELSE 0 END) AS leaders,
+      SUM(CASE WHEN m.archived_at IS NULL AND m.joined_at IS NOT NULL AND m.joined_at >= (SELECT track FROM cutoffs) THEN 1 ELSE 0 END) AS joined,
+      SUM(CASE WHEN m.archived_at IS NOT NULL AND m.archived_at >= (SELECT track FROM cutoffs) THEN 1 ELSE 0 END) AS archivedInWindow,
+      COUNT(DISTINCT CASE WHEN m.archived_at IS NULL AND m.last_attended_at IS NOT NULL AND m.last_attended_at >= (SELECT track FROM cutoffs) AND m.last_attended_at < (SELECT lapse FROM cutoffs) THEN m.person_id END) AS lapsedCandidates
+    FROM pco_group_memberships m LEFT JOIN pco_people p ON p.org_id=m.org_id AND p.pco_id=m.person_id
+    WHERE m.org_id=:orgId GROUP BY m.group_id
+  ),
+  epg AS (SELECT group_id, COUNT(*) AS events FROM pco_group_events WHERE org_id=:orgId AND starts_at IS NOT NULL AND starts_at >= (SELECT track FROM cutoffs) GROUP BY group_id),
+  apg AS (
+    SELECT a.group_id,
+      COUNT(DISTINCT CASE WHEN arl.active=1 THEN a.person_id END) AS attDistinct,
+      COUNT(DISTINCT a.event_id) AS eventsAtt,
+      COUNT(DISTINCT CASE WHEN arl.active IS NULL THEN a.person_id END) AS attendedThenGone,
+      MAX(CASE WHEN a.event_starts_at >= (SELECT lapse FROM cutoffs) THEN 1 ELSE 0 END) AS takenInLapsed
+    FROM pco_event_attendances a LEFT JOIN arl ON arl.group_id=a.group_id AND arl.person_id=a.person_id
+    WHERE a.org_id=:orgId AND a.attended=1 AND a.event_starts_at IS NOT NULL AND a.event_starts_at >= (SELECT track FROM cutoffs)
+    GROUP BY a.group_id
+  ),
+  derived AS (
+    SELECT g.pco_id, g.name, gt.name AS type_name,
+      COALESCE(mpg.members,0) AS members, COALESCE(mpg.kids,0) AS kids, COALESCE(mpg.leaders,0) AS leaders,
+      COALESCE(mpg.joined,0) AS joined,
+      COALESCE(mpg.archivedInWindow,0) + COALESCE(apg.attendedThenGone,0)
+        + CASE WHEN COALESCE(apg.takenInLapsed,0)=1 THEN COALESCE(mpg.lapsedCandidates,0) ELSE 0 END AS leftr,
+      COALESCE(epg.events,0) AS events, COALESCE(apg.attDistinct,0) AS attDistinct, COALESCE(apg.eventsAtt,0) AS eventsAtt
+    FROM pco_groups g
+    LEFT JOIN pco_group_types gt ON gt.org_id=g.org_id AND gt.pco_id=g.group_type_id
+    LEFT JOIN mpg ON mpg.group_id=g.pco_id
+    LEFT JOIN epg ON epg.group_id=g.pco_id
+    LEFT JOIN apg ON apg.group_id=g.pco_id
+    WHERE g.org_id=:orgId AND g.archived_at IS NULL
+      AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${EXC_GT}))
+  ),
+  base AS (
+    SELECT *, CASE
+        WHEN events=0 AND members>0 THEN 'paused'
+        WHEN (joined-leftr) >= 2 THEN 'growing'
+        WHEN (joined-leftr) <= -2 THEN 'shrinking'
+        ELSE 'steady' END AS state
+    FROM derived
+  )`;
+
+// Unique people currently in a non-excluded active group (dedups across groups).
+const GROUPS_ROSTER = `FROM pco_group_memberships m
+    JOIN pco_groups g ON g.org_id=m.org_id AND g.pco_id=m.group_id
+    LEFT JOIN pco_people p ON p.org_id=m.org_id AND p.pco_id=m.person_id
+   WHERE m.org_id=:orgId AND m.archived_at IS NULL AND g.archived_at IS NULL
+     AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${EXC_GT}))`;
+
 const groupsSeed: SeedPage = {
   slug: "groups",
   title: "Groups",
-  description: "Active groups, who's in them, and the demographics of the people they gather.",
-  revision: 1,
+  description: "Active groups, who's in them, their health, and the demographics of the people they gather.",
+  revision: 2,
   blocks: [
     {
       kind: "stat",
       config: {
-        title: "Active groups", span: 3, sub: "not archived",
-        sql: `SELECT COUNT(*) FROM pco_groups WHERE org_id = :orgId AND archived_at IS NULL`,
+        title: "Active members", span: 3, sub: "unique adults in groups",
+        sql: `SELECT COUNT(DISTINCT m.person_id) ${GROUPS_ROSTER} AND COALESCE(p.is_minor,0)=0`,
       },
     },
     {
       kind: "stat",
       config: {
-        title: "People in groups", span: 3, sub: "distinct current members",
-        sql: `SELECT COUNT(DISTINCT m.person_id) FROM pco_group_memberships m
-                JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
-               WHERE m.org_id = :orgId AND m.archived_at IS NULL AND g.archived_at IS NULL`,
+        title: "Kids in groups", span: 3, sub: "unique minors", color: "low",
+        sql: `SELECT COUNT(DISTINCT m.person_id) ${GROUPS_ROSTER} AND p.is_minor=1`,
+      },
+    },
+    {
+      kind: "stat",
+      config: {
+        title: "Leaders", span: 3, sub: "unique leaders", color: "highlight",
+        sql: `SELECT COUNT(DISTINCT m.person_id) ${GROUPS_ROSTER} AND lower(coalesce(m.role,'')) LIKE '%leader%'`,
+      },
+    },
+    {
+      kind: "stat",
+      config: {
+        title: "Leader : member ratio", span: 3, format: "ratio", sub: "people per leader",
+        sql: `SELECT
+                COUNT(DISTINCT CASE WHEN lower(coalesce(m.role,'')) LIKE '%leader%' THEN m.person_id END) AS leaders,
+                COUNT(DISTINCT m.person_id) AS people
+              ${GROUPS_ROSTER}`,
       },
     },
     {
@@ -298,32 +378,39 @@ const groupsSeed: SeedPage = {
                 JOIN pco_group_memberships m ON m.org_id = g.org_id AND m.group_id = g.pco_id AND m.archived_at IS NULL
                 LEFT JOIN pco_group_types t ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
                WHERE g.org_id = :orgId AND g.archived_at IS NULL
+                 AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${EXC_GT}))
                GROUP BY 1 ORDER BY 2 DESC`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Group health", chartType: "bar", colorByCategory: true, span: 6,
+        sql: `${GROUPS_BASE}
+              SELECT state AS "Health", COUNT(*) AS "Groups" FROM base
+               GROUP BY 1
+               ORDER BY CASE state WHEN 'growing' THEN 1 WHEN 'steady' THEN 2 WHEN 'shrinking' THEN 3 ELSE 4 END`,
       },
     },
     {
       kind: "table",
       config: {
         title: "Groups", span: 12, density: "normal",
-        columnColors: { Type: "low", "Last event": "low" },
-        sub: "active groups · current members · most recent attended event",
-        sql: `WITH mem AS (
-                SELECT group_id, COUNT(DISTINCT person_id) AS members
-                  FROM pco_group_memberships WHERE org_id = :orgId AND archived_at IS NULL GROUP BY group_id
-              ), att AS (
-                SELECT group_id, MAX(event_starts_at) AS last_event
-                  FROM pco_event_attendances WHERE org_id = :orgId AND attended = 1 AND group_id IS NOT NULL GROUP BY group_id
-              )
-              SELECT g.name AS "Group",
-                     COALESCE(t.name, '(no type)') AS "Type",
-                     COALESCE(mem.members, 0) AS "Members",
-                     date(att.last_event) AS "Last event"
-                FROM pco_groups g
-                LEFT JOIN pco_group_types t ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
-                LEFT JOIN mem ON mem.group_id = g.pco_id
-                LEFT JOIN att ON att.group_id = g.pco_id
-               WHERE g.org_id = :orgId AND g.archived_at IS NULL
-               ORDER BY "Members" DESC, g.name ASC`,
+        columnColors: { Type: "low", Leaders: "low", "Attend taken %": "low", Events: "low" },
+        sub: "active groups · membership, leaders, attendance, and joins/leaves in the activity window",
+        sql: `${GROUPS_BASE}
+              SELECT name AS "Group",
+                     COALESCE(type_name, '(no type)') AS "Type",
+                     state AS "State",
+                     members AS "Members",
+                     leaders AS "Leaders",
+                     CASE WHEN events > 0 THEN round(CAST(eventsAtt AS REAL)/events*100) END AS "Attend taken %",
+                     CASE WHEN eventsAtt > 0 AND members > 0 THEN min(100, round(CAST(attDistinct AS REAL)/members*100)) END AS "Attend %",
+                     joined AS "Joined",
+                     leftr AS "Left",
+                     events AS "Events"
+                FROM base
+               ORDER BY members DESC, name ASC`,
       },
     },
     { kind: "divider", config: { title: "Demographics — people in groups", span: 12 } },

@@ -14,6 +14,14 @@ const fmt = (v: unknown): string => {
   return String(v);
 };
 
+/** Normalize a row of numbers to a ratio against the smallest (1 : 3 : 5, or 1 : 3.5). */
+const asRatio = (row: unknown[]): string => {
+  const nums = row.map(Number).filter((n) => Number.isFinite(n));
+  const mn = Math.min(...nums);
+  if (!nums.length || !(mn > 0)) return "—";
+  return nums.map((n) => { const r = n / mn; return Number.isInteger(r) ? String(r) : r.toFixed(1); }).join(" : ");
+};
+
 function QueryError({ error }: { error: string }) {
   return <div className="rounded-lg border border-warn-soft-bg bg-warn-soft-bg/30 px-3 py-2 text-xs text-warn-soft-fg">{error}</div>;
 }
@@ -75,7 +83,9 @@ export function BlockView({ kind, config, result, pages, childResults }: {
     if (kind === "stat") {
       return (
         <div>
-          <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>{fmt(result.rows[0]?.[0])}</div>
+          <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>
+            {config.format === "ratio" ? asRatio(result.rows[0] ?? []) : fmt(result.rows[0]?.[0])}
+          </div>
           {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
         </div>
       );
