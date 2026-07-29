@@ -259,10 +259,134 @@ const demographicsSeed: SeedPage = {
   ],
 };
 
+// ── Groups ───────────────────────────────────────────────────────────
+// People currently in a non-archived group — the demographics scope for /groups.
+const GROUPS_SP = `WITH sp AS (
+  SELECT DISTINCT m.person_id FROM pco_group_memberships m
+    JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL AND g.archived_at IS NULL
+)`;
+
+const groupsSeed: SeedPage = {
+  slug: "groups",
+  title: "Groups",
+  description: "Active groups, who's in them, and the demographics of the people they gather.",
+  revision: 1,
+  blocks: [
+    {
+      kind: "stat",
+      config: {
+        title: "Active groups", span: 3, sub: "not archived",
+        sql: `SELECT COUNT(*) FROM pco_groups WHERE org_id = :orgId AND archived_at IS NULL`,
+      },
+    },
+    {
+      kind: "stat",
+      config: {
+        title: "People in groups", span: 3, sub: "distinct current members",
+        sql: `SELECT COUNT(DISTINCT m.person_id) FROM pco_group_memberships m
+                JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
+               WHERE m.org_id = :orgId AND m.archived_at IS NULL AND g.archived_at IS NULL`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Members by group type", chartType: "bar", colorByCategory: true, span: 6,
+        sql: `SELECT COALESCE(t.name, '(no type)') AS "Type", COUNT(DISTINCT m.person_id) AS "Members"
+                FROM pco_groups g
+                JOIN pco_group_memberships m ON m.org_id = g.org_id AND m.group_id = g.pco_id AND m.archived_at IS NULL
+                LEFT JOIN pco_group_types t ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
+               WHERE g.org_id = :orgId AND g.archived_at IS NULL
+               GROUP BY 1 ORDER BY 2 DESC`,
+      },
+    },
+    {
+      kind: "table",
+      config: {
+        title: "Groups", span: 12, density: "normal",
+        columnColors: { Type: "low", "Last event": "low" },
+        sub: "active groups · current members · most recent attended event",
+        sql: `WITH mem AS (
+                SELECT group_id, COUNT(DISTINCT person_id) AS members
+                  FROM pco_group_memberships WHERE org_id = :orgId AND archived_at IS NULL GROUP BY group_id
+              ), att AS (
+                SELECT group_id, MAX(event_starts_at) AS last_event
+                  FROM pco_event_attendances WHERE org_id = :orgId AND attended = 1 AND group_id IS NOT NULL GROUP BY group_id
+              )
+              SELECT g.name AS "Group",
+                     COALESCE(t.name, '(no type)') AS "Type",
+                     COALESCE(mem.members, 0) AS "Members",
+                     date(att.last_event) AS "Last event"
+                FROM pco_groups g
+                LEFT JOIN pco_group_types t ON t.org_id = g.org_id AND t.pco_id = g.group_type_id
+                LEFT JOIN mem ON mem.group_id = g.pco_id
+                LEFT JOIN att ON att.group_id = g.pco_id
+               WHERE g.org_id = :orgId AND g.archived_at IS NULL
+               ORDER BY "Members" DESC, g.name ASC`,
+      },
+    },
+    { kind: "divider", config: { title: "Demographics — people in groups", span: 12 } },
+    {
+      kind: "chart",
+      config: {
+        title: "Membership status", chartType: "pie", span: 3,
+        sql: `${GROUPS_SP}
+              SELECT COALESCE(p.membership_type, '(unknown)') AS "Membership", COUNT(*) AS "People"
+                FROM pco_people p JOIN sp ON sp.person_id = p.pco_id WHERE p.org_id = :orgId
+               GROUP BY p.membership_type ORDER BY COUNT(*) DESC`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Age", chartType: "bar", colorByCategory: true, span: 3,
+        sql: `${GROUPS_SP}
+              SELECT CASE
+                       WHEN p.birth_year IS NULL OR p.birth_year < 1900 THEN 'Unknown'
+                       WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 18 THEN '<18'
+                       WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 30 THEN '18–29'
+                       WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 50 THEN '30–49'
+                       WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 65 THEN '50–64'
+                       ELSE '65+' END AS "Age",
+                     COUNT(*) AS "People"
+                FROM pco_people p JOIN sp ON sp.person_id = p.pco_id WHERE p.org_id = :orgId
+               GROUP BY 1 ORDER BY MIN(${AGE_ORD})`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Gender", chartType: "bar", colorByCategory: true, span: 3,
+        sql: `${GROUPS_SP}
+              SELECT CASE
+                       WHEN lower(coalesce(p.gender,'')) IN ('m','male') THEN 'Male'
+                       WHEN lower(coalesce(p.gender,'')) IN ('f','female') THEN 'Female'
+                       ELSE 'Unknown' END AS "Gender",
+                     COUNT(*) AS "People"
+                FROM pco_people p JOIN sp ON sp.person_id = p.pco_id WHERE p.org_id = :orgId
+               GROUP BY 1`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Parents", chartType: "bar", colorByCategory: true, span: 3,
+        sql: `${GROUPS_SP}
+              SELECT CASE WHEN p.is_parent = 1 THEN 'Parent' ELSE 'No kids' END AS "Household",
+                     COUNT(*) AS "People"
+                FROM pco_people p JOIN sp ON sp.person_id = p.pco_id WHERE p.org_id = :orgId
+               GROUP BY 1`,
+      },
+    },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
   [demographicsSeed.slug]: demographicsSeed,
+  [groupsSeed.slug]: groupsSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────
