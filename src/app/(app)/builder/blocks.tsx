@@ -83,25 +83,31 @@ export function BlockView({ kind, config, result, pages, childResults }: {
     if (kind === "progress") return <Progress config={config} result={result} />;
     if (kind === "leaderboard") return <Leaderboard config={config} result={result} />;
 
-    // table — "condensed" (tight, left/right-aligned) or "normal" (spacious, centered)
+    // table — "condensed" (tight, the default) or "normal" (spacious, like the
+    // original hand-coded page tables): larger text, roomy padding, a header
+    // rule and row hover, with text columns left-aligned and numeric columns
+    // right-aligned (NOT centered).
     if (result.columns.length === 0) return <Empty>No columns returned.</Empty>;
     const normal = config.density === "normal";
+    // A column is numeric if its first non-null cell is a number — used to
+    // right-align number columns (header + cells) in normal mode.
+    const colNum = result.columns.map((_, j) => typeof result.rows.find((r) => r[j] != null)?.[j] === "number");
     return (
       <div className="overflow-x-auto">
         <table className={`w-full tnum border-collapse ${normal ? "text-sm" : "text-xs"}`}>
           <thead>
             <tr className={`text-muted ${normal ? "border-b border-border-soft" : ""}`}>
-              {result.columns.map((c) => (
-                <th key={c} className={`font-medium whitespace-nowrap ${normal ? "text-center px-4 py-2.5" : "text-left py-1 pr-3"}`}>{c}</th>
+              {result.columns.map((c, j) => (
+                <th key={c} className={`font-medium whitespace-nowrap ${normal ? `px-4 py-2.5 ${colNum[j] ? "text-right" : "text-left"}` : "text-left py-1 pr-3"}`}>{c}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {result.rows.slice(0, 200).map((r, i) => (
-              <tr key={i} className={`border-t border-border-soft/60 ${normal ? "hover:bg-bg-elev-2/40 transition-colors" : ""}`}>
+              <tr key={i} className={`border-t border-border-soft/60 ${normal ? "hover:bg-bg-elev-2/50 transition-colors" : ""}`}>
                 {r.map((cell, j) => (
                   <td key={j} className={normal
-                    ? "px-4 py-2.5 whitespace-nowrap text-center"
+                    ? `px-4 py-2.5 whitespace-nowrap ${colNum[j] ? "text-right tnum" : "text-fg"}`
                     : `py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : "text-fg"}`}>{fmt(cell)}</td>
                 ))}
               </tr>
@@ -109,7 +115,7 @@ export function BlockView({ kind, config, result, pages, childResults }: {
           </tbody>
         </table>
         {(result.truncated || result.rows.length > 200) && (
-          <div className={`text-[10px] text-subtle mt-1.5 ${normal ? "text-center" : ""}`}>Showing the first {Math.min(result.rows.length, 200).toLocaleString()} rows.</div>
+          <div className="text-[10px] text-subtle mt-1.5">Showing the first {Math.min(result.rows.length, 200).toLocaleString()} rows.</div>
         )}
       </div>
     );

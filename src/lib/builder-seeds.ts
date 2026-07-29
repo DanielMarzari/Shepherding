@@ -40,7 +40,7 @@ const checkinsSeed: SeedPage = {
   title: "Check-ins",
   description:
     "Tag events as Kid / Adult / Ignore under Filters → Check-in events. Ignored events don't appear here.",
-  revision: 2,
+  revision: 3,
   blocks: [
     {
       kind: "stat",
@@ -93,7 +93,7 @@ const checkinsSeed: SeedPage = {
       kind: "table",
       config: {
         title: "Check-in events",
-        span: 6,
+        span: 12,
         density: "normal",
         sub: "active events · sorted by all-time check-ins (ignored events hidden)",
         sql: `WITH event_stats AS (

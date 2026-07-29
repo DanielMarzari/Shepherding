@@ -40,11 +40,13 @@ const PALETTE_GROUPS: Array<{ group: string; kinds: BlockKind[] }> = [
 ];
 const DATA_KINDS = new Set<BlockKind>(["stat", "kpi", "progress", "chart", "table", "leaderboard", "map"]);
 
+// 12-column bento: fine enough for quarters/thirds (KPI rows of 4, etc.).
 const SPAN: Record<number, string> = {
-  1: "lg:col-span-1", 2: "lg:col-span-2", 3: "lg:col-span-3",
-  4: "lg:col-span-4", 5: "lg:col-span-5", 6: "lg:col-span-6",
+  1: "lg:col-span-1", 2: "lg:col-span-2", 3: "lg:col-span-3", 4: "lg:col-span-4",
+  5: "lg:col-span-5", 6: "lg:col-span-6", 7: "lg:col-span-7", 8: "lg:col-span-8",
+  9: "lg:col-span-9", 10: "lg:col-span-10", 11: "lg:col-span-11", 12: "lg:col-span-12",
 };
-const spanClass = (n: number | undefined) => SPAN[Math.min(6, Math.max(1, n ?? 1))] ?? "lg:col-span-2";
+const spanClass = (n: number | undefined) => SPAN[Math.min(12, Math.max(1, n ?? 4))] ?? "lg:col-span-4";
 const chartHint = (id: string) => CHART_TYPES.flatMap((g) => g.items).find((i) => i.id === id)?.hint ?? "";
 
 /** Whether a block kind (with its current config) is powered by a SQL query. */
@@ -116,7 +118,7 @@ export function BuilderPageClient({
           No blocks yet — add one above. Data blocks run a read-only SQL query against the live database.
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4">
           {blocks.map((b, i) => (
             <BlockEditor key={b.id} block={b} slug={page.slug} schema={schema} pages={pages}
               siblings={siblings.filter((s) => s.id !== b.id && DATA_KINDS.has(s.kind))}
@@ -180,10 +182,10 @@ function ViewMode({ page, blocks, isAdmin, pages, onEdit }: { page: PageInfo; bl
       {blocks.length === 0 ? (
         <EmptyPage isAdmin={isAdmin} onEdit={onEdit} />
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4">
           {blocks.map((b) => {
             if (b.kind === "divider") {
-              return <div key={b.id} className={`py-1 ${spanClass(6)}`}><BlockView kind="divider" config={b.config} result={null} /></div>;
+              return <div key={b.id} className={`py-1 ${spanClass(12)}`}><BlockView kind="divider" config={b.config} result={null} /></div>;
             }
             return (
               <div key={b.id} className={`relative rounded-xl border border-border-soft bg-bg-elev-2/40 p-5 ${spanClass(b.config.span)}`}>
@@ -515,8 +517,8 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
 
       <div className="flex items-center gap-2 text-xs flex-wrap">
         <label className="text-subtle">Width</label>
-        <select value={cfg.span ?? 2} onChange={(e) => set({ span: Number(e.target.value) })} className="bg-bg border border-border-soft rounded px-1.5 py-1 text-xs cursor-pointer">
-          {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}/6</option>)}
+        <select value={cfg.span ?? 4} onChange={(e) => set({ span: Number(e.target.value) })} className="bg-bg border border-border-soft rounded px-1.5 py-1 text-xs cursor-pointer">
+          {[[2, "1/6"], [3, "1/4"], [4, "1/3"], [6, "1/2"], [8, "2/3"], [9, "3/4"], [10, "5/6"], [12, "Full"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
         {showHeight && (
           <>
