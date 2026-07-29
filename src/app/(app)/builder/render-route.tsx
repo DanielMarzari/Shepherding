@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import type { SessionContext } from "@/lib/auth";
 import {
+  countPageVersions,
   getBuilderBlocks,
   getBuilderPage,
   getDbSchema,
@@ -71,6 +72,7 @@ export async function renderBuilderRoute({
           initialEdit={edit}
           schema={getDbSchema()}
           pages={pages}
+          versionCount={countPageVersions(session.orgId, page.id)}
         />
       </div>
     </AppShell>

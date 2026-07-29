@@ -14,7 +14,10 @@ import {
   deleteBuilderPage,
   getBuilderBlockSql,
   moveBuilderBlock,
+  pageIdOfBlock,
   runBuilderQueryForOrg,
+  snapshotPageVersion,
+  undoPageVersion,
   updateBuilderBlock,
   updateBuilderPage,
 } from "@/lib/builder";
@@ -37,6 +40,7 @@ export async function createPageAction(formData: FormData) {
 
 export async function updatePageAction(id: number, title: string, description: string, slug: string, navSection?: string, moreSection?: string) {
   const s = await requireAdmin();
+  snapshotPageVersion(s.orgId, id);
   updateBuilderPage(s.orgId, id, title, description.trim() || null, navSection ?? null, moreSection ?? null);
   revalidatePath(`/builder/${slug}`);
   revalidatePath("/builder");
@@ -54,26 +58,41 @@ export async function deletePageAction(id: number) {
 export async function addBlockAction(pageId: number, kind: BlockKind, slug: string) {
   const s = await requireAdmin();
   if (!VALID_KINDS.includes(kind)) throw new Error("Bad block kind");
+  snapshotPageVersion(s.orgId, pageId);
   addBuilderBlock(s.orgId, pageId, kind);
   revalidatePath(`/builder/${slug}`);
 }
 
 export async function updateBlockAction(id: number, config: BlockConfig, slug: string) {
   const s = await requireAdmin();
+  const pid = pageIdOfBlock(s.orgId, id);
+  if (pid) snapshotPageVersion(s.orgId, pid);
   updateBuilderBlock(s.orgId, id, config);
   revalidatePath(`/builder/${slug}`);
 }
 
 export async function deleteBlockAction(id: number, slug: string) {
   const s = await requireAdmin();
+  const pid = pageIdOfBlock(s.orgId, id);
+  if (pid) snapshotPageVersion(s.orgId, pid);
   deleteBuilderBlock(s.orgId, id);
   revalidatePath(`/builder/${slug}`);
 }
 
 export async function moveBlockAction(id: number, dir: "up" | "down", slug: string) {
   const s = await requireAdmin();
+  const pid = pageIdOfBlock(s.orgId, id);
+  if (pid) snapshotPageVersion(s.orgId, pid);
   moveBuilderBlock(s.orgId, id, dir);
   revalidatePath(`/builder/${slug}`);
+}
+
+/** Undo the most recent change to a page (restores the last snapshot). */
+export async function undoPageAction(pageId: number, slug: string) {
+  const s = await requireAdmin();
+  undoPageVersion(s.orgId, pageId);
+  revalidatePath(`/builder/${slug}`);
+  revalidatePath(`/${slug}`);
 }
 
 /** Live-preview a query from the block editor (admin only, read-only). */

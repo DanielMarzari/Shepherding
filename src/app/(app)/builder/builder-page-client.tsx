@@ -16,6 +16,7 @@ import {
   moveBlockAction,
   runBlockAction,
   runQueryAction,
+  undoPageAction,
   updateBlockAction,
   updatePageAction,
 } from "./actions";
@@ -77,6 +78,7 @@ export function BuilderPageClient({
   initialEdit,
   schema,
   pages,
+  versionCount = 0,
 }: {
   page: PageInfo;
   blocks: ClientBlock[];
@@ -84,11 +86,19 @@ export function BuilderPageClient({
   initialEdit: boolean;
   schema: DbSchema;
   pages: PageRef[];
+  versionCount?: number;
 }) {
   const router = useRouter();
   const [edit, setEdit] = useState(isAdmin && initialEdit);
   const [pending, start] = useTransition();
   const mutate = (fn: () => Promise<unknown>) => start(async () => { await fn(); router.refresh(); });
+  // Undo restores the last snapshot; a full reload back into edit mode guarantees
+  // every block editor picks up the restored config (their local state is seeded
+  // on mount).
+  const undo = () => start(async () => {
+    await undoPageAction(page.id, page.slug);
+    window.location.assign(`${window.location.pathname}?edit=1`);
+  });
 
   const siblings: SiblingRef[] = blocks.map((b) => ({ id: b.id, title: (b.config.title ?? "").trim() || BLOCK_META[b.kind].label, kind: b.kind }));
 
@@ -96,6 +106,15 @@ export function BuilderPageClient({
 
   return (
     <div className="space-y-5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-xs text-muted">Editing — click a block to change it. Each change can be undone.</div>
+        <button type="button" onClick={undo} disabled={pending || versionCount === 0}
+          title={versionCount === 0 ? "Nothing to undo yet" : `Undo the last change (${versionCount} available)`}
+          className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-border-soft text-muted hover:text-fg hover:border-accent disabled:opacity-40 disabled:hover:border-border-soft cursor-pointer transition-colors">
+          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" /></svg>
+          Undo{versionCount > 0 ? ` (${versionCount})` : ""}
+        </button>
+      </div>
       <PageSettings page={page} onDone={() => setEdit(false)} busy={pending} mutate={mutate} />
       <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4 space-y-3">
         <div className="text-xs text-muted font-medium">Add a block</div>

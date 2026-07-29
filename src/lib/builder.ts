@@ -352,6 +352,65 @@ export function deleteBuilderBlock(orgId: number, id: number): void {
   if (row) touchPage(row.pageId);
 }
 
+// ─── Edit history (Undo) ─────────────────────────────────────────────
+
+const MAX_PAGE_VERSIONS = 10;
+
+interface PageSnapshot {
+  page: { title: string; description: string | null; navSection: string | null; moreSection: string | null };
+  blocks: Array<{ id: number; position: number; kind: string; config: string }>;
+}
+
+/** The page a block belongs to (org-scoped), or null. */
+export function pageIdOfBlock(orgId: number, blockId: number): number | null {
+  const row = getDb().prepare("SELECT page_id AS pid FROM builder_blocks WHERE id = ? AND org_id = ?").get(blockId, orgId) as { pid: number } | undefined;
+  return row?.pid ?? null;
+}
+
+/** Snapshot a page (meta + blocks) so the next change can be undone. Call BEFORE
+ *  mutating; keeps only the most recent MAX_PAGE_VERSIONS snapshots per page. */
+export function snapshotPageVersion(orgId: number, pageId: number): void {
+  const db = getDb();
+  const page = db
+    .prepare("SELECT title, description, nav_section AS navSection, more_section AS moreSection FROM builder_pages WHERE id = ? AND org_id = ?")
+    .get(pageId, orgId) as PageSnapshot["page"] | undefined;
+  if (!page) return;
+  const blocks = db.prepare("SELECT id, position, kind, config FROM builder_blocks WHERE page_id = ? ORDER BY position, id").all(pageId) as PageSnapshot["blocks"];
+  db.prepare("INSERT INTO builder_page_versions (page_id, org_id, snapshot) VALUES (?, ?, ?)").run(pageId, orgId, JSON.stringify({ page, blocks }));
+  db.prepare(
+    `DELETE FROM builder_page_versions
+      WHERE page_id = ? AND id NOT IN (SELECT id FROM builder_page_versions WHERE page_id = ? ORDER BY id DESC LIMIT ?)`,
+  ).run(pageId, pageId, MAX_PAGE_VERSIONS);
+}
+
+/** How many undo steps are available for a page. */
+export function countPageVersions(orgId: number, pageId: number): number {
+  return (getDb().prepare("SELECT COUNT(*) AS n FROM builder_page_versions WHERE page_id = ? AND org_id = ?").get(pageId, orgId) as { n: number }).n;
+}
+
+/** Undo: restore the most recent snapshot (meta + blocks) and consume it, so
+ *  repeated undos walk back through history. Block ids are preserved so filter
+ *  targeting survives. Returns false when there's nothing to undo. */
+export function undoPageVersion(orgId: number, pageId: number): boolean {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT id, snapshot FROM builder_page_versions WHERE page_id = ? AND org_id = ? ORDER BY id DESC LIMIT 1")
+    .get(pageId, orgId) as { id: number; snapshot: string } | undefined;
+  if (!row) return false;
+  const snap = JSON.parse(row.snapshot) as PageSnapshot;
+  const tx = db.transaction(() => {
+    db.prepare(
+      "UPDATE builder_pages SET title = ?, description = ?, nav_section = ?, more_section = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND org_id = ?",
+    ).run(snap.page.title, snap.page.description, snap.page.navSection, snap.page.moreSection, pageId, orgId);
+    db.prepare("DELETE FROM builder_blocks WHERE page_id = ?").run(pageId);
+    const ins = db.prepare("INSERT INTO builder_blocks (id, page_id, org_id, position, kind, config) VALUES (?, ?, ?, ?, ?, ?)");
+    for (const b of snap.blocks) ins.run(b.id, pageId, orgId, b.position, b.kind, b.config);
+    db.prepare("DELETE FROM builder_page_versions WHERE id = ?").run(row.id);
+  });
+  tx();
+  return true;
+}
+
 /** Swap a block with its neighbor in the given direction. */
 export function moveBuilderBlock(orgId: number, id: number, dir: "up" | "down"): void {
   const db = getDb();
