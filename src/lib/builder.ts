@@ -121,12 +121,29 @@ export type BlockKind =
   | "table"
   | "leaderboard"
   | "map"
+  | "linkcard"
   | "text"
   | "divider"
   | "embed"
   | "filter"
   | "pagelist"
   | "group";
+
+/** One person inside a linkcard connection — an avatar + name that links out
+ *  to their PCO profile. Produced by decrypt-capable sources. */
+export interface LinkCardPerson {
+  name: string;
+  /** PCO person id → https://people.planningcenteronline.com/people/{pcoId} */
+  pcoId?: string | null;
+  initials?: string | null;
+  /** A small inline badge on the person (e.g. "inactive"). */
+  badge?: string | null;
+}
+/** A small labelled tag on a linkcard row (confidence, "may be returning", …). */
+export interface LinkCardTag {
+  label: string;
+  tone?: "normal" | "low" | "success" | "warning" | "error" | "highlight";
+}
 
 /** A block nested inside a group container. */
 export interface ChildBlock {
@@ -210,6 +227,12 @@ export interface BlockConfig {
   segmentColors?: string[];
   /** Stat: label for a secondary "+N" value (the query's 2nd column), e.g. "kids". */
   secondaryLabel?: string;
+  /** Stat / kpi / progress: which result column holds the value (default 0).
+   *  Lets several stat cards read different columns of one shared source row. */
+  valueColumn?: number;
+  /** Table: render these columns' cells as chips/pills. The cell value is a
+   *  newline-joined list (sources) or an array; each part becomes a chip. */
+  chipColumns?: string[];
   /** Table: click column headers to sort. */
   sortable?: boolean;
   /** Per-table-column preset text color, keyed by column name (a "parts" override). */

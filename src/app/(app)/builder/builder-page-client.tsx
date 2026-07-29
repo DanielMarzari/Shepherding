@@ -36,12 +36,12 @@ interface SiblingRef { id: number; title: string; kind: BlockKind }
 
 const PALETTE_GROUPS: Array<{ group: string; kinds: BlockKind[] }> = [
   { group: "Metrics", kinds: ["stat", "kpi", "progress"] },
-  { group: "Visuals", kinds: ["chart", "table", "leaderboard", "map"] },
+  { group: "Visuals", kinds: ["chart", "table", "leaderboard", "map", "linkcard"] },
   { group: "Content", kinds: ["text", "divider", "embed"] },
   { group: "Controls", kinds: ["filter"] },
   { group: "Containers", kinds: ["group", "pagelist"] },
 ];
-const DATA_KINDS = new Set<BlockKind>(["stat", "kpi", "progress", "chart", "table", "leaderboard", "map"]);
+const DATA_KINDS = new Set<BlockKind>(["stat", "kpi", "progress", "chart", "table", "leaderboard", "map", "linkcard"]);
 /** Kinds that support a whole-element preset text color. */
 const COLORABLE = new Set<BlockKind>(["stat", "kpi", "progress", "text", "divider", "leaderboard", "table"]);
 
@@ -424,6 +424,9 @@ function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
       {kind === "stat" && (cfg.format ?? "number") === "number" && (
         <input value={cfg.secondaryLabel ?? ""} onChange={(e) => set({ secondaryLabel: e.target.value || undefined })} placeholder={`"+N" label — uses the query's 2nd column (e.g. "kids")`} className={INPUT_SM} />
       )}
+      {kind === "stat" && (cfg.format ?? "number") === "number" && (
+        <input type="number" min={0} value={cfg.valueColumn ?? 0} onChange={(e) => set({ valueColumn: Math.max(0, Number(e.target.value)) || undefined })} placeholder="Value column (0 = first)" title="Which result column holds the number (0 = first). Lets several cards share one source row." className={INPUT_SM} />
+      )}
       {(kind === "stat" || kind === "kpi") && (
         <input value={cfg.sub ?? ""} onChange={(e) => set({ sub: e.target.value })} placeholder="Sub-label (optional)" className={INPUT_SM} />
       )}
@@ -613,6 +616,12 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
                     className="w-14 bg-bg border border-border-soft rounded px-1 py-0.5 text-[11px] disabled:opacity-40" />
                   <input type="checkbox" checked={!!th?.invert} disabled={!th} title="lower is better (flip green/red)"
                     onChange={(e) => setTh({ invert: e.target.checked })} className="cursor-pointer disabled:opacity-40" />
+                  <label className="flex items-center gap-0.5 text-[10px] text-subtle cursor-pointer" title="Render this column's newline-joined list as chips">
+                    <input type="checkbox" checked={(cfg.chipColumns ?? []).includes(c)}
+                      onChange={(e) => set({ chipColumns: e.target.checked ? [...(cfg.chipColumns ?? []), c] : (cfg.chipColumns ?? []).filter((x) => x !== c) })}
+                      className="cursor-pointer" />
+                    chips
+                  </label>
                 </div>
               );
             })}

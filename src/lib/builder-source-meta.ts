@@ -45,31 +45,31 @@ export const SOURCE_META: SourceMeta[] = [
   {
     id: "shepherds_directory",
     label: "Shepherds directory",
-    description: "Every group/team leader: Shepherd, Status (needs mapping / lead pastor / overseen), Groups led, Teams led, Overseen by. Decrypted names.",
+    description: "Every group/team leader: Shepherd, Status (needs mapping / lead pastor / overseen), Groups led, Teams led, Overseen by. Groups/Teams/Overseen are newline-joined name lists — mark them as chip columns. Decrypted names.",
     kinds: ["table"],
   },
   {
     id: "shepherds_overview",
     label: "Shepherds overview (counts)",
-    description: "One row of the three headline counts: Shepherds, Overseen, Needs mapping. Pair with a list-format stat.",
+    description: "One row of the three headline counts: Shepherds, Overseen, Needs mapping. Read a column with a stat's Value-column setting (0/1/2).",
     kinds: ["stat"],
   },
   {
     id: "shepherd_team_directory",
     label: "Shepherd team directory",
-    description: "The 'REFERENCE - Shepherd Team' list with each member's four-bucket reach: Shepherd, Membership, Staff, Vol leaders, Congregants, Care, Total reach. Decrypted names.",
+    description: "The 'REFERENCE - Shepherd Team' list with each member's assignments (chip column) + four-bucket reach: Shepherd, Membership, Assignments, Staff, Vol leaders, Congregants, Care, Total reach. Decrypted names.",
     kinds: ["table"],
   },
   {
     id: "duplicate_pairs",
-    label: "Duplicate pairs",
-    description: "Likely-duplicate people: Person A, Person B, Confidence, Signals, Returning?. Honors a :confidence param (high/low). Decrypted names.",
-    kinds: ["table"],
+    label: "Duplicate pairs (PCO cards)",
+    description: "Likely-duplicate people as People/PCO cards: each row is a pair (both link to PCO), matching signals as the note, confidence + returning as tags. Honors a :confidence param (high/low). Decrypted names.",
+    kinds: ["linkcard"],
   },
   {
     id: "duplicate_overview",
     label: "Duplicate audit (counts)",
-    description: "One row of the headline counts: Pairs, High, Low, Returning. Pair with a list-format stat.",
+    description: "One row of the headline counts: Pairs, High, Low, Returning. Read a column with a stat's Value-column setting (0/1/2/3).",
     kinds: ["stat"],
   },
 ];

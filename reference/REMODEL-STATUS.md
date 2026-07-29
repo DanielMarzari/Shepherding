@@ -58,6 +58,10 @@ flows or mutating forms.
 
 ## Capabilities built for this remodel
 Table density; 12-col grid (fractional widths); preset text colors (whole-element +
-per-column) + threshold color-bands; per-bar category colors; ratio & list stat
-formats (+ per-segment colors); Undo (last 10); re-seed-on-revision; and the
-decrypt-capable **data source** registry (`builder-sources.ts`).
+per-column) + threshold color-bands; **chip columns** (newline-joined lists → pills);
+per-bar category colors; ratio & list stat formats (+ per-segment colors); **stat
+`valueColumn`** (several cards read one shared source row); SVG bar/pie charts +
+multi-series line; **tabs / chips / dropdown filters**; the **`linkcard`** block
+(People/PCO cards — 1+ people linking to PCO, note, tags); Undo (last 10);
+re-seed-on-revision; and the decrypt-capable **data source** registry
+(`builder-sources.ts`, cached per-render for graph-heavy sources).

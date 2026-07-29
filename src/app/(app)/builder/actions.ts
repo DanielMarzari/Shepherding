@@ -29,7 +29,7 @@ async function requireAdmin() {
   return s;
 }
 
-const VALID_KINDS: BlockKind[] = ["stat", "kpi", "progress", "chart", "table", "leaderboard", "map", "text", "divider", "embed", "filter", "pagelist", "group"];
+const VALID_KINDS: BlockKind[] = ["stat", "kpi", "progress", "chart", "table", "leaderboard", "map", "linkcard", "text", "divider", "embed", "filter", "pagelist", "group"];
 
 export async function createPageAction(formData: FormData) {
   const s = await requireAdmin();

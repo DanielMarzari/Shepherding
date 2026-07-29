@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { BlockConfig, BlockKind, PageRef, QueryResult } from "@/lib/builder";
+import type { BlockConfig, BlockKind, LinkCardPerson, LinkCardTag, PageRef, QueryResult } from "@/lib/builder";
 import { colorClass } from "@/lib/builder-defaults";
 import { renderMarkdown, MD_CLASS } from "@/lib/markdown";
 import { EChartsBlock } from "./echarts-block";
@@ -94,6 +94,14 @@ export function BlockView({ kind, config, result, pages, childResults }: {
       </div>
     );
   }
+  if (kind === "linkcard") {
+    return (
+      <div className="space-y-2">
+        {title && <h3 className="text-sm font-semibold">{title}</h3>}
+        <LinkCards config={config} result={result} />
+      </div>
+    );
+  }
 
   const body = () => {
     if (!result) return <Empty>No data yet.</Empty>;
@@ -117,10 +125,11 @@ export function BlockView({ kind, config, result, pages, childResults }: {
           </div>
         );
       }
+      const vc = config.valueColumn ?? 0;
       return (
         <div>
           <div className="flex items-baseline gap-2">
-            <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>{fmt(row[0])}</div>
+            <div className={`tnum text-3xl font-semibold leading-tight ${colorClass(config.color)}`}>{fmt(row[vc])}</div>
             {config.secondaryLabel && row[1] != null && (
               <div className="tnum text-xs text-subtle">+ {fmt(row[1])} {config.secondaryLabel}</div>
             )}
@@ -242,6 +251,94 @@ function Leaderboard({ config, result }: { config: BlockConfig; result: QueryRes
   );
 }
 
+const PCO_PERSON = "https://people.planningcenteronline.com/people/";
+const TAG_TONE: Record<string, string> = {
+  normal: "border-border-soft text-fg",
+  low: "border-border-soft text-muted",
+  success: "border-[color:var(--good-soft-fg)]/40 text-[color:var(--good-soft-fg)]",
+  warning: "border-warn-soft-bg text-warn-soft-fg",
+  error: "border-bad-soft-bg text-bad-soft-fg",
+  highlight: "border-accent text-accent",
+};
+
+/** Coerce a raw result row into a linkcard shape. Structured sources return
+ *  [people[], subtext, tags[]]; a flat SQL row degrades to a single person
+ *  [name, pcoId?, subtext?, tags(| -delimited)?]. */
+function toCard(row: unknown[]): { people: LinkCardPerson[]; subtext: string; tags: LinkCardTag[] } {
+  const first = row[0];
+  if (Array.isArray(first)) {
+    const people = (first as unknown[]).map((p) => (p && typeof p === "object" ? (p as LinkCardPerson) : { name: String(p) }));
+    const rawTags = Array.isArray(row[2]) ? (row[2] as unknown[]) : [];
+    const tags = rawTags.map((t) => (t && typeof t === "object" ? (t as LinkCardTag) : { label: String(t) }));
+    return { people, subtext: row[1] != null ? String(row[1]) : "", tags };
+  }
+  const tags = row[3] != null ? String(row[3]).split("|").map((s) => s.trim()).filter(Boolean).map((label) => ({ label })) : [];
+  return { people: [{ name: String(first ?? "—"), pcoId: row[1] != null ? String(row[1]) : null }], subtext: row[2] != null ? String(row[2]) : "", tags };
+}
+
+function PersonLink({ p }: { p: LinkCardPerson }) {
+  const initials = (p.initials || p.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
+  const inner = (
+    <>
+      <span className="w-7 h-7 rounded-full bg-bg-elev-2 flex items-center justify-center text-[10px] font-semibold text-muted shrink-0">{initials}</span>
+      <span className="min-w-0">
+        <span className="font-medium text-sm truncate group-hover:text-accent">{p.name}</span>
+        {p.badge && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-bg-elev-2 text-muted">{p.badge}</span>}
+      </span>
+    </>
+  );
+  if (!p.pcoId) return <span className="flex items-center gap-2">{inner}</span>;
+  return (
+    <a href={`${PCO_PERSON}${p.pcoId}`} target="_blank" rel="noopener noreferrer" title="Open in PCO" className="group flex items-center gap-2">
+      {inner}
+    </a>
+  );
+}
+
+/** A list of "connection" cards: one or more people (each linking to their PCO
+ *  profile), an optional note, and optional tags. Used for duplicate pairs,
+ *  flagged records, families being connected, etc. */
+function LinkCards({ config, result }: { config: BlockConfig; result: QueryResult | null }) {
+  if (!result) return <Empty>No data yet.</Empty>;
+  if (result.error) return <QueryError error={result.error} />;
+  if (result.rows.length === 0) return <Empty>{config.sub || "Nothing to show."}</Empty>;
+  const limit = config.limit && config.limit > 0 ? config.limit : 100;
+  const shown = result.rows.slice(0, limit);
+  return (
+    <div className="space-y-2.5">
+      {config.sub && <p className="text-xs text-subtle">{config.sub}</p>}
+      {shown.map((row, i) => {
+        const { people, subtext, tags } = toCard(row);
+        return (
+          <div key={i} className="rounded-lg border border-border-soft bg-bg/40 p-3.5 space-y-2">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2.5 flex-wrap min-w-0">
+                {people.map((p, k) => (
+                  <span key={k} className="flex items-center gap-2.5">
+                    {k > 0 && <span className="text-subtle text-sm">{people.length === 2 ? "↔" : "·"}</span>}
+                    <PersonLink p={p} />
+                  </span>
+                ))}
+              </div>
+              {tags.length > 0 && (
+                <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                  {tags.map((t, k) => (
+                    <span key={k} className={`text-[11px] px-2 py-0.5 rounded-full border ${TAG_TONE[t.tone ?? "normal"] ?? TAG_TONE.normal}`}>{t.label}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+            {subtext && <div className="text-xs text-muted whitespace-pre-line">{subtext}</div>}
+          </div>
+        );
+      })}
+      {result.rows.length > shown.length && (
+        <div className="text-[10px] text-subtle">Showing {shown.length.toLocaleString()} of {result.rows.length.toLocaleString()}.</div>
+      )}
+    </div>
+  );
+}
+
 function EmbedView({ config }: { config: BlockConfig }) {
   const url = (config.url ?? "").trim();
   const title = (config.title ?? "").trim();
@@ -345,6 +442,7 @@ export const BLOCK_META: Record<BlockKind, { label: string; hint: string; dataHi
   table: { label: "Table", hint: "Any columns and rows.", dataHint: "Any SELECT — every returned column becomes a table column." },
   leaderboard: { label: "Leaderboard", hint: "Ranked list with inline bars.", dataHint: "col1 = label, col2 = value, ordered highest → lowest." },
   map: { label: "Map", hint: "Plot points on a map.", dataHint: "col1 = lat, col2 = lng, col3 = label (opt), col4 = size (opt)." },
+  linkcard: { label: "People / PCO cards", hint: "Cards linking one or more people out to PCO, with a note + tags.", dataHint: "Source: col1 = people[] ({name, pcoId, initials, badge}), col2 = note, col3 = tags[]. Or flat SQL: col1 = name, col2 = pcoId, col3 = note, col4 = tags (| -delimited)." },
   text: { label: "Rich text", hint: "Markdown — headings, bold, links, lists." },
   divider: { label: "Divider", hint: "A titled section separator." },
   embed: { label: "Image / embed", hint: "An image or an iframe embed." },

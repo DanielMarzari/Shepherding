@@ -64,6 +64,12 @@ export const DEFAULT_CONFIG: Record<BlockKind, BlockConfig> = {
     sub: "col1 = lat, col2 = lng, col3 = label (optional)",
     span: 6,
   },
+  linkcard: {
+    title: "People",
+    sql: "SELECT 'Pick a data source, or return name + pcoId columns' AS name, NULL AS pcoId",
+    sub: "one card per row · links out to PCO",
+    span: 12,
+  },
   text: {
     title: "",
     text: "Write **markdown** here — `#` headings, **bold**, _italic_, [links](https://example.com), and `-` lists.",

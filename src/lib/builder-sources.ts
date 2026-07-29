@@ -1,22 +1,26 @@
 import "server-only";
+import { cache } from "react";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
-import type { QueryParams, QueryResult } from "./builder";
+import type { LinkCardPerson, LinkCardTag, QueryParams, QueryResult } from "./builder";
 import { getFallingThroughCracks, getRecentMovement, getShepherdWorkload } from "./dashboard-read";
 import { listShepherds } from "./shepherds-read";
 import { getLeaderOverseersBatch } from "./shepherd-graph";
-import { listLeadPastorIds, listShepherdTeamIds } from "./assignments-read";
+import { listAssignments, listLeadPastorIds, listShepherdTeamIds } from "./assignments-read";
+import { TARGET_KIND_LABELS } from "./assignments-types";
 import { getListByName } from "./lists-read";
 import { getShepherdTeamBreakdown } from "./shepherd-team-read";
 import { listDuplicatePairs } from "./audit-read";
 
 const SHEPHERD_TEAM_LIST = "REFERENCE - Shepherd Team";
 
-/** Enriched shepherd rows shared by the directory table + the overview stat:
- *  each leader with their led-unit counts, their shepherd-team overseer(s),
- *  and a status (needs mapping / lead pastor / overseen) — the exact logic
- *  the hand-coded /shepherds page uses. */
-function shepherdRows(orgId: number) {
+/** Enriched shepherd rows shared by the directory table + the overview stats:
+ *  each leader with the group/team names they lead, their shepherd-team
+ *  overseer(s), and a status (needs mapping / lead pastor / overseen) — the
+ *  exact logic the hand-coded /shepherds page uses. Wrapped in React.cache so
+ *  the several stat cards + the table that read it during one render share a
+ *  single (graph-heavy) computation. */
+const shepherdRows = cache((orgId: number) => {
   const shepherds = listShepherds(orgId);
   const leadPastorIds = new Set(listLeadPastorIds(orgId));
   const teamIds = new Set(listShepherdTeamIds(orgId));
@@ -33,8 +37,8 @@ function shepherdRows(orgId: number) {
     const needsMapping = overseers.length === 0 && !isLeadPastor;
     return {
       fullName: s.fullName,
-      groupsLed: s.groupsLed.length,
-      teamsLed: s.teamsLed.length,
+      groupsLed: s.groupsLed.map((g) => g.name ?? "(unnamed group)"),
+      teamsLed: s.teamsLed.map((t) => t.name ?? "(unnamed team)"),
       overseers,
       status: needsMapping ? "Needs mapping" : isLeadPastor ? "Lead pastor" : "Overseen",
       tier: needsMapping ? 0 : isLeadPastor ? 1 : 2,
@@ -43,7 +47,21 @@ function shepherdRows(orgId: number) {
   // Action items first, then the apex lead pastor, then the overseen — name within tier.
   rows.sort((a, b) => (a.tier !== b.tier ? a.tier - b.tier : a.fullName.localeCompare(b.fullName)));
   return rows;
-}
+});
+
+/** Duplicate pairs, cached per render so the overview stats + the cards share
+ *  one computation. */
+const dupPairs = cache((orgId: number) => listDuplicatePairs(orgId));
+
+/** Shepherd-team assignments grouped by shepherd person id (cached). */
+const assignmentsByShepherd = cache((orgId: number) => {
+  const map = new Map<string, string[]>();
+  for (const a of listAssignments(orgId)) {
+    const chip = `${TARGET_KIND_LABELS[a.targetKind]}: ${a.targetName}`;
+    (map.get(a.shepherdPersonId) ?? map.set(a.shepherdPersonId, []).get(a.shepherdPersonId)!).push(chip);
+  }
+  return map;
+});
 
 // Curated, server-side data sources for builder blocks. Unlike raw SQL blocks
 // (which run on a read-only connection that can't decrypt), these run in TS and
@@ -108,15 +126,18 @@ const SOURCES: Record<string, SourceFn> = {
     );
   },
 
+  // Newline-joined name lists in Groups led / Teams led / Overseen by so the
+  // table can render them as chips (mark those columns as chip columns).
   shepherds_directory: (orgId) => {
     const rows = shepherdRows(orgId);
     return R(
       ["Shepherd", "Status", "Groups led", "Teams led", "Overseen by"],
-      rows.map((r) => [r.fullName, r.status, r.groupsLed, r.teamsLed, r.overseers.join(", ") || "—"]),
+      rows.map((r) => [r.fullName, r.status, r.groupsLed.join("\n"), r.teamsLed.join("\n"), r.overseers.join("\n")]),
     );
   },
 
-  // Single row of the three /shepherds headline counts, for a list-format stat.
+  // The three /shepherds headline counts in one row; three stat cards read
+  // columns 0/1/2 via valueColumn (cached, so the graph runs once).
   shepherds_overview: (orgId) => {
     const rows = shepherdRows(orgId);
     // Match the hand-coded page: "overseen" = anyone with ≥1 overseer (even
@@ -128,14 +149,16 @@ const SOURCES: Record<string, SourceFn> = {
 
   shepherd_team_directory: (orgId) => {
     const list = getListByName(orgId, SHEPHERD_TEAM_LIST);
-    const cols = ["Shepherd", "Membership", "Staff", "Vol leaders", "Congregants", "Care", "Total reach"];
+    const cols = ["Shepherd", "Membership", "Assignments", "Staff", "Vol leaders", "Congregants", "Care", "Total reach"];
     if (!list) return R(cols, []);
     const breakdown = getShepherdTeamBreakdown(orgId, list.members.map((m) => m.personId));
+    const assigns = assignmentsByShepherd(orgId);
     const rows = list.members.map((m) => {
       const b = breakdown.get(m.personId);
       return [
         m.fullName,
         m.membershipType ?? "—",
+        (assigns.get(m.personId) ?? []).join("\n"),
         b?.staffDirect ?? 0,
         b?.volunteerLeaders ?? 0,
         b?.congregants ?? 0,
@@ -143,26 +166,39 @@ const SOURCES: Record<string, SourceFn> = {
         b?.totalReach ?? 0,
       ];
     });
-    rows.sort((a, b) => Number(b[6]) - Number(a[6]));
+    rows.sort((a, b) => Number(b[7]) - Number(a[7]));
     return R(cols, rows);
   },
 
-  // Likely-duplicate people. Optional :confidence param (high/low) narrows it,
-  // matching the /audit/duplicates confidence chips.
+  // Likely-duplicate people as PCO-link cards: each row is a pair (both people
+  // link to PCO), the matching signals as the note, and confidence / returning
+  // as tags. Optional :confidence param (high/low) narrows it.
   duplicate_pairs: (orgId, params) => {
     const want = (params.confidence ?? "").trim().toLowerCase();
     const conf = want === "high" || want === "low" ? want : "";
-    const label = (p: { fullName: string; inactive: boolean }) => (p.inactive ? `${p.fullName} (inactive)` : p.fullName);
-    const pairs = listDuplicatePairs(orgId).filter((p) => !conf || p.confidence === conf);
+    const person = (p: { pcoId: string; fullName: string; initials: string; inactive: boolean }): LinkCardPerson => ({
+      name: p.fullName,
+      pcoId: p.pcoId,
+      initials: p.initials,
+      badge: p.inactive ? "inactive" : null,
+    });
+    const pairs = dupPairs(orgId).filter((p) => !conf || p.confidence === conf);
     return R(
-      ["Person A", "Person B", "Confidence", "Signals", "Returning?"],
-      pairs.map((p) => [label(p.a), label(p.b), p.confidence, p.reasons.join(", ") || "—", p.oneActiveOneInactive ? "Yes" : ""]),
+      ["People", "Signals", "Tags"],
+      pairs.map((p) => {
+        const tags: LinkCardTag[] = [
+          { label: p.confidence === "high" ? "high confidence" : "low confidence", tone: p.confidence === "high" ? "warning" : "low" },
+        ];
+        if (p.oneActiveOneInactive) tags.push({ label: "may be returning", tone: "highlight" });
+        return [[person(p.a), person(p.b)], p.reasons.join("\n"), tags];
+      }),
     );
   },
 
-  // Single row of the /audit/duplicates headline counts, for a list-format stat.
+  // The /audit/duplicates headline counts in one row; stat cards read columns
+  // 0/1/2/3 via valueColumn (cached).
   duplicate_overview: (orgId) => {
-    const all = listDuplicatePairs(orgId);
+    const all = dupPairs(orgId);
     return R(
       ["Pairs", "High", "Low", "Returning"],
       [[

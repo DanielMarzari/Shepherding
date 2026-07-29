@@ -18,8 +18,14 @@ function bandClass(v: number, t: { base: number; band?: number; invert?: boolean
   return hi ? good : lo ? bad : "text-warn-soft-fg";
 }
 
+/** A chip-column cell → its parts (newline-joined string, or an array). */
+function chipParts(cell: unknown): string[] {
+  if (Array.isArray(cell)) return cell.map((x) => String(x)).filter(Boolean);
+  return String(cell ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
 /** Table block: density (condensed / normal), per-column & per-cell coloring,
- *  optional click-to-sort headers, and a row limit. */
+ *  optional chip columns, click-to-sort headers, and a row limit. */
 export function TableView({ config, result }: { config: BlockConfig; result: QueryResult }) {
   const [sort, setSort] = useState<{ col: number; dir: 1 | -1 } | null>(null);
   const cols = result.columns;
@@ -27,19 +33,23 @@ export function TableView({ config, result }: { config: BlockConfig; result: Que
 
   const normal = config.density === "normal";
   const sortable = !!config.sortable;
-  const colNum = cols.map((_, j) => typeof result.rows.find((r) => r[j] != null)?.[j] === "number");
+  const chipSet = new Set(config.chipColumns ?? []);
+  const isChip = cols.map((c) => chipSet.has(c));
+  const colNum = cols.map((c, j) => !isChip[j] && typeof result.rows.find((r) => r[j] != null)?.[j] === "number");
   const colColor = (j: number): string => colorClass(config.columnColors?.[cols[j]]) || colorClass(config.color);
   const cellColor = (j: number, cell: unknown): string => {
     const t = config.columnThresholds?.[cols[j]];
     if (t && typeof cell === "number") return bandClass(cell, t);
     return colColor(j);
   };
+  // Chip columns sort by how many chips they carry.
+  const sortKey = (cell: unknown, j: number): unknown => (isChip[j] ? chipParts(cell).length : cell);
 
   let rows = result.rows;
   if (sort) {
     const { col, dir } = sort;
     rows = [...rows].sort((a, b) => {
-      const x = a[col], y = b[col];
+      const x = sortKey(a[col], col), y = sortKey(b[col], col);
       if (x == null && y == null) return 0;
       if (x == null) return 1;
       if (y == null) return -1;
@@ -77,11 +87,27 @@ export function TableView({ config, result }: { config: BlockConfig; result: Que
         <tbody>
           {shown.map((r, i) => (
             <tr key={i} className={`border-t border-border-soft/60 ${normal ? "hover:bg-bg-elev-2/50 transition-colors" : ""}`}>
-              {r.map((cell, j) => (
-                <td key={j} className={normal
-                  ? `px-4 py-2.5 whitespace-nowrap ${colNum[j] ? "text-right tnum" : "text-left"} ${cellColor(j, cell) || "text-fg"}`
-                  : `py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : ""} ${cellColor(j, cell) || "text-fg"}`}>{fmt(cell)}</td>
-              ))}
+              {r.map((cell, j) => {
+                if (isChip[j]) {
+                  const parts = chipParts(cell);
+                  return (
+                    <td key={j} className={`${normal ? "px-4 py-2.5" : "py-1 pr-3"} text-left align-top`}>
+                      {parts.length === 0 ? <span className="text-subtle">—</span> : (
+                        <span className="flex flex-wrap gap-1.5">
+                          {parts.map((p, k) => (
+                            <span key={k} className="inline-block rounded-full bg-bg-elev-2 text-fg px-2 py-0.5 text-xs whitespace-nowrap">{p}</span>
+                          ))}
+                        </span>
+                      )}
+                    </td>
+                  );
+                }
+                return (
+                  <td key={j} className={normal
+                    ? `px-4 py-2.5 whitespace-nowrap ${colNum[j] ? "text-right tnum" : "text-left"} ${cellColor(j, cell) || "text-fg"}`
+                    : `py-1 pr-3 whitespace-nowrap ${typeof cell === "number" ? "text-right tnum" : ""} ${cellColor(j, cell) || "text-fg"}`}>{fmt(cell)}</td>
+                );
+              })}
             </tr>
           ))}
         </tbody>

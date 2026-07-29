@@ -714,12 +714,13 @@ const shepherdsSeed: SeedPage = {
   slug: "shepherds",
   title: "Shepherds",
   description: "Everyone leading a group or team, and who on the shepherd team oversees them. \"Needs mapping\" rows have no overseer yet.",
-  revision: 1,
+  revision: 2,
   blocks: [
-    { kind: "stat", config: { title: "Shepherds", span: 4, source: "shepherds_overview", format: "list",
-      segmentColors: ["normal", "success", "warning"], sub: "total · overseen · needs mapping" } },
+    { kind: "stat", config: { title: "Shepherds", span: 4, source: "shepherds_overview", valueColumn: 0, sub: "leading a group or team" } },
+    { kind: "stat", config: { title: "Overseen", span: 4, color: "success", source: "shepherds_overview", valueColumn: 1, sub: "have a shepherd-team overseer" } },
+    { kind: "stat", config: { title: "Needs mapping", span: 4, color: "warning", source: "shepherds_overview", valueColumn: 2, sub: "no overseer yet — set on the shepherd map" } },
     { kind: "table", config: { title: "Shepherds", span: 12, density: "normal", source: "shepherds_directory", sortable: true,
-      columnColors: { "Groups led": "low", "Teams led": "low", "Overseen by": "low" },
+      chipColumns: ["Groups led", "Teams led", "Overseen by"],
       sub: "leaders first that still need an overseer mapped · then the lead pastor · then the overseen" } },
   ],
 };
@@ -729,14 +730,14 @@ const shepherdTeamSeed: SeedPage = {
   slug: "shepherd-team",
   title: "Shepherd team",
   description: "The people on the \"REFERENCE - Shepherd Team\" list and each one's direct reach, split into four non-overlapping buckets.",
-  revision: 1,
+  revision: 2,
   blocks: [
     { kind: "stat", config: { title: "Team members", span: 3, sub: "on the shepherd team list",
       sql: `SELECT COUNT(*) FROM pco_list_memberships lm JOIN pco_lists l ON l.org_id=lm.org_id AND l.pco_id=lm.list_id
              WHERE lm.org_id=:orgId AND l.name='REFERENCE - Shepherd Team'` } },
     { kind: "table", config: { title: "Reach by shepherd", span: 12, density: "normal", source: "shepherd_team_directory", sortable: true,
-      columnColors: { Membership: "low" },
-      sub: "distinct people reached · volunteer leaders → congregants → care → staff (non-overlapping) · sorted by total reach" } },
+      columnColors: { Membership: "low" }, chipColumns: ["Assignments"],
+      sub: "assignments (shepherd-map targets) + distinct people reached · volunteer leaders → congregants → care → staff (non-overlapping) · sorted by total reach" } },
   ],
 };
 
@@ -745,18 +746,19 @@ const duplicatesSeed: SeedPage = {
   slug: "audit-duplicates",
   title: "Duplicate audit",
   description: "People who likely appear twice — matched on exact name and fuzzily (shared email, birthdate, or address). Active + inactive pairs often mean someone is returning.",
-  revision: 1,
+  revision: 2,
   blocks: [
-    { kind: "stat", config: { title: "Duplicate pairs", span: 5, source: "duplicate_overview", format: "list",
-      segmentColors: ["normal", "warning", "low", "highlight"], sub: "total · high · low · possibly returning" } },
-    { kind: "filter", config: { title: "Confidence", span: 7, param: "confidence", filterType: "chips",
+    { kind: "stat", config: { title: "Duplicate pairs", span: 3, source: "duplicate_overview", valueColumn: 0, sub: "likely appear twice" } },
+    { kind: "stat", config: { title: "High confidence", span: 3, color: "warning", source: "duplicate_overview", valueColumn: 1, sub: "exact-name match" } },
+    { kind: "stat", config: { title: "Low confidence", span: 3, color: "low", source: "duplicate_overview", valueColumn: 2, sub: "fuzzy / shared signal" } },
+    { kind: "stat", config: { title: "Possibly returning", span: 3, color: "highlight", source: "duplicate_overview", valueColumn: 3, sub: "one active + one inactive" } },
+    { kind: "filter", config: { title: "Confidence", span: 12, param: "confidence", filterType: "chips",
       sql: `SELECT value, label FROM (
               SELECT 1 AS o, 'high' AS value, 'High confidence' AS label
               UNION ALL SELECT 2, 'low', 'Low confidence'
             ) ORDER BY o` } },
-    { kind: "table", config: { title: "Likely duplicates", span: 12, density: "normal", source: "duplicate_pairs", sortable: true, limit: 200,
-      columnColors: { Signals: "low", "Returning?": "highlight" },
-      sub: "matched on name + a shared email / birthdate / address · fix upstream in PCO" } },
+    { kind: "linkcard", config: { title: "Likely duplicates", span: 12, source: "duplicate_pairs", limit: 200,
+      sub: "each pair links out to PCO — matched on name + a shared email / birthdate / address · fix upstream in PCO" } },
   ],
 };
 
