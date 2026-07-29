@@ -160,16 +160,16 @@ const demographicsSeed: SeedPage = {
   title: "Membership demographics",
   description:
     "Who makes up the church — membership status, age, gender, and whether they have kids — for whichever slice you pick below. Drawn from PCO profile data.",
-  revision: 1,
+  revision: 2,
   blocks: [
     {
       kind: "filter",
       config: {
         title: "Population",
         param: "scope",
-        filterType: "dropdown",
+        filterType: "chips",
         defaultValue: "all",
-        span: 4,
+        span: 8,
         sql: `SELECT value, label FROM (
                 SELECT 1 AS o, 'all' AS value, 'Everyone' AS label
                 UNION ALL SELECT 2, 'engaged', 'Engaged'
@@ -182,7 +182,7 @@ const demographicsSeed: SeedPage = {
       kind: "stat",
       config: {
         title: "People in this slice",
-        span: 3,
+        span: 4,
         sub: "distinct people in the selected population",
         sql: `${SCOPE_CTE} SELECT COUNT(*) FROM sp`,
       },
@@ -191,8 +191,8 @@ const demographicsSeed: SeedPage = {
       kind: "chart",
       config: {
         title: "Membership status",
-        chartType: "bar",
-        span: 9,
+        chartType: "pie",
+        span: 3,
         sql: `${SCOPE_CTE}
               SELECT COALESCE(p.membership_type, '(unknown)') AS "Membership", COUNT(*) AS "People"
                 FROM pco_people p JOIN sp ON sp.person_id = p.pco_id
@@ -205,8 +205,8 @@ const demographicsSeed: SeedPage = {
       kind: "chart",
       config: {
         title: "Gender",
-        chartType: "donut",
-        span: 4,
+        chartType: "bar",
+        span: 3,
         sql: `${SCOPE_CTE}
               SELECT CASE
                        WHEN lower(coalesce(p.gender,'')) IN ('m','male') THEN 'Male'
@@ -223,7 +223,7 @@ const demographicsSeed: SeedPage = {
       config: {
         title: "Age",
         chartType: "bar",
-        span: 4,
+        span: 3,
         sql: `${SCOPE_CTE}
               SELECT CASE
                        WHEN p.birth_year IS NULL OR p.birth_year < 1900 THEN 'Unknown'
@@ -243,8 +243,8 @@ const demographicsSeed: SeedPage = {
       kind: "chart",
       config: {
         title: "Parents",
-        chartType: "donut",
-        span: 4,
+        chartType: "bar",
+        span: 3,
         sql: `${SCOPE_CTE}
               SELECT CASE WHEN p.is_parent = 1 THEN 'Parent' ELSE 'No kids' END AS "Household",
                      COUNT(*) AS "People"
