@@ -10,7 +10,7 @@ import { listAssignments, listLeadPastorIds, listShepherdTeamIds } from "./assig
 import { TARGET_KIND_LABELS } from "./assignments-types";
 import { getListByName } from "./lists-read";
 import { getShepherdTeamBreakdown } from "./shepherd-team-read";
-import { listDuplicatePairs } from "./audit-read";
+import { type AuditFlag, auditMembershipType, findNameIssuesAcrossOrg, listDuplicatePairs } from "./audit-read";
 
 const SHEPHERD_TEAM_LIST = "REFERENCE - Shepherd Team";
 
@@ -52,6 +52,22 @@ const shepherdRows = cache((orgId: number) => {
 /** Duplicate pairs, cached per render so the overview stats + the cards share
  *  one computation. */
 const dupPairs = cache((orgId: number) => listDuplicatePairs(orgId));
+
+/** Membership audit for one type, cached so the overview stats + the cards
+ *  (which both scan the same type) compute once. */
+const auditResult = cache((orgId: number, membershipType: string) => auditMembershipType(orgId, membershipType));
+/** Name issues across the org (cached). */
+const nameIssues = cache((orgId: number) => findNameIssuesAcrossOrg(orgId));
+
+const AUDIT_FLAG_META: Record<AuditFlag, { label: string; tone: LinkCardTag["tone"] }> = {
+  deceased: { label: "deceased", tone: "error" },
+  inactive: { label: "inactive (PCO)", tone: "warning" },
+  "junk-name": { label: "junk name", tone: "warning" },
+  "weird-name": { label: "weird name", tone: "low" },
+  "possible-duplicate": { label: "possible duplicate", tone: "warning" },
+  "stale-pco-record": { label: "stale 6mo+", tone: "low" },
+  "no-activity-no-rosters": { label: "no activity", tone: "low" },
+};
 
 /** Shepherd-team assignments grouped by shepherd person id (cached). */
 const assignmentsByShepherd = cache((orgId: number) => {
@@ -207,6 +223,46 @@ const SOURCES: Record<string, SourceFn> = {
         all.filter((p) => p.confidence === "low").length,
         all.filter((p) => p.oneActiveOneInactive).length,
       ]],
+    );
+  },
+
+  // Flagged rows in one membership type as PCO-link cards. :membership_type
+  // picks the type (default Member); :flag optionally narrows to one flag.
+  membership_audit: (orgId, params) => {
+    const type = (params.membership_type ?? "").trim() || "Member";
+    const flag = (params.flag ?? "").trim();
+    let rows = auditResult(orgId, type).rows.filter((r) => r.flags.length > 0);
+    if (flag) rows = rows.filter((r) => r.flags.includes(flag as AuditFlag));
+    return R(
+      ["People", "Context", "Tags"],
+      rows.map((r) => {
+        const ctx = [`${r.groupsCount} groups`, `${r.teamsCount} teams`, `${r.recentCheckins} check-ins/90d`];
+        if (r.pcoUpdatedAt) ctx.push(`updated ${r.pcoUpdatedAt.slice(0, 10)}`);
+        const badge = r.isMinor ? "minor" : r.status && r.status.toLowerCase() !== "active" ? r.status : null;
+        const tags: LinkCardTag[] = r.flags.map((f) => ({ label: AUDIT_FLAG_META[f].label, tone: AUDIT_FLAG_META[f].tone }));
+        return [[{ name: r.fullName, pcoId: r.pcoId, initials: r.initials, badge }], ctx.join(" · "), tags];
+      }),
+    );
+  },
+
+  // Counts for the selected membership type: [flagged, scanned].
+  membership_audit_overview: (orgId, params) => {
+    const type = (params.membership_type ?? "").trim() || "Member";
+    const res = auditResult(orgId, type);
+    return R(["Flagged", "Scanned"], [[res.rows.filter((r) => r.flags.length > 0).length, res.totalScanned]]);
+  },
+
+  // Junk / weird names across the org as PCO-link cards.
+  name_audit: (orgId) => {
+    const rows = nameIssues(orgId);
+    return R(
+      ["People", "Context", "Tags"],
+      rows.map((r) => {
+        const badge = r.status && r.status.toLowerCase() !== "active" ? r.status : null;
+        const ctx = r.membershipType ? `${r.membershipType}` : "";
+        const tags: LinkCardTag[] = r.flags.map((f) => ({ label: AUDIT_FLAG_META[f].label, tone: AUDIT_FLAG_META[f].tone }));
+        return [[{ name: r.fullName, pcoId: r.pcoId, initials: r.initials, badge }], ctx, tags];
+      }),
     );
   },
 

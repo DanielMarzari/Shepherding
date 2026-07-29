@@ -72,6 +72,24 @@ export const SOURCE_META: SourceMeta[] = [
     description: "One row of the headline counts: Pairs, High, Low, Returning. Read a column with a stat's Value-column setting (0/1/2/3).",
     kinds: ["stat"],
   },
+  {
+    id: "membership_audit",
+    label: "Membership audit (PCO cards)",
+    description: "Flagged rows in one membership type as People/PCO cards (deceased, inactive, junk names, duplicates…). Honors :membership_type (default Member) and an optional :flag.",
+    kinds: ["linkcard"],
+  },
+  {
+    id: "membership_audit_overview",
+    label: "Membership audit (counts)",
+    description: "Two counts for the selected type: Flagged, Scanned. Honors :membership_type. Read a column via a stat's Value-column setting.",
+    kinds: ["stat"],
+  },
+  {
+    id: "name_audit",
+    label: "Name audit (PCO cards)",
+    description: "Junk / weird names across the org as People/PCO cards, tagged by issue.",
+    kinds: ["linkcard"],
+  },
 ];
 
 export const sourceMeta = (id: string | undefined): SourceMeta | undefined =>

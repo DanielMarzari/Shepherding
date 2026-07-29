@@ -762,6 +762,69 @@ const duplicatesSeed: SeedPage = {
   ],
 };
 
+// ── Membership audit (from the See More menu) ────────────────────────
+const membershipAuditSeed: SeedPage = {
+  slug: "audit-membership",
+  title: "Membership audit",
+  description: "Rows in a membership type that look wrong — deceased, long-inactive, junk names, possible duplicates. Fix them upstream in PCO; this page never writes back.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Flagged", span: 3, color: "warning", source: "membership_audit_overview", valueColumn: 0, sub: "rows with ≥1 issue" } },
+    { kind: "stat", config: { title: "Scanned", span: 3, color: "low", source: "membership_audit_overview", valueColumn: 1, sub: "in the selected type" } },
+    { kind: "filter", config: { title: "Membership type", span: 3, param: "membership_type", filterType: "dropdown", defaultValue: "Member",
+      sql: `SELECT DISTINCT membership_type FROM pco_people
+             WHERE org_id=:orgId AND membership_type IS NOT NULL AND trim(membership_type) != '' ORDER BY 1` } },
+    { kind: "filter", config: { title: "Issue", span: 3, param: "flag", filterType: "chips",
+      sql: `SELECT value, label FROM (
+              SELECT 1 AS o, 'deceased' AS value, 'Deceased' AS label
+              UNION ALL SELECT 2, 'inactive', 'Inactive'
+              UNION ALL SELECT 3, 'junk-name', 'Junk name'
+              UNION ALL SELECT 4, 'weird-name', 'Weird name'
+              UNION ALL SELECT 5, 'possible-duplicate', 'Possible duplicate'
+              UNION ALL SELECT 6, 'stale-pco-record', 'Stale 6mo+'
+              UNION ALL SELECT 7, 'no-activity-no-rosters', 'No activity'
+            ) ORDER BY o` } },
+    { kind: "linkcard", config: { title: "Flagged people", span: 12, source: "membership_audit", limit: 300,
+      sub: "each links to their PCO profile · tags show why it was flagged" } },
+  ],
+};
+
+// ── Name audit (from the See More menu) ──────────────────────────────
+const nameAuditSeed: SeedPage = {
+  slug: "audit-names",
+  title: "Name audit",
+  description: "People whose names look like junk or data-entry noise (all caps, symbols, a single letter, obvious placeholders). Fix them in PCO.",
+  revision: 1,
+  blocks: [
+    { kind: "linkcard", config: { title: "Name issues", span: 12, source: "name_audit", limit: 400,
+      sub: "junk / weird names across every membership type · each links to PCO" } },
+  ],
+};
+
+// ── Member map (from the See More menu) ──────────────────────────────
+// Static approximation of the interactive /map: plots geocoded members and
+// summarizes coverage. The drag-to-test second-campus tooling stays on /map.
+const memberMapSeed: SeedPage = {
+  slug: "member-map",
+  title: "Member map",
+  description: "Where geocoded members live, colored intent aside. A static view — the interactive reach / second-campus tooling stays on the original Map page.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Mapped members", span: 4, sub: "geocoded to a home location",
+      sql: `SELECT COUNT(*) FROM person_geo WHERE org_id=:orgId AND status='ok' AND lat IS NOT NULL` } },
+    { kind: "chart", config: { title: "Mapped by engagement", chartType: "donut", span: 8,
+      sql: `SELECT COALESCE(pa.classification,'inactive') AS "Engagement", COUNT(*) AS "People"
+              FROM person_geo g LEFT JOIN person_activity pa ON pa.org_id=g.org_id AND pa.person_id=g.person_id
+             WHERE g.org_id=:orgId AND g.status='ok' AND g.lat IS NOT NULL
+             GROUP BY 1 ORDER BY 2 DESC` } },
+    { kind: "map", config: { title: "Members", span: 12, height: "double",
+      sql: `SELECT g.lat, g.lng, COALESCE(pa.classification,'inactive') AS "Engagement"
+              FROM person_geo g LEFT JOIN person_activity pa ON pa.org_id=g.org_id AND pa.person_id=g.person_id
+             WHERE g.org_id=:orgId AND g.status='ok' AND g.lat IS NOT NULL
+             LIMIT 4000` } },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
@@ -774,6 +837,9 @@ export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [shepherdsSeed.slug]: shepherdsSeed,
   [shepherdTeamSeed.slug]: shepherdTeamSeed,
   [duplicatesSeed.slug]: duplicatesSeed,
+  [membershipAuditSeed.slug]: membershipAuditSeed,
+  [nameAuditSeed.slug]: nameAuditSeed,
+  [memberMapSeed.slug]: memberMapSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────

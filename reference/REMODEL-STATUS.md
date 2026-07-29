@@ -20,7 +20,10 @@ Next Campus Planner is intentionally excluded.
 | `/staff-new` | `-new` | staff count + directory via `staff_directory` source (the "REFERENCE - Church Staff" list) |
 | `/shepherds-new` | `-new` | overview list-stat (shepherds · overseen · needs mapping) + directory table via `shepherds_directory` / `shepherds_overview` sources (reuses `listShepherds` + `getLeaderOverseersBatch`, exact page logic) |
 | `/shepherd-team-new` | `-new` | team-members count (SQL) + four-bucket reach table via `shepherd_team_directory` (`getShepherdTeamBreakdown`) |
-| `/audit/duplicates-new` | `-new` (slug `audit-duplicates`) | overview list-stat + confidence **chips** (`:confidence`) + likely-duplicates table via `duplicate_pairs` / `duplicate_overview` (`listDuplicatePairs`) |
+| `/audit/duplicates-new` | `-new` (slug `audit-duplicates`) | 4 stat cards + confidence **chips** + likely-duplicates **linkcard** (each pair links both people to PCO) via `duplicate_pairs` / `duplicate_overview` |
+| `/audit/membership-new` | `-new` (slug `audit-membership`) | flagged/scanned stats + membership-type dropdown + issue chips + flagged-people **linkcard** via `membership_audit` (`auditMembershipType`) |
+| `/audit/names-new` | `-new` (slug `audit-names`) | junk/weird-name **linkcard** via `name_audit` (`findNameIssuesAcrossOrg`) |
+| `/map-new` | `-new` (slug `member-map`) | mapped-count stat + engagement donut + **map block** of geocoded members (static; the reach / second-campus tooling stays on `/map`) |
 
 ## 🟡 Quick follow-ups — reuse existing patterns (decrypt sources exist)
 
