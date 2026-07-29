@@ -1,62 +1,22 @@
-import { Suspense } from "react";
-import Link from "next/link";
-import { AppShell } from "@/components/AppShell";
 import { requireOrg } from "@/lib/auth";
-import { AsyncDemographicCharts } from "@/components/AsyncChartSections";
-import { DemographicChartsSkeleton } from "@/components/ChartsLoading";
-import type { DemographicScope } from "@/lib/demographics";
+import { renderBuilderRoute } from "../builder/render-route";
 
-const SCOPES: Array<{ key: string; label: string; title: string; scope: DemographicScope }> = [
-  { key: "all", label: "Everyone", title: "Demographics — everyone on file", scope: { kind: "all" } },
-  { key: "engaged", label: "Engaged", title: "Demographics — engaged (shepherded / active / present)", scope: { kind: "engaged" } },
-  { key: "groups", label: "In groups", title: "Demographics — people in a group", scope: { kind: "groups" } },
-  { key: "teams", label: "On teams", title: "Demographics — people on a team", scope: { kind: "teams" } },
-];
-
+// This route now renders its editable Page Builder page in place (seeded from
+// src/lib/builder-seeds.ts). The original hand-coded design is archived at
+// reference/pages/demographics.tsx and viewable at /demographics-original.
 export default async function DemographicsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ scope?: string }>;
+  searchParams: Promise<{ edit?: string }>;
 }) {
   const session = await requireOrg();
-  const params = await searchParams;
-  const active = SCOPES.find((s) => s.key === params.scope) ?? SCOPES[0];
-
-  return (
-    <AppShell active="See more" breadcrumb="See more › Demographics">
-      <div className="px-5 md:px-7 py-7 space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Membership demographics</h1>
-          <p className="text-muted text-sm mt-1 max-w-2xl">
-            Who makes up the church — membership status, age, gender, and whether
-            they have kids — for whichever slice you pick. Drawn from PCO profile
-            data; pick a population below.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-1.5">
-          {SCOPES.map((s) => (
-            <Link
-              key={s.key}
-              href={s.key === "all" ? "/demographics" : `/demographics?scope=${s.key}`}
-              className={`px-3 py-1.5 rounded-full border text-xs transition-colors ${
-                active.key === s.key
-                  ? "border-accent bg-bg-elev-2 text-fg"
-                  : "border-border-soft text-muted hover:text-fg"
-              }`}
-            >
-              {s.label}
-            </Link>
-          ))}
-        </div>
-
-        <Suspense
-          key={active.key}
-          fallback={<DemographicChartsSkeleton title={active.title} />}
-        >
-          <AsyncDemographicCharts orgId={session.orgId} scope={active.scope} title={active.title} />
-        </Suspense>
-      </div>
-    </AppShell>
-  );
+  const { edit } = await searchParams;
+  return renderBuilderRoute({
+    session,
+    slug: "demographics",
+    edit: edit === "1",
+    seed: true,
+    active: "See more",
+    breadcrumb: "See more › Demographics",
+  });
 }

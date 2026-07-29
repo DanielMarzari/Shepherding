@@ -18,5 +18,6 @@ here is a route.
 | Route | Original design | Builder seed | Status |
 |-------|-----------------|--------------|--------|
 | `/checkins` | `pages/checkins.tsx` | `builder-seeds.ts` → `checkins` | ✅ overridden |
+| `/demographics` | `pages/demographics.tsx` | `builder-seeds.ts` → `demographics` | ✅ overridden |
 
 _Next Campus Planner is intentionally excluded from the remodel._

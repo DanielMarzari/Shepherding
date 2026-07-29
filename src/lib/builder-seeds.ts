@@ -126,9 +126,140 @@ const checkinsSeed: SeedPage = {
   ],
 };
 
+// ── Demographics ─────────────────────────────────────────────────────
+// A :scope filter (Everyone / Engaged / In groups / On teams) drives every
+// chart. Each `sp` branch mirrors populatePeopleInScope() in lib/demographics.ts
+// and is gated by :scope so only the selected branch returns rows.
+const SCOPE_CTE = `WITH sp AS (
+  SELECT pco_id AS person_id FROM pco_people
+   WHERE org_id = :orgId AND :scope = 'all'
+  UNION
+  SELECT person_id FROM person_activity
+   WHERE org_id = :orgId AND classification != 'inactive' AND :scope = 'engaged'
+  UNION
+  SELECT DISTINCT m.person_id FROM pco_group_memberships m
+    JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL AND g.archived_at IS NULL AND :scope = 'groups'
+  UNION
+  SELECT DISTINCT m.person_id FROM pco_team_memberships m
+    JOIN pco_teams t ON t.org_id = m.org_id AND t.pco_id = m.team_id
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+     AND t.archived_at IS NULL AND t.deleted_at IS NULL AND :scope = 'teams'
+)`;
+// Reused age-bucket ordinal (kept out of the SELECT list so charts get 2 columns).
+const AGE_ORD = `CASE
+  WHEN p.birth_year IS NULL OR p.birth_year < 1900 THEN 99
+  WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 18 THEN 1
+  WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 30 THEN 2
+  WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 50 THEN 3
+  WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 65 THEN 4
+  ELSE 5 END`;
+
+const demographicsSeed: SeedPage = {
+  slug: "demographics",
+  title: "Membership demographics",
+  description:
+    "Who makes up the church — membership status, age, gender, and whether they have kids — for whichever slice you pick below. Drawn from PCO profile data.",
+  revision: 1,
+  blocks: [
+    {
+      kind: "filter",
+      config: {
+        title: "Population",
+        param: "scope",
+        filterType: "dropdown",
+        defaultValue: "all",
+        span: 4,
+        sql: `SELECT value, label FROM (
+                SELECT 1 AS o, 'all' AS value, 'Everyone' AS label
+                UNION ALL SELECT 2, 'engaged', 'Engaged'
+                UNION ALL SELECT 3, 'groups', 'In groups'
+                UNION ALL SELECT 4, 'teams', 'On teams'
+              ) ORDER BY o`,
+      },
+    },
+    {
+      kind: "stat",
+      config: {
+        title: "People in this slice",
+        span: 3,
+        sub: "distinct people in the selected population",
+        sql: `${SCOPE_CTE} SELECT COUNT(*) FROM sp`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Membership status",
+        chartType: "bar",
+        span: 9,
+        sql: `${SCOPE_CTE}
+              SELECT COALESCE(p.membership_type, '(unknown)') AS "Membership", COUNT(*) AS "People"
+                FROM pco_people p JOIN sp ON sp.person_id = p.pco_id
+               WHERE p.org_id = :orgId
+               GROUP BY p.membership_type
+               ORDER BY COUNT(*) DESC, p.membership_type ASC`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Gender",
+        chartType: "donut",
+        span: 4,
+        sql: `${SCOPE_CTE}
+              SELECT CASE
+                       WHEN lower(coalesce(p.gender,'')) IN ('m','male') THEN 'Male'
+                       WHEN lower(coalesce(p.gender,'')) IN ('f','female') THEN 'Female'
+                       ELSE 'Unknown' END AS "Gender",
+                     COUNT(*) AS "People"
+                FROM pco_people p JOIN sp ON sp.person_id = p.pco_id
+               WHERE p.org_id = :orgId
+               GROUP BY 1`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Age",
+        chartType: "bar",
+        span: 4,
+        sql: `${SCOPE_CTE}
+              SELECT CASE
+                       WHEN p.birth_year IS NULL OR p.birth_year < 1900 THEN 'Unknown'
+                       WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 18 THEN '<18'
+                       WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 30 THEN '18–29'
+                       WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 50 THEN '30–49'
+                       WHEN (CAST(strftime('%Y','now') AS INTEGER) - p.birth_year) < 65 THEN '50–64'
+                       ELSE '65+' END AS "Age",
+                     COUNT(*) AS "People"
+                FROM pco_people p JOIN sp ON sp.person_id = p.pco_id
+               WHERE p.org_id = :orgId
+               GROUP BY 1
+               ORDER BY MIN(${AGE_ORD})`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Parents",
+        chartType: "donut",
+        span: 4,
+        sql: `${SCOPE_CTE}
+              SELECT CASE WHEN p.is_parent = 1 THEN 'Parent' ELSE 'No kids' END AS "Household",
+                     COUNT(*) AS "People"
+                FROM pco_people p JOIN sp ON sp.person_id = p.pco_id
+               WHERE p.org_id = :orgId
+               GROUP BY 1`,
+      },
+    },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
+  [demographicsSeed.slug]: demographicsSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────
