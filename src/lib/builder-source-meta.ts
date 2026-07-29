@@ -42,6 +42,36 @@ export const SOURCE_META: SourceMeta[] = [
     description: "People on the 'REFERENCE - Church Staff' list: Name, Membership, Engagement.",
     kinds: ["table"],
   },
+  {
+    id: "shepherds_directory",
+    label: "Shepherds directory",
+    description: "Every group/team leader: Shepherd, Status (needs mapping / lead pastor / overseen), Groups led, Teams led, Overseen by. Decrypted names.",
+    kinds: ["table"],
+  },
+  {
+    id: "shepherds_overview",
+    label: "Shepherds overview (counts)",
+    description: "One row of the three headline counts: Shepherds, Overseen, Needs mapping. Pair with a list-format stat.",
+    kinds: ["stat"],
+  },
+  {
+    id: "shepherd_team_directory",
+    label: "Shepherd team directory",
+    description: "The 'REFERENCE - Shepherd Team' list with each member's four-bucket reach: Shepherd, Membership, Staff, Vol leaders, Congregants, Care, Total reach. Decrypted names.",
+    kinds: ["table"],
+  },
+  {
+    id: "duplicate_pairs",
+    label: "Duplicate pairs",
+    description: "Likely-duplicate people: Person A, Person B, Confidence, Signals, Returning?. Honors a :confidence param (high/low). Decrypted names.",
+    kinds: ["table"],
+  },
+  {
+    id: "duplicate_overview",
+    label: "Duplicate audit (counts)",
+    description: "One row of the headline counts: Pairs, High, Low, Returning. Pair with a list-format stat.",
+    kinds: ["stat"],
+  },
 ];
 
 export const sourceMeta = (id: string | undefined): SourceMeta | undefined =>

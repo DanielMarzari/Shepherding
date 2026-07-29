@@ -16,15 +16,16 @@ Next Campus Planner is intentionally excluded.
 | `/groups` | primary (orig at `/groups-original`) | full parity: 6 stats, health, rich table (attend % banded), demographics, attendance trend |
 | `/teams-new` | `-new` | roster stats, health, teams table, demographics, serving trend |
 | `/home-new` | `-new` | engaged/mix stats + group health (SQL) + falling-through-cracks / movement / shepherd-workload (decrypt sources) |
-| `/people-new` | `-new` | classification stats + directory table (decrypted names via `people_directory` source) |
+| `/people-new` | `-new` | classification stats + **tabs filter** (All/Shepherded/Active/Present/Inactive → `:classification`) driving the directory table (decrypted names via `people_directory` source) |
 | `/staff-new` | `-new` | staff count + directory via `staff_directory` source (the "REFERENCE - Church Staff" list) |
+| `/shepherds-new` | `-new` | overview list-stat (shepherds · overseen · needs mapping) + directory table via `shepherds_directory` / `shepherds_overview` sources (reuses `listShepherds` + `getLeaderOverseersBatch`, exact page logic) |
+| `/shepherd-team-new` | `-new` | team-members count (SQL) + four-bucket reach table via `shepherd_team_directory` (`getShepherdTeamBreakdown`) |
+| `/audit/duplicates-new` | `-new` (slug `audit-duplicates`) | overview list-stat + confidence **chips** (`:confidence`) + likely-duplicates table via `duplicate_pairs` / `duplicate_overview` (`listDuplicatePairs`) |
 
 ## 🟡 Quick follow-ups — reuse existing patterns (decrypt sources exist)
 
 | Page | Plan |
 |------|------|
-| `/shepherds` | shepherd roster source (names + flock + overseer) — original is a hierarchy view |
-| `/audit/duplicates` | count + a duplicate-pairs source (names) |
 | `/care-queue` | **original is mock data** (`@/lib/mock`) — needs real care logic first (`listCareCandidates` exists in care-read.ts) |
 
 ## 🟠 Complex analytics — need their TS logic ported to SQL/sources (bigger)

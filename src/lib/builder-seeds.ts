@@ -708,6 +708,58 @@ const staffSeed: SeedPage = {
   ],
 };
 
+// ── Shepherds (leader oversight) ─────────────────────────────────────
+// Names + overseer graph via the decrypt-capable shepherds sources.
+const shepherdsSeed: SeedPage = {
+  slug: "shepherds",
+  title: "Shepherds",
+  description: "Everyone leading a group or team, and who on the shepherd team oversees them. \"Needs mapping\" rows have no overseer yet.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Shepherds", span: 4, source: "shepherds_overview", format: "list",
+      segmentColors: ["normal", "success", "warning"], sub: "total · overseen · needs mapping" } },
+    { kind: "table", config: { title: "Shepherds", span: 12, density: "normal", source: "shepherds_directory", sortable: true,
+      columnColors: { "Groups led": "low", "Teams led": "low", "Overseen by": "low" },
+      sub: "leaders first that still need an overseer mapped · then the lead pastor · then the overseen" } },
+  ],
+};
+
+// ── Shepherd team (four-bucket reach) ────────────────────────────────
+const shepherdTeamSeed: SeedPage = {
+  slug: "shepherd-team",
+  title: "Shepherd team",
+  description: "The people on the \"REFERENCE - Shepherd Team\" list and each one's direct reach, split into four non-overlapping buckets.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Team members", span: 3, sub: "on the shepherd team list",
+      sql: `SELECT COUNT(*) FROM pco_list_memberships lm JOIN pco_lists l ON l.org_id=lm.org_id AND l.pco_id=lm.list_id
+             WHERE lm.org_id=:orgId AND l.name='REFERENCE - Shepherd Team'` } },
+    { kind: "table", config: { title: "Reach by shepherd", span: 12, density: "normal", source: "shepherd_team_directory", sortable: true,
+      columnColors: { Membership: "low" },
+      sub: "distinct people reached · volunteer leaders → congregants → care → staff (non-overlapping) · sorted by total reach" } },
+  ],
+};
+
+// ── Duplicate audit (from the See More menu) ─────────────────────────
+const duplicatesSeed: SeedPage = {
+  slug: "audit-duplicates",
+  title: "Duplicate audit",
+  description: "People who likely appear twice — matched on exact name and fuzzily (shared email, birthdate, or address). Active + inactive pairs often mean someone is returning.",
+  revision: 1,
+  blocks: [
+    { kind: "stat", config: { title: "Duplicate pairs", span: 5, source: "duplicate_overview", format: "list",
+      segmentColors: ["normal", "warning", "low", "highlight"], sub: "total · high · low · possibly returning" } },
+    { kind: "filter", config: { title: "Confidence", span: 7, param: "confidence", filterType: "chips",
+      sql: `SELECT value, label FROM (
+              SELECT 1 AS o, 'high' AS value, 'High confidence' AS label
+              UNION ALL SELECT 2, 'low', 'Low confidence'
+            ) ORDER BY o` } },
+    { kind: "table", config: { title: "Likely duplicates", span: 12, density: "normal", source: "duplicate_pairs", sortable: true, limit: 200,
+      columnColors: { Signals: "low", "Returning?": "highlight" },
+      sub: "matched on name + a shared email / birthdate / address · fix upstream in PCO" } },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [checkinsSeed.slug]: checkinsSeed,
@@ -717,6 +769,9 @@ export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [homeSeed.slug]: homeSeed,
   [peopleSeed.slug]: peopleSeed,
   [staffSeed.slug]: staffSeed,
+  [shepherdsSeed.slug]: shepherdsSeed,
+  [shepherdTeamSeed.slug]: shepherdTeamSeed,
+  [duplicatesSeed.slug]: duplicatesSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────
