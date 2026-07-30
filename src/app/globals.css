@@ -36,9 +36,15 @@
   --lane-serv-bg: rgba(124, 58, 237, 0.10);
   --lane-none: #71717a;
   --lane-none-bg: rgba(113, 113, 122, 0.10);
-  /* SQL editor syntax tokens — blue keyword · pink table · yellow field · green function */
-  --sql-kw: #1a56db; --sql-tbl: #a3357f; --sql-tbl-bg: #fbe4f1; --sql-col: #7a5f0d; --sql-col-bg: #faedcf;
-  --sql-fn: #116b2e; --sql-str: #8a5a12; --sql-num: #8a5a12; --sql-cmt: #8b95a1; --sql-param: #b04a06;
+  /* SQL editor palette (named colors) + default role mapping (Settings › Appearance) */
+  --sql-c-blue: #1a56db; --sql-c-blue-bg: #d5e4ff; --sql-c-pink: #a3357f; --sql-c-pink-bg: #fbe4f1;
+  --sql-c-green: #116b2e; --sql-c-green-bg: #d3f3dc; --sql-c-yellow: #7a5f0d; --sql-c-yellow-bg: #faedcf;
+  --sql-c-orange: #b04a06; --sql-c-orange-bg: #f7e3d2; --sql-c-red: #cf222e; --sql-c-red-bg: #fbe0e0;
+  --sql-c-purple: #6f42c1; --sql-c-purple-bg: #efe7fb; --sql-c-teal: #0f766e; --sql-c-teal-bg: #d3f1ec;
+  --sql-c-slate: #475569; --sql-c-slate-bg: #e9edf2;
+  --sql-kw: var(--sql-c-blue); --sql-tbl: var(--sql-c-pink); --sql-tbl-bg: var(--sql-c-pink-bg);
+  --sql-col: var(--sql-c-yellow); --sql-col-bg: var(--sql-c-yellow-bg); --sql-fn: var(--sql-c-green);
+  --sql-str: #8a5a12; --sql-num: #8a5a12; --sql-cmt: #8b95a1; --sql-param: #b04a06;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -76,8 +82,14 @@
     --lane-serv-bg: rgba(167, 139, 250, 0.14);
     --lane-none: #52525b;
     --lane-none-bg: rgba(82, 82, 91, 0.20);
-    --sql-kw: #8cc2ff; --sql-tbl: #e88fd0; --sql-tbl-bg: #3a1f30; --sql-col: #e3c94a; --sql-col-bg: #3a3110;
-    --sql-fn: #5fd88a; --sql-str: #d0a878; --sql-num: #d0a878; --sql-cmt: #5b6572; --sql-param: #f0a35e;
+    --sql-c-blue: #8cc2ff; --sql-c-blue-bg: #16324f; --sql-c-pink: #e88fd0; --sql-c-pink-bg: #3a1f30;
+    --sql-c-green: #5fd88a; --sql-c-green-bg: #12301e; --sql-c-yellow: #e3c94a; --sql-c-yellow-bg: #3a3110;
+    --sql-c-orange: #f0a35e; --sql-c-orange-bg: #3a2410; --sql-c-red: #ff7b72; --sql-c-red-bg: #3a1718;
+    --sql-c-purple: #c792ea; --sql-c-purple-bg: #2a2140; --sql-c-teal: #4fd1b6; --sql-c-teal-bg: #0f2a26;
+    --sql-c-slate: #94a3b8; --sql-c-slate-bg: #232a35;
+    --sql-kw: var(--sql-c-blue); --sql-tbl: var(--sql-c-pink); --sql-tbl-bg: var(--sql-c-pink-bg);
+    --sql-col: var(--sql-c-yellow); --sql-col-bg: var(--sql-c-yellow-bg); --sql-fn: var(--sql-c-green);
+    --sql-str: #d0a878; --sql-num: #d0a878; --sql-cmt: #5b6572; --sql-param: #f0a35e;
   }
 }
 
@@ -142,3 +154,6 @@ body {
 .sql-num { color: var(--sql-num); }
 .sql-cmt { color: var(--sql-cmt); font-style: italic; }
 .sql-param { color: var(--sql-param); font-weight: 600; }
+/* Appearance-settings preview toggles (scoped to the sample). */
+.sqlprev.caps .sql-kw { text-transform: uppercase; }
+.sqlprev.ital .sql-fn { font-style: italic; }

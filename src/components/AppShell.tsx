@@ -42,6 +42,7 @@ export const SHELL_NAV = {
   settings: [
     { href: "/pco/filters", label: "Filters" },
     { href: "/metrics", label: "Metrics" },
+    { href: "/settings/appearance", label: "Appearance" },
   ],
   other: [{ href: "/more", label: "See more" }],
 };

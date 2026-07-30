@@ -14,6 +14,21 @@ const KEYWORDS = [
 type Kind = "table" | "column" | "keyword";
 interface Sugg { text: string; kind: Kind }
 
+// Reusable expressions — date windows, org scoping, common filters. Inserting
+// one drops "col" as the selected placeholder so you can type the column.
+const SNIPPETS: Array<{ label: string; sql: string }> = [
+  { label: "Within last 7 days", sql: "date(col) >= date('now','-7 days')" },
+  { label: "Within last 30 days", sql: "date(col) >= date('now','-30 days')" },
+  { label: "Within last month", sql: "date(col) >= date('now','-1 month')" },
+  { label: "Within last 3 months", sql: "date(col) >= date('now','-3 months')" },
+  { label: "Within last year", sql: "date(col) >= date('now','-1 year')" },
+  { label: "This org", sql: "org_id = :orgId" },
+  { label: "Adults only", sql: "is_minor = 0" },
+  { label: "Exclude inactive", sql: "lower(coalesce(status,'')) != 'inactive' AND inactivated_at IS NULL" },
+  { label: "Not archived", sql: "archived_at IS NULL" },
+  { label: "Engaged (shepherded / active / present)", sql: "classification IN ('shepherded','active','present')" },
+];
+
 // One-glyph key symbol per suggestion kind (shown in the dropdown).
 const SIGIL: Record<Kind, string> = { table: "$", column: "#", keyword: "/" };
 const SIGIL_COLOR: Record<Kind, string> = {
@@ -114,6 +129,7 @@ export function SqlField({
   const [active, setActive] = useState(0);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [snipOpen, setSnipOpen] = useState(false);
 
   const allColumns = useMemo(() => Array.from(new Set(Object.values(schema.columns).flat())), [schema.columns]);
   const tblSet = useMemo(() => new Set(schema.tables.map((t) => t.toLowerCase())), [schema.tables]);
@@ -169,6 +185,21 @@ export function SqlField({
     });
   }
 
+  function insertSnippet(sql: string) {
+    const ta = taRef.current;
+    const start = ta?.selectionStart ?? value.length;
+    const end = ta?.selectionEnd ?? start;
+    onChange(value.slice(0, start) + sql + value.slice(end));
+    setSnipOpen(false);
+    requestAnimationFrame(() => {
+      if (!ta) return;
+      ta.focus();
+      const rel = sql.indexOf("col");
+      if (rel >= 0) ta.setSelectionRange(start + rel, start + rel + 3);
+      else { const p = start + sql.length; ta.setSelectionRange(p, p); }
+    });
+  }
+
   // Shared box metrics so the highlight layer aligns exactly with the textarea.
   const boxClass = "w-full px-2.5 py-1.5 text-xs font-mono leading-5 border rounded-lg";
 
@@ -201,6 +232,31 @@ export function SqlField({
           className={`${boxClass} relative bg-bg border-border-soft resize-y focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
           style={{ color: "transparent", caretColor: "var(--fg)" }}
         />
+      </div>
+      <div className="relative mt-1">
+        <button
+          type="button"
+          onClick={() => setSnipOpen((o) => !o)}
+          className="text-[11px] text-muted hover:text-fg inline-flex items-center gap-1 cursor-pointer"
+        >
+          <span className="font-mono">+</span> Snippets
+        </button>
+        {snipOpen && (
+          <ul className="absolute z-30 left-0 top-6 w-64 max-h-56 overflow-auto rounded-lg border border-border-soft bg-bg-elev-2 shadow-xl text-xs p-1">
+            {SNIPPETS.map((s) => (
+              <li key={s.label}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => { e.preventDefault(); insertSnippet(s.sql); }}
+                  className="w-full text-left px-2 py-1.5 rounded hover:bg-accent/15 cursor-pointer"
+                >
+                  <div className="font-medium text-fg">{s.label}</div>
+                  <div className="font-mono text-[10px] text-subtle truncate">{s.sql}</div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
       {open && (
         <ul
