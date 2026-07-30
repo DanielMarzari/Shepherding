@@ -109,10 +109,27 @@ const TABS: Array<{ id: Tab; label: string }> = [
 interface Item { label: string; ins: string; meta?: string; back?: number; snippet?: boolean; }
 interface Sugg { label: string; insert: string }
 
+/** Uppercase keywords + break before major clauses. A light client-side format
+ *  (the deeper reformat happens server-side on run). */
+function formatSQL(sql: string): string {
+  const parts = sql.split(/(--[^\n]*|'(?:[^']|'')*')/g);
+  const KW = ["select", "distinct", "from", "where", "group by", "order by", "having", "limit", "offset", "as", "on", "and", "or", "not", "in", "is", "null", "join", "left join", "right join", "inner join", "union all", "union", "case", "when", "then", "else", "end", "asc", "desc", "between", "like", "exists", "cast"];
+  for (let i = 0; i < parts.length; i += 2) {
+    let s = parts[i].replace(/\s+/g, " ");
+    KW.forEach((k) => { s = s.replace(new RegExp("\\b" + k.replace(/ /g, "\\s+") + "\\b", "gi"), k.toUpperCase()); });
+    s = s.replace(/\s*\n?\s*\b(FROM|WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|UNION ALL|UNION|LEFT JOIN|RIGHT JOIN|INNER JOIN|JOIN)\b/g, "\n$1");
+    s = s.replace(/\b(ON|AND|OR)\b/g, "\n  $1");
+    s = s.replace(/,\s*/g, ",\n  ");
+    parts[i] = s;
+  }
+  return parts.join("").replace(/\n{2,}/g, "\n").replace(/^\n/, "").trim();
+}
+
 export function SqlField({
-  value, onChange, onBlur, schema, rows = 8,
+  value, onChange, onBlur, schema, rows = 8, onRun, running,
 }: {
   value: string; onChange: (v: string) => void; onBlur?: () => void; schema: DbSchema; rows?: number;
+  onRun?: () => void; running?: boolean;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
@@ -124,7 +141,6 @@ export function SqlField({
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [tab, setTab] = useState<Tab>("keywords");
   const [filter, setFilter] = useState("");
-  const [panelOpen, setPanelOpen] = useState(true);
 
   const allColumns = useMemo(() => Array.from(new Set(Object.values(schema.columns).flat())), [schema.columns]);
   const tblSet = useMemo(() => new Set(schema.tables.map((t) => t.toLowerCase())), [schema.tables]);
@@ -231,78 +247,87 @@ export function SqlField({
   const cls = "font-mono text-xs leading-5";
 
   return (
-    <div className="relative">
-      <div className="relative border border-border-soft rounded-lg bg-bg overflow-hidden focus-within:ring-2 focus-within:ring-accent">
-        <div ref={gutRef} aria-hidden className={`${cls} absolute left-0 top-0 w-8 pt-1.5 pr-1.5 text-right text-subtle select-none pointer-events-none whitespace-pre overflow-hidden`}>
-          {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
-        </div>
-        <pre ref={preRef} aria-hidden className={`${cls} absolute inset-0 pl-9 pr-2.5 py-1.5 whitespace-pre overflow-hidden pointer-events-none text-fg`}
-          dangerouslySetInnerHTML={{ __html: value ? highlightSql(value, tblSet, colSet) + "\n" : '<span class="text-subtle">SELECT …  (type @ for tables, # for fields)</span>' }} />
-        <textarea
-          ref={taRef} value={value} rows={rows} spellCheck={false} wrap="off"
-          onChange={(e) => { onChange(e.target.value); refresh(e.target.value, e.target.selectionStart ?? 0); }}
-          onKeyUp={(e) => { if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0); }}
-          onClick={(e) => refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0)}
-          onScroll={syncScroll}
-          onKeyDown={(e) => {
-            if (!open) return;
-            if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => (a + 1) % suggs.length); }
-            else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => (a - 1 + suggs.length) % suggs.length); }
-            else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptSugg(suggs[active]); }
-            else if (e.key === "Escape") { setOpen(false); }
-          }}
-          onBlur={() => { setTimeout(() => setOpen(false), 150); onBlur?.(); }}
-          className={`${cls} relative block w-full pl-9 pr-2.5 py-1.5 bg-transparent resize-y overflow-x-auto whitespace-pre focus:outline-none`}
-          style={{ color: "transparent", caretColor: "var(--fg)" }}
-        />
+    <div>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <button type="button" onClick={() => onChange(formatSQL(value))}
+          className="px-2 py-1 rounded-md border border-border-soft text-[11px] text-muted hover:text-fg hover:border-accent cursor-pointer">Format</button>
+        <a href="/settings/appearance" target="_blank" rel="noopener noreferrer"
+          className="px-2 py-1 rounded-md border border-border-soft text-[11px] text-muted hover:text-fg hover:border-accent">Customize</a>
+        {onRun && (
+          <button type="button" onClick={onRun} disabled={running}
+            className="ml-auto px-2.5 py-1 rounded-md bg-accent text-[var(--accent-fg)] text-[11px] font-medium disabled:opacity-50 cursor-pointer">
+            {running ? "Running…" : "Run preview"}
+          </button>
+        )}
       </div>
 
-      {open && (
-        <ul role="listbox" style={{ top: pos.top, left: pos.left }} className="absolute z-30 w-[220px] max-h-52 overflow-auto rounded-lg border border-border-soft bg-bg-elev-2 shadow-xl text-xs">
-          {suggs.map((s, i) => (
-            <li key={`${s.label}-${i}`}>
-              <button type="button" onMouseDown={(e) => { e.preventDefault(); acceptSugg(s); }}
-                className={`w-full text-left px-2 py-1.5 font-mono truncate cursor-pointer ${i === active ? "bg-accent/15 text-fg" : "text-muted hover:bg-bg/60"}`}>
-                {s.label}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="mt-1.5">
-        <button type="button" onClick={() => setPanelOpen((o) => !o)} className="text-[11px] text-muted hover:text-fg inline-flex items-center gap-1 cursor-pointer">
-          <span className="font-mono">{panelOpen ? "▾" : "▸"}</span> Insert
-        </button>
-        {panelOpen && (
-          <div className="mt-1 rounded-lg border border-border-soft bg-bg-elev overflow-hidden">
-            <div className="flex border-b border-border-soft">
-              {TABS.map((t) => (
-                <button key={t.id} type="button" onClick={() => { setTab(t.id); setFilter(""); }}
-                  className={`flex-1 text-[11px] py-1.5 cursor-pointer border-b-2 -mb-px transition-colors ${tab === t.id ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg"}`}>
-                  {t.label}
-                </button>
-              ))}
+      <div className="flex flex-wrap gap-2 items-start">
+        <div className="relative flex-1 min-w-[240px]">
+          <div className="relative border border-border-soft rounded-lg bg-bg overflow-hidden focus-within:ring-2 focus-within:ring-accent">
+            <div ref={gutRef} aria-hidden className={`${cls} absolute left-0 top-0 w-8 pt-1.5 pr-1.5 text-right text-subtle select-none pointer-events-none whitespace-pre overflow-hidden`}>
+              {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
             </div>
-            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter…"
-              className="w-full bg-bg border-b border-border-soft px-2.5 py-1.5 text-xs font-mono focus:outline-none" />
-            <div className="max-h-40 overflow-auto p-1">
-              {items.length === 0 ? (
-                <div className="px-2 py-3 text-center text-[11px] text-subtle">No matches.</div>
-              ) : items.map((it, i) => (
-                <button key={`${it.label}-${i}`} type="button"
-                  onMouseDown={(e) => { e.preventDefault(); insertText(it.ins, { back: it.back, snippet: it.snippet }); }}
-                  className={`w-full text-left px-2 py-1 rounded hover:bg-accent/15 cursor-pointer ${tab === "snippets" ? "" : "font-mono text-xs flex items-baseline gap-2"}`}>
-                  {tab === "snippets" ? (
-                    <><div className="text-xs font-medium text-fg">{it.label}</div><div className="font-mono text-[10px] text-subtle truncate">{it.meta}</div></>
-                  ) : (
-                    <><span className="truncate">{it.label}</span>{it.meta && <span className="ml-auto text-[10px] text-subtle shrink-0">{it.meta}</span>}</>
-                  )}
-                </button>
-              ))}
-            </div>
+            <pre ref={preRef} aria-hidden className={`${cls} absolute inset-0 pl-9 pr-2.5 py-1.5 whitespace-pre overflow-hidden pointer-events-none text-fg`}
+              dangerouslySetInnerHTML={{ __html: value ? highlightSql(value, tblSet, colSet) + "\n" : '<span class="text-subtle">SELECT …  (type @ tables, # fields)</span>' }} />
+            <textarea
+              ref={taRef} value={value} rows={rows} spellCheck={false} wrap="off"
+              onChange={(e) => { onChange(e.target.value); refresh(e.target.value, e.target.selectionStart ?? 0); }}
+              onKeyUp={(e) => { if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0); }}
+              onClick={(e) => refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+              onScroll={syncScroll}
+              onKeyDown={(e) => {
+                if (!open) return;
+                if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => (a + 1) % suggs.length); }
+                else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => (a - 1 + suggs.length) % suggs.length); }
+                else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptSugg(suggs[active]); }
+                else if (e.key === "Escape") { setOpen(false); }
+              }}
+              onBlur={() => { setTimeout(() => setOpen(false), 150); onBlur?.(); }}
+              className={`${cls} relative block w-full pl-9 pr-2.5 py-1.5 bg-transparent resize-y overflow-x-auto whitespace-pre focus:outline-none`}
+              style={{ color: "transparent", caretColor: "var(--fg)" }}
+            />
           </div>
-        )}
+          {open && (
+            <ul role="listbox" style={{ top: pos.top, left: pos.left }} className="absolute z-30 w-[220px] max-h-52 overflow-auto rounded-lg border border-border-soft bg-bg-elev-2 shadow-xl text-xs">
+              {suggs.map((s, i) => (
+                <li key={`${s.label}-${i}`}>
+                  <button type="button" onMouseDown={(e) => { e.preventDefault(); acceptSugg(s); }}
+                    className={`w-full text-left px-2 py-1.5 font-mono truncate cursor-pointer ${i === active ? "bg-accent/15 text-fg" : "text-muted hover:bg-bg/60"}`}>
+                    {s.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="w-[190px] grow rounded-lg border border-border-soft bg-bg-elev overflow-hidden flex flex-col" style={{ height: rows * 20 + 16 }}>
+          <div className="flex border-b border-border-soft">
+            {TABS.map((t) => (
+              <button key={t.id} type="button" onClick={() => { setTab(t.id); setFilter(""); }}
+                className={`flex-1 text-[10.5px] py-1.5 cursor-pointer border-b-2 -mb-px transition-colors ${tab === t.id ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg"}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter…"
+            className="bg-bg border-b border-border-soft px-2.5 py-1.5 text-xs font-mono focus:outline-none" />
+          <div className="flex-1 min-h-0 overflow-auto p-1">
+            {items.length === 0 ? (
+              <div className="px-2 py-3 text-center text-[11px] text-subtle">No matches.</div>
+            ) : items.map((it, i) => (
+              <button key={`${it.label}-${i}`} type="button"
+                onMouseDown={(e) => { e.preventDefault(); insertText(it.ins, { back: it.back, snippet: it.snippet }); }}
+                className={`w-full text-left px-2 py-1 rounded hover:bg-accent/15 cursor-pointer ${tab === "snippets" ? "" : "font-mono text-xs flex items-baseline gap-2"}`}>
+                {tab === "snippets" ? (
+                  <><div className="text-xs font-medium text-fg">{it.label}</div><div className="font-mono text-[10px] text-subtle truncate">{it.meta}</div></>
+                ) : (
+                  <><span className="truncate">{it.label}</span>{it.meta && <span className="ml-auto text-[10px] text-subtle shrink-0">{it.meta}</span>}</>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -295,9 +295,9 @@ function LayoutToggle({ cfg, set }: { cfg: BlockConfig; set: (p: Partial<BlockCo
 
 /** The per-kind configuration fields, shared by the top-level editor and the
  *  group child editor. */
-function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
+function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur, onRun, running }: {
   kind: BlockKind; cfg: BlockConfig; set: (p: Partial<BlockConfig>) => void; schema: DbSchema;
-  pages?: PageRef[]; siblings?: SiblingRef[]; onSqlBlur?: () => void;
+  pages?: PageRef[]; siblings?: SiblingRef[]; onSqlBlur?: () => void; onRun?: () => void; running?: boolean;
 }) {
   const meta = BLOCK_META[kind];
   const hasSql = blockHasSql(kind, cfg);
@@ -412,7 +412,7 @@ function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur }: {
         </div>
       )}
 
-      {hasSql && !cfg.source && <SqlField value={cfg.sql ?? ""} onChange={(v) => set({ sql: v })} onBlur={onSqlBlur} schema={schema} />}
+      {hasSql && !cfg.source && <SqlField value={cfg.sql ?? ""} onChange={(v) => set({ sql: v })} onBlur={onSqlBlur} onRun={onRun} running={running} schema={schema} />}
 
       {kind === "stat" && (
         <select value={cfg.format ?? "number"} onChange={(e) => set({ format: e.target.value as BlockConfig["format"] })} className={`${SELECT} w-full`}>
@@ -491,7 +491,7 @@ function GroupChildEditor({ cfg, set, schema }: { cfg: BlockConfig; set: (p: Par
             </div>
           </div>
           <input value={ch.config.title ?? ""} onChange={(e) => setChild(i, { title: e.target.value })} placeholder="Title" className={INPUT_SM} />
-          <BlockFields kind={ch.kind} cfg={ch.config} set={(p) => setChild(i, p)} schema={schema} onSqlBlur={() => runChild(i, ch.config.sql ?? "")} />
+          <BlockFields kind={ch.kind} cfg={ch.config} set={(p) => setChild(i, p)} schema={schema} onSqlBlur={() => runChild(i, ch.config.sql ?? "")} onRun={() => runChild(i, ch.config.sql ?? "")} />
           <div className="rounded border border-border-soft/70 bg-bg/40 p-2">
             <BlockView kind={ch.kind} config={ch.config} result={blockHasSql(ch.kind, ch.config) ? childResults[i] ?? null : null} />
           </div>
@@ -567,7 +567,7 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
       {kind === "group" ? (
         <GroupChildEditor cfg={cfg} set={set} schema={schema} />
       ) : (
-        <BlockFields kind={kind} cfg={cfg} set={set} schema={schema} pages={pages} siblings={siblings} onSqlBlur={run} />
+        <BlockFields kind={kind} cfg={cfg} set={set} schema={schema} pages={pages} siblings={siblings} onSqlBlur={run} onRun={run} running={running} />
       )}
 
       {kind === "stat" && (cfg.format === "ratio" || cfg.format === "list") && (result?.rows?.[0]?.length ?? 0) > 0 && (
@@ -664,8 +664,8 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
             </select>
           </>
         )}
-        {hasSql && <button type="button" onClick={run} disabled={running} className="ml-auto px-2.5 py-1 rounded border border-border-soft text-muted hover:text-fg cursor-pointer disabled:opacity-50">{running ? "Running…" : "Run"}</button>}
-        <button type="button" onClick={cancel} className={`px-2.5 py-1 rounded border border-border-soft text-muted hover:text-fg cursor-pointer ${hasSql ? "" : "ml-auto"}`}>Cancel</button>
+        {hasSql && cfg.source && <button type="button" onClick={run} disabled={running} className="ml-auto px-2.5 py-1 rounded border border-border-soft text-muted hover:text-fg cursor-pointer disabled:opacity-50">{running ? "Running…" : "Run"}</button>}
+        <button type="button" onClick={cancel} className={`px-2.5 py-1 rounded border border-border-soft text-muted hover:text-fg cursor-pointer ${hasSql && cfg.source ? "" : "ml-auto"}`}>Cancel</button>
         <button type="button" onClick={save} disabled={busy} className="px-3 py-1 rounded bg-accent text-[var(--accent-fg)] font-medium cursor-pointer disabled:opacity-50">Save</button>
       </div>
 
