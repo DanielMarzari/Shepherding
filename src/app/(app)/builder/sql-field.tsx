@@ -3,19 +3,23 @@
 import { useMemo, useRef, useState } from "react";
 import type { DbSchema } from "@/lib/builder";
 
+// ── Static data ──────────────────────────────────────────────────────
 const KEYWORDS = [
-  "SELECT", "FROM", "WHERE", "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET",
-  "JOIN", "LEFT JOIN", "INNER JOIN", "ON", "AS", "AND", "OR", "NOT", "IN",
-  "LIKE", "IS NULL", "IS NOT NULL", "DISTINCT", "CASE", "WHEN", "THEN", "ELSE",
-  "END", "COALESCE", "CAST", "SUBSTR", "strftime", "DESC", "ASC", "WITH",
-  "UNION", "UNION ALL", "BETWEEN", "EXISTS", "COUNT", "SUM", "AVG", "MIN", "MAX", "ROUND",
+  "SELECT", "DISTINCT", "FROM", "WHERE", "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET",
+  "JOIN", "LEFT JOIN", "INNER JOIN", "ON", "AND", "OR", "NOT", "AS", "CASE", "WHEN", "THEN",
+  "ELSE", "END", "UNION ALL", "UNION", "ASC", "DESC", "IS NULL", "IS NOT NULL", "WITH",
 ];
-
-type Kind = "table" | "column" | "keyword";
-interface Sugg { text: string; kind: Kind }
-
-// Reusable expressions — date windows, org scoping, common filters. Inserting
-// one drops "col" as the selected placeholder so you can type the column.
+const FUNCTIONS: Array<{ name: string; tpl: string; hint?: string }> = [
+  { name: "count", tpl: "count()", hint: "rows" }, { name: "sum", tpl: "sum()", hint: "total" },
+  { name: "avg", tpl: "avg()", hint: "average" }, { name: "min", tpl: "min()" }, { name: "max", tpl: "max()" },
+  { name: "coalesce", tpl: "coalesce()", hint: "first non-null" }, { name: "round", tpl: "round()" },
+  { name: "date", tpl: "date()", hint: "'now','-7 days'" }, { name: "datetime", tpl: "datetime()" },
+  { name: "strftime", tpl: "strftime()", hint: "format date" }, { name: "substr", tpl: "substr()" },
+  { name: "cast", tpl: "cast( as )" }, { name: "like", tpl: "like ", hint: "pattern" },
+  { name: "in", tpl: "in ()" }, { name: "between", tpl: "between " }, { name: "exists", tpl: "exists ()" },
+];
+// Reusable expressions — date windows, org scoping, common filters. "col" is
+// dropped as the selected placeholder so you type the column immediately.
 const SNIPPETS: Array<{ label: string; sql: string }> = [
   { label: "Within last 7 days", sql: "date(col) >= date('now','-7 days')" },
   { label: "Within last 30 days", sql: "date(col) >= date('now','-30 days')" },
@@ -28,14 +32,6 @@ const SNIPPETS: Array<{ label: string; sql: string }> = [
   { label: "Not archived", sql: "archived_at IS NULL" },
   { label: "Engaged (shepherded / active / present)", sql: "classification IN ('shepherded','active','present')" },
 ];
-
-// One-glyph key symbol per suggestion kind (shown in the dropdown).
-const SIGIL: Record<Kind, string> = { table: "$", column: "#", keyword: "/" };
-const SIGIL_COLOR: Record<Kind, string> = {
-  table: "text-[color:var(--good-soft-fg)]",
-  column: "text-accent",
-  keyword: "text-subtle",
-};
 
 // ── Syntax highlighting ──────────────────────────────────────────────
 const HL_KW = new Set([
@@ -51,8 +47,7 @@ const HL_OP = new Set(["like", "in", "between", "exists", "glob"]);
 const isWord = (c: string) => /[A-Za-z0-9_]/.test(c);
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** Tokenize SQL into colored spans. Tables/columns come from the live schema;
- *  an identifier right after a `.` is treated as a field. HTML-escaped. */
+/** Tokenize SQL into colored spans (schema-aware). HTML-escaped. */
 function highlightSql(src: string, tbl: Set<string>, col: Set<string>): string {
   let out = "", i = 0;
   const n = src.length;
@@ -93,12 +88,8 @@ function caretCoords(ta: HTMLTextAreaElement, pos: number): { top: number; left:
     "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "textTransform", "tabSize",
   ] as const;
   for (const p of copy) div.style[p as never] = s[p as never];
-  div.style.position = "absolute";
-  div.style.visibility = "hidden";
-  div.style.whiteSpace = "pre-wrap";
-  div.style.wordWrap = "break-word";
-  div.style.overflow = "hidden";
-  div.style.width = `${ta.clientWidth}px`;
+  div.style.position = "absolute"; div.style.visibility = "hidden";
+  div.style.whiteSpace = "pre"; div.style.overflow = "hidden";
   div.textContent = ta.value.slice(0, pos);
   const marker = document.createElement("span");
   marker.textContent = ta.value.slice(pos) || ".";
@@ -110,113 +101,145 @@ function caretCoords(ta: HTMLTextAreaElement, pos: number): { top: number; left:
   return { top, left };
 }
 
+type Tab = "keywords" | "tables" | "fields" | "functions" | "snippets";
+const TABS: Array<{ id: Tab; label: string }> = [
+  { id: "keywords", label: "Keywords" }, { id: "tables", label: "Tables" },
+  { id: "fields", label: "Fields" }, { id: "functions", label: "Functions" }, { id: "snippets", label: "Snippets" },
+];
+interface Item { label: string; ins: string; meta?: string; back?: number; snippet?: boolean; }
+interface Sugg { label: string; insert: string }
+
 export function SqlField({
-  value,
-  onChange,
-  onBlur,
-  schema,
-  rows = 6,
+  value, onChange, onBlur, schema, rows = 8,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  onBlur?: () => void;
-  schema: DbSchema;
-  rows?: number;
+  value: string; onChange: (v: string) => void; onBlur?: () => void; schema: DbSchema; rows?: number;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
+  const gutRef = useRef<HTMLDivElement>(null);
   const [suggs, setSuggs] = useState<Sugg[]>([]);
   const [active, setActive] = useState(0);
   const [open, setOpen] = useState(false);
+  const [start, setStart] = useState(0);
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
-  const [snipOpen, setSnipOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>("keywords");
+  const [filter, setFilter] = useState("");
+  const [panelOpen, setPanelOpen] = useState(true);
 
   const allColumns = useMemo(() => Array.from(new Set(Object.values(schema.columns).flat())), [schema.columns]);
   const tblSet = useMemo(() => new Set(schema.tables.map((t) => t.toLowerCase())), [schema.tables]);
   const colSet = useMemo(() => new Set(allColumns.map((c) => c.toLowerCase())), [allColumns]);
+  const lineCount = value.split("\n").length;
 
   function syncScroll() {
-    const ta = taRef.current, pre = preRef.current;
-    if (ta && pre) { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; }
+    const ta = taRef.current;
+    if (!ta) return;
+    if (preRef.current) { preRef.current.scrollTop = ta.scrollTop; preRef.current.scrollLeft = ta.scrollLeft; }
+    if (gutRef.current) gutRef.current.style.transform = `translateY(${-ta.scrollTop}px)`;
   }
 
-  function tokenAt(text: string, caret: number): { word: string; start: number } {
-    let s = caret;
-    while (s > 0 && /[A-Za-z0-9_]/.test(text[s - 1])) s--;
-    return { word: text.slice(s, caret), start: s };
+  /** table→table and alias→table from FROM/JOIN clauses. */
+  function aliasMap(text: string): Record<string, string> {
+    const m: Record<string, string> = {};
+    const re = /\b(?:from|join)\s+([a-z_]\w*)(?:\s+(?:as\s+)?([a-z_]\w*))?/gi;
+    let x: RegExpExecArray | null;
+    while ((x = re.exec(text))) {
+      const t = x[1].toLowerCase();
+      if (tblSet.has(t)) { m[t] = t; if (x[2] && !HL_KW.has(x[2].toLowerCase())) m[x[2].toLowerCase()] = t; }
+    }
+    return m;
+  }
+
+  /** Completion context: @tables, #fields, alias.fields, from/join tables, or a bare word. */
+  function detect(text: string, caret: number): { items: Sugg[]; start: number } | null {
+    const pre = text.slice(0, caret);
+    const tables = (q: string): Sugg[] => schema.tables.filter((t) => t.toLowerCase().includes(q)).slice(0, 8).map((t) => ({ label: t, insert: t }));
+    let m: RegExpExecArray | null;
+    if ((m = /@(\w*)$/.exec(pre))) { const it = tables(m[1].toLowerCase()); return it.length ? { items: it, start: caret - m[0].length } : null; }
+    if ((m = /#(\w*)$/.exec(pre))) {
+      const q = m[1].toLowerCase();
+      const refs = Object.values(aliasMap(text));
+      const pool = refs.length ? Array.from(new Set(refs.flatMap((t) => schema.columns[t] ?? []))) : allColumns;
+      const it = pool.filter((c) => c.toLowerCase().includes(q)).slice(0, 8).map((c) => ({ label: c, insert: c }));
+      return it.length ? { items: it, start: caret - m[0].length } : null;
+    }
+    if ((m = /([a-zA-Z_]\w*)\.(\w*)$/.exec(pre))) {
+      const base = aliasMap(text)[m[1].toLowerCase()];
+      if (base) { const q = m[2].toLowerCase(); const it = (schema.columns[base] ?? []).filter((c) => c.toLowerCase().includes(q)).slice(0, 8).map((c) => ({ label: c, insert: c })); return it.length ? { items: it, start: caret - m[2].length } : null; }
+    }
+    if ((m = /\b(?:from|join)\s+(\w*)$/i.exec(pre))) { const it = tables(m[1].toLowerCase()); return it.length ? { items: it, start: caret - m[1].length } : null; }
+    // bare word → tables + columns + keywords
+    let s = caret; while (s > 0 && isWord(text[s - 1])) s--;
+    const word = text.slice(s, caret);
+    if (word.length < 1) return null;
+    const w = word.toLowerCase();
+    const merged: Sugg[] = [
+      ...schema.tables.filter((t) => t.toLowerCase().includes(w)).map((t) => ({ label: t, insert: t })),
+      ...allColumns.filter((c) => c.toLowerCase().includes(w)).map((c) => ({ label: c, insert: c })),
+      ...KEYWORDS.filter((k) => k.toLowerCase().startsWith(w)).map((k) => ({ label: k, insert: k + " " })),
+    ].sort((a, b) => Number(b.label.toLowerCase().startsWith(w)) - Number(a.label.toLowerCase().startsWith(w)) || a.label.length - b.label.length).slice(0, 8);
+    return merged.length ? { items: merged, start: s } : null;
   }
 
   function refresh(text: string, caret: number) {
-    const { word, start } = tokenAt(text, caret);
-    if (word.length < 1) { setOpen(false); return; }
-    const prev = text.slice(0, start).trimEnd().split(/\s+/).pop()?.toUpperCase() ?? "";
-    const afterFrom = prev === "FROM" || prev.endsWith("JOIN");
-    const w = word.toLowerCase();
-    const tables: Sugg[] = schema.tables.filter((t) => t.toLowerCase().includes(w)).map((t) => ({ text: t, kind: "table" }));
-    const columns: Sugg[] = allColumns.filter((c) => c.toLowerCase().includes(w)).map((c) => ({ text: c, kind: "column" }));
-    const keywords: Sugg[] = KEYWORDS.filter((k) => k.toLowerCase().startsWith(w)).map((k) => ({ text: k, kind: "keyword" }));
-    const merged = (afterFrom ? [...tables, ...columns, ...keywords] : [...columns, ...tables, ...keywords])
-      .sort((a, b) => Number(b.text.toLowerCase().startsWith(w)) - Number(a.text.toLowerCase().startsWith(w)) || a.text.length - b.text.length)
-      .slice(0, 8);
-    setSuggs(merged);
-    setActive(0);
-    if (merged.length && taRef.current) {
+    const r = detect(text, caret);
+    if (!r) { setOpen(false); return; }
+    setSuggs(r.items); setStart(r.start); setActive(0);
+    if (taRef.current) {
       const c = caretCoords(taRef.current, caret);
       const lh = parseFloat(getComputedStyle(taRef.current).lineHeight) || 16;
       const maxLeft = Math.max(0, taRef.current.clientWidth - 228);
       setPos({ top: c.top + lh + 4, left: Math.min(c.left, maxLeft) });
     }
-    setOpen(merged.length > 0);
+    setOpen(true);
   }
 
-  function accept(s: Sugg) {
+  function acceptSugg(s: Sugg) {
     const ta = taRef.current;
-    if (!ta) return;
-    const caret = ta.selectionStart ?? value.length;
-    const { start } = tokenAt(value, caret);
-    const insert = s.kind === "keyword" ? s.text + " " : s.text;
-    const next = value.slice(0, start) + insert + value.slice(caret);
+    const caret = ta?.selectionStart ?? value.length;
+    const next = value.slice(0, start) + s.insert + value.slice(caret);
     onChange(next);
     setOpen(false);
+    requestAnimationFrame(() => { if (!ta) return; ta.focus(); const p = start + s.insert.length; ta.setSelectionRange(p, p); });
+  }
+
+  /** Insert panel text at the caret; snippets select "col", functions land inside "(". */
+  function insertText(text: string, opts: { back?: number; snippet?: boolean } = {}) {
+    const ta = taRef.current;
+    const s = ta?.selectionStart ?? value.length;
+    const e = ta?.selectionEnd ?? s;
+    onChange(value.slice(0, s) + text + value.slice(e));
     requestAnimationFrame(() => {
-      ta.focus();
-      const p = start + insert.length;
+      if (!ta) return; ta.focus();
+      if (opts.snippet) { const rel = text.indexOf("col"); if (rel >= 0) { ta.setSelectionRange(s + rel, s + rel + 3); return; } }
+      const p = s + text.length - (opts.back ?? 0);
       ta.setSelectionRange(p, p);
     });
   }
 
-  function insertSnippet(sql: string) {
-    const ta = taRef.current;
-    const start = ta?.selectionStart ?? value.length;
-    const end = ta?.selectionEnd ?? start;
-    onChange(value.slice(0, start) + sql + value.slice(end));
-    setSnipOpen(false);
-    requestAnimationFrame(() => {
-      if (!ta) return;
-      ta.focus();
-      const rel = sql.indexOf("col");
-      if (rel >= 0) ta.setSelectionRange(start + rel, start + rel + 3);
-      else { const p = start + sql.length; ta.setSelectionRange(p, p); }
-    });
-  }
+  const items: Item[] = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    let list: Item[];
+    if (tab === "keywords") list = KEYWORDS.map((k) => ({ label: k, ins: k + " " }));
+    else if (tab === "tables") list = schema.tables.map((t) => ({ label: t, ins: t }));
+    else if (tab === "fields") list = allColumns.map((c) => ({ label: c, ins: c }));
+    else if (tab === "functions") list = FUNCTIONS.map((f) => ({ label: f.name, ins: f.tpl, meta: f.hint, back: f.tpl.indexOf("(") >= 0 ? f.tpl.length - f.tpl.indexOf("(") - 1 : 0 }));
+    else list = SNIPPETS.map((s) => ({ label: s.label, ins: s.sql, meta: s.sql, snippet: true }));
+    return q ? list.filter((it) => it.label.toLowerCase().includes(q) || (it.meta ?? "").toLowerCase().includes(q)) : list;
+  }, [tab, filter, schema.tables, allColumns]);
 
-  // Shared box metrics so the highlight layer aligns exactly with the textarea.
-  const boxClass = "w-full px-2.5 py-1.5 text-xs font-mono leading-5 border rounded-lg";
+  const cls = "font-mono text-xs leading-5";
 
   return (
     <div className="relative">
-      <div className="relative">
-        <pre
-          ref={preRef}
-          aria-hidden
-          className={`${boxClass} border-transparent absolute inset-0 overflow-hidden whitespace-pre-wrap break-words pointer-events-none text-fg`}
-          dangerouslySetInnerHTML={{ __html: value ? highlightSql(value, tblSet, colSet) + "\n" : '<span class="text-subtle">SELECT …</span>' }}
-        />
+      <div className="relative border border-border-soft rounded-lg bg-bg overflow-hidden focus-within:ring-2 focus-within:ring-accent">
+        <div ref={gutRef} aria-hidden className={`${cls} absolute left-0 top-0 w-8 pt-1.5 pr-1.5 text-right text-subtle select-none pointer-events-none whitespace-pre overflow-hidden`}>
+          {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
+        </div>
+        <pre ref={preRef} aria-hidden className={`${cls} absolute inset-0 pl-9 pr-2.5 py-1.5 whitespace-pre overflow-hidden pointer-events-none text-fg`}
+          dangerouslySetInnerHTML={{ __html: value ? highlightSql(value, tblSet, colSet) + "\n" : '<span class="text-subtle">SELECT …  (type @ for tables, # for fields)</span>' }} />
         <textarea
-          ref={taRef}
-          value={value}
-          rows={rows}
-          spellCheck={false}
+          ref={taRef} value={value} rows={rows} spellCheck={false} wrap="off"
           onChange={(e) => { onChange(e.target.value); refresh(e.target.value, e.target.selectionStart ?? 0); }}
           onKeyUp={(e) => { if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0); }}
           onClick={(e) => refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0)}
@@ -225,59 +248,62 @@ export function SqlField({
             if (!open) return;
             if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => (a + 1) % suggs.length); }
             else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => (a - 1 + suggs.length) % suggs.length); }
-            else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); accept(suggs[active]); }
+            else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptSugg(suggs[active]); }
             else if (e.key === "Escape") { setOpen(false); }
           }}
           onBlur={() => { setTimeout(() => setOpen(false), 150); onBlur?.(); }}
-          className={`${boxClass} relative bg-bg border-border-soft resize-y focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+          className={`${cls} relative block w-full pl-9 pr-2.5 py-1.5 bg-transparent resize-y overflow-x-auto whitespace-pre focus:outline-none`}
           style={{ color: "transparent", caretColor: "var(--fg)" }}
         />
       </div>
-      <div className="relative mt-1">
-        <button
-          type="button"
-          onClick={() => setSnipOpen((o) => !o)}
-          className="text-[11px] text-muted hover:text-fg inline-flex items-center gap-1 cursor-pointer"
-        >
-          <span className="font-mono">+</span> Snippets
-        </button>
-        {snipOpen && (
-          <ul className="absolute z-30 left-0 top-6 w-64 max-h-56 overflow-auto rounded-lg border border-border-soft bg-bg-elev-2 shadow-xl text-xs p-1">
-            {SNIPPETS.map((s) => (
-              <li key={s.label}>
-                <button
-                  type="button"
-                  onMouseDown={(e) => { e.preventDefault(); insertSnippet(s.sql); }}
-                  className="w-full text-left px-2 py-1.5 rounded hover:bg-accent/15 cursor-pointer"
-                >
-                  <div className="font-medium text-fg">{s.label}</div>
-                  <div className="font-mono text-[10px] text-subtle truncate">{s.sql}</div>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+
       {open && (
-        <ul
-          role="listbox"
-          style={{ top: pos.top, left: pos.left }}
-          className="absolute z-30 w-[220px] max-h-52 overflow-auto rounded-lg border border-border-soft bg-bg-elev-2 shadow-xl text-xs"
-        >
+        <ul role="listbox" style={{ top: pos.top, left: pos.left }} className="absolute z-30 w-[220px] max-h-52 overflow-auto rounded-lg border border-border-soft bg-bg-elev-2 shadow-xl text-xs">
           {suggs.map((s, i) => (
-            <li key={`${s.kind}-${s.text}`}>
-              <button
-                type="button"
-                onMouseDown={(e) => { e.preventDefault(); accept(s); }}
-                className={`w-full flex items-center gap-2 px-2 py-1.5 text-left cursor-pointer ${i === active ? "bg-accent/15 text-fg" : "text-muted hover:bg-bg/60"}`}
-              >
-                <span className={`w-4 shrink-0 text-center font-mono font-semibold ${SIGIL_COLOR[s.kind]}`} title={s.kind}>{SIGIL[s.kind]}</span>
-                <span className="font-mono truncate">{s.text}</span>
+            <li key={`${s.label}-${i}`}>
+              <button type="button" onMouseDown={(e) => { e.preventDefault(); acceptSugg(s); }}
+                className={`w-full text-left px-2 py-1.5 font-mono truncate cursor-pointer ${i === active ? "bg-accent/15 text-fg" : "text-muted hover:bg-bg/60"}`}>
+                {s.label}
               </button>
             </li>
           ))}
         </ul>
       )}
+
+      <div className="mt-1.5">
+        <button type="button" onClick={() => setPanelOpen((o) => !o)} className="text-[11px] text-muted hover:text-fg inline-flex items-center gap-1 cursor-pointer">
+          <span className="font-mono">{panelOpen ? "▾" : "▸"}</span> Insert
+        </button>
+        {panelOpen && (
+          <div className="mt-1 rounded-lg border border-border-soft bg-bg-elev overflow-hidden">
+            <div className="flex border-b border-border-soft">
+              {TABS.map((t) => (
+                <button key={t.id} type="button" onClick={() => { setTab(t.id); setFilter(""); }}
+                  className={`flex-1 text-[11px] py-1.5 cursor-pointer border-b-2 -mb-px transition-colors ${tab === t.id ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg"}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter…"
+              className="w-full bg-bg border-b border-border-soft px-2.5 py-1.5 text-xs font-mono focus:outline-none" />
+            <div className="max-h-40 overflow-auto p-1">
+              {items.length === 0 ? (
+                <div className="px-2 py-3 text-center text-[11px] text-subtle">No matches.</div>
+              ) : items.map((it, i) => (
+                <button key={`${it.label}-${i}`} type="button"
+                  onMouseDown={(e) => { e.preventDefault(); insertText(it.ins, { back: it.back, snippet: it.snippet }); }}
+                  className={`w-full text-left px-2 py-1 rounded hover:bg-accent/15 cursor-pointer ${tab === "snippets" ? "" : "font-mono text-xs flex items-baseline gap-2"}`}>
+                  {tab === "snippets" ? (
+                    <><div className="text-xs font-medium text-fg">{it.label}</div><div className="font-mono text-[10px] text-subtle truncate">{it.meta}</div></>
+                  ) : (
+                    <><span className="truncate">{it.label}</span>{it.meta && <span className="ml-auto text-[10px] text-subtle shrink-0">{it.meta}</span>}</>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
