@@ -36,6 +36,9 @@
   --lane-serv-bg: rgba(124, 58, 237, 0.10);
   --lane-none: #71717a;
   --lane-none-bg: rgba(113, 113, 122, 0.10);
+  /* SQL editor syntax tokens — blue keyword · pink table · yellow field · green function */
+  --sql-kw: #1a56db; --sql-tbl: #a3357f; --sql-tbl-bg: #fbe4f1; --sql-col: #7a5f0d; --sql-col-bg: #faedcf;
+  --sql-fn: #116b2e; --sql-str: #8a5a12; --sql-num: #8a5a12; --sql-cmt: #8b95a1; --sql-param: #b04a06;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -73,6 +76,8 @@
     --lane-serv-bg: rgba(167, 139, 250, 0.14);
     --lane-none: #52525b;
     --lane-none-bg: rgba(82, 82, 91, 0.20);
+    --sql-kw: #8cc2ff; --sql-tbl: #e88fd0; --sql-tbl-bg: #3a1f30; --sql-col: #e3c94a; --sql-col-bg: #3a3110;
+    --sql-fn: #5fd88a; --sql-str: #d0a878; --sql-num: #d0a878; --sql-cmt: #5b6572; --sql-param: #f0a35e;
   }
 }
 
@@ -127,3 +132,13 @@ body {
 
 .tnum { font-variant-numeric: tabular-nums; }
 .spark { fill: none; stroke-width: 1.5; }
+
+/* ─── SQL editor syntax highlighting (SqlField) ─── */
+.sql-kw { color: var(--sql-kw); font-weight: 600; }
+.sql-tbl { color: var(--sql-tbl); font-weight: 600; background: var(--sql-tbl-bg); border-radius: 3px; padding: 0 2px; margin: 0 -2px; }
+.sql-col { color: var(--sql-col); background: var(--sql-col-bg); border-radius: 3px; padding: 0 2px; margin: 0 -2px; }
+.sql-fn { color: var(--sql-fn); font-weight: 600; }
+.sql-str { color: var(--sql-str); }
+.sql-num { color: var(--sql-num); }
+.sql-cmt { color: var(--sql-cmt); font-style: italic; }
+.sql-param { color: var(--sql-param); font-weight: 600; }

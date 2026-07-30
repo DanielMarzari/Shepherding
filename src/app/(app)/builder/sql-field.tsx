@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { DbSchema } from "@/lib/builder";
 
 const KEYWORDS = [
@@ -21,6 +21,52 @@ const SIGIL_COLOR: Record<Kind, string> = {
   column: "text-accent",
   keyword: "text-subtle",
 };
+
+// ── Syntax highlighting ──────────────────────────────────────────────
+const HL_KW = new Set([
+  "select", "distinct", "from", "where", "group", "by", "order", "having", "limit", "offset",
+  "as", "on", "and", "or", "not", "is", "null", "join", "left", "right", "inner", "outer",
+  "union", "all", "case", "when", "then", "else", "end", "asc", "desc", "with",
+]);
+const HL_FN = new Set([
+  "count", "sum", "avg", "min", "max", "coalesce", "round", "date", "datetime", "strftime",
+  "substr", "cast", "nullif", "ifnull", "lower", "upper", "abs", "length", "julianday", "total", "group_concat",
+]);
+const HL_OP = new Set(["like", "in", "between", "exists", "glob"]);
+const isWord = (c: string) => /[A-Za-z0-9_]/.test(c);
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Tokenize SQL into colored spans. Tables/columns come from the live schema;
+ *  an identifier right after a `.` is treated as a field. HTML-escaped. */
+function highlightSql(src: string, tbl: Set<string>, col: Set<string>): string {
+  let out = "", i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === "-" && src[i + 1] === "-") { let j = i; while (j < n && src[j] !== "\n") j++; out += `<span class="sql-cmt">${esc(src.slice(i, j))}</span>`; i = j; continue; }
+    if (c === "'") { let j = i + 1; while (j < n && !(src[j] === "'" && src[j - 1] !== "\\")) j++; j = Math.min(n, j + 1); out += `<span class="sql-str">${esc(src.slice(i, j))}</span>`; i = j; continue; }
+    if (c === ":" && isWord(src[i + 1] ?? "")) { let j = i + 1; while (j < n && isWord(src[j])) j++; out += `<span class="sql-param">${esc(src.slice(i, j))}</span>`; i = j; continue; }
+    if (/[0-9]/.test(c)) { let j = i; while (j < n && /[0-9.]/.test(src[j])) j++; out += `<span class="sql-num">${esc(src.slice(i, j))}</span>`; i = j; continue; }
+    if (isWord(c)) {
+      let j = i; while (j < n && isWord(src[j])) j++;
+      const w = src.slice(i, j), lw = w.toLowerCase();
+      let p = i - 1; while (p >= 0 && (src[p] === " " || src[p] === "\t")) p--;
+      const afterDot = src[p] === ".";
+      let nx = j; while (nx < n && src[nx] === " ") nx++;
+      const callish = src[nx] === "(";
+      let cls = "";
+      if (tbl.has(lw)) cls = "sql-tbl";
+      else if (HL_FN.has(lw) && callish) cls = "sql-fn";
+      else if (HL_OP.has(lw)) cls = "sql-fn";
+      else if (HL_KW.has(lw)) cls = "sql-kw";
+      else if (afterDot || col.has(lw)) cls = "sql-col";
+      out += cls ? `<span class="${cls}">${esc(w)}</span>` : esc(w);
+      i = j; continue;
+    }
+    out += esc(c); i++;
+  }
+  return out;
+}
 
 /** Pixel position of the caret inside a textarea, via a mirror element. */
 function caretCoords(ta: HTMLTextAreaElement, pos: number): { top: number; left: number } {
@@ -54,7 +100,7 @@ export function SqlField({
   onChange,
   onBlur,
   schema,
-  rows = 4,
+  rows = 6,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -63,12 +109,20 @@ export function SqlField({
   rows?: number;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const preRef = useRef<HTMLPreElement>(null);
   const [suggs, setSuggs] = useState<Sugg[]>([]);
   const [active, setActive] = useState(0);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
 
-  const allColumns = Array.from(new Set(Object.values(schema.columns).flat()));
+  const allColumns = useMemo(() => Array.from(new Set(Object.values(schema.columns).flat())), [schema.columns]);
+  const tblSet = useMemo(() => new Set(schema.tables.map((t) => t.toLowerCase())), [schema.tables]);
+  const colSet = useMemo(() => new Set(allColumns.map((c) => c.toLowerCase())), [allColumns]);
+
+  function syncScroll() {
+    const ta = taRef.current, pre = preRef.current;
+    if (ta && pre) { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; }
+  }
 
   function tokenAt(text: string, caret: number): { word: string; start: number } {
     let s = caret;
@@ -115,27 +169,39 @@ export function SqlField({
     });
   }
 
+  // Shared box metrics so the highlight layer aligns exactly with the textarea.
+  const boxClass = "w-full px-2.5 py-1.5 text-xs font-mono leading-5 border rounded-lg";
+
   return (
     <div className="relative">
-      <textarea
-        ref={taRef}
-        value={value}
-        rows={rows}
-        spellCheck={false}
-        placeholder="SELECT …"
-        onChange={(e) => { onChange(e.target.value); refresh(e.target.value, e.target.selectionStart ?? 0); }}
-        onKeyUp={(e) => { if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0); }}
-        onClick={(e) => refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0)}
-        onKeyDown={(e) => {
-          if (!open) return;
-          if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => (a + 1) % suggs.length); }
-          else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => (a - 1 + suggs.length) % suggs.length); }
-          else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); accept(suggs[active]); }
-          else if (e.key === "Escape") { setOpen(false); }
-        }}
-        onBlur={() => { setTimeout(() => setOpen(false), 150); onBlur?.(); }}
-        className="w-full bg-bg border border-border-soft rounded-lg px-2.5 py-1.5 text-xs font-mono resize-y focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      />
+      <div className="relative">
+        <pre
+          ref={preRef}
+          aria-hidden
+          className={`${boxClass} border-transparent absolute inset-0 overflow-hidden whitespace-pre-wrap break-words pointer-events-none text-fg`}
+          dangerouslySetInnerHTML={{ __html: value ? highlightSql(value, tblSet, colSet) + "\n" : '<span class="text-subtle">SELECT …</span>' }}
+        />
+        <textarea
+          ref={taRef}
+          value={value}
+          rows={rows}
+          spellCheck={false}
+          onChange={(e) => { onChange(e.target.value); refresh(e.target.value, e.target.selectionStart ?? 0); }}
+          onKeyUp={(e) => { if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0); }}
+          onClick={(e) => refresh((e.target as HTMLTextAreaElement).value, (e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+          onScroll={syncScroll}
+          onKeyDown={(e) => {
+            if (!open) return;
+            if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => (a + 1) % suggs.length); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => (a - 1 + suggs.length) % suggs.length); }
+            else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); accept(suggs[active]); }
+            else if (e.key === "Escape") { setOpen(false); }
+          }}
+          onBlur={() => { setTimeout(() => setOpen(false), 150); onBlur?.(); }}
+          className={`${boxClass} relative bg-bg border-border-soft resize-y focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+          style={{ color: "transparent", caretColor: "var(--fg)" }}
+        />
+      </div>
       {open && (
         <ul
           role="listbox"
