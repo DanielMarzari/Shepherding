@@ -22,10 +22,6 @@ jobs:
       - name: Build
         run: npm run build
 
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          tags: tag:ci
-
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -91,7 +87,4 @@ jobs:
               }
               console.log(\"Migrations complete\");
             " && cd /var/www/apps && (pm2 restart ecosystem.config.js --only shepherdly --update-env || pm2 start ecosystem.config.js --only shepherdly) && pm2 save'
-
-
-
 
