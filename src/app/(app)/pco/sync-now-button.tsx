@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { getSyncStatusAction, syncNowAction, type SyncStatusState } from "./actions";
+import { getSyncStatusAction, syncNowAction, fullResyncAction, type SyncStatusState } from "./actions";
 
 export function SyncNowButton() {
   const router = useRouter();
@@ -48,10 +48,10 @@ export function SyncNowButton() {
     }
   }
 
-  async function onClick() {
+  async function onClick(full = false) {
     startTransition(async () => {
       const fd = new FormData();
-      const result = await syncNowAction(null, fd);
+      const result = await (full ? fullResyncAction(null, fd) : syncNowAction(null, fd));
       if (result.status === "started" || result.status === "already-running") {
         const s = await getSyncStatusAction();
         setStatus(s);
@@ -77,7 +77,7 @@ export function SyncNowButton() {
     <div className="flex items-center gap-3">
       <button
         type="button"
-        onClick={onClick}
+        onClick={() => onClick(false)}
         disabled={pending || running}
         className="px-3 py-1.5 rounded bg-accent text-[var(--accent-fg)] text-sm font-medium disabled:opacity-50 inline-flex items-center gap-2"
       >
@@ -94,6 +94,15 @@ export function SyncNowButton() {
           <path d="M21 12a9 9 0 0 1-15.5 6.3M3 20v-5h5" />
         </svg>
         {running ? "Syncing in background…" : pending ? "Starting…" : "Sync now"}
+      </button>
+      <button
+        type="button"
+        onClick={() => onClick(true)}
+        disabled={pending || running}
+        title="Re-fetches every person from PCO (not just recently-changed) — needed to backfill phone numbers for the whole roster. Takes longer."
+        className="px-3 py-1.5 rounded border border-border-soft text-sm text-muted hover:text-fg hover:border-accent disabled:opacity-50 cursor-pointer transition-colors"
+      >
+        Full re-sync
       </button>
       {running && status?.startedAt && (
         <span className="text-xs text-muted">

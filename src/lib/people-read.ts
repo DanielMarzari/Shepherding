@@ -830,7 +830,37 @@ export function searchPeople(
 
   const q = raw.toLowerCase();
   populateShepherdedTempTable(orgId);
-  const rows = getDb()
+  const db2 = getDb();
+
+  // Fast path: filter on the plaintext name columns (0074) inside SQL with a
+  // LIMIT, so we return ≤limit rows instead of loading all ~33k into JS on
+  // every keystroke. Escape LIKE wildcards in the query.
+  const like = `%${q.replace(/[\\%_]/g, (m) => "\\" + m)}%`;
+  const fast = db2
+    .prepare(
+      `SELECT pco_people.pco_id, enc_pii, first_name, last_name, gender, membership_type, marital_status,
+              pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
+              is_minor, birth_year,
+              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
+         FROM pco_people
+         LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+        WHERE pco_people.org_id = ?
+          AND ( lower(first_name) LIKE ? ESCAPE '\\'
+                OR lower(last_name) LIKE ? ESCAPE '\\'
+                OR lower(first_name || ' ' || last_name) LIKE ? ESCAPE '\\' )
+        LIMIT ?`,
+    )
+    .all(orgId, like, like, like, limit) as RawRow[];
+  if (fast.length > 0 || namesBackfilled(orgId)) {
+    return fast.map((r) => {
+      const p = toRow(r, activityMonths);
+      return { pcoId: p.pcoId, fullName: p.fullName, initials: p.initials, classification: p.classification, membershipType: p.membershipType };
+    });
+  }
+
+  // Fallback (only while names aren't backfilled yet — right after the 0074
+  // deploy, before the next sync): the original decrypt-and-scan.
+  const rows = db2
     .prepare(
       `SELECT pco_people.pco_id, enc_pii, first_name, last_name, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
@@ -843,8 +873,6 @@ export function searchPeople(
     .all(orgId) as RawRow[];
   const hits: SearchHit[] = [];
   for (const r of rows) {
-    // Match on the plaintext name (0074) so we don't decrypt all 33k people on
-    // every keystroke — only the ≤limit matches get toRow'd (which decrypts).
     let haystack: string;
     if (r.first_name != null || r.last_name != null) {
       haystack = `${r.first_name ?? ""} ${r.last_name ?? ""}`.toLowerCase();
@@ -854,15 +882,17 @@ export function searchPeople(
     }
     if (haystack.includes(q)) {
       const person = toRow(r, activityMonths);
-      hits.push({
-        pcoId: person.pcoId,
-        fullName: person.fullName,
-        initials: person.initials,
-        classification: person.classification,
-        membershipType: person.membershipType,
-      });
+      hits.push({ pcoId: person.pcoId, fullName: person.fullName, initials: person.initials, classification: person.classification, membershipType: person.membershipType });
       if (hits.length >= limit) break;
     }
   }
   return hits;
 }
+
+/** True when every person has a plaintext name (0074 backfill complete), so
+ *  the fast SQL name search can be trusted to return everything. Cached per
+ *  request. */
+const namesBackfilled = cache((orgId: number): boolean => {
+  const r = getDb().prepare(`SELECT 1 FROM pco_people WHERE org_id = ? AND first_name IS NULL AND enc_pii IS NOT NULL LIMIT 1`).get(orgId);
+  return !r;
+});

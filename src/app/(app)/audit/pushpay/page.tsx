@@ -7,7 +7,7 @@ import {
   getPushpayImport,
   listDonorsByStatus,
 } from "@/lib/pushpay-import";
-import { ReconcileList, RematchButton } from "./reconcile-list";
+import { ReconcileList } from "./reconcile-list";
 
 interface SearchParams {
   status?: string;
@@ -56,19 +56,6 @@ export default async function PushpayConnectionsPage({
             right person — the best way to place organizations and odd names.
           </p>
         </div>
-
-        {meta && session.role === "admin" && (
-          <div className="rounded-xl border border-border-soft p-4">
-            <div className="text-sm font-medium mb-1">Auto-match again</div>
-            <p className="text-xs text-muted mb-3 max-w-2xl">
-              Re-runs matching on the current import with the latest rules and
-              your newest PCO data — it auto-resolves same-name duplicates to the
-              one active record and picks up new email/phone matches. Your manual
-              assignments are kept.
-            </p>
-            <RematchButton />
-          </div>
-        )}
 
         {!meta ? (
           <Card className="p-6">

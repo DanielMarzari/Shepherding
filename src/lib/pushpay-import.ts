@@ -222,7 +222,30 @@ export interface DonorRow {
   donorKey: string; fullName: string; email: string; phone: string;
   stage: string | null; channel: string | null; lastGiftDate: string | null; fund: string | null;
   status: string; personId: string | null; assignedName: string | null;
-  candidates: Array<{ pcoId: string; name: string }>;
+  candidates: Array<{ pcoId: string; name: string; sharesEmail: boolean; sharesPhone: boolean; active: boolean }>;
+}
+
+/** Per-candidate context for the reconcile UI — since PCO email/phone are only
+ *  stored as one-way hashes, we can't show the raw values, but we CAN show
+ *  whether a candidate shares the donor's email/phone (an exact-hash match) and
+ *  whether they're the active record (vs. an old inactive dupe). */
+function candidateContext(orgId: number, ids: string[]): { emails: Map<string, Set<string>>; phones: Map<string, Set<string>>; active: Set<string> } {
+  const emails = new Map<string, Set<string>>();
+  const phones = new Map<string, Set<string>>();
+  const active = new Set<string>();
+  if (!ids.length) return { emails, phones, active };
+  const ph = ids.map(() => "?").join(",");
+  const db = getDb();
+  for (const r of db.prepare(`SELECT person_id, email_hash FROM pco_person_emails WHERE org_id = ? AND person_id IN (${ph})`).all(orgId, ...ids) as Array<{ person_id: string; email_hash: string }>) {
+    (emails.get(r.person_id) ?? emails.set(r.person_id, new Set()).get(r.person_id)!).add(r.email_hash);
+  }
+  for (const r of db.prepare(`SELECT person_id, phone_hash FROM pco_person_phones WHERE org_id = ? AND person_id IN (${ph})`).all(orgId, ...ids) as Array<{ person_id: string; phone_hash: string }>) {
+    (phones.get(r.person_id) ?? phones.set(r.person_id, new Set()).get(r.person_id)!).add(r.phone_hash);
+  }
+  for (const r of db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'inactive' AND person_id IN (${ph})`).all(orgId, ...ids) as Array<{ person_id: string }>) {
+    active.add(r.person_id);
+  }
+  return { emails, phones, active };
 }
 
 const donorName = (enc: string): { fullName: string; email: string; phone: string } => {
@@ -253,9 +276,19 @@ export function listDonorsByStatus(orgId: number, status: string, limit = 500): 
     ...rows.map((r) => r.person_id).filter((x): x is string => !!x),
   ]));
   const names = personNames(orgId, wanted);
+  const ctx = candidateContext(orgId, wanted);
   return rows.map((r) => {
     const n = donorName(r.enc);
-    const cand = (r.candidate_ids ? (JSON.parse(r.candidate_ids) as string[]) : []).map((id) => ({ pcoId: id, name: names.get(id) ?? `#${id}` }));
+    const deh = n.email ? hmac(n.email.trim().toLowerCase()) : null;
+    const np = normPhone(n.phone);
+    const dph = np ? hmac(np) : null;
+    const cand = (r.candidate_ids ? (JSON.parse(r.candidate_ids) as string[]) : []).map((id) => ({
+      pcoId: id,
+      name: names.get(id) ?? `#${id}`,
+      sharesEmail: !!deh && (ctx.emails.get(id)?.has(deh) ?? false),
+      sharesPhone: !!dph && (ctx.phones.get(id)?.has(dph) ?? false),
+      active: ctx.active.has(id),
+    }));
     return { donorKey: r.donor_key, ...n, stage: r.donor_stage, channel: r.giving_channel, lastGiftDate: r.last_gift_date, fund: r.last_gift_fund, status: r.match_status, personId: r.person_id, assignedName: r.person_id ? names.get(r.person_id) ?? `#${r.person_id}` : null, candidates: cand };
   });
 }

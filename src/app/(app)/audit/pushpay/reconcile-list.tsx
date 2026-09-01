@@ -8,27 +8,7 @@ import type { DonorRow } from "@/lib/pushpay-import";
 import {
   assignDonorAction,
   clearDonorMatchAction,
-  rematchDonorsAction,
 } from "@/app/(app)/pushpay/actions";
-
-/** Re-run matching on the imported donors with the latest rules (no re-upload). */
-export function RematchButton() {
-  const [pending, start] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
-  return (
-    <div className="flex items-center gap-3 flex-wrap">
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => start(async () => { const r = await rematchDonorsAction(); setMsg(r.message); })}
-        className="text-xs px-3 py-1.5 rounded-lg border border-accent text-accent hover:bg-accent hover:text-bg disabled:opacity-50 cursor-pointer transition-colors"
-      >
-        {pending ? "Re-matching…" : "Re-match with latest rules"}
-      </button>
-      {msg && <span className="text-xs text-muted">{msg}</span>}
-    </div>
-  );
-}
 
 export function ReconcileList({
   donors,
@@ -135,19 +115,47 @@ function DonorCard({ donor }: { donor: DonorRow }) {
               {donor.candidates.length > 0 && (
                 <div>
                   <div className="text-[11px] uppercase tracking-wider text-subtle mb-1">
-                    Likely the same person
+                    Likely the same person — click a name to assign
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-col gap-1.5">
                     {donor.candidates.map((c) => (
-                      <button
+                      <div
                         key={c.pcoId}
-                        type="button"
-                        onClick={() => assign(c.pcoId)}
-                        disabled={pending}
-                        className="px-2.5 py-1 rounded-lg border border-accent text-accent hover:bg-accent hover:text-bg text-xs font-medium cursor-pointer disabled:opacity-50"
+                        className="flex items-center gap-2 flex-wrap rounded-lg border border-border-soft px-2.5 py-1.5"
                       >
-                        {c.name}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => assign(c.pcoId)}
+                          disabled={pending}
+                          className="text-sm font-medium text-accent hover:underline cursor-pointer disabled:opacity-50"
+                        >
+                          {c.name}
+                        </button>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded ${
+                            c.active ? "bg-good-soft-bg text-good-soft-fg" : "bg-bg-elev-2 text-subtle"
+                          }`}
+                        >
+                          {c.active ? "active" : "inactive"}
+                        </span>
+                        {c.sharesEmail && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-soft-bg text-accent-soft-fg">
+                            same email
+                          </span>
+                        )}
+                        {c.sharesPhone && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-soft-bg text-accent-soft-fg">
+                            same phone
+                          </span>
+                        )}
+                        <Link
+                          href={`/people/${c.pcoId}`}
+                          target="_blank"
+                          className="ml-auto text-[11px] text-subtle hover:text-accent"
+                        >
+                          view →
+                        </Link>
+                      </div>
                     ))}
                   </div>
                 </div>

@@ -847,6 +847,14 @@ function writeCursor(orgId: number, resource: string, updatedAt: string | null) 
     .run(orgId, resource, updatedAt);
 }
 
+/** Clear a resource's sync cursor so the next sync re-fetches EVERYTHING for
+ *  it (a full / deep sync). Resetting "people" re-pulls every person — the way
+ *  to backfill phone numbers for the whole roster, since phones only arrive
+ *  from the PCO API per person. */
+export function resetSyncCursor(orgId: number, resource = "people"): void {
+  getDb().prepare(`DELETE FROM pco_sync_cursor WHERE org_id = ? AND resource = ?`).run(orgId, resource);
+}
+
 /** Returns the `where[updated_at][gt]` cutoff. We always want at LEAST
  *  thresholdMonths of look-back, even if the cursor is more recent —
  *  catches PCO edits that were retroactively dated.

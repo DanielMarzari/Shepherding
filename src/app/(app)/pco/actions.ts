@@ -12,7 +12,7 @@ import {
   saveSyncSettings,
   testPcoConnection,
 } from "@/lib/pco";
-import { runSync, type SyncDetails } from "@/lib/pco-sync";
+import { runSync, resetSyncCursor, type SyncDetails } from "@/lib/pco-sync";
 
 const VALID_FREQ: SyncFrequency[] = ["daily", "weekly", "monthly"];
 
@@ -189,6 +189,30 @@ export async function syncNowAction(
   return {
     status: "started",
     message: "Sync started in the background. Safe to navigate away.",
+  };
+}
+
+/** Full/deep sync — clears the people cursor first so every person is
+ *  re-fetched, backfilling phone numbers (and anything else) for the whole
+ *  roster, not just recently-changed people. */
+export async function fullResyncAction(
+  _prev: SyncNowState | null,
+  _formData: FormData,
+): Promise<SyncNowState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") {
+    return { status: "error", message: "Only admins can trigger a sync." };
+  }
+  if (isSyncRunningInDb(s.orgId)) {
+    return { status: "already-running", message: "A sync is already in progress for this org." };
+  }
+  resetSyncCursor(s.orgId, "people");
+  const promise = runSync(s.orgId, "manual").catch(() => {});
+  inFlight.add(promise);
+  promise.finally(() => inFlight.delete(promise));
+  return {
+    status: "started",
+    message: "Full re-sync started — re-pulling every person + phone numbers. This takes longer; safe to navigate away.",
   };
 }
 
