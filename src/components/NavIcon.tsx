@@ -23,7 +23,7 @@ const PATHS: Record<string, ReactNode> = {
   list: (<><path d="M8 6h13M8 12h13M8 18h13" /><circle cx="3.6" cy="6" r="1.1" /><circle cx="3.6" cy="12" r="1.1" /><circle cx="3.6" cy="18" r="1.1" /></>),
   map: (<path d="m9 4-6 3v13l6-3 6 3 6-3V4l-6 3-6-3zM9 4v13M15 7v13" />),
   pin: (<><path d="M12 21s-6-5.5-6-10a6 6 0 0 1 12 0c0 4.5-6 10-6 10Z" /><circle cx="12" cy="11" r="2.3" /></>),
-  globe: (<><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.6 2.6 2.6 15 0 18M12 3c-2.6 2.6-2.6 15 0 18" /></>),
+  globe: (<><circle cx="12" cy="12" r="9" /><ellipse cx="12" cy="12" rx="3.8" ry="9" /><path d="M3 12h18M4.6 7.5h14.8M4.6 16.5h14.8" /></>),
   compass: (<><circle cx="12" cy="12" r="9" /><path d="m15 9-2 5-5 2 2-5 5-2Z" /></>),
   route: (<><circle cx="6" cy="19" r="2.5" /><circle cx="18" cy="5" r="2.5" /><path d="M8.5 19H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5" /></>),
   funnel: (<path d="M3 5h18l-7 8v6l-4-2v-4L3 5Z" />),
@@ -54,6 +54,13 @@ const PATHS: Record<string, ReactNode> = {
   search: (<><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></>),
   layers: (<><path d="m12 2 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></>),
   sprout: (<><path d="M12 20v-8" /><path d="M12 12C8.5 12 6 9.5 6 6c3.5 0 6 2.5 6 6Z" /><path d="M12 12c0-3 2-5 6-5 0 3.5-2.5 5-6 5Z" /></>),
+  footsteps: (<><path d="M7.5 4c1.5 0 2.3 1.6 2.3 3.6S9 11.2 7.5 11.2 5.2 9.6 5.2 7.6 6 4 7.5 4Z" /><path d="M6.2 12.5c1.3 0 2 .9 1.8 2.2-.2 1.4-2.2 1.8-1.7-.6" /><path d="M16.5 8.8c1.5 0 2.3 1.6 2.3 3.6S18 16 16.5 16s-2.3-1.6-2.3-3.6S15 8.8 16.5 8.8Z" /><path d="M15.2 17.3c1.3 0 2 .9 1.8 2.2-.2 1.4-2.2 1.8-1.7-.6" /></>),
+  "code-slash": (<path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5.5l-4 13" />),
+  terminal: (<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>),
+  beetle: (<><ellipse cx="12" cy="13" rx="5" ry="6" /><path d="M12 7V19M12 7 10 4.5M12 7l2-2.5M7 10 4 8M17 10l3-2M7 16l-3 2M17 16l3 2" /></>),
+  "admin-key": (<><circle cx="8" cy="8" r="4" /><path d="m10.8 10.8 8.2 8.2M16 16l2-2M18 18l2-2" /></>),
+  "plant-pot": (<><path d="M6.5 14h11l-1.2 6.2a1 1 0 0 1-1 .8H8.7a1 1 0 0 1-1-.8L6.5 14Z" /><path d="M12 14V7M12 11C10 11 8 9.5 8 7c2.5 0 4 1.5 4 4M12 10c0-3 2-4.5 4.5-4.5 0 3-2 4.5-4.5 4.5" /></>),
+  tree: (<path d="M12 22v-5M8.5 17a5 5 0 0 1-1.2-9.5 5 5 0 0 1 9.4 0A5 5 0 0 1 15.5 17H8.5Z" />),
 };
 
 /** Icons offered in the nav builder's picker — Dan's chosen set (order shown). */
@@ -97,6 +104,13 @@ export const NAV_ICONS: Array<{ id: string; label: string }> = [
   { id: "church", label: "Church" },
   { id: "money", label: "Donations" },
   { id: "bell", label: "Alerts" },
+  { id: "footsteps", label: "Footsteps" },
+  { id: "code-slash", label: "Code" },
+  { id: "terminal", label: "Terminal" },
+  { id: "beetle", label: "Bug" },
+  { id: "admin-key", label: "Admin" },
+  { id: "plant-pot", label: "Plant" },
+  { id: "tree", label: "Tree" },
 ];
 
 export function NavIcon({
