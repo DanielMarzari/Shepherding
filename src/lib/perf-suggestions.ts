@@ -97,13 +97,27 @@ export const PERF_SUGGESTIONS: PerfSuggestion[] = [
     pages: ["Relationship graph", "Name audit", "Global search"],
     whatsSlow:
       "Names live only inside the encrypted PII blob, so the relationship graph and the name audit decrypt the whole population on each render, and search decrypts everyone on each keystroke (the code notes ~50–150 ms per pass on 33k).",
-    location: "src/lib/graph-read.ts:98, src/lib/audit-read.ts:899, src/lib/people-read.ts:792",
+    location: "src/lib/graph-read.ts, src/lib/audit-read.ts, src/lib/people-read.ts",
     bigOBefore: "O(people) AES-decrypt per render / per keystroke",
-    bigOAfter: "indexed read of plaintext display names",
-    fix: "Add a person_name(org_id, person_id, display_name, initials) cache populated during the dashboard refresh (names are already in memory at sync time), and read it instead of decrypting. Search can then use an indexed LIKE/FTS. Biggest architectural win — but it's a denormalization: correct only while kept in sync with the refresh.",
-    safety: "larger",
+    bigOAfter: "plaintext column read (0 decrypts)",
+    fix: "Names are now plaintext columns on pco_people (migration 0074), populated at sync + a one-time backfill; email/phone/address/birthdate stay protected. Graph, name-audit, and search read the columns and decrypt nobody. Search matches on plaintext first and only builds the ≤8 matches.",
+    safety: "safe",
     how: "claude-code",
-    defaultStatus: "pending",
+    defaultStatus: "applied",
+  },
+  {
+    key: "per-render-dedupe",
+    title: "Reuse identical queries within a page render",
+    pages: ["Groups", "Teams", "Demographics", "any custom page"],
+    whatsSlow:
+      "Blocks running the exact same SQL (a shared base aggregate, a scope set) re-executed it every time — /groups computed the same 6-CTE base 4×, /teams scanned the serving history ~12–15×, demographics re-scanned people per chart.",
+    location: "src/app/(app)/builder/render-route.tsx",
+    bigOBefore: "N × the query cost",
+    bigOAfter: "1 × per distinct query",
+    fix: "render-route memoizes each block query by its SQL/source within a render, so identical queries run once and the rest reuse the result (shown as “deduped” in the inspector). Automatic — covers custom pages you build later. This is the generic fix for the three recompute items below.",
+    safety: "safe",
+    how: "claude-code",
+    defaultStatus: "applied",
   },
   {
     key: "groups-base-once",
@@ -117,7 +131,7 @@ export const PERF_SUGGESTIONS: PerfSuggestion[] = [
     fix: "Compute the base once per render (a request-scoped temp table or a cache()d source) and have the three blocks read from it. NOTE: do NOT repoint at the existing group_summary snapshot — its window/exclusion/column semantics differ and would change the displayed numbers.",
     safety: "moderate",
     how: "claude-code",
-    defaultStatus: "pending",
+    defaultStatus: "applied",
   },
   {
     key: "teams-base-once",
@@ -131,7 +145,7 @@ export const PERF_SUGGESTIONS: PerfSuggestion[] = [
     fix: "Compute TEAMS_BASE once per render and reuse. A team_summary snapshot (mirroring group_summary, built in the dashboard refresh) is the bigger win but adds a staleness contract.",
     safety: "moderate",
     how: "claude-code",
-    defaultStatus: "pending",
+    defaultStatus: "applied",
   },
   {
     key: "scope-set-once",
@@ -145,7 +159,7 @@ export const PERF_SUGGESTIONS: PerfSuggestion[] = [
     fix: "Build the scope person-id set once (temp table / cached CTE) and reuse across the page's charts. (Indexes won't help here — the charts bucket with CASE expressions, so no column index can drive the GROUP BY.)",
     safety: "moderate",
     how: "claude-code",
-    defaultStatus: "pending",
+    defaultStatus: "applied",
   },
 ];
 

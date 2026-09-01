@@ -55,6 +55,9 @@ export interface QueryDebug {
   error: string | null;
   /** EXPLAIN-derived complexity for SQL blocks; null for source blocks. */
   plan: QueryPlan | null;
+  /** True when this block reused an identical query already run this render
+   *  (so it cost ~0ms) rather than hitting the database again. */
+  deduped?: boolean;
 }
 
 /** Filter parameters injected into a query as :name placeholders. */

@@ -58,6 +58,10 @@ interface PIIBlob {
 interface RawRow {
   pco_id: string;
   enc_pii: string | null;
+  /** Plaintext names (0074) — present when the query selects them; used to
+   *  skip decrypting enc_pii just to read a name. */
+  first_name?: string | null;
+  last_name?: string | null;
   gender: string | null;
   membership_type: string | null;
   marital_status: string | null;
@@ -779,7 +783,7 @@ export function searchPeople(
   populateShepherdedTempTable(orgId);
   const rows = getDb()
     .prepare(
-      `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
+      `SELECT pco_people.pco_id, enc_pii, first_name, last_name, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
               is_minor, birth_year,
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
@@ -790,9 +794,17 @@ export function searchPeople(
     .all(orgId) as RawRow[];
   const hits: SearchHit[] = [];
   for (const r of rows) {
-    const person = toRow(r, activityMonths);
-    const haystack = `${person.firstName ?? ""} ${person.lastName ?? ""}`.toLowerCase();
+    // Match on the plaintext name (0074) so we don't decrypt all 33k people on
+    // every keystroke — only the ≤limit matches get toRow'd (which decrypts).
+    let haystack: string;
+    if (r.first_name != null || r.last_name != null) {
+      haystack = `${r.first_name ?? ""} ${r.last_name ?? ""}`.toLowerCase();
+    } else {
+      const pii = decryptJson<PIIBlob>(r.enc_pii) ?? {};
+      haystack = `${pii.first_name ?? ""} ${pii.last_name ?? ""}`.toLowerCase();
+    }
     if (haystack.includes(q)) {
+      const person = toRow(r, activityMonths);
       hits.push({
         pcoId: person.pcoId,
         fullName: person.fullName,

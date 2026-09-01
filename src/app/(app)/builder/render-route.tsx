@@ -57,14 +57,26 @@ export async function renderBuilderRoute({
   // Execution is serial/synchronous on one better-sqlite3 connection, so the
   // summed ms here ≈ the real render-blocking time the user feels.
   const queryLog: QueryDebug[] = [];
+  // Dedupe identical queries within one render: blocks that run the exact same
+  // SQL (or the same named source) reuse the first result instead of hitting
+  // the DB again. This automatically collapses the "same heavy base recomputed
+  // N times per page" cases — including on custom pages built later — with no
+  // per-page tuning. All blocks share initialParams, so the query text is a
+  // sufficient key.
+  const queryCache = new Map<string, QueryResult>();
   const runTimed = (
     b: { id: number; kind: string; config: BlockConfig },
     cfg: BlockConfig,
   ): QueryResult => {
+    const key = cfg.source ? `src:${cfg.source}` : `sql:${cfg.sql ?? ""}`;
+    const cached = queryCache.has(key);
     const t0 = performance.now();
-    const res = cfg.source
-      ? runSource(session.orgId, cfg.source, initialParams)
-      : runBuilderQueryForOrg(session.orgId, cfg.sql ?? "", initialParams);
+    const res = cached
+      ? queryCache.get(key)!
+      : cfg.source
+        ? runSource(session.orgId, cfg.source, initialParams)
+        : runBuilderQueryForOrg(session.orgId, cfg.sql ?? "", initialParams);
+    if (!cached) queryCache.set(key, res);
     queryLog.push({
       blockId: b.id,
       kind: b.kind,
@@ -76,7 +88,8 @@ export async function renderBuilderRoute({
       cols: res.columns.length,
       truncated: res.truncated,
       error: res.error ?? null,
-      plan: cfg.source
+      deduped: cached,
+      plan: cached || cfg.source
         ? null
         : explainQueryPlan(cfg.sql ?? "", { ...initialParams, orgId: String(session.orgId) }),
     });

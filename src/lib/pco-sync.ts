@@ -423,6 +423,8 @@ async function syncPeople(
       upsertPerson(orgId, {
         pcoId: p.id,
         encPii: encryptJson(pii),
+        firstName: pii.first_name,
+        lastName: pii.last_name,
         gender: (attrs.gender as string | undefined) ?? null,
         membershipType: (attrs.membership as string | undefined) ?? null,
         maritalStatus: maritalValue,
@@ -475,6 +477,9 @@ async function syncPeople(
       replacePersonPhones(orgId, p.id, [...phoneHashes]);
     }
   }
+
+  // Backfill plaintext names for anyone synced before 0074 (idempotent).
+  backfillPersonNames(orgId);
 
   return { fetched, upserted, maxUpdatedAt };
 }
@@ -568,6 +573,8 @@ function upsertPerson(
   p: {
     pcoId: string;
     encPii: string;
+    firstName: string | null;
+    lastName: string | null;
     gender: string | null;
     membershipType: string | null;
     maritalStatus: string | null;
@@ -580,11 +587,13 @@ function upsertPerson(
   getDb()
     .prepare(
       `INSERT INTO pco_people
-        (org_id, pco_id, enc_pii, gender, membership_type, marital_status,
+        (org_id, pco_id, enc_pii, first_name, last_name, gender, membership_type, marital_status,
          status, pco_created_at, pco_updated_at, inactivated_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id, pco_id) DO UPDATE SET
          enc_pii = excluded.enc_pii,
+         first_name = excluded.first_name,
+         last_name = excluded.last_name,
          gender = excluded.gender,
          membership_type = excluded.membership_type,
          marital_status = excluded.marital_status,
@@ -598,6 +607,8 @@ function upsertPerson(
       orgId,
       p.pcoId,
       p.encPii,
+      p.firstName,
+      p.lastName,
       p.gender,
       p.membershipType,
       p.maritalStatus,
@@ -606,6 +617,25 @@ function upsertPerson(
       p.pcoUpdatedAt,
       p.inactivatedAt,
     );
+}
+
+/** One-time (idempotent) backfill of the plaintext name columns for people
+ *  synced before 0074 — only touches rows where first_name is still NULL, so
+ *  it's ~free after the first pass. Called at the end of the people sync. */
+function backfillPersonNames(orgId: number): void {
+  const db = getDb();
+  const rows = db
+    .prepare(`SELECT pco_id, enc_pii FROM pco_people WHERE org_id = ? AND first_name IS NULL AND enc_pii IS NOT NULL`)
+    .all(orgId) as Array<{ pco_id: string; enc_pii: string }>;
+  if (rows.length === 0) return;
+  const upd = db.prepare(`UPDATE pco_people SET first_name = ?, last_name = ? WHERE org_id = ? AND pco_id = ?`);
+  const run = db.transaction(() => {
+    for (const r of rows) {
+      const pii = decryptJson<{ first_name?: string | null; last_name?: string | null }>(r.enc_pii);
+      upd.run(pii?.first_name ?? null, pii?.last_name ?? null, orgId, r.pco_id);
+    }
+  });
+  run();
 }
 
 // ─── Forms ──────────────────────────────────────────────────────────────

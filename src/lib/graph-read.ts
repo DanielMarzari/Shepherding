@@ -55,7 +55,7 @@ export function buildRelationshipGraph(orgId: number): GraphData {
 
   const rows = db
     .prepare(
-      `SELECT p.pco_id AS id, p.enc_pii AS encPii,
+      `SELECT p.pco_id AS id, p.enc_pii AS encPii, p.first_name AS firstName, p.last_name AS lastName,
          CASE
            WHEN s.person_id IS NOT NULL THEN 'shepherded'
            WHEN ((p.last_form_submission_at IS NOT NULL
@@ -73,6 +73,8 @@ export function buildRelationshipGraph(orgId: number): GraphData {
     .all(cutoff, cutoff, cutoff, orgId) as Array<{
     id: string;
     encPii: string | null;
+    firstName: string | null;
+    lastName: string | null;
     cls: string;
   }>;
 
@@ -95,10 +97,15 @@ export function buildRelationshipGraph(orgId: number): GraphData {
       : isTeam
         ? "shepherd_team"
         : (r.cls as GraphClass);
-    const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
-    const name =
-      [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") ||
-      `(unknown #${r.id})`;
+    // Prefer the plaintext name columns (0074); only decrypt as a fallback
+    // for rows not yet backfilled. Post-backfill this decrypts nobody.
+    let name: string;
+    if (r.firstName != null || r.lastName != null) {
+      name = [r.firstName, r.lastName].filter(Boolean).join(" ") || `(unknown #${r.id})`;
+    } else {
+      const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
+      name = [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") || `(unknown #${r.id})`;
+    }
     idx.set(r.id, nodes.length);
     clsOf.set(r.id, cls);
     nodes.push({ id: r.id, name, cls });

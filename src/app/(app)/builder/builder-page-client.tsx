@@ -251,14 +251,18 @@ function QueryRow({ q, slowest }: { q: QueryDebug; slowest: number }) {
         <span
           className={`text-xs tnum shrink-0 ${isSlow ? "text-warn-soft-fg font-semibold" : "text-muted"}`}
         >
-          {q.ms.toFixed(0)}ms
+          {q.deduped ? "reused" : `${q.ms.toFixed(0)}ms`}
         </span>
         <span
           className={`text-[11px] shrink-0 px-1.5 py-0.5 rounded font-medium ${
-            isHeavy ? "bg-warn-soft-bg text-warn-soft-fg" : "bg-bg-elev-2 text-muted"
+            q.deduped
+              ? "bg-bg-elev-2 text-subtle"
+              : isHeavy
+                ? "bg-warn-soft-bg text-warn-soft-fg"
+                : "bg-bg-elev-2 text-muted"
           }`}
         >
-          {tier}
+          {q.deduped ? "deduped" : tier}
         </span>
       </button>
       {show && (

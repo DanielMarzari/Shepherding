@@ -884,26 +884,36 @@ function loadAllPeopleForAudit(orgId: number): AuditScanRow[] {
   const db = getDb();
   const rawRows = db
     .prepare(
-      `SELECT pco_id, enc_pii, membership_type, status, inactivated_at
+      `SELECT pco_id, enc_pii, first_name, last_name, membership_type, status, inactivated_at
          FROM pco_people
         WHERE org_id = ?`,
     )
     .all(orgId) as Array<{
     pco_id: string;
     enc_pii: string | null;
+    first_name: string | null;
+    last_name: string | null;
     membership_type: string | null;
     status: string | null;
     inactivated_at: string | null;
   }>;
   return rawRows.map((r) => {
-    const pii = r.enc_pii ? decryptJson<PIIBlob>(r.enc_pii) : null;
+    // Prefer the plaintext name columns (0074); decrypt only as a fallback for
+    // rows not yet backfilled, so a full name audit no longer decrypts 33k rows.
+    let first = r.first_name;
+    let last = r.last_name;
+    if (first == null && last == null && r.enc_pii) {
+      const pii = decryptJson<PIIBlob>(r.enc_pii);
+      first = pii?.first_name ?? null;
+      last = pii?.last_name ?? null;
+    }
     return {
       pcoId: r.pco_id,
       membershipType: r.membership_type,
       status: r.status,
       inactivatedAt: r.inactivated_at,
-      _first: pii?.first_name?.trim() ?? null,
-      _last: pii?.last_name?.trim() ?? null,
+      _first: first?.trim() ?? null,
+      _last: last?.trim() ?? null,
     };
   });
 }
