@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { togglePinAction } from "@/app/actions/pins";
+import { NavIcon } from "./NavIcon";
 import type { GalleryLink, GallerySection } from "@/lib/gallery-types";
 
 export type { GalleryLink, GallerySection } from "@/lib/gallery-types";
@@ -41,10 +42,10 @@ export function GalleryHub({
   );
 
   const railEntries = useMemo(() => {
-    const base: Array<{ id: string; label: string; count?: number }> = [];
+    const base: Array<{ id: string; label: string; count?: number; icon?: string }> = [];
     if (homeContent) base.push({ id: HOME_ID, label: homeLabel });
     if (pinnedLinks.length) base.push({ id: PINNED_ID, label: "Pinned", count: pinnedLinks.length });
-    return base.concat(sections.map((s) => ({ id: s.id, label: s.label, count: s.links.length })));
+    return base.concat(sections.map((s) => ({ id: s.id, label: s.label, count: s.links.length, icon: s.icon })));
   }, [sections, pinnedLinks.length, homeContent, homeLabel]);
 
   const [selected, setSelected] = useState<string>(() => railEntries[0]?.id ?? "");
@@ -96,11 +97,8 @@ export function GalleryHub({
                 }`}
               >
                 {e.id === PINNED_ID && <span aria-hidden className="text-accent">★</span>}
-                {e.id === HOME_ID && (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" />
-                  </svg>
-                )}
+                {e.id === HOME_ID && <NavIcon id="home" size={14} />}
+                {e.icon && <NavIcon id={e.icon} size={14} className="shrink-0 text-subtle" />}
                 <span className="truncate">{e.label}</span>
                 {e.count != null && <span className="ml-auto text-[11px] text-subtle tnum">{e.count}</span>}
               </button>

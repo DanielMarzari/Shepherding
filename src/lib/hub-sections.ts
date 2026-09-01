@@ -44,7 +44,7 @@ export function buildHomeHubSections(orgId: number): GallerySection[] {
         links.push({ href: `/builder/${it.slug}`, title: it.label, description: "Custom page." });
       }
     }
-    if (links.length) sections.push({ id: g.id, label: g.label, links });
+    if (links.length) sections.push({ id: g.id, label: g.label, icon: g.icon, links });
   }
   // Append the See More sections, dropping any page the admin has already
   // placed into one of their own layers (so it isn't listed twice).

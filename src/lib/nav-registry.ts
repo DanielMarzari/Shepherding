@@ -87,6 +87,8 @@ export interface NavGroup {
   label: string;
   mode: NavMode;
   collapsible?: boolean;
+  /** Nav-icon id (see components/NavIcon) shown next to the layer. */
+  icon?: string;
   items: NavItemRef[];
 }
 export interface NavConfig {
@@ -149,7 +151,8 @@ export function sanitizeNavConfig(raw: unknown): NavConfig | null {
         }
       }
     }
-    groups.push({ id, label, mode, collapsible: gg.collapsible === true, items });
+    const icon = typeof gg.icon === "string" && gg.icon.trim() ? gg.icon.trim().slice(0, 40) : undefined;
+    groups.push({ id, label, mode, collapsible: gg.collapsible === true, icon, items });
   }
   if (groups.length === 0) return null;
   return { version: 1, groups };

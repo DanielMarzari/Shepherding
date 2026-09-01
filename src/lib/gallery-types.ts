@@ -15,5 +15,7 @@ export interface GallerySection {
   id: string;
   label: string;
   blurb?: string;
+  /** Optional nav-icon id (see components/NavIcon) shown in the rail. */
+  icon?: string;
   links: GalleryLink[];
 }
