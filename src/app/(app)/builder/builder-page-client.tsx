@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { BlockConfig, BlockKind, DbSchema, PageRef, QueryResult } from "@/lib/builder";
+import Link from "next/link";
+import type { BlockConfig, BlockKind, DbSchema, PageRef, QueryDebug, QueryResult } from "@/lib/builder";
 import { DEFAULT_CONFIG, LEAF_KINDS, COLOR_PRESETS } from "@/lib/builder-defaults";
 import { SOURCE_META, sourceMeta } from "@/lib/builder-source-meta";
 import { NAV_SECTIONS } from "@/lib/builder-nav";
@@ -81,6 +82,7 @@ export function BuilderPageClient({
   schema,
   pages,
   versionCount = 0,
+  queryLog = [],
 }: {
   page: PageInfo;
   blocks: ClientBlock[];
@@ -89,6 +91,7 @@ export function BuilderPageClient({
   schema: DbSchema;
   pages: PageRef[];
   versionCount?: number;
+  queryLog?: QueryDebug[];
 }) {
   const router = useRouter();
   const [edit, setEdit] = useState(isAdmin && initialEdit);
@@ -117,6 +120,7 @@ export function BuilderPageClient({
           Undo{versionCount > 0 ? ` (${versionCount})` : ""}
         </button>
       </div>
+      <QueryInspector queryLog={queryLog} slug={page.slug} />
       <PageSettings page={page} onDone={() => setEdit(false)} busy={pending} mutate={mutate} />
       <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4 space-y-3">
         <div className="text-xs text-muted font-medium">Add a block</div>
@@ -150,6 +154,144 @@ export function BuilderPageClient({
         </div>
       )}
     </div>
+  );
+}
+
+// ── Query inspector (edit-mode only) ─────────────────────────────────
+// Shows how many queries rendered the page, each one's wall-clock ms + row
+// count, and an EXPLAIN-derived big-O — the debugging surface the admin asked
+// for. Complexity is flagged with a text tier + chip (never hue alone), so
+// it's legible for red-green colorblindness.
+
+function QueryInspector({ queryLog, slug }: { queryLog: QueryDebug[]; slug: string }) {
+  const [open, setOpen] = useState(false);
+  if (queryLog.length === 0) return null;
+  const totalMs = queryLog.reduce((s, q) => s + q.ms, 0);
+  const heavy = queryLog.filter(
+    (q) => q.plan && (q.plan.tier === "nested" || q.plan.tier === "correlated"),
+  ).length;
+  const slowest = Math.max(...queryLog.map((q) => q.ms));
+  return (
+    <div className="rounded-xl border border-border-soft bg-bg-elev-2/40">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 cursor-pointer"
+      >
+        <span className="flex items-center gap-2 text-sm min-w-0">
+          <svg
+            viewBox="0 0 24 24"
+            className={`w-3.5 h-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+          <span className="font-medium">Query inspector</span>
+          <span className="text-muted truncate">
+            {queryLog.length} quer{queryLog.length === 1 ? "y" : "ies"} · {totalMs.toFixed(0)}ms to render
+          </span>
+        </span>
+        {heavy > 0 && (
+          <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-warn-soft-bg text-warn-soft-fg font-medium">
+            {heavy} heavy
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="border-t border-border-softer">
+          <div className="px-4 py-2 text-[11px] text-subtle leading-relaxed">
+            Blocks run one after another on a single connection, so the total ≈
+            the real load time. Named sources are memoized — a source&apos;s whole
+            cost lands on its first block and reads ~0ms after.{" "}
+            <Link
+              href={`/settings/performance?from=${slug}`}
+              className="text-accent hover:underline"
+            >
+              Optimization suggestions →
+            </Link>
+          </div>
+          <ul className="divide-y divide-border-softer">
+            {queryLog.map((q, i) => (
+              <QueryRow key={`${q.blockId}-${i}`} q={q} slowest={slowest} />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QueryRow({ q, slowest }: { q: QueryDebug; slowest: number }) {
+  const [show, setShow] = useState(false);
+  const isHeavy = q.plan && (q.plan.tier === "nested" || q.plan.tier === "correlated");
+  const isSlow = q.ms > 50 && q.ms >= slowest * 0.75;
+  const tier = q.source ? "source" : q.plan?.tier ?? "n/a";
+  return (
+    <li className="px-4 py-2">
+      <button
+        type="button"
+        onClick={() => setShow((s) => !s)}
+        className="w-full flex items-center gap-3 text-left cursor-pointer"
+      >
+        <span className="flex-1 min-w-0">
+          <span className="text-sm font-medium">{q.title}</span>
+          <span className="text-[11px] text-subtle ml-2">
+            {q.kind}
+            {q.source ? ` · ${q.source}` : ""}
+          </span>
+        </span>
+        <span className="text-[11px] text-muted tnum shrink-0">
+          {q.rows.toLocaleString()} row{q.rows === 1 ? "" : "s"}
+        </span>
+        <span
+          className={`text-xs tnum shrink-0 ${isSlow ? "text-warn-soft-fg font-semibold" : "text-muted"}`}
+        >
+          {q.ms.toFixed(0)}ms
+        </span>
+        <span
+          className={`text-[11px] shrink-0 px-1.5 py-0.5 rounded font-medium ${
+            isHeavy ? "bg-warn-soft-bg text-warn-soft-fg" : "bg-bg-elev-2 text-muted"
+          }`}
+        >
+          {tier}
+        </span>
+      </button>
+      {show && (
+        <div className="mt-2 space-y-2">
+          {q.sql ? (
+            <pre className="text-[11px] bg-bg rounded-lg border border-border-softer p-2 overflow-x-auto whitespace-pre-wrap">
+              {q.sql}
+            </pre>
+          ) : (
+            <div className="text-[11px] text-subtle">
+              Named source <code className="font-mono">{q.source}</code> — runs in
+              TypeScript (decrypts PII / builds analytics), so there&apos;s no single
+              SQL statement to plan; its cost shows as measured ms.
+            </div>
+          )}
+          {q.plan && (
+            <div className="text-[11px] text-muted">
+              <span className="font-medium text-fg">{q.plan.bigO}</span> ·{" "}
+              {q.plan.fullScans} full scan{q.plan.fullScans === 1 ? "" : "s"},{" "}
+              {q.plan.indexedSteps} indexed
+              {q.plan.correlated ? `, ${q.plan.correlated} correlated` : ""}
+              <details className="mt-1">
+                <summary className="cursor-pointer hover:text-fg">EXPLAIN QUERY PLAN</summary>
+                <pre className="mt-1 whitespace-pre-wrap text-[10px] text-subtle">
+                  {q.plan.detail.join("\n")}
+                </pre>
+              </details>
+            </div>
+          )}
+          {q.error && <div className="text-[11px] text-warn-soft-fg">{q.error}</div>}
+        </div>
+      )}
+    </li>
   );
 }
 

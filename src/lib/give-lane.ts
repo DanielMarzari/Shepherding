@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 
@@ -69,8 +70,10 @@ export interface GivingPersonRow {
 }
 
 /** People who have given, one row per person (latest gift wins), most
- *  recent first. Powers the Give lane person list. */
-export function listGivingPeople(orgId: number, limit = 50): GivingPersonRow[] {
+ *  recent first. Powers the Give lane person list. Memoized per (orgId, limit)
+ *  within a request — the giving builder page reads it from two blocks
+ *  (directory + lapsed), which would otherwise decrypt up to 1000 donors twice. */
+export const listGivingPeople = cache((orgId: number, limit = 50): GivingPersonRow[] => {
   const rows = getDb()
     .prepare(
       `WITH ranked AS (
@@ -120,4 +123,4 @@ export function listGivingPeople(orgId: number, limit = 50): GivingPersonRow[] {
       gifts: r.gifts,
     };
   });
-}
+});

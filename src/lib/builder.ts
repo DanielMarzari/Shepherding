@@ -16,6 +16,10 @@ function roDb(): Database.Database {
   const file = getDb().name; // ensures the main DB + migrations are initialized
   const db = new Database(file, { readonly: true });
   db.pragma("busy_timeout = 5000");
+  // Speed-only: this connection serves every builder block query serially, so
+  // a large page cache + mmap keeps the hot pages resident across blocks.
+  db.pragma("cache_size = -65536"); // 64 MB
+  db.pragma("mmap_size = 268435456"); // 256 MB
   _ro = db;
   return db;
 }
@@ -32,6 +36,25 @@ export interface QueryResult {
   rows: unknown[][];
   truncated: boolean;
   error?: string;
+}
+
+/** One row in the edit-mode query inspector: what a block ran, how long it
+ *  took, and its estimated complexity. Produced server-side in render-route. */
+export interface QueryDebug {
+  blockId: number;
+  kind: string;
+  title: string;
+  /** Named source id (decrypt-capable TS source) when the block uses one. */
+  source: string | null;
+  /** Raw SQL for SQL blocks; null for source blocks (no SQL to show/EXPLAIN). */
+  sql: string | null;
+  ms: number;
+  rows: number;
+  cols: number;
+  truncated: boolean;
+  error: string | null;
+  /** EXPLAIN-derived complexity for SQL blocks; null for source blocks. */
+  plan: QueryPlan | null;
 }
 
 /** Filter parameters injected into a query as :name placeholders. */
@@ -78,6 +101,67 @@ export function runBuilderQuery(sql: string, params?: QueryParams): QueryResult 
  *  knowing about orgs. `orgId` is a reserved parameter name. */
 export function runBuilderQueryForOrg(orgId: number, sql: string, params?: QueryParams): QueryResult {
   return runBuilderQuery(sql, { ...(params ?? {}), orgId: String(orgId) });
+}
+
+/** A read of a query's execution plan → a rough big-O, for the edit-mode
+ *  query inspector. We run `EXPLAIN QUERY PLAN` on the read-only connection
+ *  (a dedicated path — the EXPLAIN prefix would be rejected by runBuilderQuery)
+ *  and classify the plan: full SCANs of a table (no index) are the expensive
+ *  steps; SEARCH … USING INDEX / PRIMARY KEY are cheap probes; a CORRELATED
+ *  subquery re-runs per outer row (a multiplier). This is a heuristic, not a
+ *  measurement — the wall-clock ms next to it is the ground truth. */
+export interface QueryPlan {
+  /** Coarse big-O in n = rows of the largest table touched. */
+  bigO: string;
+  /** One-word tier for coloring/sorting: indexed | linear | nested | correlated. */
+  tier: "indexed" | "linear" | "nested" | "correlated";
+  fullScans: number;
+  indexedSteps: number;
+  correlated: number;
+  /** Raw EXPLAIN QUERY PLAN lines, for the expandable detail. */
+  detail: string[];
+}
+export function explainQueryPlan(sql: string, params?: QueryParams): QueryPlan | null {
+  const q = (sql ?? "").trim().replace(/;+\s*$/, "");
+  if (!q || q.includes(";") || !/^(select|with)\b/i.test(q) || FORBIDDEN.test(q)) return null;
+  try {
+    const stmt = roDb().prepare(`EXPLAIN QUERY PLAN ${q}`);
+    const names = extractParams(q);
+    const bind: QueryParams = {};
+    for (const n of names) bind[n] = params?.[n] ?? "";
+    const rows = (names.length ? stmt.all(bind) : stmt.all()) as Array<{ detail?: string }>;
+    const detail = rows.map((r) => r.detail ?? "").filter(Boolean);
+    let fullScans = 0;
+    let indexedSteps = 0;
+    let correlated = 0;
+    for (const d of detail) {
+      if (/CORRELATED/i.test(d)) correlated++;
+      const usesIndex = /USING\s+(COVERING\s+)?INDEX|USING\s+INTEGER\s+PRIMARY\s+KEY|USING\s+PRIMARY\s+KEY/i.test(d);
+      if (/\bSEARCH\b/i.test(d)) indexedSteps++;
+      else if (/\bSCAN\b/i.test(d)) {
+        if (usesIndex) indexedSteps++;
+        else fullScans++;
+      }
+    }
+    let bigO: string;
+    let tier: QueryPlan["tier"];
+    if (correlated > 0) {
+      tier = "correlated";
+      bigO = fullScans > 0 ? "O(n·m) — correlated × scan" : "O(n·m) — correlated subquery";
+    } else if (fullScans === 0) {
+      tier = "indexed";
+      bigO = indexedSteps <= 1 ? "O(log n) — indexed" : "O(n log n) — indexed joins";
+    } else if (fullScans === 1) {
+      tier = "linear";
+      bigO = "O(n) — one full scan";
+    } else {
+      tier = "nested";
+      bigO = `O(n${fullScans > 1 ? "^" + fullScans : ""}) — ${fullScans} full scans`;
+    }
+    return { bigO, tier, fullScans, indexedSteps, correlated, detail };
+  } catch {
+    return null;
+  }
 }
 
 /** Table + column names for the SQL editor's autocomplete. */

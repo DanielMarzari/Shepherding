@@ -25,7 +25,23 @@ export function getDb(): Database.Database {
   // dashboard refresh would SQLITE_BUSY one of them on the first
   // statement of any conflicting transaction.
   db.pragma("busy_timeout = 10000");
+  // Speed-only tuning (changes no query result, only how fast it runs).
+  // The default 2 MB page cache is far too small for the org-wide aggregate
+  // scans the dashboards do; a bigger cache + memory-mapped I/O keeps hot
+  // pages resident, and MEMORY temp_store keeps the many staging TEMP tables
+  // (dashboard refresh, populateShepherdedTempTable, per-page scope sets) off
+  // disk. Sized conservatively for the 33k-person DB.
+  db.pragma("cache_size = -65536"); // 64 MB page cache (negative = KiB)
+  db.pragma("mmap_size = 268435456"); // 256 MB memory-mapped reads
+  db.pragma("temp_store = MEMORY"); // TEMP tables/indexes in RAM
   ensureMigrationsApplied(db);
+  // Refresh the query planner's stats so it picks the composite indexes over
+  // full scans. Cheap; runs once per process on first connection.
+  try {
+    db.pragma("optimize");
+  } catch {
+    // PRAGMA optimize is best-effort — never block startup on it.
+  }
   _db = db;
   return db;
 }

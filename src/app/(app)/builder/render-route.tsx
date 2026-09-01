@@ -3,11 +3,15 @@ import { AppShell } from "@/components/AppShell";
 import type { SessionContext } from "@/lib/auth";
 import {
   countPageVersions,
+  explainQueryPlan,
   getBuilderBlocks,
   getBuilderPage,
   getDbSchema,
   listBuilderPages,
   runBuilderQueryForOrg,
+  type BlockConfig,
+  type QueryDebug,
+  type QueryResult,
 } from "@/lib/builder";
 import { ensureSeededPage } from "@/lib/builder-seeds";
 import { runSource } from "@/lib/builder-sources";
@@ -48,19 +52,48 @@ export async function renderBuilderRoute({
   const initialParams: Record<string, string> = {};
   for (const b of raw) if (b.kind === "filter" && b.config.param) initialParams[b.config.param] = b.config.defaultValue ?? "";
 
+  // Time every block query so edit mode can show a per-page inspector (how
+  // many queries ran, each query's ms + rows, and an EXPLAIN-derived big-O).
+  // Execution is serial/synchronous on one better-sqlite3 connection, so the
+  // summed ms here ≈ the real render-blocking time the user feels.
+  const queryLog: QueryDebug[] = [];
+  const runTimed = (
+    b: { id: number; kind: string; config: BlockConfig },
+    cfg: BlockConfig,
+  ): QueryResult => {
+    const t0 = performance.now();
+    const res = cfg.source
+      ? runSource(session.orgId, cfg.source, initialParams)
+      : runBuilderQueryForOrg(session.orgId, cfg.sql ?? "", initialParams);
+    queryLog.push({
+      blockId: b.id,
+      kind: b.kind,
+      title: (b.config.title ?? "").trim() || b.kind,
+      source: cfg.source ?? null,
+      sql: cfg.source ? null : cfg.sql ?? "",
+      ms: performance.now() - t0,
+      rows: res.rows.length,
+      cols: res.columns.length,
+      truncated: res.truncated,
+      error: res.error ?? null,
+      plan: cfg.source
+        ? null
+        : explainQueryPlan(cfg.sql ?? "", { ...initialParams, orgId: String(session.orgId) }),
+    });
+    return res;
+  };
+
   const blocks: ClientBlock[] = raw.map((b) => ({
     id: b.id,
     position: b.position,
     kind: b.kind,
     config: b.config,
-    result: NO_SQL.has(b.kind)
-      ? null
-      : b.config.source
-        ? runSource(session.orgId, b.config.source, initialParams)
-        : runBuilderQueryForOrg(session.orgId, b.config.sql ?? "", initialParams),
+    result: NO_SQL.has(b.kind) ? null : runTimed(b, b.config),
     childResults: b.kind === "group"
       ? (b.config.children ?? []).map((ch) =>
-          NO_SQL.has(ch.kind) ? null : ch.config.source ? runSource(session.orgId, ch.config.source, initialParams) : runBuilderQueryForOrg(session.orgId, ch.config.sql ?? "", initialParams))
+          NO_SQL.has(ch.kind)
+            ? null
+            : runTimed({ id: b.id, kind: ch.kind, config: ch.config }, ch.config))
       : undefined,
   }));
 
@@ -79,6 +112,7 @@ export async function renderBuilderRoute({
           schema={getDbSchema()}
           pages={pages}
           versionCount={countPageVersions(session.orgId, page.id)}
+          queryLog={queryLog}
         />
       </div>
     </AppShell>
