@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
+import { GalleryHub } from "@/components/GalleryHub";
 import { PieChart } from "@/components/charts";
 import { requireOrg } from "@/lib/auth";
 import { getOrgSnapshot } from "@/lib/dashboard-refresh";
+import { buildHomeHubSections } from "@/lib/hub-sections";
+import { getPinnedKeys } from "@/lib/nav-config-db";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
 import { listGroups } from "@/lib/community-lane";
@@ -18,6 +21,8 @@ import { RefreshSnapshotsButton } from "./refresh-button";
 export default async function HomePage() {
   const session = await requireOrg();
   const snapshot = getOrgSnapshot(session.orgId);
+  const hubSections = buildHomeHubSections(session.orgId);
+  const pinned = getPinnedKeys(session.orgId, session.user.id);
   return (
     <AppShell active="Home" breadcrumb="Home">
       <div className="px-5 md:px-7 py-7">
@@ -90,6 +95,17 @@ export default async function HomePage() {
               <GroupHealth orgId={session.orgId} />
             </Suspense>
           </Card>
+        </div>
+
+        {/* The hub — this is the navigation now (there's no left sidebar).
+            Every page, organized into layers, searchable and pinnable. */}
+        <div className="mt-10">
+          <h2 className="text-lg font-semibold tracking-tight">Go to…</h2>
+          <p className="text-muted text-sm mt-0.5 mb-4">
+            Every page, organized. Search across everything, or star the ones you
+            use most.
+          </p>
+          <GalleryHub sections={hubSections} pinned={pinned} />
         </div>
       </div>
     </AppShell>

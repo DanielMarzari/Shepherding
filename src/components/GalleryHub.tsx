@@ -4,21 +4,9 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { togglePinAction } from "@/app/actions/pins";
+import type { GalleryLink, GallerySection } from "@/lib/gallery-types";
 
-export interface GalleryLink {
-  href: string;
-  title: string;
-  description: string;
-  external?: boolean;
-  /** Section label, filled in for search results so a card shows where it lives. */
-  section?: string;
-}
-export interface GallerySection {
-  id: string;
-  label: string;
-  blurb?: string;
-  links: GalleryLink[];
-}
+export type { GalleryLink, GallerySection } from "@/lib/gallery-types";
 
 const PINNED_ID = "__pinned";
 

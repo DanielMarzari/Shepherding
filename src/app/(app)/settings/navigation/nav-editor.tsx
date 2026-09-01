@@ -1,29 +1,28 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import {
   DEFAULT_NAV_CONFIG,
   PAGE_REGISTRY,
   type NavConfig,
-  type NavGroup,
   type NavItemRef,
 } from "@/lib/nav-registry";
 import { saveNavConfigAction } from "./actions";
 
+type Drag =
+  | { type: "page"; gi: number; ii: number }
+  | { type: "layer"; gi: number }
+  | null;
+
 const clone = (c: NavConfig): NavConfig => structuredClone(c);
-
-function itemLabel(it: NavItemRef): string {
-  if (it.kind === "builder") return it.label;
-  return PAGE_REGISTRY[it.pageKey]?.defaultLabel ?? it.pageKey;
-}
-function itemKey(it: NavItemRef): string {
-  return it.kind === "builder" ? `builder:${it.slug}` : it.pageKey;
-}
-
-const BTN = "text-xs px-2 py-1 rounded-lg border border-border-soft text-muted hover:text-fg hover:border-accent disabled:opacity-30 disabled:hover:border-border-soft cursor-pointer transition-colors";
+const itemLabel = (it: NavItemRef) =>
+  it.kind === "builder" ? it.label : PAGE_REGISTRY[it.pageKey]?.defaultLabel ?? it.pageKey;
+const itemKey = (it: NavItemRef) => (it.kind === "builder" ? `builder:${it.slug}` : it.pageKey);
 
 export function NavEditor({ initial, isAdmin }: { initial: NavConfig; isAdmin: boolean }) {
   const [cfg, setCfg] = useState<NavConfig>(() => clone(initial));
+  const drag = useRef<Drag>(null);
+  const [over, setOver] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -32,16 +31,36 @@ export function NavEditor({ initial, isAdmin }: { initial: NavConfig; isAdmin: b
   for (const g of cfg.groups) for (const it of g.items) if (it.kind === "page") assigned.add(it.pageKey);
   const unassigned = Object.keys(PAGE_REGISTRY).filter((k) => !assigned.has(k));
 
-  function apply(next: NavConfig) {
-    setCfg(next);
-    setDirty(true);
-    setMsg(null);
-  }
   const mutate = (fn: (c: NavConfig) => void) => {
     const next = clone(cfg);
     fn(next);
-    apply(next);
+    setCfg(next);
+    setDirty(true);
+    setMsg(null);
   };
+
+  function dropPage(toGi: number, toIi: number) {
+    const d = drag.current;
+    if (!d || d.type !== "page") return;
+    mutate((c) => {
+      const item = c.groups[d.gi].items[d.ii];
+      c.groups[d.gi].items.splice(d.ii, 1);
+      let idx = toIi;
+      if (d.gi === toGi && d.ii < toIi) idx--;
+      idx = Math.max(0, Math.min(idx, c.groups[toGi].items.length));
+      c.groups[toGi].items.splice(idx, 0, item);
+    });
+  }
+  function dropLayer(toGi: number) {
+    const d = drag.current;
+    if (!d || d.type !== "layer" || d.gi === toGi) return;
+    mutate((c) => {
+      const [g] = c.groups.splice(d.gi, 1);
+      let idx = toGi;
+      if (d.gi < toGi) idx--;
+      c.groups.splice(idx, 0, g);
+    });
+  }
 
   function save() {
     start(async () => {
@@ -50,179 +69,146 @@ export function NavEditor({ initial, isAdmin }: { initial: NavConfig; isAdmin: b
       if (res.ok) setDirty(false);
     });
   }
-  function reset() {
-    apply(clone(DEFAULT_NAV_CONFIG));
-  }
 
-  if (!isAdmin) {
-    return <p className="text-sm text-muted">Only admins can edit the navigation.</p>;
-  }
+  if (!isAdmin) return <p className="text-sm text-muted">Only admins can edit the navigation.</p>;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" onDragEnd={() => { drag.current = null; setOver(null); }}>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={save} disabled={pending || !dirty}
           className="text-sm px-3 py-1.5 rounded-lg border border-accent text-accent hover:bg-accent hover:text-bg disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent cursor-pointer transition-colors">
-          {pending ? "Saving…" : "Save navigation"}
+          {pending ? "Saving…" : "Save"}
         </button>
-        <button type="button" onClick={reset} disabled={pending} className={BTN}>Reset to default</button>
+        <button type="button" onClick={() => mutate(() => { setCfg(clone(DEFAULT_NAV_CONFIG)); })}
+          disabled={pending}
+          className="text-sm px-3 py-1.5 rounded-lg border border-border-soft text-muted hover:text-fg hover:border-accent cursor-pointer transition-colors">
+          Reset to default
+        </button>
         {dirty && !msg && <span className="text-xs text-subtle">Unsaved changes</span>}
         {msg && <span className={`text-xs ${msg.ok ? "text-good-soft-fg" : "text-warn-soft-fg"}`}>{msg.text}</span>}
       </div>
 
       <p className="text-xs text-subtle max-w-2xl">
-        Drag isn&apos;t needed — use the arrows to reorder. Set a group to{" "}
-        <span className="text-fg">Drill-in</span> to make it a single sidebar entry
-        that opens its own list (with a Back arrow). Page Builder pages you&apos;ve
-        pinned to the nav are placed from each page&apos;s own settings and merged
-        in automatically.
+        This is your home hub. Drag a page to move it within a layer or into
+        another; drag a layer by its handle to reorder. Add layers and pages
+        below. Page Builder pages you&apos;ve pinned to the nav are placed from
+        each page&apos;s own settings.
       </p>
 
+      {/* Layers */}
       <div className="space-y-3">
         {cfg.groups.map((g, gi) => (
-          <GroupCard
+          <div
             key={gi}
-            group={g}
-            gi={gi}
-            total={cfg.groups.length}
-            unassigned={unassigned}
-            onRename={(label) => mutate((c) => { c.groups[gi].label = label; })}
-            onMode={(mode) => mutate((c) => { c.groups[gi].mode = mode; })}
-            onCollapsible={(v) => mutate((c) => { c.groups[gi].collapsible = v; })}
-            onMoveGroup={(dir) => mutate((c) => {
-              const j = gi + dir;
-              if (j < 0 || j >= c.groups.length) return;
-              [c.groups[gi], c.groups[j]] = [c.groups[j], c.groups[gi]];
-            })}
-            onDeleteGroup={() => mutate((c) => { c.groups.splice(gi, 1); })}
-            onAddPage={(pageKey) => mutate((c) => { c.groups[gi].items.push({ kind: "page", pageKey }); })}
-            onRemoveItem={(ii) => mutate((c) => { c.groups[gi].items.splice(ii, 1); })}
-            onMoveItem={(ii, dir) => mutate((c) => {
-              const items = c.groups[gi].items;
-              const j = ii + dir;
-              if (j < 0 || j >= items.length) return;
-              [items[ii], items[j]] = [items[j], items[ii]];
-            })}
-          />
+            className={`rounded-xl border p-4 transition-colors ${over === `layer:${gi}` ? "border-accent" : "border-border-soft"}`}
+            onDragOver={(e) => {
+              if (drag.current?.type === "layer") { e.preventDefault(); setOver(`layer:${gi}`); }
+            }}
+            onDrop={(e) => {
+              if (drag.current?.type === "layer") { e.preventDefault(); dropLayer(gi); setOver(null); }
+            }}
+          >
+            <div className="flex items-center gap-2 mb-3">
+              <span
+                draggable
+                onDragStart={() => { drag.current = { type: "layer", gi }; }}
+                title="Drag to reorder layer"
+                className="cursor-grab active:cursor-grabbing text-subtle hover:text-fg select-none px-1"
+                aria-hidden
+              >
+                ⠿
+              </span>
+              <input
+                value={g.label}
+                onChange={(e) => mutate((c) => { c.groups[gi].label = e.target.value; })}
+                aria-label="Layer name"
+                className="bg-bg border border-border-soft rounded-lg px-2.5 py-1.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+              />
+              <span className="text-[11px] text-subtle">{g.items.length} page{g.items.length === 1 ? "" : "s"}</span>
+              <button type="button" onClick={() => mutate((c) => { c.groups.splice(gi, 1); })}
+                aria-label="Delete layer"
+                className="ml-auto text-xs px-2 py-1 rounded-lg border border-border-soft text-subtle hover:text-warn-soft-fg hover:border-warn-soft-fg cursor-pointer transition-colors">
+                Remove layer
+              </button>
+            </div>
+
+            {/* Page chips (drop zone for pages) */}
+            <div
+              className={`flex flex-wrap gap-2 min-h-11 rounded-lg p-2 border border-dashed transition-colors ${
+                over === `body:${gi}` ? "border-accent bg-accent-soft-bg" : "border-border-softer"
+              }`}
+              onDragOver={(e) => {
+                if (drag.current?.type === "page") { e.preventDefault(); setOver(`body:${gi}`); }
+              }}
+              onDrop={(e) => {
+                if (drag.current?.type === "page") { e.preventDefault(); dropPage(gi, g.items.length); setOver(null); }
+              }}
+            >
+              {g.items.length === 0 && (
+                <span className="text-xs text-subtle px-1 py-1.5">Drag pages here, or add one below.</span>
+              )}
+              {g.items.map((it, ii) => (
+                <span
+                  key={itemKey(it)}
+                  draggable
+                  onDragStart={(e) => { e.stopPropagation(); drag.current = { type: "page", gi, ii }; }}
+                  onDragOver={(e) => {
+                    if (drag.current?.type === "page") { e.preventDefault(); e.stopPropagation(); setOver(`chip:${gi}:${ii}`); }
+                  }}
+                  onDrop={(e) => {
+                    if (drag.current?.type === "page") { e.preventDefault(); e.stopPropagation(); dropPage(gi, ii); setOver(null); }
+                  }}
+                  className={`inline-flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-lg border cursor-grab active:cursor-grabbing transition-colors ${
+                    over === `chip:${gi}:${ii}` ? "border-accent" : "border-border-soft"
+                  } bg-bg-elev-2/50`}
+                >
+                  <span aria-hidden className="text-subtle text-xs">⠿</span>
+                  {itemLabel(it)}
+                  {it.kind === "builder" && <span className="text-[10px] text-subtle">page builder</span>}
+                  <button type="button" onClick={() => mutate((c) => { c.groups[gi].items.splice(ii, 1); })}
+                    aria-label={`Remove ${itemLabel(it)}`}
+                    className="text-subtle hover:text-warn-soft-fg cursor-pointer">×</button>
+                </span>
+              ))}
+            </div>
+
+            {unassigned.length > 0 && <AddPage unassigned={unassigned} onAdd={(k) => mutate((c) => { c.groups[gi].items.push({ kind: "page", pageKey: k }); })} />}
+          </div>
         ))}
       </div>
 
-      <button
-        type="button"
-        onClick={() => mutate((c) => { c.groups.push({ id: `group-${c.groups.length + 1}-${c.groups.length}`, label: "New heading", mode: "top", items: [] }); })}
-        className="text-sm px-3 py-1.5 rounded-lg border border-dashed border-border-soft text-muted hover:text-fg hover:border-accent cursor-pointer transition-colors"
-      >
-        + Add heading
+      <button type="button"
+        onClick={() => mutate((c) => { c.groups.push({ id: `layer-${c.groups.length}-${Math.random().toString(36).slice(2, 8)}`, label: "New layer", mode: "top", items: [] }); })}
+        className="text-sm px-3 py-1.5 rounded-lg border border-dashed border-border-soft text-muted hover:text-fg hover:border-accent cursor-pointer transition-colors">
+        + Add a layer
       </button>
 
       {unassigned.length > 0 && (
         <div className="rounded-xl border border-border-soft p-4">
-          <div className="text-xs uppercase tracking-wider text-subtle mb-2">
-            Not in the sidebar ({unassigned.length})
-          </div>
+          <div className="text-xs uppercase tracking-wider text-subtle mb-2">Not in the hub ({unassigned.length})</div>
           <div className="flex flex-wrap gap-1.5">
             {unassigned.map((k) => (
-              <span key={k} className="text-xs px-2 py-1 rounded-lg bg-bg-elev-2 text-muted">
-                {PAGE_REGISTRY[k].defaultLabel}
-              </span>
+              <span key={k} className="text-xs px-2 py-1 rounded-lg bg-bg-elev-2 text-muted">{PAGE_REGISTRY[k].defaultLabel}</span>
             ))}
           </div>
-          <p className="text-[11px] text-subtle mt-2">Add any of these to a heading with its “Add page” menu.</p>
+          <p className="text-[11px] text-subtle mt-2">Add any of these to a layer with its “+ add page” menu.</p>
         </div>
       )}
     </div>
   );
 }
 
-function GroupCard({
-  group, gi, total, unassigned,
-  onRename, onMode, onCollapsible, onMoveGroup, onDeleteGroup, onAddPage, onRemoveItem, onMoveItem,
-}: {
-  group: NavGroup;
-  gi: number;
-  total: number;
-  unassigned: string[];
-  onRename: (label: string) => void;
-  onMode: (mode: "top" | "drill") => void;
-  onCollapsible: (v: boolean) => void;
-  onMoveGroup: (dir: -1 | 1) => void;
-  onDeleteGroup: () => void;
-  onAddPage: (pageKey: string) => void;
-  onRemoveItem: (ii: number) => void;
-  onMoveItem: (ii: number, dir: -1 | 1) => void;
-}) {
-  const [addKey, setAddKey] = useState("");
+function AddPage({ unassigned, onAdd }: { unassigned: string[]; onAdd: (k: string) => void }) {
+  const [k, setK] = useState("");
   return (
-    <div className="rounded-xl border border-border-soft p-4">
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <input
-          value={group.label}
-          onChange={(e) => onRename(e.target.value)}
-          aria-label="Heading name"
-          className="bg-bg border border-border-soft rounded-lg px-2.5 py-1.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
-        />
-        <select
-          value={group.mode}
-          onChange={(e) => onMode(e.target.value as "top" | "drill")}
-          aria-label="Group mode"
-          className="bg-bg border border-border-soft rounded-lg px-2 py-1.5 text-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent/40"
-        >
-          <option value="top">Top-level</option>
-          <option value="drill">Drill-in</option>
-        </select>
-        {group.mode === "top" && (
-          <label className="text-xs text-muted flex items-center gap-1.5 cursor-pointer">
-            <input type="checkbox" checked={group.collapsible ?? false} onChange={(e) => onCollapsible(e.target.checked)} />
-            Collapsible
-          </label>
-        )}
-        <div className="ml-auto flex items-center gap-1">
-          <button type="button" onClick={() => onMoveGroup(-1)} disabled={gi === 0} className={BTN} aria-label="Move heading up">↑</button>
-          <button type="button" onClick={() => onMoveGroup(1)} disabled={gi === total - 1} className={BTN} aria-label="Move heading down">↓</button>
-          <button type="button" onClick={onDeleteGroup} className={`${BTN} hover:!text-warn-soft-fg`} aria-label="Delete heading">✕</button>
-        </div>
-      </div>
-
-      {group.items.length === 0 ? (
-        <p className="text-xs text-subtle mb-2">No pages in this heading yet.</p>
-      ) : (
-        <ul className="space-y-1 mb-2">
-          {group.items.map((it, ii) => (
-            <li key={itemKey(it)} className="flex items-center gap-2 bg-bg-elev-2/50 rounded-lg px-2.5 py-1.5">
-              <span className="text-sm flex-1 min-w-0 truncate">
-                {itemLabel(it)}
-                {it.kind === "builder" && <span className="text-[10px] text-subtle ml-2">page builder</span>}
-              </span>
-              <button type="button" onClick={() => onMoveItem(ii, -1)} disabled={ii === 0} className={BTN} aria-label="Move page up">↑</button>
-              <button type="button" onClick={() => onMoveItem(ii, 1)} disabled={ii === group.items.length - 1} className={BTN} aria-label="Move page down">↓</button>
-              <button type="button" onClick={() => onRemoveItem(ii)} className={BTN} aria-label="Remove page">✕</button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {unassigned.length > 0 && (
-        <div className="flex items-center gap-2">
-          <select
-            value={addKey}
-            onChange={(e) => setAddKey(e.target.value)}
-            className="bg-bg border border-border-soft rounded-lg px-2 py-1.5 text-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent/40"
-          >
-            <option value="">Add page…</option>
-            {unassigned.map((k) => (
-              <option key={k} value={k}>{PAGE_REGISTRY[k].defaultLabel}</option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={!addKey}
-            onClick={() => { if (addKey) { onAddPage(addKey); setAddKey(""); } }}
-            className={BTN}
-          >
-            Add
-          </button>
-        </div>
-      )}
+    <div className="flex items-center gap-2 mt-2">
+      <select value={k} onChange={(e) => setK(e.target.value)}
+        className="bg-bg border border-border-soft rounded-lg px-2 py-1.5 text-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent/40">
+        <option value="">+ add page…</option>
+        {unassigned.map((u) => <option key={u} value={u}>{PAGE_REGISTRY[u].defaultLabel}</option>)}
+      </select>
+      <button type="button" disabled={!k} onClick={() => { if (k) { onAdd(k); setK(""); } }}
+        className="text-xs px-2 py-1 rounded-lg border border-border-soft text-muted hover:text-fg hover:border-accent disabled:opacity-30 cursor-pointer transition-colors">Add</button>
     </div>
   );
 }
