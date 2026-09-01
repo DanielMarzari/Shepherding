@@ -980,8 +980,8 @@ const givingSeed: SeedPage = {
   slug: "giving",
   title: "Giving statistics",
   description:
-    "Giving from the imported PushPay donor export — who gives, membership vs. giving coverage, donor stages, funds, channels, where givers live, and recency. Import or refresh on the PushPay page.",
-  revision: 1,
+    "Giving from the imported PushPay donor export — who gives, membership vs. giving coverage, donor stages, funds, channels, where givers live, recency, and new givers over time. Import or refresh on the PushPay page.",
+  revision: 2,
   moreSection: "Reports & insights",
   blocks: [
     { kind: "stat", config: { title: "Givers", span: 2, sub: "people who have given", sql: GIVERS } },
@@ -1042,6 +1042,21 @@ const givingSeed: SeedPage = {
       sub: "the export carries each donor's last gift only — this is when people most recently gave",
       sql: `SELECT substr(last_gift_date,1,7) AS "Month", COUNT(*) AS "Donors"
               FROM pushpay_donors WHERE org_id=:orgId AND last_gift_date IS NOT NULL AND length(last_gift_date)>=7
+             GROUP BY 1 ORDER BY 1` } },
+
+    { kind: "divider", config: { title: "New givers over time", span: 12 } },
+    { kind: "text", config: { span: 12, text: "Each person counted by the month/year of their FIRST gift. This needs a \"First Gift - Date\" column in the PushPay export — the standard All Donors export only carries the last gift date, so until you drop an export that includes first-gift dates, these two charts stay empty. Import it on the PushPay page and they fill in automatically." } },
+    { kind: "stat", config: { title: "New givers tracked", span: 3, sub: "with a first-gift date",
+      sql: `SELECT COUNT(*) FROM pushpay_donors WHERE org_id=:orgId AND first_gift_date IS NOT NULL` } },
+    { kind: "chart", config: { title: "New givers by year", chartType: "bar", colorByCategory: true, span: 9,
+      sub: "count of people whose first gift landed in each year (since 2017)",
+      sql: `SELECT substr(first_gift_date,1,4) AS "Year", COUNT(*) AS "New givers"
+              FROM pushpay_donors WHERE org_id=:orgId AND first_gift_date IS NOT NULL AND first_gift_date >= '2017'
+             GROUP BY 1 ORDER BY 1` } },
+    { kind: "chart", config: { title: "New givers by month", chartType: "line", span: 12,
+      sub: "first-time givers per month since 2017",
+      sql: `SELECT substr(first_gift_date,1,7) AS "Month", COUNT(*) AS "New givers"
+              FROM pushpay_donors WHERE org_id=:orgId AND first_gift_date IS NOT NULL AND first_gift_date >= '2017'
              GROUP BY 1 ORDER BY 1` } },
 
     { kind: "divider", config: { title: "Donors", span: 12 } },

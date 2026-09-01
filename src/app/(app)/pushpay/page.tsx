@@ -15,7 +15,7 @@ export default async function PushpayPage() {
 
   return (
     <AppShell active="PushPay" breadcrumb="Giving › PushPay">
-      <div className="px-5 md:px-7 py-7 space-y-6 max-w-3xl">
+      <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">PushPay giving</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">

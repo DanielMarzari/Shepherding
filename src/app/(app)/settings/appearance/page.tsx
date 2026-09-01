@@ -8,7 +8,7 @@ export default async function AppearancePage() {
   const theme = getSqlTheme(session.orgId);
   return (
     <AppShell active="Appearance" breadcrumb="Settings › Appearance">
-      <div className="px-5 md:px-7 py-7 max-w-3xl space-y-6">
+      <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Appearance</h1>
           <p className="text-muted text-sm mt-1 max-w-xl">

@@ -133,6 +133,11 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
   const col = (name: string) => header.indexOf(name);
   const iF = col("first name"), iL = col("last name"), iE = col("email"), iP = col("phone number"),
     iStage = col("donor stage"), iChan = col("giving channel"), iDate = col("last gift - date"), iFund = col("last gift - fund");
+  // Optional "first gift" date — the standard All Donors export doesn't include
+  // it, but if the export is configured with a First Gift column we capture it
+  // for the new-givers-over-time chart.
+  const iFirst = ["first gift - date", "first gift date", "first gift", "first_gift_date"]
+    .map((n) => col(n)).find((x) => x >= 0) ?? -1;
   if (iF < 0 || iL < 0) throw new Error("CSV is missing First Name / Last Name columns.");
 
   const db = getDb();
@@ -152,6 +157,7 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
       nameHash: nn ? hmac(nn) : null, emailHash: eh,
       stage: (r[iStage] ?? "").trim() || null, channel: (r[iChan] ?? "").trim() || null,
       date: parseDate(r[iDate] ?? ""), fund: (r[iFund] ?? "").trim() || null,
+      firstDate: iFirst >= 0 ? parseDate(r[iFirst] ?? "") : null,
       personId: dec.personId, status: dec.status, candidates: dec.candidates,
     };
   });
@@ -159,9 +165,9 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
   const run = db.transaction(() => {
     db.prepare(`DELETE FROM pushpay_donors WHERE org_id = ?`).run(orgId);
     const ins = db.prepare(`INSERT INTO pushpay_donors
-      (org_id, donor_key, enc, name_hash, email_hash, donor_stage, giving_channel, last_gift_date, last_gift_fund, person_id, match_status, candidate_ids)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
-    for (const d of donors) ins.run(orgId, d.key, d.enc, d.nameHash, d.emailHash, d.stage, d.channel, d.date, d.fund, d.personId, d.status, d.candidates ? JSON.stringify(d.candidates) : null);
+      (org_id, donor_key, enc, name_hash, email_hash, donor_stage, giving_channel, last_gift_date, last_gift_fund, first_gift_date, person_id, match_status, candidate_ids)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    for (const d of donors) ins.run(orgId, d.key, d.enc, d.nameHash, d.emailHash, d.stage, d.channel, d.date, d.fund, d.firstDate, d.personId, d.status, d.candidates ? JSON.stringify(d.candidates) : null);
     const counts: PushpayImportResult = {
       total: donors.length,
       matched: donors.filter((d) => d.status === "matched").length,
