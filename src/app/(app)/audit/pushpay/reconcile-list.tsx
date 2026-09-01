@@ -8,7 +8,27 @@ import type { DonorRow } from "@/lib/pushpay-import";
 import {
   assignDonorAction,
   clearDonorMatchAction,
+  rematchDonorsAction,
 } from "@/app/(app)/pushpay/actions";
+
+/** Re-run matching on the imported donors with the latest rules (no re-upload). */
+export function RematchButton() {
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <div className="flex items-center gap-3 flex-wrap">
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => start(async () => { const r = await rematchDonorsAction(); setMsg(r.message); })}
+        className="text-xs px-3 py-1.5 rounded-lg border border-accent text-accent hover:bg-accent hover:text-bg disabled:opacity-50 cursor-pointer transition-colors"
+      >
+        {pending ? "Re-matching…" : "Re-match with latest rules"}
+      </button>
+      {msg && <span className="text-xs text-muted">{msg}</span>}
+    </div>
+  );
+}
 
 export function ReconcileList({
   donors,
@@ -196,7 +216,7 @@ function PersonPicker({
           type="text"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
-          placeholder="Search people by name…"
+          placeholder="Search by name, email, or phone…"
           disabled={disabled}
           autoComplete="off"
           spellCheck={false}

@@ -2,7 +2,8 @@ import "server-only";
 import { cache } from "react";
 import { getOrgSnapshot } from "./dashboard-refresh";
 import { getDb } from "./db";
-import { decryptJson } from "./encryption";
+import { decryptJson, hmac } from "./encryption";
+import { normPhone } from "./phone";
 import {
   getExcludedCheckinEvents,
   getExcludedGroupTypes,
@@ -769,17 +770,65 @@ export interface SearchHit {
   membershipType: string | null;
 }
 
-/** Decrypt-and-match across all synced people for the org. With ~33k
- *  rows this takes ~50-150ms server-side; called from a server action
- *  on each keystroke (the client debounces). */
+/** Build SearchHits for a specific set of person ids (used by the email/phone
+ *  lookups, which resolve exact ids by hash first). */
+function hitsForIds(orgId: number, ids: string[], activityMonths: number, limit: number): SearchHit[] {
+  if (ids.length === 0) return [];
+  const capped = ids.slice(0, limit);
+  populateShepherdedTempTable(orgId);
+  const ph = capped.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(
+      `SELECT pco_people.pco_id, enc_pii, first_name, last_name, gender, membership_type, marital_status,
+              pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
+              is_minor, birth_year,
+              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
+         FROM pco_people
+         LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+        WHERE pco_people.org_id = ? AND pco_people.pco_id IN (${ph})`,
+    )
+    .all(orgId, ...capped) as RawRow[];
+  return rows.map((r) => {
+    const p = toRow(r, activityMonths);
+    return { pcoId: p.pcoId, fullName: p.fullName, initials: p.initials, classification: p.classification, membershipType: p.membershipType };
+  });
+}
+
+/** Search people by name, or — when the query looks like an email or phone —
+ *  by an exact hashed lookup against pco_person_emails / pco_person_phones
+ *  (email/phone are never stored in plaintext, so only exact matches resolve).
+ *  This is how you find organizations and anyone whose name is odd. With ~33k
+ *  rows the name path takes ~50-150ms; the contact paths are indexed lookups. */
 export function searchPeople(
   orgId: number,
   query: string,
   activityMonths: number,
   limit = 8,
 ): SearchHit[] {
-  const q = query.trim().toLowerCase();
-  if (q.length < 2) return [];
+  const raw = query.trim();
+  if (raw.length < 2) return [];
+  const db = getDb();
+
+  // Email → exact hash lookup.
+  if (raw.includes("@")) {
+    const ids = (
+      db.prepare(`SELECT DISTINCT person_id FROM pco_person_emails WHERE org_id = ? AND email_hash = ?`)
+        .all(orgId, hmac(raw.toLowerCase())) as Array<{ person_id: string }>
+    ).map((r) => r.person_id);
+    return hitsForIds(orgId, ids, activityMonths, limit);
+  }
+  // Phone → normalize + exact hash lookup (only when it's clearly a phone).
+  const digits = raw.replace(/\D+/g, "");
+  const np = normPhone(raw);
+  if (np && digits.length >= 7) {
+    const ids = (
+      db.prepare(`SELECT DISTINCT person_id FROM pco_person_phones WHERE org_id = ? AND phone_hash = ?`)
+        .all(orgId, hmac(np)) as Array<{ person_id: string }>
+    ).map((r) => r.person_id);
+    return hitsForIds(orgId, ids, activityMonths, limit);
+  }
+
+  const q = raw.toLowerCase();
   populateShepherdedTempTable(orgId);
   const rows = getDb()
     .prepare(

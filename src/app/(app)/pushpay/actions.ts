@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
 import { deletePushpayCreds, savePushpayCreds } from "@/lib/pushpay";
-import { importPushpay, assignDonor, clearDonorMatch } from "@/lib/pushpay-import";
+import { importPushpay, assignDonor, clearDonorMatch, rematchDonors } from "@/lib/pushpay-import";
 
 export interface SaveState {
   status: "idle" | "saved" | "error";
@@ -49,6 +49,21 @@ export async function importPushpayCsvAction(
       message: err instanceof Error ? err.message : "Import failed. Check the file format.",
     };
   }
+}
+
+/** Re-run matching on the imported donors with the latest rules (no re-upload).
+ *  Preserves manual assignments. Returns a short summary for the UI. */
+export async function rematchDonorsAction(): Promise<{ ok: boolean; message: string }> {
+  const s = await requireOrg();
+  if (s.role !== "admin") return { ok: false, message: "Admin only." };
+  const r = rematchDonors(s.orgId);
+  revalidatePath("/audit/pushpay");
+  revalidatePath("/pushpay");
+  revalidatePath("/lanes/give");
+  return {
+    ok: true,
+    message: `Re-matched ${r.total.toLocaleString()} donors — ${r.matched.toLocaleString()} matched, ${r.ambiguous.toLocaleString()} to review, ${r.unmatched.toLocaleString()} unmatched (${r.changed.toLocaleString()} changed).`,
+  };
 }
 
 /** Reconcile a donor → assign it to a person (used on the audit PushPay connections page). */

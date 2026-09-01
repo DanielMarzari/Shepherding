@@ -16,9 +16,18 @@ interface DonorPII { firstName: string; lastName: string; email: string; phone: 
 
 const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
 
-/** Lowercased "first last", punctuation + generational suffixes stripped. */
+/** Lowercased "first last", punctuation + generational suffixes stripped, and
+ *  dashes/underscores treated as spaces so org-name variants line up
+ *  ("grace-church" = "grace_church" = "grace church", and a leading "_"
+ *  placeholder first name drops out). */
 function normName(first: string, last: string): string {
-  return `${first} ${last}`.toLowerCase().replace(/[.,'`]/g, "").replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "").replace(/\s+/g, " ").trim();
+  return `${first} ${last}`
+    .toLowerCase()
+    .replace(/[.,'`]/g, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /** "31-Aug-26" → "2026-08-31". */
@@ -50,6 +59,72 @@ function parseCsv(text: string): string[][] {
 
 export interface PushpayImportResult { total: number; matched: number; ambiguous: number; unmatched: number }
 
+interface MatchIndexes {
+  name: Map<string, string[]>;
+  email: Map<string, string[]>;
+  phone: Map<string, string[]>;
+  /** pco_ids that are NOT inactive (per person_activity) — used to pick the
+   *  live record when a name matches an active person + old inactive dupes. */
+  active: Set<string>;
+}
+
+/** Build the name / email / phone → person-id indexes once (decrypts every
+ *  person's name a single time), plus the active-person set. Shared by import
+ *  and re-match. */
+function buildMatchIndexes(orgId: number): MatchIndexes {
+  const db = getDb();
+  const name = new Map<string, string[]>();
+  for (const p of db.prepare(`SELECT pco_id, first_name, last_name, enc_pii FROM pco_people WHERE org_id = ?`).all(orgId) as Array<{ pco_id: string; first_name: string | null; last_name: string | null; enc_pii: string | null }>) {
+    let f = p.first_name, l = p.last_name;
+    if (f == null && l == null && p.enc_pii) { const pii = decryptJson<PII>(p.enc_pii); f = pii?.first_name ?? null; l = pii?.last_name ?? null; }
+    const nn = normName(f ?? "", l ?? "");
+    if (nn) (name.get(nn) ?? name.set(nn, []).get(nn)!).push(p.pco_id);
+  }
+  const email = new Map<string, string[]>();
+  for (const e of db.prepare(`SELECT email_hash, person_id FROM pco_person_emails WHERE org_id = ?`).all(orgId) as Array<{ email_hash: string; person_id: string }>) {
+    (email.get(e.email_hash) ?? email.set(e.email_hash, []).get(e.email_hash)!).push(e.person_id);
+  }
+  const phone = new Map<string, string[]>();
+  for (const ph of db.prepare(`SELECT phone_hash, person_id FROM pco_person_phones WHERE org_id = ?`).all(orgId) as Array<{ phone_hash: string; person_id: string }>) {
+    (phone.get(ph.phone_hash) ?? phone.set(ph.phone_hash, []).get(ph.phone_hash)!).push(ph.person_id);
+  }
+  const active = new Set<string>(
+    (db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'inactive'`).all(orgId) as Array<{ person_id: string }>).map((r) => r.person_id),
+  );
+  return { name, email, phone, active };
+}
+
+/** Decide who a donor matches from its normalized name + email/phone hashes.
+ *  Anyone confirmed by 2+ signals wins; a lone unique signal still matches;
+ *  when a name matches several people we pick the one that's active if that's
+ *  unambiguous (the common "one live record + old inactive dupes" case),
+ *  otherwise it's flagged ambiguous for manual reconciliation. */
+function decideMatch(
+  nn: string,
+  eh: string | null,
+  phh: string | null,
+  ix: MatchIndexes,
+): { personId: string | null; status: string; candidates: string[] | null } {
+  const nm = nn ? ix.name.get(nn) ?? [] : [];
+  const em = eh ? ix.email.get(eh) ?? [] : [];
+  const ph = phh ? ix.phone.get(phh) ?? [] : [];
+  const votes = new Map<string, number>();
+  for (const set of [new Set(nm), new Set(em), new Set(ph)]) {
+    for (const id of set) votes.set(id, (votes.get(id) ?? 0) + 1);
+  }
+  const strong = [...votes].filter(([, c]) => c >= 2).map(([id]) => id);
+  const union = [...votes.keys()];
+  if (strong.length === 1) return { personId: strong[0], status: "matched", candidates: null };
+  if (strong.length > 1) return { personId: null, status: "ambiguous", candidates: strong };
+  if (union.length === 1) return { personId: union[0], status: "matched", candidates: null };
+  if (union.length > 1) {
+    const act = union.filter((id) => ix.active.has(id));
+    if (act.length === 1) return { personId: act[0], status: "matched", candidates: null };
+    return { personId: null, status: "ambiguous", candidates: union };
+  }
+  return { personId: null, status: "unmatched", candidates: null };
+}
+
 /** Parse the CSV, match every donor to a person, and replace the stored set. */
 export function importPushpay(orgId: number, fileName: string, csvText: string): PushpayImportResult {
   const rows = parseCsv(csvText).filter((r) => r.some((c) => c.trim()));
@@ -61,21 +136,7 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
   if (iF < 0 || iL < 0) throw new Error("CSV is missing First Name / Last Name columns.");
 
   const db = getDb();
-  // Name index (decrypt every person once) + email-hash index.
-  const nameIndex = new Map<string, string[]>();
-  for (const p of db.prepare(`SELECT pco_id, enc_pii FROM pco_people WHERE org_id = ?`).all(orgId) as Array<{ pco_id: string; enc_pii: string | null }>) {
-    const pii = p.enc_pii ? decryptJson<PII>(p.enc_pii) : null;
-    const nn = normName(pii?.first_name ?? "", pii?.last_name ?? "");
-    if (nn) (nameIndex.get(nn) ?? nameIndex.set(nn, []).get(nn)!).push(p.pco_id);
-  }
-  const emailIndex = new Map<string, string[]>();
-  for (const e of db.prepare(`SELECT email_hash, person_id FROM pco_person_emails WHERE org_id = ?`).all(orgId) as Array<{ email_hash: string; person_id: string }>) {
-    (emailIndex.get(e.email_hash) ?? emailIndex.set(e.email_hash, []).get(e.email_hash)!).push(e.person_id);
-  }
-  const phoneIndex = new Map<string, string[]>();
-  for (const ph of db.prepare(`SELECT phone_hash, person_id FROM pco_person_phones WHERE org_id = ?`).all(orgId) as Array<{ phone_hash: string; person_id: string }>) {
-    (phoneIndex.get(ph.phone_hash) ?? phoneIndex.set(ph.phone_hash, []).get(ph.phone_hash)!).push(ph.person_id);
-  }
+  const ix = buildMatchIndexes(orgId);
 
   const donors = rows.slice(1).map((r, i) => {
     const first = (r[iF] ?? "").trim(), last = (r[iL] ?? "").trim();
@@ -84,29 +145,14 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
     const eh = email ? hmac(email.toLowerCase()) : null;
     const np = normPhone(phone);
     const phh = np ? hmac(np) : null;
-    const nm = nn ? nameIndex.get(nn) ?? [] : [];
-    const em = eh ? emailIndex.get(eh) ?? [] : [];
-    const ph = phh ? phoneIndex.get(phh) ?? [] : [];
-    // Vote per candidate person across the three independent signals.
-    const votes = new Map<string, number>();
-    for (const set of [new Set(nm), new Set(em), new Set(ph)]) {
-      for (const id of set) votes.set(id, (votes.get(id) ?? 0) + 1);
-    }
-    const strong = [...votes].filter(([, c]) => c >= 2).map(([id]) => id); // 2+ signals agree
-    const union = [...votes.keys()];
-    let personId: string | null = null, status: string, candidates: string[] | null = null;
-    if (strong.length === 1) { personId = strong[0]; status = "matched"; }
-    else if (strong.length > 1) { status = "ambiguous"; candidates = strong; }
-    else if (union.length === 1) { personId = union[0]; status = "matched"; }
-    else if (union.length > 1) { status = "ambiguous"; candidates = union; }
-    else { status = "unmatched"; }
+    const dec = decideMatch(nn, eh, phh, ix);
     return {
       key: String(i),
       enc: encryptJson({ firstName: first, lastName: last, email, phone } as DonorPII),
       nameHash: nn ? hmac(nn) : null, emailHash: eh,
       stage: (r[iStage] ?? "").trim() || null, channel: (r[iChan] ?? "").trim() || null,
       date: parseDate(r[iDate] ?? ""), fund: (r[iFund] ?? "").trim() || null,
-      personId, status, candidates,
+      personId: dec.personId, status: dec.status, candidates: dec.candidates,
     };
   });
 
@@ -129,6 +175,39 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
     return counts;
   });
   return run();
+}
+
+export interface RematchResult extends PushpayImportResult { changed: number }
+
+/** Re-run matching on the already-imported donors (no re-upload) with the
+ *  current rules + latest PCO people. Human assignments (match_status =
+ *  'manual') are left untouched. Returns the new counts + how many rows moved. */
+export function rematchDonors(orgId: number): RematchResult {
+  const db = getDb();
+  const ix = buildMatchIndexes(orgId);
+  const rows = db.prepare(`SELECT donor_key, enc, match_status, person_id FROM pushpay_donors WHERE org_id = ?`).all(orgId) as Array<{ donor_key: string; enc: string; match_status: string; person_id: string | null }>;
+  const upd = db.prepare(`UPDATE pushpay_donors SET person_id = ?, match_status = ?, candidate_ids = ? WHERE org_id = ? AND donor_key = ?`);
+  let changed = 0;
+  const run = db.transaction(() => {
+    for (const r of rows) {
+      if (r.match_status === "manual") continue; // never clobber a human assignment
+      const d = decryptJson<DonorPII>(r.enc);
+      const nn = normName(d?.firstName ?? "", d?.lastName ?? "");
+      const eh = d?.email ? hmac(d.email.trim().toLowerCase()) : null;
+      const np = normPhone(d?.phone ?? null);
+      const phh = np ? hmac(np) : null;
+      const dec = decideMatch(nn, eh, phh, ix);
+      if (dec.status !== r.match_status || dec.personId !== r.person_id) changed++;
+      upd.run(dec.personId, dec.status, dec.candidates ? JSON.stringify(dec.candidates) : null, orgId, r.donor_key);
+    }
+  });
+  run();
+  const c = countDonorsByStatus(orgId);
+  const matched = c.matched + c.manual;
+  const total = matched + c.ambiguous + c.unmatched;
+  db.prepare(`UPDATE pushpay_import SET matched = ?, ambiguous = ?, unmatched = ? WHERE org_id = ?`)
+    .run(matched, c.ambiguous, c.unmatched, orgId);
+  return { total, matched, ambiguous: c.ambiguous, unmatched: c.unmatched, changed };
 }
 
 export interface PushpayImportMeta { fileName: string | null; total: number; matched: number; ambiguous: number; unmatched: number; importedAt: string | null }
