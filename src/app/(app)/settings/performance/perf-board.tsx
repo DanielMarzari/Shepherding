@@ -39,7 +39,7 @@ export function PerfBoard({
             {STATUS_LABEL[g.status]}{" "}
             <span className="text-subtle tnum">({g.items.length})</span>
           </h2>
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
             {g.items.map((s) => (
               <Card key={s.key} s={s} isAdmin={isAdmin} />
             ))}

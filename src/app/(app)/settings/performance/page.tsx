@@ -12,7 +12,7 @@ export default async function PerformancePage() {
 
   return (
     <AppShell active="Performance" breadcrumb="Settings & Integration › Performance">
-      <div className="px-5 md:px-7 py-7 space-y-6 max-w-4xl">
+      <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Performance</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
@@ -39,7 +39,7 @@ export default async function PerformancePage() {
 
         <Card className="p-4">
           <h2 className="text-sm font-semibold mb-1.5">The root cause</h2>
-          <p className="text-xs text-muted leading-relaxed">
+          <p className="text-xs text-muted leading-relaxed max-w-3xl">
             Builder pages run each block&apos;s query one after another on a single
             database connection, so a page&apos;s load time is the{" "}
             <span className="text-fg">sum</span> of every block. The big wins are
