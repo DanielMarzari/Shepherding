@@ -148,13 +148,14 @@ function DonorCard({ donor }: { donor: DonorRow }) {
                             same phone
                           </span>
                         )}
-                        <Link
-                          href={`/people/${c.pcoId}`}
+                        <a
+                          href={`https://people.planningcenteronline.com/people/${c.pcoId}`}
                           target="_blank"
+                          rel="noopener noreferrer"
                           className="ml-auto text-[11px] text-subtle hover:text-accent"
                         >
-                          view →
-                        </Link>
+                          view in PCO ↗
+                        </a>
                       </div>
                     ))}
                   </div>
@@ -197,11 +198,14 @@ function PersonPicker({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reqRef = useRef(0);
 
-  // Debounced search runs from the change handler (not an effect) so we never
-  // setState synchronously during render/commit.
+  // Debounced search: each keystroke cancels the pending timer and any
+  // in-flight request (via reqRef), so we only actually search ~350ms after you
+  // stop typing — not on every keystroke. Runs from the change handler (not an
+  // effect) so we never setState synchronously during render/commit.
   function onQueryChange(next: string) {
     setQuery(next);
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    reqRef.current++; // invalidate any in-flight response from prior keystrokes
     if (next.trim().length < 2) {
       setHits([]);
       setLoading(false);
@@ -214,7 +218,7 @@ function PersonPicker({
       if (id !== reqRef.current) return;
       setHits(res.hits);
       setLoading(false);
-    }, 180);
+    }, 350);
   }
 
   return (
