@@ -6,6 +6,7 @@ import {
   getCommunityLaneStats,
   listCommunityPeople,
 } from "@/lib/community-lane";
+import { getGiveLaneStats, listGivingPeople } from "@/lib/give-lane";
 import {
   LANE_STATS,
   type LaneKey,
@@ -94,6 +95,13 @@ export default async function LanePage({
         trackingMonths={settings.activityTrackingMonths}
       />
     );
+  }
+
+  if (laneKey === "give") {
+    const session = await requireOrg();
+    const stats = getGiveLaneStats(session.orgId);
+    const people = listGivingPeople(session.orgId, 50);
+    return <GivingLane laneStats={laneStats} stats={stats} people={people} />;
   }
 
   const people = peopleInLane(laneKey);
@@ -675,6 +683,217 @@ function ServingLane({
             </div>
           )}
         </Card>
+      </div>
+    </AppShell>
+  );
+}
+
+// ─── Giving lane (real data from imported PushPay donors) ─────────────────
+
+function GivingLane({
+  laneStats,
+  stats,
+  people,
+}: {
+  laneStats: (typeof LANE_STATS)[number];
+  stats: ReturnType<typeof getGiveLaneStats>;
+  people: Awaited<ReturnType<typeof listGivingPeople>>;
+}) {
+  return (
+    <AppShell active="lane:give" breadcrumb={`Lanes › ${laneStats.label}`}>
+      <div className="px-5 md:px-7 py-7 space-y-6">
+        <div>
+          <BackLink fallback="/lanes">← Back</BackLink>
+          <div className="flex items-center gap-3 mt-3">
+            <span
+              className="w-2.5 h-2.5 rounded-full"
+              style={{ background: "var(--lane-give)" }}
+            />
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {laneStats.label}
+            </h1>
+            <Pill tone="muted">{stats.givers.toLocaleString()} givers</Pill>
+            <span className="text-xs text-muted">
+              real data from <code className="font-mono">pushpay_donors</code>
+            </span>
+          </div>
+          <p className="text-muted text-sm mt-2 max-w-2xl">
+            Anyone matched to an imported PushPay gift counts as Giving — a next
+            step they&apos;ve <span className="text-fg">completed</span>. Import
+            or refresh the data on{" "}
+            <Link href="/pushpay" className="text-accent hover:underline">
+              PushPay
+            </Link>
+            . Donors we couldn&apos;t confidently place are reconciled on{" "}
+            <Link href="/audit/pushpay" className="text-accent hover:underline">
+              PushPay connections
+            </Link>
+            .
+          </p>
+        </div>
+
+        {stats.givers === 0 ? (
+          <Card className="p-8 text-center">
+            <p className="text-sm text-muted">
+              No giving imported yet.{" "}
+              <Link href="/pushpay" className="text-accent hover:underline">
+                Drop the PushPay “All Donors” export →
+              </Link>
+            </p>
+          </Card>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Card className="p-4">
+                <div className="text-xs text-muted mb-1.5">Givers</div>
+                <div className="tnum text-2xl font-semibold">
+                  {stats.givers.toLocaleString()}
+                </div>
+                <div className="text-xs text-muted mt-1">
+                  people who have given
+                </div>
+              </Card>
+              <Card className="p-4">
+                <div className="text-xs text-muted mb-1.5">Recurring</div>
+                <div className="tnum text-2xl font-semibold">
+                  {stats.recurring.toLocaleString()}
+                </div>
+                <div className="text-xs text-muted mt-1">regular / scheduled</div>
+              </Card>
+              <Card className="p-4">
+                <div className="text-xs text-muted mb-1.5">Lapsed</div>
+                <div className="tnum text-2xl font-semibold text-warn-soft-fg">
+                  {stats.lapsed.toLocaleString()}
+                </div>
+                <div className="text-xs text-muted mt-1">stopped giving</div>
+              </Card>
+              <Card
+                className={`p-4 ${stats.unlinked > 0 ? "border-accent" : ""}`}
+              >
+                <div className="text-xs text-muted mb-1.5">Unlinked donors</div>
+                <div className="tnum text-2xl font-semibold">
+                  {stats.unlinked.toLocaleString()}
+                </div>
+                {stats.unlinked > 0 ? (
+                  <Link
+                    href="/audit/pushpay"
+                    className="text-xs text-accent hover:underline mt-1 inline-block"
+                  >
+                    reconcile →
+                  </Link>
+                ) : (
+                  <div className="text-xs text-muted mt-1">all matched</div>
+                )}
+              </Card>
+            </div>
+
+            <Card>
+              <CardHeader
+                title="People in Giving"
+                right={
+                  <span className="text-xs text-muted">
+                    top {people.length} by most recent gift
+                  </span>
+                }
+              />
+              {people.length === 0 ? (
+                <div className="px-5 py-12 text-center text-sm text-muted">
+                  Every gift is still awaiting reconciliation — assign donors on{" "}
+                  <Link
+                    href="/audit/pushpay"
+                    className="text-accent hover:underline"
+                  >
+                    PushPay connections
+                  </Link>
+                  .
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm table-fixed min-w-[820px]">
+                    <colgroup>
+                      <col className="w-[30%]" />
+                      <col className="w-[16%]" />
+                      <col className="w-[16%]" />
+                      <col className="w-[16%]" />
+                      <col className="w-[14%]" />
+                      <col className="w-[12%]" />
+                    </colgroup>
+                    <thead className="text-xs text-muted">
+                      <tr className="border-b border-border-soft">
+                        <th className="text-left font-medium px-5 py-2">
+                          Person
+                        </th>
+                        <th className="text-left font-medium px-5 py-2">
+                          Membership
+                        </th>
+                        <th className="text-left font-medium px-5 py-2">
+                          Donor stage
+                        </th>
+                        <th className="text-left font-medium px-5 py-2">
+                          Last gift fund
+                        </th>
+                        <th className="text-left font-medium px-5 py-2">
+                          Channel
+                        </th>
+                        <th className="text-right font-medium px-5 py-2">
+                          Last gift
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {people.map((p) => (
+                        <tr
+                          key={p.pcoId}
+                          className="border-b border-border-softer hover:bg-bg-elev-2/60"
+                        >
+                          <td className="px-5 py-2.5">
+                            <Link
+                              href={`/people/${p.pcoId}`}
+                              className="flex items-center gap-3 group"
+                            >
+                              <Avatar initials={p.initials} size="sm" />
+                              <div className="min-w-0">
+                                <div className="font-medium truncate group-hover:text-accent">
+                                  {p.fullName}
+                                </div>
+                                <div className="text-xs text-muted">
+                                  PCO #{p.pcoId}
+                                </div>
+                              </div>
+                            </Link>
+                          </td>
+                          <td className="px-5 py-2.5 text-muted truncate">
+                            {p.membershipType ?? (
+                              <span className="text-subtle">—</span>
+                            )}
+                          </td>
+                          <td className="px-5 py-2.5">
+                            {p.stage ? (
+                              <span className="text-[11px] px-1.5 py-0.5 rounded bg-bg-elev-2 text-muted">
+                                {p.stage}
+                              </span>
+                            ) : (
+                              <span className="text-subtle">—</span>
+                            )}
+                          </td>
+                          <td className="px-5 py-2.5 text-muted truncate">
+                            {p.fund ?? <span className="text-subtle">—</span>}
+                          </td>
+                          <td className="px-5 py-2.5 text-muted truncate">
+                            {p.channel ?? <span className="text-subtle">—</span>}
+                          </td>
+                          <td className="px-5 py-2.5 text-right tnum text-muted">
+                            {p.lastGiftDate ?? "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          </>
+        )}
       </div>
     </AppShell>
   );

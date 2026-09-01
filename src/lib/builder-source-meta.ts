@@ -43,6 +43,18 @@ export const SOURCE_META: SourceMeta[] = [
     kinds: ["table"],
   },
   {
+    id: "giving_directory",
+    label: "Giving directory",
+    description: "Matched PushPay givers, one row per person (latest gift): Name, Membership, Donor stage, Last gift fund, Channel, Last gift. Decrypted names.",
+    kinds: ["table"],
+  },
+  {
+    id: "giving_lapsed",
+    label: "Lapsed givers",
+    description: "Givers whose PushPay donor stage reads as lapsed — a reconnect list: Name, Membership, Last gift fund, Last gift. Decrypted names.",
+    kinds: ["table"],
+  },
+  {
     id: "shepherds_directory",
     label: "Shepherds directory",
     description: "Every group/team leader: Shepherd, Status (needs mapping / lead pastor / overseen), Groups led, Teams led, Overseen by. Groups/Teams/Overseen are newline-joined name lists — mark them as chip columns. Decrypted names.",

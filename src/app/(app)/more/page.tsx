@@ -46,6 +46,12 @@ const SECTIONS: MoreSection[] = [
         description:
           "Records whose name looks wrong — empty, punctuation-only, digits, single-letter, or repeated characters. Catches placeholder rows and test accounts. System-use accounts are ignored.",
       },
+      {
+        href: "/audit/pushpay",
+        title: "PushPay connections",
+        description:
+          "Reconcile imported PushPay donors we couldn't confidently match to a person — assign the ambiguous ones (same name, or shared household email) and the unmatched ones to the right PCO record.",
+      },
     ],
   },
   {

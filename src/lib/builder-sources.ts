@@ -11,6 +11,7 @@ import { TARGET_KIND_LABELS } from "./assignments-types";
 import { getListByName } from "./lists-read";
 import { getShepherdTeamBreakdown } from "./shepherd-team-read";
 import { type AuditFlag, auditMembershipType, findNameIssuesAcrossOrg, listDuplicatePairs } from "./audit-read";
+import { listGivingPeople } from "./give-lane";
 import { buildRelationshipGraph } from "./graph-read";
 import { getIntakeGraph } from "./intake-graph";
 import { getRetention } from "./retention-read";
@@ -367,6 +368,25 @@ const SOURCES: Record<string, SourceFn> = {
       )
       .all(orgId) as Array<{ enc: string | null; mt: string | null; cls: string }>;
     return R(["Name", "Membership", "Engagement"], rows.map((r) => [nameOf(r.enc), r.mt ?? "—", r.cls]));
+  },
+
+  // Givers, one row per person (latest gift wins), decrypted names. For the
+  // giving stats page + any custom donor list.
+  giving_directory: (orgId) => {
+    const rows = listGivingPeople(orgId, 1000);
+    return R(
+      ["Name", "Membership", "Donor stage", "Last gift fund", "Channel", "Last gift"],
+      rows.map((r) => [r.fullName, r.membershipType ?? "—", r.stage ?? "—", r.fund ?? "—", r.channel ?? "—", r.lastGiftDate ?? "—"]),
+    );
+  },
+
+  // Lapsed givers to reconnect — same list narrowed to a lapsed donor stage.
+  giving_lapsed: (orgId) => {
+    const rows = listGivingPeople(orgId, 1000).filter((r) => (r.stage ?? "").toLowerCase().includes("lapsed"));
+    return R(
+      ["Name", "Membership", "Last gift fund", "Last gift"],
+      rows.map((r) => [r.fullName, r.membershipType ?? "—", r.fund ?? "—", r.lastGiftDate ?? "—"]),
+    );
   },
 };
 

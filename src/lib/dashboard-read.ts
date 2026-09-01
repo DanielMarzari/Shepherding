@@ -3,6 +3,7 @@ import { getDb } from "./db";
 import { getOrgSnapshot } from "./dashboard-refresh";
 import { decryptJson } from "./encryption";
 import { getSyncSettings } from "./pco";
+import { countGivers } from "./pushpay-import";
 
 const MS_PER_DAY = 86_400_000;
 const MS_PER_MONTH = 30 * MS_PER_DAY;
@@ -480,18 +481,25 @@ export function getLaneStats(
   const comm = snap?.laneComm ?? 0;
   const serv = snap?.laneServ ?? 0;
   const none = snap?.laneNone ?? 0;
+  // Give = distinct people matched to an imported PushPay gift. Filled in
+  // as soon as the "All Donors" export is dropped on /pushpay; before that
+  // the lane stays greyed-out with a pointer to the importer.
+  const give = countGivers(orgId);
 
   return [
     { key: "wors", label: "Worship", count: wors },
     { key: "comm", label: "Community", count: comm },
     { key: "serv", label: "Serve", count: serv },
-    {
-      key: "give",
-      label: "Giving",
-      count: null,
-      unavailable: true,
-      reason: "PCO Giving isn't synced yet — once it is, this lane fills in.",
-    },
+    give > 0
+      ? { key: "give", label: "Giving", count: give }
+      : {
+          key: "give",
+          label: "Giving",
+          count: null,
+          unavailable: true,
+          reason:
+            "No giving imported yet — drop the PushPay “All Donors” export on the PushPay page.",
+        },
     {
       key: "outr",
       label: "Outreach",

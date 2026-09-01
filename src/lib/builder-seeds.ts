@@ -969,8 +969,92 @@ const pipelineSeed: SeedPage = {
   ],
 };
 
+// ── Giving (imported PushPay donors) ─────────────────────────────────
+// Aggregates run as plain read-only SQL against pushpay_donors (joined to
+// pco_people / person_geo). Name-bearing tables use the decrypt-capable
+// giving_directory / giving_lapsed sources, since builder SQL can't read
+// encrypted PII. Donor stage buckets are matched loosely (LIKE) because the
+// export's wording varies (Recurring / Regular Giver / Lapsed Donor / …).
+const GIVERS = `SELECT COUNT(DISTINCT person_id) FROM pushpay_donors WHERE org_id=:orgId AND person_id IS NOT NULL`;
+const givingSeed: SeedPage = {
+  slug: "giving",
+  title: "Giving statistics",
+  description:
+    "Giving from the imported PushPay donor export — who gives, membership vs. giving coverage, donor stages, funds, channels, where givers live, and recency. Import or refresh on the PushPay page.",
+  revision: 1,
+  moreSection: "Reports & insights",
+  blocks: [
+    { kind: "stat", config: { title: "Givers", span: 2, sub: "people who have given", sql: GIVERS } },
+    { kind: "stat", config: { title: "Recurring", span: 2, color: "success", sub: "regular / scheduled",
+      sql: `${GIVERS} AND (lower(donor_stage) LIKE '%recurring%' OR lower(donor_stage) LIKE '%regular%')` } },
+    { kind: "stat", config: { title: "Lapsed", span: 2, color: "warning", sub: "stopped giving",
+      sql: `${GIVERS} AND lower(donor_stage) LIKE '%lapsed%'` } },
+    { kind: "stat", config: { title: "First-time", span: 2, color: "highlight", sub: "new donors",
+      sql: `${GIVERS} AND (lower(donor_stage) LIKE '%first%' OR lower(donor_stage) LIKE '%new%')` } },
+    { kind: "stat", config: { title: "Donor records", span: 2, color: "low", sub: "rows in the export",
+      sql: `SELECT COUNT(*) FROM pushpay_donors WHERE org_id=:orgId` } },
+    { kind: "stat", config: { title: "Unlinked", span: 2, color: "low", sub: "not tied to a person yet",
+      sql: `SELECT COUNT(*) FROM pushpay_donors WHERE org_id=:orgId AND person_id IS NULL` } },
+
+    { kind: "divider", config: { title: "Membership vs. giving", span: 12 } },
+    { kind: "chart", config: { title: "Givers by membership", chartType: "bar", colorByCategory: true, span: 6,
+      sql: `SELECT COALESCE(p.membership_type,'(none)') AS "Membership", COUNT(DISTINCT d.person_id) AS "Givers"
+              FROM pushpay_donors d JOIN pco_people p ON p.org_id=d.org_id AND p.pco_id=d.person_id
+             WHERE d.org_id=:orgId AND d.person_id IS NOT NULL
+             GROUP BY 1 ORDER BY 2 DESC` } },
+    { kind: "table", config: { title: "Giving coverage by membership", span: 6, density: "condensed",
+      sub: "what share of each membership type has given",
+      sql: `WITH givers AS (SELECT DISTINCT person_id FROM pushpay_donors WHERE org_id=:orgId AND person_id IS NOT NULL)
+            SELECT COALESCE(p.membership_type,'(none)') AS "Membership",
+                   COUNT(*) AS "People",
+                   COUNT(g.person_id) AS "Givers",
+                   round(CAST(COUNT(g.person_id) AS REAL)/COUNT(*)*100) AS "Coverage %"
+              FROM pco_people p
+              LEFT JOIN givers g ON g.person_id=p.pco_id
+             WHERE p.org_id=:orgId AND p.is_minor=0
+               AND (p.membership_type IS NULL OR lower(p.membership_type) NOT LIKE '%system use%')
+             GROUP BY 1 ORDER BY COUNT(g.person_id) DESC` } },
+
+    { kind: "divider", config: { title: "Giving mix", span: 12 } },
+    { kind: "chart", config: { title: "Donor stage", chartType: "bar", colorByCategory: true, span: 4,
+      sql: `SELECT COALESCE(donor_stage,'(unknown)') AS "Stage", COUNT(*) AS "Donors"
+              FROM pushpay_donors WHERE org_id=:orgId GROUP BY 1 ORDER BY 2 DESC` } },
+    { kind: "chart", config: { title: "Last gift fund", chartType: "bar", colorByCategory: true, span: 4,
+      sql: `SELECT COALESCE(last_gift_fund,'(none)') AS "Fund", COUNT(*) AS "Gifts"
+              FROM pushpay_donors WHERE org_id=:orgId GROUP BY 1 ORDER BY 2 DESC LIMIT 12` } },
+    { kind: "chart", config: { title: "Giving channel", chartType: "donut", span: 4,
+      sql: `SELECT COALESCE(giving_channel,'(unknown)') AS "Channel", COUNT(*) AS "Donors"
+              FROM pushpay_donors WHERE org_id=:orgId GROUP BY 1 ORDER BY 2 DESC` } },
+
+    { kind: "divider", config: { title: "Where givers live", span: 12 } },
+    { kind: "stat", config: { title: "Givers mapped", span: 4, sub: "geocoded to a home",
+      sql: `SELECT COUNT(DISTINCT d.person_id)
+              FROM pushpay_donors d JOIN person_geo g ON g.org_id=d.org_id AND g.person_id=d.person_id
+             WHERE d.org_id=:orgId AND d.person_id IS NOT NULL AND g.status='ok' AND g.lat IS NOT NULL` } },
+    { kind: "map", config: { title: "Givers", span: 8, height: "double",
+      sql: `SELECT g.lat, g.lng, MAX(COALESCE(d.donor_stage,'Donor')) AS "Stage"
+              FROM pushpay_donors d JOIN person_geo g ON g.org_id=d.org_id AND g.person_id=d.person_id
+             WHERE d.org_id=:orgId AND d.person_id IS NOT NULL AND g.status='ok' AND g.lat IS NOT NULL
+             GROUP BY d.person_id, g.lat, g.lng LIMIT 4000` } },
+
+    { kind: "divider", config: { title: "Recency", span: 12 } },
+    { kind: "chart", config: { title: "Most recent gift by month", chartType: "line", span: 12,
+      sub: "the export carries each donor's last gift only — this is when people most recently gave",
+      sql: `SELECT substr(last_gift_date,1,7) AS "Month", COUNT(*) AS "Donors"
+              FROM pushpay_donors WHERE org_id=:orgId AND last_gift_date IS NOT NULL AND length(last_gift_date)>=7
+             GROUP BY 1 ORDER BY 1` } },
+
+    { kind: "divider", config: { title: "Donors", span: 12 } },
+    { kind: "table", config: { title: "Giving directory", span: 12, density: "normal", sortable: true,
+      source: "giving_directory", sub: "one row per giver, most recent gift" } },
+    { kind: "table", config: { title: "Lapsed givers to reconnect", span: 12, density: "condensed", sortable: true,
+      source: "giving_lapsed", sub: "givers whose donor stage reads as lapsed" } },
+  ],
+};
+
 /** Every page rebuilt from builder widgets, keyed by slug. */
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
+  [givingSeed.slug]: givingSeed,
   [checkinsSeed.slug]: checkinsSeed,
   [demographicsSeed.slug]: demographicsSeed,
   [groupsSeed.slug]: groupsSeed,

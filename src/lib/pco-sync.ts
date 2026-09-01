@@ -2,6 +2,7 @@ import "server-only";
 import { refreshDashboardSnapshots } from "./dashboard-refresh";
 import { decryptJson, encryptJson, hmac } from "./encryption";
 import { getDb } from "./db";
+import { normPhone } from "./phone";
 import {
   getAdultCheckinEvents,
   getDecryptedCreds,
@@ -348,7 +349,7 @@ async function syncPeople(
   cutoff: string | null,
 ): Promise<{ fetched: number; upserted: number; maxUpdatedAt: string | null }> {
   const params = new URLSearchParams({
-    include: "addresses,marital_status,emails",
+    include: "addresses,marital_status,emails,phone_numbers",
     per_page: "100",
     order: "updated_at",
   });
@@ -365,10 +366,12 @@ async function syncPeople(
     const addressById = new Map<string, PCOResource>();
     const maritalById = new Map<string, PCOResource>();
     const emailById = new Map<string, PCOResource>();
+    const phoneById = new Map<string, PCOResource>();
     for (const inc of included) {
       if (inc.type === "Address") addressById.set(inc.id, inc);
       if (inc.type === "MaritalStatus") maritalById.set(inc.id, inc);
       if (inc.type === "Email") emailById.set(inc.id, inc);
+      if (inc.type === "PhoneNumber") phoneById.set(inc.id, inc);
     }
 
     for (const p of records) {
@@ -450,6 +453,26 @@ async function syncPeople(
         }
       }
       replacePersonEmails(orgId, p.id, [...hashes]);
+
+      // Phone-hash lookup — same one-way-token approach as emails, so
+      // integrations (PushPay giving) can match a person by phone without
+      // us storing a plaintext number. Normalized to US 10-digit first so
+      // both sides hash identically.
+      const phoneRel = rels.phone_numbers?.data;
+      const phoneIds: string[] = Array.isArray(phoneRel)
+        ? phoneRel.map((r) => r.id)
+        : phoneRel
+          ? [phoneRel.id]
+          : [];
+      const phoneHashes = new Set<string>();
+      for (const id of phoneIds) {
+        const ph = phoneById.get(id);
+        const num = (ph?.attributes as Record<string, unknown> | undefined)
+          ?.number;
+        const norm = normPhone(typeof num === "string" ? num : null);
+        if (norm) phoneHashes.add(hmac(norm));
+      }
+      replacePersonPhones(orgId, p.id, [...phoneHashes]);
     }
   }
 
@@ -470,6 +493,25 @@ function replacePersonEmails(
   if (hashes.length === 0) return;
   const stmt = db.prepare(
     `INSERT OR IGNORE INTO pco_person_emails (org_id, person_id, email_hash)
+     VALUES (?, ?, ?)`,
+  );
+  for (const h of hashes) stmt.run(orgId, personId, h);
+}
+
+/** Replace the stored phone hashes for one person (delete+insert, so a
+ *  removed number drops out of the lookup). Mirrors replacePersonEmails. */
+function replacePersonPhones(
+  orgId: number,
+  personId: string,
+  hashes: string[],
+): void {
+  const db = getDb();
+  db.prepare(
+    `DELETE FROM pco_person_phones WHERE org_id = ? AND person_id = ?`,
+  ).run(orgId, personId);
+  if (hashes.length === 0) return;
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO pco_person_phones (org_id, person_id, phone_hash)
      VALUES (?, ?, ?)`,
   );
   for (const h of hashes) stmt.run(orgId, personId, h);
