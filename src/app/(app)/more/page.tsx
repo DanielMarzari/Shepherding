@@ -1,8 +1,10 @@
-import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import { Card } from "@/components/ui";
+import { GalleryHub, type GallerySection } from "@/components/GalleryHub";
 import { requireOrg } from "@/lib/auth";
+import { getPinnedKeys } from "@/lib/nav-config-db";
 import { listMorePages } from "@/lib/builder";
+
+const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 interface MoreLink {
   href: string;
@@ -178,51 +180,26 @@ export default async function MorePage() {
   });
   for (const [heading, links] of groups) sections.push({ title: heading, links });
 
+  const gallerySections: GallerySection[] = sections.map((s) => ({
+    id: slugify(s.title),
+    label: s.title,
+    blurb: s.blurb,
+    links: s.links,
+  }));
+  const pinned = getPinnedKeys(session.orgId, session.user.id);
+
   return (
     <AppShell active="See more" breadcrumb="See more">
-      <div className="px-5 md:px-7 py-7 space-y-8">
+      <div className="px-5 md:px-7 py-7 space-y-5 max-w-5xl">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">See more</h1>
           <p className="text-muted text-sm mt-1">
-            Utility pages that don&apos;t fit cleanly into Dashboard, PCO data,
-            or the lane pathway.
+            Every audit, report, map, and tool that doesn&apos;t live in the main
+            nav. Pick a category, search across everything, or star the ones you
+            use most.
           </p>
         </div>
-        {sections.map((section) => (
-          <section key={section.title} className="space-y-3">
-            <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-muted">
-                {section.title}
-              </h2>
-              {section.blurb && (
-                <p className="text-xs text-subtle mt-1">{section.blurb}</p>
-              )}
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {section.links.map((l) => (
-                <Card key={l.href} className="p-5">
-                  {l.external ? (
-                    <a
-                      href={l.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-semibold hover:text-accent"
-                    >
-                      {l.title} ↗
-                    </a>
-                  ) : (
-                    <Link href={l.href} className="font-semibold hover:text-accent">
-                      {l.title} →
-                    </Link>
-                  )}
-                  <p className="text-xs text-muted leading-relaxed mt-2">
-                    {l.description}
-                  </p>
-                </Card>
-              ))}
-            </div>
-          </section>
-        ))}
+        <GalleryHub sections={gallerySections} pinned={pinned} />
       </div>
     </AppShell>
   );

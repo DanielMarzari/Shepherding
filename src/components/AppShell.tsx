@@ -2,93 +2,18 @@ import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { getSession, listOrgs } from "@/lib/auth";
-import { listNavPages } from "@/lib/builder";
+import { resolveNavConfig } from "@/lib/nav-config-db";
+import {
+  ACTIVE_TO_KEY,
+  DEFAULT_NAV_CONFIG,
+  PAGE_REGISTRY,
+} from "@/lib/nav-registry";
 import { logoutAction } from "@/app/orgs/actions";
-import { CollapsibleNavGroup } from "./CollapsibleNavGroup";
+import { SidebarNav } from "./SidebarNav";
 import { SearchBar } from "./SearchBar";
 
-// Exported nav lists so the AppShellSkeleton (used by per-route
-// loading.tsx files) can paint exactly the same sidebar without
-// awaiting any DB work.
-export const SHELL_NAV = {
-  primary: [
-    { href: "/", label: "Home" },
-    { href: "/care-queue", label: "Care queue" },
-  ],
-  leadership: [
-    { href: "/shepherd-team", label: "Shepherd team" },
-    { href: "/shepherds", label: "Shepherds" },
-  ],
-  pcoData: [
-    { href: "/people", label: "People" },
-    { href: "/groups", label: "Groups" },
-    { href: "/teams", label: "Teams" },
-    { href: "/checkins", label: "Check-ins" },
-  ],
-  nextSteps: [
-    { href: "/lanes", label: "Activity overview" },
-    { href: "/lanes/list", label: "Lanes" },
-  ],
-  credentials: [
-    { href: "/pco", label: "PCO" },
-    { href: "/pushpay", label: "PushPay" },
-    { href: "/constant-contact", label: "Constant Contact" },
-    { href: "/subsplash", label: "Subsplash" },
-  ],
-  dataMappings: [
-    { href: "/shepherd-map", label: "Shepherd map" },
-    { href: "/care-map", label: "Care map" },
-  ],
-  settings: [
-    { href: "/pco/filters", label: "Filters" },
-    { href: "/metrics", label: "Metrics" },
-    { href: "/settings/appearance", label: "Appearance" },
-  ],
-  other: [{ href: "/more", label: "See more" }],
-};
-
-const NAV_ITEMS = [
-  { href: "/", label: "Home" },
-  { href: "/care-queue", label: "Care queue", badge: 17 },
-];
-
-const LEADERSHIP_NAV_ITEMS = [
-  { href: "/shepherd-team", label: "Shepherd team" },
-  { href: "/shepherds", label: "Shepherds" },
-];
-
-const PCO_DATA_NAV_ITEMS = [
-  { href: "/people", label: "People" },
-  { href: "/groups", label: "Groups" },
-  { href: "/teams", label: "Teams" },
-  { href: "/checkins", label: "Check-ins" },
-];
-
-const OTHER_NAV_ITEMS = [
-  { href: "/more", label: "See more" },
-];
-
-const CREDENTIALS_NAV_ITEMS = [
-  { href: "/pco", label: "PCO" },
-  { href: "/pushpay", label: "PushPay" },
-  { href: "/constant-contact", label: "Constant Contact" },
-  { href: "/subsplash", label: "Subsplash" },
-];
-
-const DATA_MAPPING_NAV_ITEMS = [
-  { href: "/shepherd-map", label: "Shepherd map" },
-  { href: "/care-map", label: "Care map" },
-];
-
-const SETTINGS_NAV_ITEMS = [
-  { href: "/pco/filters", label: "Filters" },
-  { href: "/metrics", label: "Metrics" },
-];
-
-const NEXT_STEPS_NAV_ITEMS = [
-  { href: "/lanes", label: "Activity overview" },
-  { href: "/lanes/list", label: "Lanes" },
-];
+const SIDEBAR =
+  "w-56 shrink-0 border-r border-border-soft px-4 py-5 text-sm hidden md:flex md:flex-col sticky top-0 h-screen overflow-y-auto";
 
 export async function AppShell({
   children,
@@ -103,26 +28,19 @@ export async function AppShell({
   const myOrgs = session ? listOrgs(session.user.id) : [];
   const otherOrgsExist = myOrgs.length > 1;
 
-  // Builder pages the admin has pinned to a sidebar section.
-  const navPages = session?.orgId ? listNavPages(session.orgId) : [];
-  const nb = (section: string): Array<{ href: string; label: string; badge?: number }> =>
-    navPages.filter((p) => p.navSection === section).map((p) => ({ href: `/builder/${p.slug}`, label: p.title }));
+  // Per-org configurable sidebar (falls back to the coded default). Highlight
+  // resolves by page key via the registry, so renaming a heading/label in the
+  // nav editor never breaks which row lights up.
+  const { config, activeToKey } = session?.orgId
+    ? resolveNavConfig(session.orgId)
+    : { config: DEFAULT_NAV_CONFIG, activeToKey: ACTIVE_TO_KEY };
+  const activeKey = active ? activeToKey[active] ?? null : null;
 
   return (
     <div className="flex min-h-screen bg-bg text-fg">
-      {/* Sticky sidebar — pinned to the viewport height with its own
-          scroll, so the main content can be arbitrarily tall without
-          stretching the nav. */}
-      <aside className="w-56 shrink-0 border-r border-border-soft px-4 py-5 text-sm hidden md:flex md:flex-col sticky top-0 h-screen overflow-y-auto">
+      <aside className={SIDEBAR}>
         <Link href="/" className="flex items-center gap-2 mb-3 group">
-          <Image
-            src="/icon.svg"
-            alt="Shepherding"
-            width={28}
-            height={28}
-            unoptimized
-            className="shrink-0"
-          />
+          <Image src="/icon.svg" alt="Shepherding" width={28} height={28} unoptimized className="shrink-0" />
           <span className="font-semibold tracking-tight">Shepherding</span>
         </Link>
         {session?.orgName && (
@@ -131,144 +49,13 @@ export async function AppShell({
             <div>
               {session.role === "admin" ? "Admin" : "Member"}
               {otherOrgsExist && (
-                <Link href="/orgs" className="text-accent ml-2 hover:underline">
-                  switch
-                </Link>
+                <Link href="/orgs" className="text-accent ml-2 hover:underline">switch</Link>
               )}
             </div>
           </div>
         )}
-        <div className="text-xs text-muted uppercase tracking-wider mb-2 px-2">Dashboard</div>
-        <ul className="space-y-0.5">
-          {[...NAV_ITEMS, ...nb("dashboard")].map((item) => {
-            const isActive = item.label === active;
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
-                    isActive
-                      ? "bg-bg-elev-2 text-fg font-medium"
-                      : "text-fg hover:bg-bg-elev-2"
-                  }`}
-                >
-                  <span>{item.label}</span>
-                  {item.badge ? (
-                    <span className="text-xs text-accent tnum">{item.badge}</span>
-                  ) : null}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
 
-        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">
-          Leadership
-        </div>
-        <ul className="space-y-0.5">
-          {[...LEADERSHIP_NAV_ITEMS, ...nb("leadership")].map((item) => {
-            const isActive = item.label === active;
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
-                    isActive
-                      ? "bg-bg-elev-2 text-fg font-medium"
-                      : "text-fg hover:bg-bg-elev-2"
-                  }`}
-                >
-                  <span>{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-
-        <CollapsibleNavGroup
-          label="PCO data"
-          items={[...PCO_DATA_NAV_ITEMS, ...nb("pco")]}
-          active={active}
-        />
-
-        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">
-          Next Steps Pathway
-        </div>
-        <ul className="space-y-0.5">
-          {[...NEXT_STEPS_NAV_ITEMS, ...nb("next-steps")].map((item) => {
-            const isActive =
-              item.label === active ||
-              (item.label === "Activity overview" && active === "Activity / Lanes");
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
-                    isActive
-                      ? "bg-bg-elev-2 text-fg font-medium"
-                      : "text-fg hover:bg-bg-elev-2"
-                  }`}
-                >
-                  <span>{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-
-        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Other</div>
-        <ul className="space-y-0.5">
-          {[...OTHER_NAV_ITEMS, ...nb("more")].map((item) => {
-            const isActive = item.label === active;
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
-                    isActive
-                      ? "bg-bg-elev-2 text-fg font-medium"
-                      : "text-fg hover:bg-bg-elev-2"
-                  }`}
-                >
-                  <span>{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-
-        <CollapsibleNavGroup
-          label="Credentials"
-          items={CREDENTIALS_NAV_ITEMS}
-          active={active}
-        />
-
-        <CollapsibleNavGroup
-          label="Data Mappings"
-          items={[...DATA_MAPPING_NAV_ITEMS, ...nb("mappings")]}
-          active={active}
-        />
-
-        <div className="text-xs text-muted uppercase tracking-wider mt-7 mb-2 px-2">Settings</div>
-        <ul className="space-y-0.5">
-          {[...SETTINGS_NAV_ITEMS, ...nb("settings")].map((item) => {
-            const isActive = item.label === active;
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={`px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
-                    isActive
-                      ? "bg-bg-elev-2 text-fg font-medium"
-                      : "text-fg hover:bg-bg-elev-2"
-                  }`}
-                >
-                  <span>{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+        <SidebarNav groups={config.groups} activeKey={activeKey} />
 
         <div className="mt-auto pt-4">
           {session && (
@@ -276,9 +63,7 @@ export async function AppShell({
               <div className="text-xs text-fg font-medium">{session.user.name}</div>
               <div className="text-xs text-muted truncate">{session.user.email}</div>
               <form action={logoutAction} className="mt-2">
-                <button type="submit" className="text-xs text-muted hover:text-fg">
-                  Sign out
-                </button>
+                <button type="submit" className="text-xs text-muted hover:text-fg">Sign out</button>
               </form>
             </div>
           )}
@@ -327,19 +112,9 @@ function initials(name: string) {
     .toUpperCase();
 }
 
-/** Static, DB-free version of AppShell for use inside loading.tsx
- *  files. Paints the sidebar with real nav links (so navigations
- *  feel instant — the user still sees where they can click) and a
- *  passthrough `<main>` area for the page-specific skeleton.
- *
- *  Differences from AppShell:
- *   - No `await getSession()` — paints the sidebar header as a static
- *     placeholder instead of org name + role.
- *   - No search bar or active-row highlighting — the loading state is
- *     transient enough that those details don't matter.
- *   - No collapsible groups — each nav group's links are always shown
- *     so the user can see options even if their last expansion state
- *     isn't reflected during the brief loading window. */
+/** Static, DB-free shell for loading.tsx files. Renders the DEFAULT nav config
+ *  (top-level groups + a single Settings & Integration entry), so the skeleton
+ *  matches the live sidebar's structure without any DB work. */
 export function AppShellSkeleton({
   children,
   active,
@@ -349,67 +124,52 @@ export function AppShellSkeleton({
   active?: string;
   breadcrumb?: string;
 }) {
+  const activeKey = active ? ACTIVE_TO_KEY[active] ?? null : null;
   return (
     <div className="flex min-h-screen bg-bg text-fg">
-      <aside className="w-56 shrink-0 border-r border-border-soft px-4 py-5 text-sm hidden md:flex md:flex-col sticky top-0 h-screen overflow-y-auto">
+      <aside className={SIDEBAR}>
         <Link href="/" className="flex items-center gap-2 mb-3">
-          <Image
-            src="/icon.svg"
-            alt="Shepherding"
-            width={28}
-            height={28}
-            unoptimized
-            className="shrink-0"
-          />
+          <Image src="/icon.svg" alt="Shepherding" width={28} height={28} unoptimized className="shrink-0" />
           <span className="font-semibold tracking-tight">Shepherding</span>
         </Link>
         <div className="px-2 mb-5 h-8 rounded bg-bg-elev-2/40" />
-        {(
-          [
-            { title: "Dashboard", items: SHELL_NAV.primary },
-            { title: "Leadership", items: SHELL_NAV.leadership },
-            { title: "PCO data", items: SHELL_NAV.pcoData },
-            { title: "Activity", items: SHELL_NAV.nextSteps },
-            // Order must match the real AppShell nav or items flicker
-            // while a page's loading skeleton is shown.
-            { title: "Other", items: SHELL_NAV.other },
-            { title: "Credentials", items: SHELL_NAV.credentials },
-            { title: "Data Mappings", items: SHELL_NAV.dataMappings },
-            { title: "Settings", items: SHELL_NAV.settings },
-          ] as const
-        ).map((group) => (
-          <div key={group.title} className="mb-4">
-            <div className="text-xs text-muted uppercase tracking-wider mb-2 px-2">
-              {group.title}
-            </div>
+        {DEFAULT_NAV_CONFIG.groups.map((group, i) => (
+          <div key={group.id} className={i === 0 ? "" : "mt-7"}>
+            <div className="text-xs text-muted uppercase tracking-wider mb-2 px-2">{group.label}</div>
             <ul className="space-y-0.5">
-              {group.items.map((item) => {
-                const isActive = item.label === active;
-                return (
-                  <li key={item.href}>
-                    <Link
-                      href={item.href}
-                      className={`px-2 py-1.5 rounded flex items-center transition-colors ${
-                        isActive
-                          ? "bg-bg-elev-2 text-fg font-medium"
-                          : "text-fg hover:bg-bg-elev-2"
-                      }`}
-                    >
-                      {item.label}
-                    </Link>
-                  </li>
-                );
-              })}
+              {group.mode === "drill" ? (
+                <li>
+                  <span className="px-2 py-1.5 rounded flex items-center justify-between text-fg">
+                    <span>Open</span>
+                    <span aria-hidden className="text-subtle">›</span>
+                  </span>
+                </li>
+              ) : (
+                group.items.map((it) => {
+                  if (it.kind !== "page") return null;
+                  const def = PAGE_REGISTRY[it.pageKey];
+                  if (!def) return null;
+                  const isActive = it.pageKey === activeKey;
+                  return (
+                    <li key={it.pageKey}>
+                      <Link
+                        href={def.href}
+                        className={`px-2 py-1.5 rounded flex items-center transition-colors ${
+                          isActive ? "bg-bg-elev-2 text-fg font-medium" : "text-fg hover:bg-bg-elev-2"
+                        }`}
+                      >
+                        {def.defaultLabel}
+                      </Link>
+                    </li>
+                  );
+                })
+              )}
             </ul>
           </div>
         ))}
       </aside>
       <main className="flex-1 min-w-0">
-        {breadcrumb && (
-          <div className="px-5 md:px-7 pt-5 text-xs text-muted">
-            {breadcrumb}
-          </div>
-        )}
+        {breadcrumb && <div className="px-5 md:px-7 pt-5 text-xs text-muted">{breadcrumb}</div>}
         {children}
       </main>
     </div>
