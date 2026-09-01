@@ -49,7 +49,10 @@ export function NavEditor({
     else assignedSlugs.add(it.slug);
   }
   const unassignedRegistry = Object.keys(PAGE_REGISTRY).filter((k) => !assignedPages.has(k));
-  const availableBuilder = builderPages.filter((p) => !assignedSlugs.has(p.slug));
+  // Exclude builder pages that are just the seeded twin of a registry page
+  // (slug === a registry key, e.g. "groups", "demographics") so they don't
+  // show twice — the registry entry is the canonical one.
+  const availableBuilder = builderPages.filter((p) => !assignedSlugs.has(p.slug) && !PAGE_REGISTRY[p.slug]);
 
   const mutate = (fn: (c: NavConfig) => void) => {
     const next = clone(cfg);

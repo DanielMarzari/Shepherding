@@ -44,6 +44,29 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   appearance: { href: "/settings/appearance", defaultLabel: "Appearance", activeAliases: ["Appearance"] },
   performance: { href: "/settings/performance", defaultLabel: "Performance", activeAliases: ["Performance"] },
   navigation: { href: "/settings/navigation", defaultLabel: "Navigation", activeAliases: ["Navigation"] },
+
+  // Utility / report / audit pages. Not in the default layout, but addable to
+  // any layer via the nav builder (they otherwise live on the See More hub).
+  "audit-membership": { href: "/audit", defaultLabel: "Membership audit", activeAliases: ["Membership audit"] },
+  "audit-duplicates": { href: "/audit/duplicates", defaultLabel: "Duplicate audit", activeAliases: ["Duplicate audit"] },
+  "audit-names": { href: "/audit/names", defaultLabel: "Name audit", activeAliases: ["Name audit"] },
+  "audit-pushpay": { href: "/audit/pushpay", defaultLabel: "PushPay connections", activeAliases: ["PushPay connections"] },
+  demographics: { href: "/demographics", defaultLabel: "Membership demographics", activeAliases: ["Membership demographics"] },
+  attendance: { href: "/attendance", defaultLabel: "Attendance", activeAliases: ["Attendance"] },
+  pipeline: { href: "/pipeline", defaultLabel: "Pipeline", activeAliases: ["Pipeline"] },
+  mir: { href: "/mir", defaultLabel: "Ministry Impact Reports", activeAliases: ["Ministry Impact Reports"] },
+  graph: { href: "/graph", defaultLabel: "Relationship graph", activeAliases: ["Relationship graph"] },
+  "intake-graph": { href: "/intake-graph", defaultLabel: "Who knows who", activeAliases: ["Who knows who"] },
+  retention: { href: "/retention", defaultLabel: "Retention", activeAliases: ["Retention"] },
+  map: { href: "/map", defaultLabel: "Member map", activeAliases: ["Member map"] },
+  "reaching-the-valley": { href: "/reaching-the-valley", defaultLabel: "Reaching the Lehigh Valley", activeAliases: ["Reaching the Lehigh Valley"] },
+  "next-campus-planner": { href: "/next-campus-planner", defaultLabel: "Next campus planner", activeAliases: ["Next campus planner"] },
+  "email-dashboard": { href: "/constant-contact/dashboard", defaultLabel: "Email dashboard", activeAliases: ["Constant Contact dashboard", "Email dashboard"] },
+  builder: { href: "/builder", defaultLabel: "Page Builder", activeAliases: ["Page Builder"] },
+  examples: { href: "/examples", defaultLabel: "Design references", activeAliases: ["Design references"] },
+  movement: { href: "/movement", defaultLabel: "Movement", activeAliases: ["Movement"] },
+  staff: { href: "/staff", defaultLabel: "Staff", activeAliases: ["Staff"] },
+  giving: { href: "/giving", defaultLabel: "Giving statistics", activeAliases: ["Giving statistics"] },
 };
 
 /** Reverse index: an incoming `active=` string → pageKey, O(1). */

@@ -28,6 +28,7 @@ const HUB_DESC: Record<string, string> = {
 export function buildHomeHubSections(orgId: number): GallerySection[] {
   const { config } = resolveNavConfig(orgId);
   const sections: GallerySection[] = [];
+  const placed = new Set<string>(); // hrefs already sitting in a layer
   for (const g of config.groups) {
     if (g.id === "settings-integration") continue;
     const links: GalleryLink[] = [];
@@ -36,12 +37,19 @@ export function buildHomeHubSections(orgId: number): GallerySection[] {
         if (it.pageKey === "home" || it.pageKey === "more") continue;
         const def = PAGE_REGISTRY[it.pageKey];
         if (!def) continue;
+        placed.add(def.href);
         links.push({ href: def.href, title: def.defaultLabel, description: HUB_DESC[it.pageKey] ?? "" });
       } else {
+        placed.add(`/builder/${it.slug}`);
         links.push({ href: `/builder/${it.slug}`, title: it.label, description: "Custom page." });
       }
     }
     if (links.length) sections.push({ id: g.id, label: g.label, links });
   }
-  return sections.concat(getMoreSections(orgId));
+  // Append the See More sections, dropping any page the admin has already
+  // placed into one of their own layers (so it isn't listed twice).
+  const more = getMoreSections(orgId)
+    .map((s) => ({ ...s, links: s.links.filter((l) => !placed.has(l.href)) }))
+    .filter((s) => s.links.length > 0);
+  return sections.concat(more);
 }
