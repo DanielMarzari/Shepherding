@@ -26,6 +26,11 @@ export default async function HomePage() {
   return (
     <AppShell active="Home" breadcrumb="Home">
       <div className="px-5 md:px-7 py-7">
+        <GalleryHub
+          sections={hubSections}
+          pinned={pinned}
+          homeContent={
+            <>
         <div className="flex items-baseline justify-between mb-6 gap-3 flex-wrap">
           <div>
             <div className="text-muted text-xs mb-1">
@@ -96,17 +101,9 @@ export default async function HomePage() {
             </Suspense>
           </Card>
         </div>
-
-        {/* The hub — this is the navigation now (there's no left sidebar).
-            Every page, organized into layers, searchable and pinnable. */}
-        <div className="mt-10">
-          <h2 className="text-lg font-semibold tracking-tight">Go to…</h2>
-          <p className="text-muted text-sm mt-0.5 mb-4">
-            Every page, organized. Search across everything, or star the ones you
-            use most.
-          </p>
-          <GalleryHub sections={hubSections} pinned={pinned} />
-        </div>
+            </>
+          }
+        />
       </div>
     </AppShell>
   );

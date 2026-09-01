@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { togglePinAction } from "@/app/actions/pins";
@@ -9,15 +9,22 @@ import type { GalleryLink, GallerySection } from "@/lib/gallery-types";
 export type { GalleryLink, GallerySection } from "@/lib/gallery-types";
 
 const PINNED_ID = "__pinned";
+const HOME_ID = "__home";
 
 export function GalleryHub({
   sections,
   pinned,
   emptyHint,
+  homeContent,
+  homeLabel = "Home",
 }: {
   sections: GallerySection[];
   pinned: string[];
   emptyHint?: string;
+  /** When provided, the rail gets a first "Home" entry whose detail pane shows
+   *  this content (the dashboard) instead of cards — this is the home hub. */
+  homeContent?: ReactNode;
+  homeLabel?: string;
 }) {
   const pathname = usePathname();
   const [pins, setPins] = useState<Set<string>>(new Set(pinned));
@@ -34,11 +41,11 @@ export function GalleryHub({
   );
 
   const railEntries = useMemo(() => {
-    const base = pinnedLinks.length
-      ? [{ id: PINNED_ID, label: "Pinned", count: pinnedLinks.length }]
-      : [];
+    const base: Array<{ id: string; label: string; count?: number }> = [];
+    if (homeContent) base.push({ id: HOME_ID, label: homeLabel });
+    if (pinnedLinks.length) base.push({ id: PINNED_ID, label: "Pinned", count: pinnedLinks.length });
     return base.concat(sections.map((s) => ({ id: s.id, label: s.label, count: s.links.length })));
-  }, [sections, pinnedLinks.length]);
+  }, [sections, pinnedLinks.length, homeContent, homeLabel]);
 
   const [selected, setSelected] = useState<string>(() => railEntries[0]?.id ?? "");
 
@@ -89,8 +96,13 @@ export function GalleryHub({
                 }`}
               >
                 {e.id === PINNED_ID && <span aria-hidden className="text-accent">★</span>}
+                {e.id === HOME_ID && (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" />
+                  </svg>
+                )}
                 <span className="truncate">{e.label}</span>
-                <span className="ml-auto text-[11px] text-subtle tnum">{e.count}</span>
+                {e.count != null && <span className="ml-auto text-[11px] text-subtle tnum">{e.count}</span>}
               </button>
             );
           })}
@@ -117,6 +129,10 @@ export function GalleryHub({
           />
         </div>
 
+        {selected === HOME_ID && !searching && homeContent ? (
+          <div>{homeContent}</div>
+        ) : (
+        <>
         {!searching && activeSection && selected !== PINNED_ID && (
           <div className="mb-3">
             <h2 className="text-lg font-semibold tracking-tight">{activeSection.label}</h2>
@@ -174,6 +190,8 @@ export function GalleryHub({
               </div>
             ))}
           </div>
+        )}
+        </>
         )}
       </div>
     </div>
