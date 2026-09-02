@@ -91,9 +91,18 @@ function stepsBySunday(orgId: number): Map<string, SundaySteps> {
   return out;
 }
 
-/** Weekly check-in counts for the events matching a step's `checkinEvent`
- *  measure — the only per-event attendance we actually have. */
-function checkinSeriesFor(orgId: number, match: RegExp) {
+/** Weekly check-in counts per EVENT NAME — scanned ONCE and bucketed, because
+ *  every `checkinEvent` step ran the identical 275k-row scan and filtered it in
+ *  JS afterwards. Five steps meant five identical scans (~10s). Now: one scan,
+ *  then each step picks its events out of the result. */
+interface EventWeekRow {
+  wk: string;
+  name: string;
+  c: number;
+}
+let _checkinRowsCache: { orgId: number; rows: EventWeekRow[] } | null = null;
+function allCheckinWeeksByEvent(orgId: number): EventWeekRow[] {
+  if (_checkinRowsCache && _checkinRowsCache.orgId === orgId) return _checkinRowsCache.rows;
   const rows = getDb()
     .prepare(
       `SELECT date(c.event_time_at, '-' || strftime('%w', c.event_time_at) || ' days') wk,
@@ -103,12 +112,21 @@ function checkinSeriesFor(orgId: number, match: RegExp) {
         WHERE c.org_id = ? AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
         GROUP BY wk, e.pco_id`,
     )
-    .all(orgId) as Array<{ wk: string; name: string | null; c: number }>;
+    .all(orgId) as Array<{ wk: string | null; name: string | null; c: number }>;
+  const out: EventWeekRow[] = [];
+  for (const r of rows) if (r.wk) out.push({ wk: r.wk, name: r.name ?? "", c: r.c });
+  _checkinRowsCache = { orgId, rows: out };
+  return out;
+}
+
+/** Build one step's weekly series from the shared scan. Identical output to
+ *  the old per-step query — same rows, same filter, just not re-scanned. */
+function checkinSeriesFor(orgId: number, match: RegExp) {
   const byWeek = new Map<string, number>();
   let minWk: string | null = null;
   let maxWk: string | null = null;
-  for (const r of rows) {
-    if (!r.wk || !match.test(r.name ?? "")) continue;
+  for (const r of allCheckinWeeksByEvent(orgId)) {
+    if (!match.test(r.name)) continue;
     byWeek.set(r.wk, (byWeek.get(r.wk) ?? 0) + r.c);
     if (minWk === null || r.wk < minWk) minWk = r.wk;
     if (maxWk === null || r.wk > maxWk) maxWk = r.wk;

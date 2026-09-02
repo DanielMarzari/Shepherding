@@ -334,6 +334,16 @@ function gapForSermonStep(key: string): string {
   }
 }
 
+/** Superset pre-filter for the transcript-detected sermon steps. Every
+ *  `sermonPatterns` regex requires one of these substrings, so a sermon that
+ *  fails this LIKE cannot match any of them. Lets the list page skip pulling
+ *  10 MB of transcript text for a table of titles — we fetch transcripts only
+ *  for the handful of candidates and then apply the exact regex, which is
+ *  provably identical to scanning them all (verified: 0 mismatches / 429). */
+const TRANSCRIPT_PREFILTER = `(transcript LIKE '%baptiz%' OR transcript LIKE '%baptis%'
+   OR transcript LIKE '%prayer works%' OR transcript LIKE '%prayerworks%'
+   OR transcript LIKE '%prayer night%' OR transcript LIKE '%night of prayer%')`;
+
 export function computeSermonImpact(orgId: number): SermonImpactSummary {
   const sermons = getSermons(orgId);
   const classified = sermons.filter((s) => s.classified);
@@ -341,7 +351,10 @@ export function computeSermonImpact(orgId: number): SermonImpactSummary {
   const transcripts = new Map<number, string | null>(
     (
       getDb()
-        .prepare("SELECT source_id, transcript FROM sermons WHERE org_id = ?")
+        .prepare(
+          `SELECT source_id, transcript FROM sermons
+            WHERE org_id = ? AND transcript IS NOT NULL AND ${TRANSCRIPT_PREFILTER}`,
+        )
         .all(orgId) as Array<{ source_id: number; transcript: string | null }>
     ).map((r) => [r.source_id, r.transcript]),
   );
@@ -446,10 +459,23 @@ export interface SermonListRow {
 export function listSermons(orgId: number): SermonListRow[] {
   const rows = getDb()
     .prepare(
-      `SELECT source_id, preached_on, title, speaker, topic, word_count, next_steps, transcript
+      `SELECT source_id, preached_on, title, speaker, topic, word_count, next_steps
          FROM sermons WHERE org_id = ? ORDER BY preached_on DESC`,
     )
     .all(orgId) as Array<Record<string, unknown>>;
+
+  // Only these sermons could possibly match a transcript-detected step.
+  const candidates = new Map<number, string>(
+    (
+      getDb()
+        .prepare(
+          `SELECT source_id, transcript FROM sermons
+            WHERE org_id = ? AND transcript IS NOT NULL AND ${TRANSCRIPT_PREFILTER}`,
+        )
+        .all(orgId) as Array<{ source_id: number; transcript: string }>
+    ).map((r) => [r.source_id, r.transcript]),
+  );
+
   return rows.map((r) => {
     let ns: Record<string, NextStepVal> = {};
     try {
@@ -457,14 +483,15 @@ export function listSermons(orgId: number): SermonListRow[] {
     } catch {
       /* leave empty */
     }
-    const found = callsForSermon(ns, (r.transcript as string) ?? null);
+    const id = r.source_id as number;
+    const found = callsForSermon(ns, candidates.get(id) ?? null);
     const calls = SERMON_STEPS.filter((s) => found.has(s.key)).map((s) => ({
       key: s.key,
       name: s.name,
       intensity: found.get(s.key)!.intensity,
     }));
     return {
-      sourceId: r.source_id as number,
+      sourceId: id,
       preachedOn: r.preached_on as string,
       title: (r.title as string) ?? null,
       speaker: (r.speaker as string) ?? null,

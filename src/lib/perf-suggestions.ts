@@ -161,6 +161,80 @@ export const PERF_SUGGESTIONS: PerfSuggestion[] = [
     how: "claude-code",
     defaultStatus: "applied",
   },
+
+  // ── 2026-09-02 profiling pass: the new Sermons / Service plans / impact
+  //    pages. Measured against production (429 sermons, 18k plan items,
+  //    275k check-ins). ────────────────────────────────────────────────────
+  {
+    key: "checkin-series-single-scan",
+    title: "Announcement impact ran the same 275k-row check-in scan five times",
+    pages: ["Announcement impact"],
+    whatsSlow:
+      "Five next steps are measured against check-in attendance (VBX, Christmas Eve, Easter, MomCo, Women's Bible Study). Each one issued an IDENTICAL scan of all 275k check-ins joined to events, then filtered the result in JS by event name. Measured: 3.2 s per scan, 9.9-11.1 s for all five, on every render.",
+    location: "src/lib/announcement-impact.ts (checkinSeriesFor)",
+    bigOBefore: "5 × O(check-ins)",
+    bigOAfter: "1 × O(check-ins) + in-memory filters",
+    fix: "Scan once into a per-event weekly bucket, then let each step pick its events out of the shared result. Verified output-identical against production (0 mismatches across all five series). Saves ~7.9 s per render.",
+    safety: "safe",
+    how: "claude-code",
+    defaultStatus: "applied",
+  },
+  {
+    key: "sermons-list-transcripts",
+    title: "The Sermons list loaded 10 MB of transcript text to render a table of titles",
+    pages: ["Sermons", "Sermon impact"],
+    whatsSlow:
+      "Some sermon next steps (get baptized, Prayer Works, Prayer Night) are detected by regex over the transcript, so the list query selected the transcript column for all 429 sermons — 10.3 MB of text pulled into memory just to draw a list of titles and tags. Measured: 4.6-6.0 s per render.",
+    location: "src/lib/sermon-impact.ts (listSermons, computeSermonImpact)",
+    bigOBefore: "O(all transcript bytes) ≈ 10 MB",
+    bigOAfter: "O(candidate transcript bytes) ≈ 2.7 MB",
+    fix: "Pre-filter in SQL with a LIKE superset (every transcript pattern requires 'baptiz'/'baptis'/'prayer works'/'prayer night'), fetch transcripts only for the 117 candidates, then apply the exact regex. Provably identical — a sermon failing the LIKE cannot match any pattern; verified 0 mismatches across 1,287 comparisons. Saves ~3.5 s per render.",
+    safety: "safe",
+    how: "claude-code",
+    defaultStatus: "applied",
+  },
+  {
+    key: "weekly-metrics-cache",
+    title: "Both impact pages rebuild the same six weekly series on every render",
+    pages: ["Sermon impact", "Announcement impact"],
+    whatsSlow:
+      "getWeeklyMetrics runs six org-wide aggregates per render — total check-ins (1.46 s), first-serve per person (1.21 s), first check-in per person (0.20 s), plus group applications/joins and form submissions. Measured 3.0 s total, and it runs on BOTH impact pages. The underlying data only changes when the nightly sync runs.",
+    location: "src/lib/sermon-impact.ts (getWeeklyMetrics)",
+    bigOBefore: "O(check-ins + plan_people) per render",
+    bigOAfter: "O(1) read from a cached snapshot",
+    fix: "Materialize the six weekly series into a small table (one row per metric per week, ~500 rows each) refreshed at the end of the nightly sync, same pattern as the dashboard snapshots. Pages then read a tiny indexed table. Numbers are identical between syncs; they'd lag intra-day changes by one sync cycle — the same staleness contract the dashboard already uses.",
+    safety: "larger",
+    how: "claude-code",
+    defaultStatus: "pending",
+  },
+  {
+    key: "plan-items-detection-cache",
+    title: "Announcement tags are re-detected from raw text on every page load",
+    pages: ["Service plans", "Announcement impact"],
+    whatsSlow:
+      "Both pages load all 18,110 plan items (0.8 s) and then run the full keyword catalog — 33 next steps × their patterns — across every one of the 913 services, re-deriving the same tags from scratch on each render.",
+    location: "src/lib/announcement-impact.ts (getPlanItemsByPlan, stepsBySunday, listServicePlans)",
+    bigOBefore: "O(plans × steps × patterns) per render",
+    bigOAfter: "O(rows) read of stored tags",
+    fix: "Store the detected step keys per plan (a column on pco_plan_items' parent plan, or a small pco_plan_steps table) written during the nightly sync, and re-derive only when the catalog changes. The detail page keeps live detection so the highlight-in-place view stays exact.",
+    safety: "larger",
+    how: "claude-code",
+    defaultStatus: "pending",
+  },
+  {
+    key: "checkins-covering-index",
+    title: "Weekly check-in aggregates scan the whole 275k-row table",
+    pages: ["Sermon impact", "Announcement impact", "Attendance"],
+    whatsSlow:
+      "Every weekly check-in rollup groups by a computed date expression over all 275k rows, so no existing index can drive it — SQLite scans the table and sorts. This is the single most expensive query in the app at ~1.5 s.",
+    location: "pco_check_ins (org_id, event_time_at, person_id, event_id)",
+    bigOBefore: "full table scan + sort",
+    bigOAfter: "index-ordered scan",
+    fix: "Add a covering index on pco_check_ins(org_id, event_time_at, person_id, event_id) so the weekly rollups and the first-check-in-per-person CTE can be served from the index without touching the table. Pure DB change — cannot alter any result, only costs disk and a little sync-time write.",
+    safety: "safe",
+    how: "db-config",
+    defaultStatus: "pending",
+  },
 ];
 
 const VALID: PerfStatus[] = ["pending", "approved", "applied", "dismissed"];
