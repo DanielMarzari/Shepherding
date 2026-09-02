@@ -67,6 +67,7 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   movement: { href: "/movement", defaultLabel: "Movement", activeAliases: ["Movement"] },
   staff: { href: "/staff", defaultLabel: "Staff", activeAliases: ["Staff"] },
   giving: { href: "/giving", defaultLabel: "Giving statistics", activeAliases: ["Giving statistics"] },
+  "sermon-impact": { href: "/sermon-impact", defaultLabel: "Sermon impact", activeAliases: ["Sermon impact"] },
 };
 
 /** Reverse index: an incoming `active=` string → pageKey, O(1). */
