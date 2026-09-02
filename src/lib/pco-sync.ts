@@ -52,6 +52,7 @@ export interface SyncDetails {
   teamMemberships: { fetched: number; upserted: number };
   plans: { fetched: number; upserted: number };
   planPeople: { fetched: number; upserted: number };
+  planItems: { fetched: number; upserted: number };
   cutoff: string | null;
   durationMs: number;
   startedAt: string;
@@ -137,6 +138,7 @@ export async function runSync(
     teamMemberships: { fetched: 0, upserted: 0 },
     plans: { fetched: 0, upserted: 0 },
     planPeople: { fetched: 0, upserted: 0 },
+    planItems: { fetched: 0, upserted: 0 },
     cutoff: null,
     durationMs: 0,
     startedAt,
@@ -252,6 +254,7 @@ export async function runSync(
         details.teamMemberships = t.teamMemberships;
         details.plans = t.plans;
         details.planPeople = t.planPeople;
+        details.planItems = t.planItems;
         refreshLastServed(orgId);
       } catch (e) {
         warning = appendWarning(
@@ -316,7 +319,8 @@ export async function runSync(
       details.teamPositions.upserted +
       details.teamMemberships.upserted +
       details.plans.upserted +
-      details.planPeople.upserted;
+      details.planPeople.upserted +
+      details.planItems.upserted;
 
     // Refresh dashboard snapshots before marking the run as ok so the
     // next page render sees fresh totals. Wrapped defensively — a

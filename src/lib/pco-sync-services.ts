@@ -17,7 +17,18 @@ export interface ServicesSyncResult {
   teamMemberships: { fetched: number; upserted: number };
   plans: { fetched: number; upserted: number };
   planPeople: { fetched: number; upserted: number };
+  planItems: { fetched: number; upserted: number };
 }
+
+/** Service types whose order-of-service ITEMS we sync (the worship folder:
+ *  the Live/Center and Classic/Chapel Sunday services). Their announcement
+ *  items feed the "announcement impact" correlation. Pulling items for all
+ *  ~48 service types would be huge and pointless, so this is scoped. */
+export const WORSHIP_SERVICE_TYPE_IDS = ["116463", "156862"];
+
+/** Nightly, refresh items for services in the last 6 weeks — announcements
+ *  get edited right up to service day. First sync backfills all history. */
+const ITEM_WINDOW_WEEKS = 6;
 
 export async function syncServicesAll(
   client: PCOClient,
@@ -31,6 +42,7 @@ export async function syncServicesAll(
     teamMemberships: { fetched: 0, upserted: 0 },
     plans: { fetched: 0, upserted: 0 },
     planPeople: { fetched: 0, upserted: 0 },
+    planItems: { fetched: 0, upserted: 0 },
   };
 
   // 1) Service types — small list ("Sunday Services", "Special Services", etc.)
@@ -328,7 +340,112 @@ export async function syncServicesAll(
     }
   }
 
+  // 6) Plan items (order of service) — ONLY the worship service types. These
+  //    feed the announcement-impact correlation: what was promoted from the
+  //    stage each week (giving, groups, serving, prayer, Discover, campaigns).
+  //    First sync backfills every worship plan; nightly refreshes the last
+  //    ITEM_WINDOW_WEEKS (announcements are edited up to service day).
+  const worshipTypes = serviceTypeIds.filter((id) => WORSHIP_SERVICE_TYPE_IDS.includes(id));
+  if (worshipTypes.length > 0) {
+    const itemsAlreadySynced = !!getDb()
+      .prepare("SELECT 1 FROM pco_plan_items WHERE org_id = ? LIMIT 1")
+      .get(orgId);
+    const itemWindowStart = new Date(
+      Date.now() - ITEM_WINDOW_WEEKS * 7 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const placeholders = worshipTypes.map(() => "?").join(",");
+    const worshipPlans = getDb()
+      .prepare(
+        `SELECT pco_id, service_type_id FROM pco_plans
+          WHERE org_id = ? AND service_type_id IN (${placeholders})
+            ${itemsAlreadySynced ? "AND sort_date >= ?" : ""}
+          ORDER BY sort_date DESC`,
+      )
+      .all(
+        orgId,
+        ...worshipTypes,
+        ...(itemsAlreadySynced ? [itemWindowStart] : []),
+      ) as Array<{ pco_id: string; service_type_id: string }>;
+
+    for (const wp of worshipPlans) {
+      const itemRows: ReturnType<typeof toPlanItemRow>[] = [];
+      try {
+        for await (const { page } of client.paginate<PCOResource>(
+          `/services/v2/service_types/${wp.service_type_id}/plans/${wp.pco_id}/items?per_page=200`,
+        )) {
+          const arr = Array.isArray(page.data) ? page.data : [page.data];
+          for (const it of arr) {
+            result.planItems.fetched++;
+            itemRows.push(toPlanItemRow(wp.pco_id, wp.service_type_id, it));
+          }
+        }
+      } catch (e) {
+        if (!(e instanceof PCOError && e.status === 404)) {
+          // Skip this plan on a transient error; nightly will catch it again.
+          continue;
+        }
+      }
+      replacePlanItems(orgId, wp.pco_id, wp.service_type_id, itemRows);
+      result.planItems.upserted += itemRows.length;
+    }
+  }
+
   return result;
+}
+
+function toPlanItemRow(planId: string, serviceTypeId: string, it: PCOResource) {
+  const a = (it.attributes ?? {}) as Record<string, unknown>;
+  return {
+    pcoId: it.id,
+    planId,
+    serviceTypeId,
+    sequence: (a.sequence as number | undefined) ?? null,
+    itemType: (a.item_type as string | undefined) ?? null,
+    title: (a.title as string | undefined) ?? null,
+    description: (a.description as string | undefined) ?? null,
+    htmlDetails: (a.html_details as string | undefined) ?? null,
+    length: (a.length as number | undefined) ?? null,
+  };
+}
+
+/** Replace all items for one plan in a single transaction (items get
+ *  reordered / added / removed, so a wholesale replace is simplest). */
+function replacePlanItems(
+  orgId: number,
+  planId: string,
+  serviceTypeId: string,
+  rows: ReturnType<typeof toPlanItemRow>[],
+) {
+  getDb().transaction(() => {
+    getDb()
+      .prepare("DELETE FROM pco_plan_items WHERE org_id = ? AND plan_id = ?")
+      .run(orgId, planId);
+    const stmt = getDb().prepare(
+      `INSERT INTO pco_plan_items
+        (org_id, pco_id, plan_id, service_type_id, sequence, item_type, title, description, html_details, length, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       ON CONFLICT(org_id, pco_id) DO UPDATE SET
+         plan_id = excluded.plan_id, service_type_id = excluded.service_type_id,
+         sequence = excluded.sequence, item_type = excluded.item_type,
+         title = excluded.title, description = excluded.description,
+         html_details = excluded.html_details, length = excluded.length,
+         synced_at = excluded.synced_at`,
+    );
+    for (const r of rows) {
+      stmt.run(
+        orgId,
+        r.pcoId,
+        r.planId,
+        r.serviceTypeId,
+        r.sequence,
+        r.itemType,
+        r.title,
+        r.description,
+        r.htmlDetails,
+        r.length,
+      );
+    }
+  })();
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
