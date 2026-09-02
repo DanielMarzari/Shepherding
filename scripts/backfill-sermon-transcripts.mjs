@@ -23,9 +23,20 @@ const ORG_ID = process.env.ORG_ID ? Number(process.env.ORG_ID) : 1;
 
 const db = new Database(DB_PATH);
 db.pragma("busy_timeout = 15000");
-// Column normally arrives via migration 0078; tolerate running standalone.
+// Column normally arrives via migration 0078. If we add it out-of-band here,
+// we MUST also record 0078 as applied — otherwise the next deploy re-runs the
+// migration, hits "duplicate column name", and aborts before pm2 restarts.
 const cols = db.prepare("PRAGMA table_info(sermons)").all().map((c) => c.name);
-if (!cols.includes("transcript")) db.exec("ALTER TABLE sermons ADD COLUMN transcript TEXT");
+if (!cols.includes("transcript")) {
+  db.exec("ALTER TABLE sermons ADD COLUMN transcript TEXT");
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS _migrations (filename TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))",
+  );
+  db.prepare("INSERT OR IGNORE INTO _migrations (filename) VALUES (?)").run(
+    "0078_sermon_transcript.sql",
+  );
+  console.log("Added transcript column and recorded migration 0078 as applied.");
+}
 
 const lab = new Database(LAB_PATH, { readonly: true });
 const pick = lab.prepare(
