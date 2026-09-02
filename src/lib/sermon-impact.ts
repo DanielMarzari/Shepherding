@@ -15,40 +15,19 @@ import type { SeasonalInsight } from "./attendance-seasonal";
  *  the weekly outcome series we correlate the call against, or null when the
  *  church doesn't yet track an outcome for it (notably giving — Shepherdly has
  *  no dated gifts, only last-gift). */
-export const NEXT_STEPS = [
-  {
-    key: "giving",
-    label: "Giving",
-    metric: null as MetricKey | null,
-    blurb: "Financial generosity — tithe, give, support the mission.",
-  },
-  { key: "groups", label: "Groups", metric: "group_apps", blurb: "Join a small group / get connected." },
-  { key: "serving", label: "Serving", metric: "new_servers", blurb: "Volunteer, serve on a team, use your gifts." },
-  { key: "outreach", label: "Outreach", metric: "new_attenders", blurb: "Invite someone, share your faith, reach the city." },
-  { key: "faith_commitment", label: "Faith commitment", metric: null, blurb: "Decide to follow Jesus, baptism, respond." },
-  { key: "prayer", label: "Prayer", metric: null, blurb: "Commit to prayer as a discipline." },
-  { key: "discipleship", label: "Discipleship", metric: null, blurb: "Read Scripture, grow, obey." },
-  { key: "care", label: "Care", metric: null, blurb: "Meet others' tangible needs, benevolence." },
-] as const;
+export {
+  NEXT_STEPS,
+  METRIC_LABELS,
+} from "./next-step-types";
+export type { MetricKey, NextStepKey, SermonListRow } from "./next-step-types";
 
-export type NextStepKey = (typeof NEXT_STEPS)[number]["key"];
-
-export type MetricKey =
-  | "group_apps"
-  | "group_joins"
-  | "new_servers"
-  | "checkins"
-  | "new_attenders"
-  | "form_subs";
-
-export const METRIC_LABELS: Record<MetricKey, string> = {
-  group_apps: "group applications",
-  group_joins: "group joins",
-  new_servers: "first-time servers",
-  checkins: "check-ins",
-  new_attenders: "first-time attenders",
-  form_subs: "form submissions",
-};
+import {
+  NEXT_STEPS,
+  METRIC_LABELS,
+  type MetricKey,
+  type NextStepKey,
+  type SermonListRow,
+} from "./next-step-types";
 
 interface NextStepVal {
   called: boolean;
@@ -477,4 +456,150 @@ function buildInsights(categories: CategoryStat[]): SeasonalInsight[] {
     });
   }
   return out;
+}
+
+// ─── Explorer: list + detail for the Sermons page ──────────────────────────
+
+/** Every classified sermon, newest first, with its tags — for the list page.
+ *  (SermonListRow lives in next-step-types so client components can use it.) */
+export function listSermons(orgId: number): SermonListRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT source_id, preached_on, title, speaker, topic, word_count, next_steps
+         FROM sermons WHERE org_id = ? ORDER BY preached_on DESC`,
+    )
+    .all(orgId) as Array<Record<string, unknown>>;
+  return rows.map((r) => {
+    let ns: Record<string, NextStepVal> = {};
+    try {
+      if (r.next_steps) ns = JSON.parse(r.next_steps as string);
+    } catch {
+      /* leave empty */
+    }
+    const calls = NEXT_STEPS.filter((s) => ns[s.key]?.called)
+      .map((s) => ({ key: s.key, label: s.label, intensity: ns[s.key].intensity ?? 0 }))
+      .sort((a, b) => b.intensity - a.intensity);
+    return {
+      sourceId: r.source_id as number,
+      preachedOn: r.preached_on as string,
+      title: (r.title as string) ?? null,
+      speaker: (r.speaker as string) ?? null,
+      topic: (r.topic as string) ?? null,
+      wordCount: (r.word_count as number) ?? null,
+      calls,
+    };
+  });
+}
+
+export interface SermonCall {
+  key: NextStepKey;
+  label: string;
+  blurb: string;
+  called: boolean;
+  intensity: number;
+  quote: string;
+  /** Character range of the quote inside the transcript, or null when the
+   *  classifier paraphrased and we can't locate it verbatim. */
+  range: { start: number; end: number } | null;
+}
+
+export interface SermonDetail {
+  sourceId: number;
+  preachedOn: string;
+  title: string | null;
+  speaker: string | null;
+  topic: string | null;
+  summary: string | null;
+  themes: string[];
+  confidence: number | null;
+  wordCount: number | null;
+  transcript: string | null;
+  calls: SermonCall[];
+}
+
+/** Locate a quote in the transcript, tolerating whitespace differences (the
+ *  classifier's quotes are verbatim but may have collapsed newlines). Returns
+ *  the character range in the ORIGINAL text, or null if not locatable. */
+export function locateQuote(transcript: string, quote: string): { start: number; end: number } | null {
+  if (!transcript || !quote) return null;
+  const direct = transcript.indexOf(quote);
+  if (direct >= 0) return { start: direct, end: direct + quote.length };
+
+  // Whitespace-tolerant scan: walk the transcript building a normalized form
+  // while remembering each normalized char's original index.
+  const map: number[] = [];
+  let norm = "";
+  let prevSpace = false;
+  for (let i = 0; i < transcript.length; i++) {
+    const ch = transcript[i];
+    if (/\s/.test(ch)) {
+      if (prevSpace) continue;
+      prevSpace = true;
+      map.push(i);
+      norm += " ";
+    } else {
+      prevSpace = false;
+      map.push(i);
+      norm += ch.toLowerCase();
+    }
+  }
+  const nq = quote.replace(/\s+/g, " ").trim().toLowerCase();
+  const at = norm.indexOf(nq);
+  if (at < 0) return null;
+  const start = map[at];
+  const endIdx = Math.min(at + nq.length - 1, map.length - 1);
+  return { start, end: map[endIdx] + 1 };
+}
+
+export function getSermonDetail(orgId: number, sourceId: number): SermonDetail | null {
+  const r = getDb()
+    .prepare(
+      `SELECT source_id, preached_on, title, speaker, topic, summary, themes,
+              next_steps, confidence, word_count, transcript
+         FROM sermons WHERE org_id = ? AND source_id = ?`,
+    )
+    .get(orgId, sourceId) as Record<string, unknown> | undefined;
+  if (!r) return null;
+
+  let ns: Record<string, NextStepVal> = {};
+  let themes: string[] = [];
+  try {
+    if (r.next_steps) ns = JSON.parse(r.next_steps as string);
+  } catch {
+    /* leave empty */
+  }
+  try {
+    if (r.themes) themes = JSON.parse(r.themes as string);
+  } catch {
+    /* leave empty */
+  }
+  const transcript = (r.transcript as string) ?? null;
+
+  const calls: SermonCall[] = NEXT_STEPS.map((s) => {
+    const v = ns[s.key] ?? { called: false, intensity: 0, quote: "" };
+    const quote = (v.quote ?? "").trim();
+    return {
+      key: s.key,
+      label: s.label,
+      blurb: s.blurb,
+      called: !!v.called,
+      intensity: v.intensity ?? 0,
+      quote,
+      range: transcript && quote ? locateQuote(transcript, quote) : null,
+    };
+  });
+
+  return {
+    sourceId: r.source_id as number,
+    preachedOn: r.preached_on as string,
+    title: (r.title as string) ?? null,
+    speaker: (r.speaker as string) ?? null,
+    topic: (r.topic as string) ?? null,
+    summary: (r.summary as string) ?? null,
+    themes,
+    confidence: (r.confidence as number) ?? null,
+    wordCount: (r.word_count as number) ?? null,
+    transcript,
+    calls,
+  };
 }

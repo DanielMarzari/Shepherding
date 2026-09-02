@@ -69,6 +69,8 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   giving: { href: "/giving", defaultLabel: "Giving statistics", activeAliases: ["Giving statistics"] },
   "sermon-impact": { href: "/sermon-impact", defaultLabel: "Sermon impact", activeAliases: ["Sermon impact"] },
   "announcement-impact": { href: "/announcement-impact", defaultLabel: "Announcement impact", activeAliases: ["Announcement impact"] },
+  sermons: { href: "/sermons", defaultLabel: "Sermons", activeAliases: ["Sermons"] },
+  "service-plans": { href: "/service-plans", defaultLabel: "Service plans", activeAliases: ["Service plans"] },
 };
 
 /** Reverse index: an incoming `active=` string → pageKey, O(1). */
@@ -108,7 +110,7 @@ export const DEFAULT_NAV_CONFIG: NavConfig = {
     { id: "dashboard", label: "Dashboard", mode: "top", items: [P("home"), P("care-queue")] },
     { id: "leadership", label: "Leadership", mode: "top", items: [P("shepherd-team"), P("shepherds")] },
     { id: "pco", label: "PCO data", mode: "top", collapsible: true, items: [P("people"), P("groups"), P("teams"), P("checkins")] },
-    { id: "next-steps", label: "Next steps", mode: "top", items: [P("lanes-overview"), P("lanes-list"), P("announcement-impact")] },
+    { id: "next-steps", label: "Next steps", mode: "top", items: [P("lanes-overview"), P("lanes-list"), P("announcement-impact"), P("sermons"), P("service-plans")] },
     { id: "mappings", label: "Maps", mode: "top", collapsible: true, items: [P("shepherd-map"), P("care-map")] },
     { id: "more", label: "More", mode: "top", items: [P("more")] },
     {

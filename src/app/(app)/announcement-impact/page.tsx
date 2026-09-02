@@ -1,12 +1,13 @@
 import { AppShell } from "@/components/AppShell";
 import { Card, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
+import Link from "next/link";
 import {
   computeAnnouncementImpact,
   type AnnCategoryStat,
   type AnnWeekRow,
 } from "@/lib/announcement-impact";
-import { NEXT_STEPS, type MetricKey } from "@/lib/sermon-impact";
+import { type MetricKey } from "@/lib/sermon-impact";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,6 @@ const RECENT_METRICS: { key: MetricKey; short: string }[] = [
 ];
 
 function ScoreCard({ c }: { c: AnnCategoryStat }) {
-  const step = NEXT_STEPS.find((s) => s.key === c.key)!;
   if (!c.measurable) {
     return (
       <Card className="p-4 space-y-1.5 border-border-soft">
@@ -46,7 +46,7 @@ function ScoreCard({ c }: { c: AnnCategoryStat }) {
           <span className="text-sm font-semibold">{c.label}</span>
           <Pill tone="muted">not tracked</Pill>
         </div>
-        <p className="text-xs text-muted leading-relaxed">{step.blurb}</p>
+        <p className="text-xs text-muted leading-relaxed">{c.what}</p>
         <p className="text-xs text-muted">
           Announced on <span className="font-medium text-fg">{Math.round(c.announceShare * 100)}%</span> of
           Sundays. No weekly outcome series to correlate against yet.
@@ -62,6 +62,7 @@ function ScoreCard({ c }: { c: AnnCategoryStat }) {
         <span className="text-sm font-semibold">{c.label}</span>
         <Pill tone="accent">→ {c.metricLabel}</Pill>
       </div>
+      <p className="text-xs text-muted leading-relaxed">{c.what}</p>
       <div className="flex items-end gap-2">
         <span
           className={`text-2xl font-semibold tabular-nums ${
@@ -175,13 +176,24 @@ export default async function AnnouncementImpactPage() {
                   <tbody>
                     {data.recent.map((s: AnnWeekRow) => (
                       <tr key={s.sunday} className="border-b border-border-soft/60 last:border-0 align-top">
-                        <td className="px-4 py-2.5 whitespace-nowrap text-muted text-xs">{fmtDate(s.sunday)}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap text-xs">
+                          {s.planIds[0] ? (
+                            <Link
+                              href={`/service-plans/${s.planIds[0]}`}
+                              className="text-accent-soft-fg hover:underline"
+                            >
+                              {fmtDate(s.sunday)}
+                            </Link>
+                          ) : (
+                            <span className="text-muted">{fmtDate(s.sunday)}</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2.5">
                           <div className="flex flex-wrap gap-1">
-                            {s.categories.length === 0 ? (
+                            {s.types.length === 0 ? (
                               <span className="text-xs text-muted">—</span>
                             ) : (
-                              s.categories.map((call) => (
+                              s.types.map((call) => (
                                 <Pill key={call.key} tone="accent" className="cursor-default">
                                   <span title={call.evidence ?? undefined}>{call.label}</span>
                                 </Pill>

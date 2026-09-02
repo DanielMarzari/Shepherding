@@ -5,25 +5,24 @@ import {
   getWeeklyMetrics,
   upliftFor,
   METRIC_LABELS,
-  NEXT_STEPS,
   sundayOf,
   type MetricKey,
-  type NextStepKey,
 } from "./sermon-impact";
 import {
+  ANNOUNCEMENT_TYPES,
   gatherAnnouncementText,
   detectAnnouncements,
+  isAnnouncementItem as isScanned,
+  itemText as textOf,
   type PlanItemLike,
 } from "./plan-announcements";
 
 // ---------------------------------------------------------------------------
 // Announcement impact: what the church PROMOTED from the stage each Sunday
 // (from the worship service order) vs measurable congregation activity in the
-// 5 weeks after. Same categories, metrics, and robust uplift math as the
-// sermon-impact page — but the "call" here is an explicit announcement
-// (giving, small-group launch, serve push, prayer night, Discover class,
-// campaign, invite) rather than the sermon's topic. This is usually a sharper
-// next-step signal than the sermon itself.
+// 5 weeks after. Same metrics and robust uplift math as sermon-impact — but
+// the "call" here is an explicit announcement, which is usually a sharper
+// next-step signal than a sermon's topic.
 // ---------------------------------------------------------------------------
 
 function median(xs: number[]): number | null {
@@ -43,7 +42,6 @@ interface PlanItemRow extends PlanItemLike {
   sort_date: string | null;
 }
 
-/** Read every synced worship plan item, grouped by plan. */
 function getPlanItemsByPlan(orgId: number): Map<string, { sortDate: string | null; items: PlanItemRow[] }> {
   const rows = getDb()
     .prepare(
@@ -67,29 +65,26 @@ function getPlanItemsByPlan(orgId: number): Map<string, { sortDate: string | nul
 }
 
 interface SundayAnnouncements {
-  categories: Set<NextStepKey>;
-  evidence: Map<NextStepKey, string>; // one representative snippet per category
+  types: Set<string>;
+  evidence: Map<string, string>;
   services: number;
 }
 
-/** Collapse plans → one record per Sunday, unioning the categories announced
- *  across that day's services (Live + Chapel). */
 function announcementsBySunday(orgId: number): Map<string, SundayAnnouncements> {
   const byPlan = getPlanItemsByPlan(orgId);
   const out = new Map<string, SundayAnnouncements>();
   for (const { sortDate, items } of byPlan.values()) {
     if (!sortDate) continue;
     const wk = sundayOf(sortDate);
-    const text = gatherAnnouncementText(items);
-    const detected = detectAnnouncements(text);
+    const detected = detectAnnouncements(gatherAnnouncementText(items));
     let e = out.get(wk);
     if (!e) {
-      e = { categories: new Set(), evidence: new Map(), services: 0 };
+      e = { types: new Set(), evidence: new Map(), services: 0 };
       out.set(wk, e);
     }
     e.services++;
     for (const d of detected) {
-      e.categories.add(d.key);
+      e.types.add(d.key);
       if (!e.evidence.has(d.key) && d.matches[0]) e.evidence.set(d.key, d.matches[0]);
     }
   }
@@ -97,22 +92,24 @@ function announcementsBySunday(orgId: number): Map<string, SundayAnnouncements> 
 }
 
 export interface AnnCategoryStat {
-  key: NextStepKey;
+  key: string;
   label: string;
+  what: string;
   measurable: boolean;
   metricLabel: string | null;
   nAnnounced: number;
   nControl: number;
-  upliftAnnounced: number | null; // median deviation from local norm
+  upliftAnnounced: number | null;
   upliftControl: number | null;
   contrast: number | null;
-  announceShare: number; // share of Sundays that announced this
+  announceShare: number;
 }
 
 export interface AnnWeekRow {
   sunday: string;
   services: number;
-  categories: Array<{ key: NextStepKey; label: string; evidence: string | null }>;
+  planIds: string[];
+  types: Array<{ key: string; label: string; evidence: string | null }>;
   uplift: Partial<Record<MetricKey, number | null>>;
 }
 
@@ -123,33 +120,40 @@ export interface AnnouncementImpactSummary {
   categories: AnnCategoryStat[];
   insights: SeasonalInsight[];
   recent: AnnWeekRow[];
-  metricCoverage: Array<{ key: MetricKey; label: string; from: string | null; to: string | null }>;
 }
 
 const RECENT_METRICS: MetricKey[] = ["group_apps", "new_servers", "new_attenders", "checkins"];
 
-const CONFOUND: Partial<Record<NextStepKey, string>> = {
+const CONFOUND: Record<string, string> = {
   groups:
-    "Group sign-ups cluster around the twice-a-year launch the announcement accompanies, so campaign timing dominates any single week's effect.",
+    "Group sign-ups cluster around the twice-a-year launch the announcement accompanies, so campaign timing does most of the work.",
   serving:
     "First-time serving is largely driven by scheduled onboarding / ministry fairs, not the week it's announced.",
-  outreach:
-    "First-time attendance also rides on holidays and invites, so treat this as a lead, not proof.",
+  invite:
+    "First-time attendance also rides on holidays and personal invites, so treat this as a lead, not proof.",
 };
 
 export function computeAnnouncementImpact(orgId: number): AnnouncementImpactSummary {
   const sundays = announcementsBySunday(orgId);
   const metrics = getWeeklyMetrics(orgId);
   const weeks = [...sundays.keys()].sort();
+  const planIdsByWeek = new Map<string, string[]>();
+  for (const [planId, { sortDate }] of getPlanItemsByPlan(orgId)) {
+    if (!sortDate) continue;
+    const wk = sundayOf(sortDate);
+    const arr = planIdsByWeek.get(wk) ?? [];
+    arr.push(planId);
+    planIdsByWeek.set(wk, arr);
+  }
 
-  const categories: AnnCategoryStat[] = NEXT_STEPS.map((step) => {
-    const series = step.metric ? metrics[step.metric] : null;
+  const categories: AnnCategoryStat[] = ANNOUNCEMENT_TYPES.map((t) => {
+    const series = t.metric ? metrics[t.metric] : null;
     const announced: number[] = [];
     const control: number[] = [];
     let announceSundays = 0;
     let nAnnouncedWithData = 0;
     for (const [wk, ann] of sundays) {
-      const has = ann.categories.has(step.key);
+      const has = ann.types.has(t.key);
       if (has) announceSundays++;
       if (!series) continue;
       const u = upliftFor(series, wk);
@@ -164,10 +168,11 @@ export function computeAnnouncementImpact(orgId: number): AnnouncementImpactSumm
     const a = median(announced);
     const c = median(control);
     return {
-      key: step.key,
-      label: step.label,
-      measurable: !!step.metric,
-      metricLabel: step.metric ? METRIC_LABELS[step.metric] : null,
+      key: t.key,
+      label: t.label,
+      what: t.what,
+      measurable: !!t.metric,
+      metricLabel: t.metric ? METRIC_LABELS[t.metric] : null,
       nAnnounced: series ? nAnnouncedWithData : announceSundays,
       nControl: control.length,
       upliftAnnounced: a,
@@ -177,39 +182,29 @@ export function computeAnnouncementImpact(orgId: number): AnnouncementImpactSumm
     };
   });
 
-  const insights = buildInsights(categories);
-
   const recent: AnnWeekRow[] = weeks
     .slice()
     .reverse()
     .slice(0, 60)
     .map((wk) => {
       const ann = sundays.get(wk)!;
-      const cats = NEXT_STEPS.filter((s) => ann.categories.has(s.key)).map((s) => ({
-        key: s.key,
-        label: s.label,
-        evidence: ann.evidence.get(s.key) ?? null,
+      const types = ANNOUNCEMENT_TYPES.filter((t) => ann.types.has(t.key)).map((t) => ({
+        key: t.key,
+        label: t.label,
+        evidence: ann.evidence.get(t.key) ?? null,
       }));
       const uplift: Partial<Record<MetricKey, number | null>> = {};
       for (const m of RECENT_METRICS) uplift[m] = upliftFor(metrics[m], wk);
-      return { sunday: wk, services: ann.services, categories: cats, uplift };
+      return { sunday: wk, services: ann.services, planIds: planIdsByWeek.get(wk) ?? [], types, uplift };
     });
-
-  const metricCoverage = (Object.keys(metrics) as MetricKey[]).map((k) => ({
-    key: k,
-    label: METRIC_LABELS[k],
-    from: metrics[k].minWk,
-    to: metrics[k].maxWk,
-  }));
 
   return {
     weeksWithData: sundays.size,
     earliest: weeks[0] ?? null,
     latest: weeks[weeks.length - 1] ?? null,
     categories,
-    insights,
+    insights: buildInsights(categories),
     recent,
-    metricCoverage,
   };
 }
 
@@ -222,7 +217,7 @@ function buildInsights(categories: AnnCategoryStat[]): SeasonalInsight[] {
     if (c.upliftAnnounced == null || c.contrast == null || c.nAnnounced < 5) {
       out.push({
         title: `${c.label}: not enough services to measure yet`,
-        detail: `Only ${c.nAnnounced} Sunday${c.nAnnounced === 1 ? "" : "s"} announced ${c.label.toLowerCase()} with usable ${ml} data around them.`,
+        detail: `Only ${c.nAnnounced} Sunday${c.nAnnounced === 1 ? "" : "s"} announced this with usable ${ml} data around them.`,
         tone: "neutral",
       });
       continue;
@@ -231,22 +226,22 @@ function buildInsights(categories: AnnCategoryStat[]): SeasonalInsight[] {
     const small = c.nAnnounced < 8;
     if (contrastPts >= 4) {
       out.push({
-        title: `Announcing ${c.label.toLowerCase()} is followed by a rise in ${ml}`,
+        title: `“${c.label}” is followed by a rise in ${ml}`,
         detail:
-          `In the 5 weeks after the ${c.nAnnounced} Sundays that announced ${c.label.toLowerCase()}, ${ml} ran a median ${pct(c.upliftAnnounced)} above the local seasonal norm, vs ${pct(c.upliftControl)} on the ${c.nControl} Sundays that didn't — a +${contrastPts}-point difference.` +
+          `In the 5 weeks after the ${c.nAnnounced} Sundays that announced it, ${ml} ran a median ${pct(c.upliftAnnounced)} above the local seasonal norm, vs ${pct(c.upliftControl)} on the ${c.nControl} Sundays that didn't — a +${contrastPts}-point difference.` +
           (small ? " Small sample — a lead, not proof." : ` ${CONFOUND[c.key] ?? ""}`),
         tone: "up",
       });
     } else if (contrastPts <= -4) {
       out.push({
         title: `${c.label}: no lift beyond normal timing`,
-        detail: `${Ml} didn't rise after a ${c.label.toLowerCase()} announcement (median ${pct(c.upliftAnnounced)} vs ${pct(c.upliftControl)} without one). ${CONFOUND[c.key] ?? "Congregation-level signal only."}`,
+        detail: `${Ml} didn't rise after this announcement (median ${pct(c.upliftAnnounced)} vs ${pct(c.upliftControl)} without it). ${CONFOUND[c.key] ?? "Congregation-level signal only."}`,
         tone: "neutral",
       });
     } else {
       out.push({
-        title: `${c.label}: about the same with or without an announcement`,
-        detail: `${Ml} sat near the local norm whether or not ${c.label.toLowerCase()} was announced (median ${pct(c.upliftAnnounced)} vs ${pct(c.upliftControl)}).`,
+        title: `${c.label}: about the same either way`,
+        detail: `${Ml} sat near the local norm whether or not it was announced (median ${pct(c.upliftAnnounced)} vs ${pct(c.upliftControl)}).`,
         tone: "neutral",
       });
     }
@@ -260,4 +255,121 @@ function buildInsights(categories: AnnCategoryStat[]): SeasonalInsight[] {
     });
   }
   return out;
+}
+
+// ─── Explorer: list + detail for the Service plans page ────────────────────
+
+export interface PlanListRow {
+  planId: string;
+  sortDate: string | null;
+  serviceTypeName: string | null;
+  title: string | null;
+  itemCount: number;
+  types: Array<{ key: string; label: string }>;
+}
+
+export function listServicePlans(orgId: number, limit = 500): PlanListRow[] {
+  const meta = getDb()
+    .prepare(
+      `SELECT pl.pco_id AS planId, pl.sort_date AS sortDate, pl.title AS title,
+              st.name AS serviceTypeName, COUNT(pi.pco_id) AS itemCount
+         FROM pco_plans pl
+         JOIN pco_plan_items pi ON pi.org_id = pl.org_id AND pi.plan_id = pl.pco_id
+         LEFT JOIN pco_service_types st ON st.org_id = pl.org_id AND st.pco_id = pl.service_type_id
+        WHERE pl.org_id = ?
+        GROUP BY pl.pco_id
+        ORDER BY pl.sort_date DESC
+        LIMIT ?`,
+    )
+    .all(orgId, limit) as Array<Omit<PlanListRow, "types">>;
+
+  const byPlan = getPlanItemsByPlan(orgId);
+  return meta.map((m) => {
+    const items = byPlan.get(m.planId)?.items ?? [];
+    const detected = detectAnnouncements(gatherAnnouncementText(items));
+    const types = detected.map((d) => ({
+      key: d.key,
+      label: ANNOUNCEMENT_TYPES.find((t) => t.key === d.key)?.label ?? d.key,
+    }));
+    return { ...m, types };
+  });
+}
+
+export interface PlanDetailItem {
+  pcoId: string;
+  sequence: number | null;
+  itemType: string | null;
+  title: string | null;
+  text: string;
+  scanned: boolean;
+}
+
+export interface PlanDetail {
+  planId: string;
+  sortDate: string | null;
+  title: string | null;
+  serviceTypeName: string | null;
+  items: PlanDetailItem[];
+  types: Array<{ key: string; label: string; what: string; matches: string[] }>;
+}
+
+export function getServicePlan(orgId: number, planId: string): PlanDetail | null {
+  const head = getDb()
+    .prepare(
+      `SELECT pl.pco_id AS planId, pl.sort_date AS sortDate, pl.title AS title, st.name AS serviceTypeName
+         FROM pco_plans pl
+         LEFT JOIN pco_service_types st ON st.org_id = pl.org_id AND st.pco_id = pl.service_type_id
+        WHERE pl.org_id = ? AND pl.pco_id = ?`,
+    )
+    .get(orgId, planId) as Omit<PlanDetail, "items" | "types"> | undefined;
+  if (!head) return null;
+
+  const rows = getDb()
+    .prepare(
+      `SELECT pco_id, sequence, item_type, title, description, html_details
+         FROM pco_plan_items WHERE org_id = ? AND plan_id = ? ORDER BY sequence`,
+    )
+    .all(orgId, planId) as Array<{
+    pco_id: string;
+    sequence: number | null;
+    item_type: string | null;
+    title: string | null;
+    description: string | null;
+    html_details: string | null;
+  }>;
+
+  const items: PlanDetailItem[] = rows.map((r) => {
+    const like: PlanItemLike = {
+      item_type: r.item_type,
+      title: r.title,
+      description: r.description,
+      html_details: r.html_details,
+    };
+    const scanned = isScanned(like);
+    return {
+      pcoId: r.pco_id,
+      sequence: r.sequence,
+      itemType: r.item_type,
+      title: r.title,
+      text: textOf(like),
+      scanned,
+    };
+  });
+
+  const detected = detectAnnouncements(gatherAnnouncementText(rows.map(toLike)));
+  const types = detected.map((d) => {
+    const t = ANNOUNCEMENT_TYPES.find((x) => x.key === d.key)!;
+    return { key: t.key, label: t.label, what: t.what, matches: d.matches };
+  });
+
+  return { ...head, items, types };
+}
+
+function toLike(r: {
+  item_type: string | null;
+  title: string | null;
+  description: string | null;
+  html_details: string | null;
+}): PlanItemLike {
+  return { item_type: r.item_type, title: r.title, description: r.description, html_details: r.html_details };
 }

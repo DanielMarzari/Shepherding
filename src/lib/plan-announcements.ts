@@ -1,106 +1,26 @@
 import "server-only";
-import type { NextStepKey } from "./sermon-impact";
+import {
+  ANNOUNCEMENT_TYPES,
+  ANNOUNCEMENT_BY_KEY,
+  type AnnouncementType,
+} from "./announcement-types";
+
+export { ANNOUNCEMENT_TYPES, ANNOUNCEMENT_BY_KEY };
+export type { AnnouncementType };
 
 // ---------------------------------------------------------------------------
 // Announcement detection: turn a worship service's order-of-service items into
-// the set of next-step CALLS that were made from the stage that week. The
-// content is free-text in item descriptions / html_details (e.g. a bulleted
-// "- Giving / - Prayer Night / - Small Group Launch"), so we detect categories
-// with a curated, auditable keyword catalog rather than an LLM — which keeps
-// it instant and safe to run inside the nightly sync. Every match keeps the
-// snippet that fired it, so the page can show WHY a week was tagged.
+// the set of next-step CALLS made from the stage that week. The content is
+// free-text in item descriptions / html_details (e.g. a bulleted "- Giving /
+// - Prayer Night / - Small Group Launch"), so we detect types with a curated,
+// auditable keyword catalog rather than an LLM — instant, deterministic, and
+// safe to run inside the nightly sync. Every match keeps the phrase that fired
+// it, so the Service plans page can show exactly WHY a week was tagged.
+//
+// Types are deliberately CONCRETE — named after what the church actually
+// promotes ("Discover class", "Baptism", "Prayer night") rather than abstract
+// buckets like "discipleship", so a tag is self-explanatory.
 // ---------------------------------------------------------------------------
-
-/** Word-boundary keyword catalog per next-step category. Patterns are matched
- *  case-insensitively against announcement text. Kept deliberately specific to
- *  the recurring programs this church promotes, to avoid over-tagging. */
-const KEYWORDS: Record<NextStepKey, RegExp[]> = {
-  giving: [
-    /(?<!thanks)\bgiving\b/i,
-    /\bgenerosity\b/i,
-    /\btithe/i,
-    /\bstewardship\b/i,
-    /\bpledge\b/i,
-    /extraordinary giving/i,
-    /year[- ]end (giving|gift)/i,
-    /capital campaign/i,
-    /\bfirst fruits\b/i,
-  ],
-  groups: [
-    // A genuine call to join / sign up, or that groups are launching / open —
-    // NOT a passing "small group study sheet" resource mention.
-    /small group (launch|kickoff|sign[- ]?up|signup|registration|semester|starting|\bstart\b|open|opening|begin|connect)/i,
-    /(join|sign up for|get in(to)?) (a |the |our |your )?(small )?group/i,
-    /small groups? (are |is )?(now )?(open|available|filling|fill up|starting|launching|back|kicking off|begin)/i,
-    /group (finder|kickoff|launch|sign[- ]?up|registration)/i,
-    /\blife group/i,
-    /\bcommunity group/i,
-  ],
-  serving: [
-    /\bvolunteer/i,
-    /\bserve\b/i,
-    /\bserving\b/i,
-    /dream team/i,
-    /serve team/i,
-    /unleashing servants/i,
-    /join (a|the|our) team/i,
-    /serve (opportunit|sunday|day|the)/i,
-    /\bnext gen\b.*volunteer/i,
-  ],
-  outreach: [
-    /invite (a |your |some ?one|people|them|others|a friend|a neighbor|friends)/i,
-    /bring a friend/i,
-    /\boutreach\b/i,
-    /christmas (eve )?(service|at faith)/i,
-    /easter (service|at faith|sunday)/i,
-    /connect(ing)? online/i,
-    /connectonline/i,
-    /community (event|outreach|dinner|day|serve)/i,
-    /tree lighting/i,
-    /trunk or treat/i,
-    /fall fest/i,
-    /block party/i,
-    /reach (the|our) (city|community|valley|lehigh)/i,
-  ],
-  prayer: [
-    /prayer night/i,
-    /prayer works/i,
-    /night of prayer/i,
-    /prayer (gathering|meeting|room|walk|vigil|tent)/i,
-    /\d+ days of prayer/i,
-    /week of prayer/i,
-  ],
-  faith_commitment: [
-    /\bbaptism/i,
-    /\bbaptize/i,
-    /get baptized/i,
-    /discover jesus/i,
-    /profession of faith/i,
-    /\baltar call\b/i,
-  ],
-  discipleship: [
-    /discover (faith church|membership|faith|next)/i,
-    /membership (class|interview|matters)/i,
-    /\bmembership\b/i,
-    /next steps class/i,
-    /reading plan/i,
-    /bible reading/i,
-    /\bdiscipleship\b/i,
-    /\bequip\b.*class/i,
-  ],
-  care: [
-    /\bbenevolence\b/i,
-    /grief\s?share/i,
-    /\bcounseling\b/i,
-    /foster (care|and adoption|& adoption)/i,
-    /meal train/i,
-    /support group/i,
-    /care (team|ministry)/i,
-    /divorce care/i,
-  ],
-};
-
-export const ANNOUNCEMENT_CATEGORIES = Object.keys(KEYWORDS) as NextStepKey[];
 
 /** Strip HTML to readable text for keyword scanning. */
 export function stripHtml(html: string): string {
@@ -109,6 +29,7 @@ export function stripHtml(html: string): string {
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&#39;|&rsquo;|&lsquo;/gi, "'")
+    .replace(/&quot;|&ldquo;|&rdquo;/gi, '"')
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -120,47 +41,96 @@ export interface PlanItemLike {
   html_details: string | null;
 }
 
-/** The announcement-bearing text of a service: descriptions + html of the
- *  'item'/'header' rows, EXCLUDING the sermon item (that's the other page)
- *  and songs (their notes are vocal arrangements, pure noise). */
+/** Is this item one whose text we scan for announcements? Songs and media are
+ *  vocal-arrangement notes (pure noise) and the sermon item is the other
+ *  page's territory. */
+export function isAnnouncementItem(it: PlanItemLike): boolean {
+  const type = (it.item_type ?? "").toLowerCase();
+  if (type === "song" || type === "media") return false;
+  if (/sermon|message\b/i.test(it.title ?? "")) return false;
+  return true;
+}
+
+/** The announcement-bearing text of one item (description + stripped html). */
+export function itemText(it: PlanItemLike): string {
+  return [it.description ?? "", it.html_details ? stripHtml(it.html_details) : ""]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+/** All announcement-bearing text of a service, joined. */
 export function gatherAnnouncementText(items: PlanItemLike[]): string {
   const parts: string[] = [];
   for (const it of items) {
-    const type = (it.item_type ?? "").toLowerCase();
-    if (type === "song" || type === "media") continue;
-    const title = it.title ?? "";
-    if (/sermon|message\b/i.test(title)) continue; // sermon content ≠ announcement
-    const chunks = [it.description ?? "", it.html_details ? stripHtml(it.html_details) : ""];
-    const text = chunks.filter(Boolean).join(" ").trim();
-    if (text) parts.push(text);
+    if (!isAnnouncementItem(it)) continue;
+    const t = itemText(it);
+    if (t) parts.push(t);
   }
   return parts.join("  •  ");
 }
 
-export interface DetectedCategory {
-  key: NextStepKey;
-  matches: string[]; // the snippets that fired, for transparency
+export interface DetectedType {
+  key: string;
+  /** The exact phrases that fired, with context — the evidence for the tag. */
+  matches: string[];
 }
 
-/** Detect which next-step categories a service announced, with evidence. */
-export function detectAnnouncements(text: string): DetectedCategory[] {
+/** Detect which announcement types a block of text contains, with evidence. */
+export function detectAnnouncements(text: string): DetectedType[] {
   if (!text) return [];
-  const out: DetectedCategory[] = [];
-  for (const key of ANNOUNCEMENT_CATEGORIES) {
+  const out: DetectedType[] = [];
+  for (const t of ANNOUNCEMENT_TYPES) {
     const matches = new Set<string>();
-    for (const re of KEYWORDS[key]) {
+    for (const re of t.patterns) {
       const m = text.match(re);
       if (m) matches.add(snippetAround(text, m.index ?? 0, m[0].length));
     }
-    if (matches.size) out.push({ key, matches: [...matches].slice(0, 3) });
+    if (matches.size) out.push({ key: t.key, matches: [...matches].slice(0, 3) });
   }
   return out;
 }
 
-/** ~40-char context window around a match, trimmed to word edges. */
+/** Every match of every type within one item's text, as offsets — used to
+ *  highlight the exact phrases in the service-plan detail view. */
+export interface Hit {
+  key: string;
+  start: number;
+  end: number;
+}
+export function findHits(text: string): Hit[] {
+  const hits: Hit[] = [];
+  if (!text) return hits;
+  for (const t of ANNOUNCEMENT_TYPES) {
+    for (const re of t.patterns) {
+      const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+      let m: RegExpExecArray | null;
+      while ((m = g.exec(text)) !== null) {
+        if (m[0].length === 0) {
+          g.lastIndex++;
+          continue;
+        }
+        hits.push({ key: t.key, start: m.index, end: m.index + m[0].length });
+      }
+    }
+  }
+  // Sort and drop overlaps (keep the first/longest at each position).
+  hits.sort((a, b) => a.start - b.start || b.end - a.end);
+  const out: Hit[] = [];
+  let lastEnd = -1;
+  for (const h of hits) {
+    if (h.start >= lastEnd) {
+      out.push(h);
+      lastEnd = h.end;
+    }
+  }
+  return out;
+}
+
+/** ~40-char context window around a match, trimmed with ellipses. */
 function snippetAround(text: string, index: number, len: number): string {
-  const start = Math.max(0, index - 16);
-  const end = Math.min(text.length, index + len + 16);
+  const start = Math.max(0, index - 18);
+  const end = Math.min(text.length, index + len + 18);
   let s = text.slice(start, end).trim();
   if (start > 0) s = "…" + s;
   if (end < text.length) s = s + "…";
