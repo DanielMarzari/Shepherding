@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Card, Pill } from "@/components/ui";
-import { ANNOUNCEMENT_TYPES } from "@/lib/announcement-types";
+import { NEXT_STEPS_CATALOG, CATEGORY_LABELS } from "@/lib/next-steps-catalog";
 import type { PlanListRow } from "@/lib/announcement-impact";
 
 function fmtDate(iso: string | null): string {
@@ -23,7 +23,7 @@ export function PlanFilter({ plans }: { plans: PlanListRow[] }) {
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return plans.filter((p) => {
-      if (tag && !p.types.some((t) => t.key === tag)) return false;
+      if (tag && !p.steps.some((t: { key: string }) => t.key === tag)) return false;
       if (!needle) return true;
       return (
         (p.title ?? "").toLowerCase().includes(needle) ||
@@ -57,20 +57,20 @@ export function PlanFilter({ plans }: { plans: PlanListRow[] }) {
           >
             All
           </button>
-          {ANNOUNCEMENT_TYPES.map((t) => (
+          {NEXT_STEPS_CATALOG.map((t) => (
             <button
               key={t.key}
               type="button"
               onClick={() => setTag(tag === t.key ? null : t.key)}
               aria-pressed={tag === t.key}
-              title={t.what}
+              title={`${CATEGORY_LABELS[t.category]} — ${t.what}`}
               className={`text-xs rounded-full px-2.5 py-1 border transition-colors cursor-pointer ${
                 tag === t.key
                   ? "border-accent-soft-fg/60 bg-accent-soft-bg text-accent-soft-fg font-medium"
                   : "border-border-soft text-muted hover:text-fg"
               }`}
             >
-              {t.label}
+              {t.name}
             </button>
           ))}
         </div>
@@ -78,7 +78,7 @@ export function PlanFilter({ plans }: { plans: PlanListRow[] }) {
 
       <p className="text-xs text-muted">
         {filtered.length} of {plans.length} services
-        {tag ? ` announcing “${ANNOUNCEMENT_TYPES.find((t) => t.key === tag)?.label}”` : ""}
+        {tag ? ` announcing “${NEXT_STEPS_CATALOG.find((t) => t.key === tag)?.name}”` : ""}
       </p>
 
       <Card className="p-0 overflow-x-auto">
@@ -109,12 +109,12 @@ export function PlanFilter({ plans }: { plans: PlanListRow[] }) {
                 <td className="px-4 py-2.5 text-right text-xs text-muted tabular-nums">{p.itemCount}</td>
                 <td className="px-4 py-2.5">
                   <div className="flex flex-wrap gap-1">
-                    {p.types.length === 0 ? (
+                    {p.steps.length === 0 ? (
                       <span className="text-xs text-muted">—</span>
                     ) : (
-                      p.types.map((t) => (
+                      p.steps.map((t: { key: string; name: string }) => (
                         <Pill key={t.key} tone="accent">
-                          {t.label}
+                          {t.name}
                         </Pill>
                       ))
                     )}

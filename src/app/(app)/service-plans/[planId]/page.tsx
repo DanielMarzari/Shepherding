@@ -4,7 +4,8 @@ import { AppShell } from "@/components/AppShell";
 import { Card, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { getServicePlan } from "@/lib/announcement-impact";
-import { findHits, ANNOUNCEMENT_BY_KEY } from "@/lib/plan-announcements";
+import { findHits } from "@/lib/plan-announcements";
+import { STEP_BY_KEY } from "@/lib/next-steps-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -28,16 +29,16 @@ function HighlightedText({ text }: { text: string }) {
   let cursor = 0;
   hits.forEach((h, i) => {
     if (h.start > cursor) out.push(<span key={`t${i}`}>{text.slice(cursor, h.start)}</span>);
-    const type = ANNOUNCEMENT_BY_KEY[h.key];
+    const type = STEP_BY_KEY[h.key];
     out.push(
       <mark
         key={`h${i}`}
         className="bg-accent-soft-bg text-accent-soft-fg rounded px-1 underline decoration-2 underline-offset-2 font-medium"
-        title={type ? `${type.label} — ${type.what}` : h.key}
+        title={type ? `${type.name} — ${type.what}` : h.key}
       >
         {text.slice(h.start, h.end)}
         <span className="ml-1 text-[0.65rem] uppercase tracking-wide font-semibold opacity-80">
-          → {type?.label ?? h.key}
+          → {type?.name ?? h.key}
         </span>
       </mark>,
     );
@@ -75,7 +76,7 @@ export default async function ServicePlanDetailPage({
 
         <section className="space-y-2">
           <h2 className="text-sm font-semibold">Next steps announced this service</h2>
-          {plan.types.length === 0 ? (
+          {plan.steps.length === 0 ? (
             <Card className="p-4">
               <p className="text-sm text-muted">
                 No next-step announcements were detected in this service order.
@@ -83,9 +84,9 @@ export default async function ServicePlanDetailPage({
             </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {plan.types.map((t) => (
+              {plan.steps.map((t) => (
                 <Card key={t.key} className="p-4 space-y-2">
-                  <span className="text-sm font-semibold">{t.label}</span>
+                  <span className="text-sm font-semibold">{t.name}</span>
                   <p className="text-xs text-muted leading-relaxed">{t.what}</p>
                   <div className="space-y-1 pt-1">
                     <p className="text-xs text-muted font-medium">Matched because the plan said:</p>

@@ -1,13 +1,12 @@
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Card, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import Link from "next/link";
 import {
   computeAnnouncementImpact,
-  type AnnCategoryStat,
+  type StepStat,
   type AnnWeekRow,
 } from "@/lib/announcement-impact";
-import { type MetricKey } from "@/lib/sermon-impact";
 
 export const dynamic = "force-dynamic";
 
@@ -15,12 +14,6 @@ function fmtPct(x: number | null | undefined): string {
   if (x == null) return "—";
   const v = Math.round(x * 100);
   return (v > 0 ? "+" : "") + v + "%";
-}
-function arrow(x: number | null | undefined): string {
-  if (x == null) return "";
-  if (x > 0.02) return "▲";
-  if (x < -0.02) return "▼";
-  return "•";
 }
 function fmtDate(iso: string): string {
   return new Date(iso.slice(0, 10) + "T00:00:00Z").toLocaleDateString("en-US", {
@@ -31,52 +24,48 @@ function fmtDate(iso: string): string {
   });
 }
 
-const RECENT_METRICS: { key: MetricKey; short: string }[] = [
-  { key: "group_apps", short: "Group apps" },
-  { key: "new_servers", short: "New servers" },
-  { key: "new_attenders", short: "New attenders" },
-  { key: "checkins", short: "Check-ins" },
-];
-
-function ScoreCard({ c }: { c: AnnCategoryStat }) {
-  if (!c.measurable) {
-    return (
-      <Card className="p-4 space-y-1.5 border-border-soft">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-semibold">{c.label}</span>
-          <Pill tone="muted">not tracked</Pill>
-        </div>
-        <p className="text-xs text-muted leading-relaxed">{c.what}</p>
-        <p className="text-xs text-muted">
-          Announced on <span className="font-medium text-fg">{Math.round(c.announceShare * 100)}%</span> of
-          Sundays. No weekly outcome series to correlate against yet.
-        </p>
-      </Card>
-    );
-  }
-  const contrastPts = c.contrast == null ? null : Math.round(c.contrast * 100);
-  const dir = contrastPts == null ? "muted" : contrastPts >= 4 ? "up" : contrastPts <= -4 ? "down" : "flat";
+function MeasurableCard({ s }: { s: StepStat }) {
+  const pts = s.contrast == null ? null : Math.round(s.contrast * 100);
+  const dir = pts == null ? "flat" : pts >= 4 ? "up" : pts <= -4 ? "down" : "flat";
   return (
     <Card className="p-4 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold">{c.label}</span>
-        <Pill tone="accent">→ {c.metricLabel}</Pill>
+        <span className="text-sm font-semibold">{s.name}</span>
+        <Pill tone="accent">→ {s.measureLabel}</Pill>
       </div>
-      <p className="text-xs text-muted leading-relaxed">{c.what}</p>
+      <p className="text-xs text-muted leading-relaxed">{s.what}</p>
       <div className="flex items-end gap-2">
         <span
           className={`text-2xl font-semibold tabular-nums ${
             dir === "up" ? "text-good-soft-fg" : dir === "down" ? "text-warn-soft-fg" : "text-fg"
           }`}
         >
-          {contrastPts == null ? "—" : (contrastPts > 0 ? "+" : "") + contrastPts + " pts"}
+          {pts == null ? "—" : (pts > 0 ? "+" : "") + pts + " pts"}
         </span>
         <span className="text-xs text-muted mb-1">vs Sundays without it</span>
       </div>
       <p className="text-xs text-muted leading-relaxed">
-        After announcing, {c.metricLabel} ran a median{" "}
-        <span className="font-medium text-fg">{fmtPct(c.upliftAnnounced)}</span> vs the local norm (n=
-        {c.nAnnounced}). Without: {fmtPct(c.upliftControl)} (n={c.nControl}).
+        Announced on <span className="font-medium text-fg">{s.announced}</span> Sundays. After: median{" "}
+        <span className="font-medium text-fg">{fmtPct(s.upliftAnnounced)}</span> (n={s.nAnnouncedWithData});
+        without: {fmtPct(s.upliftControl)} (n={s.nControl}).
+      </p>
+    </Card>
+  );
+}
+
+function BlockedCard({ s }: { s: StepStat }) {
+  return (
+    <Card className="p-4 space-y-1.5 border-border-soft">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold">{s.name}</span>
+        <Pill tone="muted">{s.categoryLabel}</Pill>
+      </div>
+      <p className="text-xs text-muted leading-relaxed">{s.what}</p>
+      <p className="text-xs">
+        Announced on <span className="font-medium">{s.announced}</span> Sundays.
+      </p>
+      <p className="text-xs text-warn-soft-fg leading-relaxed">
+        <span className="font-medium">Can&rsquo;t score yet:</span> {s.gap}
       </p>
     </Card>
   );
@@ -85,8 +74,9 @@ function ScoreCard({ c }: { c: AnnCategoryStat }) {
 export default async function AnnouncementImpactPage() {
   const session = await requireOrg();
   const data = computeAnnouncementImpact(session.orgId);
-  const measurable = data.categories.filter((c) => c.measurable);
-  const detectable = data.categories.filter((c) => !c.measurable);
+  const measurable = data.steps.filter((s) => s.measureLabel && s.announced > 0);
+  const blocked = data.steps.filter((s) => !s.measureLabel && s.announced > 0);
+  const never = data.steps.filter((s) => s.announced === 0);
 
   return (
     <AppShell active="Announcement impact" breadcrumb="Next steps › Announcement impact">
@@ -95,16 +85,16 @@ export default async function AnnouncementImpactPage() {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Announcement impact</h1>
             <p className="text-muted text-sm mt-1 max-w-3xl">
-              What the church promoted from the stage each Sunday — pulled from the worship service order
-              (Live &amp; Chapel) — lined up against measurable congregation activity in the 5 weeks after. The
-              &ldquo;call&rdquo; here is an actual announcement (giving, a group launch, a serve push, a prayer
-              night, a Discover class, a campaign, an invite), so it&rsquo;s usually a sharper next-step signal
-              than the sermon topic.
+              Every <em>specific, named</em> next step announced from the stage — pulled from the worship
+              service order — and, where we have outcome data, whether anything moved in the 5 weeks after.{" "}
+              <Link href="/service-plans" className="text-accent-soft-fg hover:underline">
+                Browse the service plans →
+              </Link>
             </p>
           </div>
           {data.weeksWithData > 0 && (
             <div className="text-right text-xs text-muted">
-              <div className="text-fg font-medium">{data.weeksWithData} Sundays analyzed</div>
+              <div className="text-fg font-medium">{data.weeksWithData} Sundays</div>
               <div>
                 {data.earliest ? fmtDate(data.earliest) : "—"} – {data.latest ? fmtDate(data.latest) : "—"}
               </div>
@@ -113,11 +103,8 @@ export default async function AnnouncementImpactPage() {
         </div>
 
         {data.weeksWithData === 0 ? (
-          <Card className="p-8 text-center space-y-2">
-            <p className="text-sm font-medium">No service-order data yet</p>
-            <p className="text-xs text-muted max-w-md mx-auto leading-relaxed">
-              Once the worship service order (plan items) has synced from PCO, this page fills in automatically.
-            </p>
+          <Card className="p-8 text-center">
+            <p className="text-sm text-muted">No service-order data has synced yet.</p>
           </Card>
         ) : (
           <>
@@ -141,19 +128,28 @@ export default async function AnnouncementImpactPage() {
             </section>
 
             <section className="space-y-2">
-              <h2 className="text-sm font-semibold">Next steps we can measure</h2>
+              <h2 className="text-sm font-semibold">Next steps we can score</h2>
+              <p className="text-xs text-muted">
+                These have an outcome series we can compare against.
+              </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {measurable.map((c) => (
-                  <ScoreCard key={c.key} c={c} />
+                {measurable.map((s) => (
+                  <MeasurableCard key={s.key} s={s} />
                 ))}
               </div>
             </section>
 
             <section className="space-y-2">
-              <h2 className="text-sm font-semibold">Announced, but no outcome to measure yet</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                {detectable.map((c) => (
-                  <ScoreCard key={c.key} c={c} />
+              <h2 className="text-sm font-semibold">
+                Announced, but not scoreable yet ({blocked.length})
+              </h2>
+              <p className="text-xs text-muted max-w-3xl">
+                We know exactly when each of these was announced — but the church doesn&rsquo;t record who
+                responded, so there&rsquo;s nothing to measure against. Each card says what would unlock it.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {blocked.map((s) => (
+                  <BlockedCard key={s.key} s={s} />
                 ))}
               </div>
             </section>
@@ -161,16 +157,11 @@ export default async function AnnouncementImpactPage() {
             <section className="space-y-2">
               <h2 className="text-sm font-semibold">By Sunday</h2>
               <Card className="p-0 overflow-x-auto">
-                <table className="w-full text-sm min-w-[720px]">
+                <table className="w-full text-sm min-w-[640px]">
                   <thead>
                     <tr className="text-left text-xs text-muted border-b border-border-soft">
                       <th className="font-medium px-4 py-2.5">Sunday</th>
-                      <th className="font-medium px-4 py-2.5">Announced (from the service order)</th>
-                      {RECENT_METRICS.map((m) => (
-                        <th key={m.key} className="font-medium px-3 py-2.5 text-right whitespace-nowrap">
-                          {m.short}
-                        </th>
-                      ))}
+                      <th className="font-medium px-4 py-2.5">Next steps announced</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -180,7 +171,7 @@ export default async function AnnouncementImpactPage() {
                           {s.planIds[0] ? (
                             <Link
                               href={`/service-plans/${s.planIds[0]}`}
-                              className="text-accent-soft-fg hover:underline"
+                              className="text-accent-soft-fg hover:underline font-medium"
                             >
                               {fmtDate(s.sunday)}
                             </Link>
@@ -190,48 +181,27 @@ export default async function AnnouncementImpactPage() {
                         </td>
                         <td className="px-4 py-2.5">
                           <div className="flex flex-wrap gap-1">
-                            {s.types.length === 0 ? (
+                            {s.steps.length === 0 ? (
                               <span className="text-xs text-muted">—</span>
                             ) : (
-                              s.types.map((call) => (
-                                <Pill key={call.key} tone="accent" className="cursor-default">
-                                  <span title={call.evidence ?? undefined}>{call.label}</span>
+                              s.steps.map((t) => (
+                                <Pill key={t.key} tone="accent">
+                                  <span title={t.evidence ?? undefined}>{t.name}</span>
                                 </Pill>
                               ))
                             )}
                           </div>
                         </td>
-                        {RECENT_METRICS.map((m) => {
-                          const v = s.uplift[m.key];
-                          return (
-                            <td
-                              key={m.key}
-                              className={`px-3 py-2.5 text-right tabular-nums whitespace-nowrap ${
-                                v == null
-                                  ? "text-muted"
-                                  : v > 0.02
-                                    ? "text-good-soft-fg font-medium"
-                                    : v < -0.02
-                                      ? "text-warn-soft-fg font-medium"
-                                      : "text-fg"
-                              }`}
-                            >
-                              {v == null ? "—" : `${arrow(v)} ${fmtPct(v)}`}
-                            </td>
-                          );
-                        })}
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </Card>
-              <p className="text-xs text-muted leading-relaxed max-w-3xl">
-                Hover an announcement tag to see the snippet that matched. Uplift = how far the metric ran over
-                the 5 weeks after vs the local seasonal norm (median weekly level in the surrounding ~6 months).
-                These are congregation-level correlations, not causation — an announcement usually rides along
-                with a launch or campaign whose timing does most of the work, and small samples move easily.
-                Read them as leads to look into.
-              </p>
+              {never.length > 0 && (
+                <p className="text-xs text-muted">
+                  Never detected in an announcement: {never.map((s) => s.name).join(", ")}.
+                </p>
+              )}
             </section>
           </>
         )}

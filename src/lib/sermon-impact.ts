@@ -15,19 +15,24 @@ import type { SeasonalInsight } from "./attendance-seasonal";
  *  the weekly outcome series we correlate the call against, or null when the
  *  church doesn't yet track an outcome for it (notably giving — Shepherdly has
  *  no dated gifts, only last-gift). */
-export {
-  NEXT_STEPS,
-  METRIC_LABELS,
-} from "./next-step-types";
-export type { MetricKey, NextStepKey, SermonListRow } from "./next-step-types";
+export { METRIC_LABELS } from "./next-steps-catalog";
+export type { MetricKey } from "./next-steps-catalog";
 
 import {
-  NEXT_STEPS,
+  NEXT_STEPS_CATALOG,
   METRIC_LABELS,
   type MetricKey,
-  type NextStepKey,
-  type SermonListRow,
-} from "./next-step-types";
+  type NextStep,
+} from "./next-steps-catalog";
+
+/** The sermon next steps we keep: only the ones that are specific AND we could
+ *  measure — give, join a group, serve, get baptized, become a member, and the
+ *  named prayer gatherings. Abstract calls (follow Jesus, read Scripture,
+ *  invite someone, care for others) are deliberately excluded: they can't be
+ *  measured, so tagging them is noise. */
+export const SERMON_STEPS: NextStep[] = NEXT_STEPS_CATALOG.filter(
+  (s) => s.sermonKey || (s.sermonPatterns && s.sermonPatterns.length > 0),
+);
 
 interface NextStepVal {
   called: boolean;
@@ -249,18 +254,17 @@ export function getSermons(orgId: number): SermonRow[] {
 // ---- the analysis ----------------------------------------------------------
 
 export interface CategoryStat {
-  key: NextStepKey;
-  label: string;
+  key: string;
+  name: string;
+  what: string;
   measurable: boolean;
   metricLabel: string | null;
-  /** Sundays with a strong call (intensity >= 2) for this step. */
+  gap: string | null;
   nCalled: number;
-  /** Sundays without the call (intensity <= 1). */
   nControl: number;
-  avgUpliftCalled: number | null; // MEDIAN deviation from local norm (0.06 = +6%)
-  avgUpliftControl: number | null;
-  contrast: number | null; // called - control, in points of %
-  /** How often this step is preached at all (share of classified Sundays). */
+  upliftCalled: number | null;
+  upliftControl: number | null;
+  contrast: number | null;
   callShare: number;
 }
 
@@ -271,17 +275,6 @@ export interface SermonImpactSummary {
   latest: string | null;
   categories: CategoryStat[];
   insights: SeasonalInsight[];
-  recent: SermonDetailRow[];
-  metricCoverage: Array<{ key: MetricKey; label: string; from: string | null; to: string | null }>;
-}
-
-export interface SermonDetailRow {
-  source_id: number;
-  preached_on: string;
-  title: string | null;
-  topic: string | null;
-  calls: Array<{ key: NextStepKey; label: string; intensity: number }>;
-  uplift: Partial<Record<MetricKey, number | null>>;
 }
 
 function pct(x: number | null): string {
@@ -290,94 +283,143 @@ function pct(x: number | null): string {
   return (v >= 0 ? "+" : "") + v + "%";
 }
 
-/** Collapse sermons to one record per Sunday, taking the max intensity seen
- *  for each category (two services / a weekend + midweek shouldn't double-count
- *  the same week's outcome window). */
-function bySunday(sermons: SermonRow[]): Map<string, Record<string, number>> {
-  const out = new Map<string, Record<string, number>>();
-  for (const s of sermons) {
-    if (!s.classified) continue;
-    const wk = sundayOf(s.preached_on);
-    const cur = out.get(wk) ?? {};
-    for (const step of NEXT_STEPS) {
-      const v = s.next_steps[step.key];
-      const inten = v?.called ? Math.max(v.intensity ?? 0, 1) : 0;
-      cur[step.key] = Math.max(cur[step.key] ?? 0, inten);
+/** Which narrowed next steps a sermon called for. `giving`/`groups`/`serving`
+ *  come from the stored classifier; the rest are detected straight from the
+ *  transcript, which also gives us the exact spot it was said. */
+function callsForSermon(
+  ns: Record<string, NextStepVal>,
+  transcript: string | null,
+): Map<string, { intensity: number; evidence: string; from: "classifier" | "transcript" }> {
+  const out = new Map<string, { intensity: number; evidence: string; from: "classifier" | "transcript" }>();
+  for (const step of SERMON_STEPS) {
+    if (step.sermonKey) {
+      const v = ns[step.sermonKey];
+      if (v?.called) {
+        out.set(step.key, {
+          intensity: v.intensity ?? 1,
+          evidence: (v.quote ?? "").trim(),
+          from: "classifier",
+        });
+        continue;
+      }
     }
-    out.set(wk, cur);
+    if (step.sermonPatterns && transcript) {
+      for (const re of step.sermonPatterns) {
+        const m = transcript.match(re);
+        if (m) {
+          const idx = m.index ?? 0;
+          out.set(step.key, {
+            intensity: 2,
+            evidence: transcript.slice(Math.max(0, idx - 60), Math.min(transcript.length, idx + m[0].length + 60)).trim(),
+            from: "transcript",
+          });
+          break;
+        }
+      }
+    }
   }
   return out;
+}
+
+function gapForSermonStep(key: string): string {
+  switch (key) {
+    case "give":
+      return "No dated gifts in Shepherdly — only each donor's last-gift date.";
+    case "baptism":
+      return "PCO records who staffed each baptism, not who was baptized.";
+    case "membership":
+      return "membership_type carries no date, so a change can't be dated.";
+    default:
+      return "No attendance record exists for this gathering.";
+  }
 }
 
 export function computeSermonImpact(orgId: number): SermonImpactSummary {
   const sermons = getSermons(orgId);
   const classified = sermons.filter((s) => s.classified);
   const metrics = getWeeklyMetrics(orgId);
-  const sundays = bySunday(sermons);
+  const transcripts = new Map<number, string | null>(
+    (
+      getDb()
+        .prepare("SELECT source_id, transcript FROM sermons WHERE org_id = ?")
+        .all(orgId) as Array<{ source_id: number; transcript: string | null }>
+    ).map((r) => [r.source_id, r.transcript]),
+  );
 
-  // Per-category contrast: uplift of the mapped metric after strong-call
-  // Sundays vs no-call Sundays.
-  const categories: CategoryStat[] = NEXT_STEPS.map((step) => {
-    const series = step.metric ? metrics[step.metric] : null;
-    const calledUp: number[] = [];
-    const controlUp: number[] = [];
-    let nCalledSundays = 0;
+  // One record per Sunday (two services shouldn't double-count a week).
+  const sundays = new Map<string, Set<string>>();
+  for (const s of classified) {
+    const wk = sundayOf(s.preached_on);
+    const calls = callsForSermon(s.next_steps, transcripts.get(s.source_id) ?? null);
+    const cur = sundays.get(wk) ?? new Set<string>();
+    for (const k of calls.keys()) cur.add(k);
+    sundays.set(wk, cur);
+  }
+
+  const categories: CategoryStat[] = SERMON_STEPS.map((step) => {
+    const series = step.measure?.kind === "series" ? metrics[step.measure.metric] : null;
+    const metricLabel = step.measure?.kind === "series" ? METRIC_LABELS[step.measure.metric] : null;
+    const called: number[] = [];
+    const control: number[] = [];
     let callSundays = 0;
-    for (const [wk, cats] of sundays) {
-      const inten = cats[step.key] ?? 0;
-      if (inten >= 1) callSundays++;
+    for (const [wk, set] of sundays) {
+      const has = set.has(step.key);
+      if (has) callSundays++;
       if (!series) continue;
       const u = upliftFor(series, wk);
       if (u == null) continue;
-      if (inten >= 2) {
-        calledUp.push(u);
-        nCalledSundays++;
-      } else if (inten <= 1) {
-        controlUp.push(u);
-      }
+      if (has) called.push(u);
+      else control.push(u);
     }
-    // Median across sermons — robust to the occasional launch-week outlier.
-    const avgCalled = median(calledUp);
-    const avgControl = median(controlUp);
+    const a = median(called);
+    const c = median(control);
     return {
       key: step.key,
-      label: step.label,
-      measurable: !!step.metric,
-      metricLabel: step.metric ? METRIC_LABELS[step.metric] : null,
-      nCalled: series ? nCalledSundays : calledSundaysCount(sundays, step.key),
-      nControl: controlUp.length,
-      avgUpliftCalled: avgCalled,
-      avgUpliftControl: avgControl,
-      contrast: avgCalled != null && avgControl != null ? avgCalled - avgControl : null,
+      name: step.name,
+      what: step.what,
+      measurable: !!series,
+      metricLabel,
+      gap: series ? null : gapForSermonStep(step.key),
+      nCalled: series ? called.length : callSundays,
+      nControl: control.length,
+      upliftCalled: a,
+      upliftControl: c,
+      contrast: a != null && c != null ? a - c : null,
       callShare: sundays.size ? callSundays / sundays.size : 0,
     };
   });
 
-  const insights = buildInsights(categories);
-
-  // Recent sermons with their calls + measured uplift, newest first.
-  const recent: SermonDetailRow[] = classified
-    .slice()
-    .reverse()
-    .slice(0, 60)
-    .map((s) => {
-      const wk = sundayOf(s.preached_on);
-      const calls = NEXT_STEPS.filter((st) => s.next_steps[st.key]?.called)
-        .map((st) => ({ key: st.key, label: st.label, intensity: s.next_steps[st.key].intensity ?? 0 }))
-        .sort((a, b) => b.intensity - a.intensity);
-      const uplift: Partial<Record<MetricKey, number | null>> = {};
-      for (const m of ["group_apps", "new_servers", "new_attenders", "checkins"] as MetricKey[]) {
-        uplift[m] = upliftFor(metrics[m], wk);
-      }
-      return { source_id: s.source_id, preached_on: s.preached_on, title: s.title, topic: s.topic, calls, uplift };
+  const insights: SeasonalInsight[] = [];
+  for (const c of categories) {
+    if (!c.measurable) continue;
+    if (c.upliftCalled == null || c.contrast == null || c.nCalled < 5) {
+      insights.push({
+        title: `${c.name}: not enough sermons to measure`,
+        detail: `Only ${c.nCalled} Sundays called for this with usable ${c.metricLabel} data around them.`,
+        tone: "neutral",
+      });
+      continue;
+    }
+    const pts = Math.round(c.contrast * 100);
+    insights.push({
+      title:
+        pts >= 4
+          ? `Preaching “${c.name}” is followed by more ${c.metricLabel}`
+          : pts <= -4
+            ? `${c.name}: no lift beyond normal timing`
+            : `${c.name}: about the same either way`,
+      detail: `Median ${c.metricLabel} over the 5 weeks after: ${pct(c.upliftCalled)} on the ${c.nCalled} Sundays that called for it, vs ${pct(c.upliftControl)} on the ${c.nControl} that didn't${pts >= 4 || pts <= -4 ? ` — a ${pts > 0 ? "+" : ""}${pts}-point difference` : ""}. Campaign and launch timing usually moves these more than the sermon does.`,
+      tone: pts >= 4 ? "up" : "neutral",
     });
-
-  const metricCoverage = (Object.keys(metrics) as MetricKey[]).map((k) => ({
-    key: k,
-    label: METRIC_LABELS[k],
-    from: metrics[k].minWk,
-    to: metrics[k].maxWk,
-  }));
+  }
+  const blocked = categories.filter((c) => !c.measurable && c.nCalled > 0);
+  if (blocked.length) {
+    insights.push({
+      title: `${blocked.length} sermon next steps can't be scored yet`,
+      detail: `${blocked.map((b) => b.name).join(", ")} are tagged where preached, but there's no record of who responded. ${blocked[0].gap}`,
+      tone: "neutral",
+    });
+  }
 
   return {
     totalSermons: sermons.length,
@@ -386,86 +428,25 @@ export function computeSermonImpact(orgId: number): SermonImpactSummary {
     latest: classified[classified.length - 1]?.preached_on ?? null,
     categories,
     insights,
-    recent,
-    metricCoverage,
   };
-}
-
-function calledSundaysCount(sundays: Map<string, Record<string, number>>, key: string): number {
-  let n = 0;
-  for (const [, cats] of sundays) if ((cats[key] ?? 0) >= 2) n++;
-  return n;
-}
-
-/** Why a flat / slightly-negative result for these categories is a timing
- *  confound, not evidence that preaching backfires. */
-const CONFOUND: Partial<Record<NextStepKey, string>> = {
-  groups:
-    "New group sign-ups cluster around the twice-a-year group launches a sermon usually accompanies, and that campaign timing swamps any week-to-week preaching effect.",
-  serving:
-    "First-time serving is mostly driven by scheduled team onboarding and ministry fairs, so it doesn't move with the individual week's message.",
-  outreach:
-    "First-time attendance also rides on holidays, invites, and events, so treat this as a lead rather than proof.",
-};
-
-function buildInsights(categories: CategoryStat[]): SeasonalInsight[] {
-  const out: SeasonalInsight[] = [];
-  for (const c of categories) {
-    if (!c.measurable) continue;
-    if (c.avgUpliftCalled == null || c.contrast == null || c.nCalled < 5) {
-      out.push({
-        title: `${c.label}: not enough sermons to measure yet`,
-        detail: `Only ${c.nCalled} Sunday${c.nCalled === 1 ? "" : "s"} in range had a strong ${c.label.toLowerCase()} call with usable ${c.metricLabel} data around them. Need a few more to trust a number.`,
-        tone: "neutral",
-      });
-      continue;
-    }
-    const contrastPts = Math.round(c.contrast * 100);
-    const small = c.nCalled < 8;
-    const ml = c.metricLabel ?? c.label.toLowerCase();
-    const Ml = ml[0].toUpperCase() + ml.slice(1);
-    if (contrastPts >= 4) {
-      out.push({
-        title: `${c.label} calls are followed by a modest rise in ${ml}`,
-        detail:
-          `In the 5 weeks after the ${c.nCalled} strongest ${c.label.toLowerCase()} calls, ${ml} ran a median ${pct(c.avgUpliftCalled)} above the local seasonal norm, vs ${pct(c.avgUpliftControl)} on the ${c.nControl} Sundays without a call — a +${contrastPts}-point difference.` +
-          (small ? " Small sample — a lead, not proof." : ` ${CONFOUND[c.key] ?? ""}`),
-        tone: "up",
-      });
-    } else if (contrastPts <= -4) {
-      out.push({
-        title: `${c.label}: no lift beyond normal timing`,
-        detail: `${Ml} didn't rise after a ${c.label.toLowerCase()} call (median ${pct(c.avgUpliftCalled)} vs ${pct(c.avgUpliftControl)} without one). ${CONFOUND[c.key] ?? "This is a congregation-level signal only."}`,
-        tone: "neutral",
-      });
-    } else {
-      out.push({
-        title: `${c.label}: about the same with or without a call`,
-        detail: `${Ml} sat near the local norm whether or not the sermon made a ${c.label.toLowerCase()} call (median ${pct(c.avgUpliftCalled)} vs ${pct(c.avgUpliftControl)}).`,
-        tone: "neutral",
-      });
-    }
-  }
-  // Giving caveat — detectable in sermons, not yet measurable as an outcome.
-  const giving = categories.find((c) => c.key === "giving");
-  if (giving) {
-    out.push({
-      title: "Giving response isn't measurable yet",
-      detail: `Giving calls are detected in sermons (${Math.round(giving.callShare * 100)}% of classified Sundays touch on it), but Shepherdly has no dated gifts — only each donor's last-gift date — so there's no weekly giving series to correlate. A PushPay gifts/transactions export (or a "First Gift - Date" column) would unlock this.`,
-      tone: "neutral",
-    });
-  }
-  return out;
 }
 
 // ─── Explorer: list + detail for the Sermons page ──────────────────────────
 
-/** Every classified sermon, newest first, with its tags — for the list page.
- *  (SermonListRow lives in next-step-types so client components can use it.) */
+export interface SermonListRow {
+  sourceId: number;
+  preachedOn: string;
+  title: string | null;
+  speaker: string | null;
+  topic: string | null;
+  wordCount: number | null;
+  calls: Array<{ key: string; name: string; intensity: number }>;
+}
+
 export function listSermons(orgId: number): SermonListRow[] {
   const rows = getDb()
     .prepare(
-      `SELECT source_id, preached_on, title, speaker, topic, word_count, next_steps
+      `SELECT source_id, preached_on, title, speaker, topic, word_count, next_steps, transcript
          FROM sermons WHERE org_id = ? ORDER BY preached_on DESC`,
     )
     .all(orgId) as Array<Record<string, unknown>>;
@@ -476,9 +457,12 @@ export function listSermons(orgId: number): SermonListRow[] {
     } catch {
       /* leave empty */
     }
-    const calls = NEXT_STEPS.filter((s) => ns[s.key]?.called)
-      .map((s) => ({ key: s.key, label: s.label, intensity: ns[s.key].intensity ?? 0 }))
-      .sort((a, b) => b.intensity - a.intensity);
+    const found = callsForSermon(ns, (r.transcript as string) ?? null);
+    const calls = SERMON_STEPS.filter((s) => found.has(s.key)).map((s) => ({
+      key: s.key,
+      name: s.name,
+      intensity: found.get(s.key)!.intensity,
+    }));
     return {
       sourceId: r.source_id as number,
       preachedOn: r.preached_on as string,
@@ -492,14 +476,12 @@ export function listSermons(orgId: number): SermonListRow[] {
 }
 
 export interface SermonCall {
-  key: NextStepKey;
-  label: string;
-  blurb: string;
-  called: boolean;
+  key: string;
+  name: string;
+  what: string;
   intensity: number;
   quote: string;
-  /** Character range of the quote inside the transcript, or null when the
-   *  classifier paraphrased and we can't locate it verbatim. */
+  from: "classifier" | "transcript";
   range: { start: number; end: number } | null;
 }
 
@@ -515,18 +497,15 @@ export interface SermonDetail {
   wordCount: number | null;
   transcript: string | null;
   calls: SermonCall[];
+  notCalled: string[];
 }
 
-/** Locate a quote in the transcript, tolerating whitespace differences (the
- *  classifier's quotes are verbatim but may have collapsed newlines). Returns
- *  the character range in the ORIGINAL text, or null if not locatable. */
+/** Locate a quote in the transcript, tolerating whitespace differences.
+ *  Returns a character range in the ORIGINAL text, or null. */
 export function locateQuote(transcript: string, quote: string): { start: number; end: number } | null {
   if (!transcript || !quote) return null;
   const direct = transcript.indexOf(quote);
   if (direct >= 0) return { start: direct, end: direct + quote.length };
-
-  // Whitespace-tolerant scan: walk the transcript building a normalized form
-  // while remembering each normalized char's original index.
   const map: number[] = [];
   let norm = "";
   let prevSpace = false;
@@ -574,18 +553,18 @@ export function getSermonDetail(orgId: number, sourceId: number): SermonDetail |
     /* leave empty */
   }
   const transcript = (r.transcript as string) ?? null;
+  const found = callsForSermon(ns, transcript);
 
-  const calls: SermonCall[] = NEXT_STEPS.map((s) => {
-    const v = ns[s.key] ?? { called: false, intensity: 0, quote: "" };
-    const quote = (v.quote ?? "").trim();
+  const calls: SermonCall[] = SERMON_STEPS.filter((s) => found.has(s.key)).map((s) => {
+    const f = found.get(s.key)!;
     return {
       key: s.key,
-      label: s.label,
-      blurb: s.blurb,
-      called: !!v.called,
-      intensity: v.intensity ?? 0,
-      quote,
-      range: transcript && quote ? locateQuote(transcript, quote) : null,
+      name: s.name,
+      what: s.what,
+      intensity: f.intensity,
+      quote: f.evidence,
+      from: f.from,
+      range: transcript && f.evidence ? locateQuote(transcript, f.evidence) : null,
     };
   });
 
@@ -601,5 +580,6 @@ export function getSermonDetail(orgId: number, sourceId: number): SermonDetail |
     wordCount: (r.word_count as number) ?? null,
     transcript,
     calls,
+    notCalled: SERMON_STEPS.filter((s) => !found.has(s.key)).map((s) => s.name),
   };
 }

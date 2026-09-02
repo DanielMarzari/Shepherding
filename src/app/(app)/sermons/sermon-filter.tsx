@@ -3,7 +3,10 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Card, Pill } from "@/components/ui";
-import { NEXT_STEPS, type SermonListRow } from "@/lib/next-step-types";
+import { NEXT_STEPS_CATALOG } from "@/lib/next-steps-catalog";
+import type { SermonListRow } from "@/lib/sermon-impact";
+
+const STEPS = NEXT_STEPS_CATALOG.filter((s) => s.sermonKey || (s.sermonPatterns && s.sermonPatterns.length));
 
 function fmtDate(iso: string): string {
   return new Date(iso.slice(0, 10) + "T00:00:00Z").toLocaleDateString("en-US", {
@@ -56,20 +59,20 @@ export function SermonFilter({ sermons }: { sermons: SermonListRow[] }) {
           >
             All
           </button>
-          {NEXT_STEPS.map((s) => (
+          {STEPS.map((s) => (
             <button
               key={s.key}
               type="button"
               onClick={() => setTag(tag === s.key ? null : s.key)}
               aria-pressed={tag === s.key}
-              title={s.blurb}
+              title={s.what}
               className={`text-xs rounded-full px-2.5 py-1 border transition-colors cursor-pointer ${
                 tag === s.key
                   ? "border-accent-soft-fg/60 bg-accent-soft-bg text-accent-soft-fg font-medium"
                   : "border-border-soft text-muted hover:text-fg"
               }`}
             >
-              {s.label}
+              {s.name}
             </button>
           ))}
         </div>
@@ -77,7 +80,7 @@ export function SermonFilter({ sermons }: { sermons: SermonListRow[] }) {
 
       <p className="text-xs text-muted">
         {filtered.length} of {sermons.length} sermons
-        {tag ? ` calling “${NEXT_STEPS.find((s) => s.key === tag)?.label}”` : ""}
+        {tag ? ` calling “${STEPS.find((s) => s.key === tag)?.name}”` : ""}
       </p>
 
       <Card className="p-0 overflow-x-auto">
@@ -111,8 +114,7 @@ export function SermonFilter({ sermons }: { sermons: SermonListRow[] }) {
                     ) : (
                       s.calls.map((c) => (
                         <Pill key={c.key} tone={c.intensity >= 2 ? "accent" : "muted"}>
-                          {c.label}
-                          {c.intensity >= 3 ? " ★" : ""}
+                          {c.name}
                         </Pill>
                       ))
                     )}

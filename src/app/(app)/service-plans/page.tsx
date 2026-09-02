@@ -2,7 +2,7 @@ import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { listServicePlans } from "@/lib/announcement-impact";
-import { ANNOUNCEMENT_TYPES } from "@/lib/plan-announcements";
+import { NEXT_STEPS_CATALOG } from "@/lib/next-steps-catalog";
 import { PlanFilter } from "./plan-filter";
 
 export const dynamic = "force-dynamic";
@@ -30,9 +30,9 @@ export default async function ServicePlansPage() {
         <Card className="p-4">
           <h2 className="text-sm font-semibold mb-2">What each announcement type means</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2">
-            {ANNOUNCEMENT_TYPES.map((t) => (
+            {NEXT_STEPS_CATALOG.map((t) => (
               <div key={t.key} className="text-xs">
-                <span className="font-medium">{t.label}</span>
+                <span className="font-medium">{t.name}</span>
                 <span className="text-muted"> — {t.what}</span>
               </div>
             ))}

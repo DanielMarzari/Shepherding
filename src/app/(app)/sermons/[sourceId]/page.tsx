@@ -35,8 +35,7 @@ export default async function SermonDetailPage({
   const sermon = getSermonDetail(session.orgId, Number(sourceId));
   if (!sermon) notFound();
 
-  const called = sermon.calls.filter((c) => c.called);
-  const notCalled = sermon.calls.filter((c) => !c.called);
+  const called = sermon.calls;
 
   return (
     <AppShell active="Sermons" breadcrumb="Next steps › Sermons › Sermon">
@@ -94,9 +93,9 @@ export default async function SermonDetailPage({
               ))}
             </div>
           )}
-          {notCalled.length > 0 && (
+          {sermon.notCalled.length > 0 && (
             <p className="text-xs text-muted pt-1">
-              Not called here: {notCalled.map((c) => c.label).join(", ")}.
+              Not called here: {sermon.notCalled.join(", ")}.
             </p>
           )}
         </section>
@@ -108,7 +107,7 @@ export default async function SermonDetailPage({
               transcript={sermon.transcript}
               calls={called.map((c) => ({
                 key: c.key,
-                label: c.label,
+                label: c.name,
                 quote: c.quote,
                 range: c.range,
               }))}
@@ -132,13 +131,16 @@ function CallCard({ c }: { c: SermonCall }) {
   return (
     <Card className="p-4 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold">{c.label}</span>
+        <span className="text-sm font-semibold">{c.name}</span>
         <Pill tone={c.intensity >= 3 ? "accent" : "muted"}>
           {INTENSITY_WORD[c.intensity] ?? `intensity ${c.intensity}`}
           {c.intensity >= 3 ? " ★" : ""}
         </Pill>
       </div>
-      <p className="text-xs text-muted leading-relaxed">{c.blurb}</p>
+      <p className="text-xs text-muted leading-relaxed">{c.what}</p>
+      <p className="text-[0.65rem] text-muted uppercase tracking-wide">
+        {c.from === "transcript" ? "found in the transcript" : "from the classifier"}
+      </p>
       {c.quote ? (
         <blockquote className="border-l-2 border-accent-soft-fg/50 pl-3 text-sm italic leading-relaxed">
           “{c.quote}”
