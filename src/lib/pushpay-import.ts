@@ -95,10 +95,11 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
 }
 
 /** Decide who a donor matches from its normalized name + email/phone hashes.
- *  Anyone confirmed by 2+ signals wins; a lone unique signal still matches;
- *  when a name matches several people we pick the one that's active if that's
- *  unambiguous (the common "one live record + old inactive dupes" case),
- *  otherwise it's flagged ambiguous for manual reconciliation. */
+ *  The person matching the MOST signals wins — all three (name + email +
+ *  phone) beats two, which beats one. Inactive is NOT disqualifying: many
+ *  donors are giver-only records with no other activity. Active is used only
+ *  to break a tie between people who match equally well; a real tie is left
+ *  ambiguous for manual reconciliation. */
 function decideMatch(
   nn: string,
   eh: string | null,
@@ -112,17 +113,20 @@ function decideMatch(
   for (const set of [new Set(nm), new Set(em), new Set(ph)]) {
     for (const id of set) votes.set(id, (votes.get(id) ?? 0) + 1);
   }
-  const strong = [...votes].filter(([, c]) => c >= 2).map(([id]) => id);
-  const union = [...votes.keys()];
-  if (strong.length === 1) return { personId: strong[0], status: "matched", candidates: null };
-  if (strong.length > 1) return { personId: null, status: "ambiguous", candidates: strong };
-  if (union.length === 1) return { personId: union[0], status: "matched", candidates: null };
-  if (union.length > 1) {
-    const act = union.filter((id) => ix.active.has(id));
-    if (act.length === 1) return { personId: act[0], status: "matched", candidates: null };
-    return { personId: null, status: "ambiguous", candidates: union };
-  }
-  return { personId: null, status: "unmatched", candidates: null };
+  if (votes.size === 0) return { personId: null, status: "unmatched", candidates: null };
+
+  // Strength of evidence decides: the person matching the MOST of
+  // (name, email, phone) wins. Someone matching all three is the same person
+  // even if PCO marks them inactive — plenty of donors are giver-only records
+  // with no other activity to make them "active". Active is only a tiebreaker
+  // when two people match equally well, never a gate on matching at all.
+  const max = Math.max(...votes.values());
+  const top = [...votes].filter(([, c]) => c === max).map(([id]) => id);
+  if (top.length === 1) return { personId: top[0], status: "matched", candidates: null };
+
+  const act = top.filter((id) => ix.active.has(id));
+  if (act.length === 1) return { personId: act[0], status: "matched", candidates: null };
+  return { personId: null, status: "ambiguous", candidates: top };
 }
 
 /** Parse the CSV, match every donor to a person, and replace the stored set. */
