@@ -9,7 +9,7 @@ export default async function NavigationSettingsPage() {
   const config = getNavConfig(session.orgId);
   const builderPages = listBuilderPages(session.orgId).map((p) => ({ slug: p.slug, title: p.title }));
   return (
-    <AppShell active="Navigation" breadcrumb="Settings & Integration › Navigation">
+    <AppShell active="Navigation" breadcrumb="Settings & Integration › Navigation" rail={false}>
       <div className="px-5 md:px-7 py-7 space-y-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Nav builder</h1>
