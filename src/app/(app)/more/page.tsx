@@ -10,7 +10,7 @@ export default async function MorePage() {
   const pinned = getPinnedKeys(session.orgId, session.user.id);
 
   return (
-    <AppShell active="See more" breadcrumb="See more">
+    <AppShell active="See more" breadcrumb="See more" rail={false}>
       <div className="px-5 md:px-7 py-7 space-y-5 max-w-5xl">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">See more</h1>
