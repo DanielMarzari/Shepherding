@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { NAV_SECTIONS } from "@/lib/builder-nav";
 import type { SessionContext } from "@/lib/auth";
 import {
   countPageVersions,
@@ -25,6 +26,18 @@ const NO_SQL = new Set(["text", "divider", "embed", "pagelist", "group"]);
  *  editable). `seed: true` creates the page from its seed definition on first
  *  visit; otherwise a missing page 404s. `active` / `breadcrumb` override the
  *  shell chrome so an overridden route keeps its original nav highlight. */
+/** A builder page filed under a hub layer belongs to that layer, not to the
+ *  Page Builder that happens to render it — "See more › Page Builder › Adult
+ *  Discipleship" tells a reader the wrong thing about where they are. Reads the
+ *  label straight from NAV_SECTIONS (client-safe constants, no extra query) and
+ *  falls back to the old crumb for pages with no layer. */
+function defaultBreadcrumb(page: { title: string; navSection: string | null; moreSection: string | null }): string {
+  const layer =
+    NAV_SECTIONS.find((s) => s.value && s.value === page.navSection)?.label ??
+    page.moreSection?.trim();
+  return layer ? `${layer} › ${page.title}` : `See more › Page Builder › ${page.title}`;
+}
+
 export async function renderBuilderRoute({
   session,
   slug,
@@ -115,7 +128,7 @@ export async function renderBuilderRoute({
     .map((p) => ({ slug: p.slug, title: p.title, description: p.description }));
 
   return (
-    <AppShell active={active ?? page.title} breadcrumb={breadcrumb ?? `See more › Page Builder › ${page.title}`}>
+    <AppShell active={active ?? page.title} breadcrumb={breadcrumb ?? defaultBreadcrumb(page)}>
       <div className="px-5 md:px-7 py-7">
         <BuilderPageClient
           page={{ id: page.id, slug: page.slug, title: page.title, description: page.description, navSection: page.navSection, moreSection: page.moreSection }}

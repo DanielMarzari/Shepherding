@@ -1110,12 +1110,19 @@ const DISCIPLESHIP_MEMBERS = `
    WHERE m.org_id = :orgId AND m.archived_at IS NULL
      AND gt.name IN (${ADULT_DISCIPLESHIP_TYPES})`;
 
+/** Width of each Logic Model column. The bento grid is 12 wide and 12 isn't
+ *  divisible by 5, so five equal sixths (5 × 2 = 10) leave a 2-unit gap at the
+ *  right of the row rather than five unequal columns. Equal beats flush here:
+ *  the five columns are a single published table, and one column rendering 50%
+ *  wider than its neighbours reads as emphasis the report never intended. */
+const MIR_COLUMN_SPAN = 2;
+
 const adultDiscipleshipMirSeed: SeedPage = {
   slug: "mir-adult-discipleship",
   title: "Adult Discipleship",
   description:
     "2025 Ministry Impact Report — the Logic Model as published, with the Outputs column measured against live PCO data.",
-  revision: 2,
+  revision: 3,
   navSection: "ministry-impact-reports",
   blocks: [
     {
@@ -1125,7 +1132,7 @@ const adultDiscipleshipMirSeed: SeedPage = {
         text: [
           "# Adult Discipleship",
           "",
-          "**Target audience:** Adults engaged with Faith Church",
+          "**Target Audience:** Adults engaged with Faith Church",
           "",
           "**Team:** Dave Steel [Lead], Dan Marzari, Dave Peters [Sponsor]",
           "",
@@ -1137,9 +1144,8 @@ const adultDiscipleshipMirSeed: SeedPage = {
     {
       kind: "text",
       config: {
-        span: 2,
-        title: "Resources",
-        text: [
+        span: MIR_COLUMN_SPAN,
+        text: `### Resources\n\n` + [
           "Ministry Team leaders and members (Women's, Men's, Young Adults, Seniors, Grandparenting)",
           "",
           "Leaders of Disciple-Making Groups",
@@ -1165,9 +1171,8 @@ const adultDiscipleshipMirSeed: SeedPage = {
     {
       kind: "text",
       config: {
-        span: 3,
-        title: "Activities",
-        text: [
+        span: MIR_COLUMN_SPAN,
+        text: `### Activities\n\n` + [
           "Ministry-specific retreats, events, and activities",
           "",
           "Discover Courses (Jesus, Baptism, Worship, Community, Generosity, Serving, Outreach, Disciple-Making)",
@@ -1187,10 +1192,8 @@ const adultDiscipleshipMirSeed: SeedPage = {
     {
       kind: "text",
       config: {
-        span: 3,
-        title: "Outputs",
-        sub: "measured below",
-        text: [
+        span: MIR_COLUMN_SPAN,
+        text: `### Outputs\n\n_measured below_\n\n` + [
           "# of people who come to faith in Christ",
           "",
           "# of baptisms",
@@ -1214,9 +1217,8 @@ const adultDiscipleshipMirSeed: SeedPage = {
     {
       kind: "text",
       config: {
-        span: 2,
-        title: "Outcomes",
-        text: [
+        span: MIR_COLUMN_SPAN,
+        text: `### Outcomes\n\n` + [
           "People come to faith in Jesus.",
           "",
           "People get baptized.",
@@ -1244,10 +1246,12 @@ const adultDiscipleshipMirSeed: SeedPage = {
     {
       kind: "text",
       config: {
-        span: 2,
-        title: "Impact",
+        span: MIR_COLUMN_SPAN,
         color: "highlight",
         text: [
+          // The printed report sets this one header in caps on the red band.
+          "### IMPACT",
+          "",
           "Adults at Faith Church become a vibrant and multiplying community of disciples of Jesus who are:",
           "",
           "**(1) EQUIPPED** to obey everything He commanded",
