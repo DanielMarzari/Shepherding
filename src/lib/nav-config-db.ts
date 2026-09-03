@@ -18,6 +18,22 @@ const SECTION_TO_GROUP: Record<string, string> = {
   mappings: "mappings",
   settings: "settings-integration",
   more: "more",
+  "ministry-impact-reports": "ministry-impact-reports",
+};
+
+/** Groups the app creates on demand rather than expecting to find in the org's
+ *  saved nav. An org that customized its nav before these existed (Faith Church
+ *  did) would otherwise have builder pages pointing at a group id that isn't
+ *  there, and `resolveNavConfig` would silently drop them. Creating the folder
+ *  the first time a page targets it means a new ministry report just appears,
+ *  with no nav surgery and no overwrite of the admin's own layout. Only ever
+ *  ADDs a group — never reorders or edits what the admin arranged. */
+const MANAGED_GROUPS: Record<string, { label: string; icon?: string; mode: "top" | "drill" }> = {
+  "ministry-impact-reports": {
+    label: "Ministry Impact Reports",
+    icon: "target",
+    mode: "drill",
+  },
 };
 
 export function getNavConfig(orgId: number): NavConfig {
@@ -65,8 +81,14 @@ export function resolveNavConfig(orgId: number): ResolvedNav {
   const groupById = new Map(config.groups.map((g) => [g.id, g]));
   for (const p of navPages) {
     const gid = SECTION_TO_GROUP[p.navSection ?? ""] ?? p.navSection ?? "";
-    const g = groupById.get(gid);
-    if (!g) continue;
+    let g = groupById.get(gid);
+    if (!g) {
+      const managed = MANAGED_GROUPS[gid];
+      if (!managed) continue;
+      g = { id: gid, label: managed.label, mode: managed.mode, icon: managed.icon, items: [] };
+      config.groups.push(g);
+      groupById.set(gid, g);
+    }
     if (g.items.some((it) => it.kind === "builder" && it.slug === p.slug)) continue;
     g.items.push({ kind: "builder", slug: p.slug, label: p.title });
     activeToKey[p.title] = `builder:${p.slug}`;

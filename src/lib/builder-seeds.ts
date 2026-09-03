@@ -1068,6 +1068,358 @@ const givingSeed: SeedPage = {
 };
 
 /** Every page rebuilt from builder widgets, keyed by slug. */
+// ─── Ministry Impact Reports ─────────────────────────────────────────
+// Faith Church evaluates each ministry with a Logic Model:
+//   Target Audience → Resources → Activities → Outputs → Outcomes → Impact
+// read left to right as if/then statements. The 2025 reports live as a PDF; a
+// MIR page reproduces one of those pages verbatim (so the document IS the page,
+// and staff can edit it in the builder like anything else) and then turns the
+// Outputs column — "the story of ministry impact through numbers" — into live
+// metrics off the PCO/PushPay data we already sync.
+//
+// Honesty rule for these pages: an Output we cannot currently measure is listed
+// as a gap with the reason, never quietly dropped and never backed by a proxy
+// metric dressed up as the real thing.
+
+/** Adults engaged with Faith Church, per the app's own activity classification.
+ *  This is the denominator every "% of congregation" Output is measured against
+ *  — it matches the report's target audience ("Adults engaged with Faith
+ *  Church") far better than a raw people count, 64% of which is inactive. */
+const ENGAGED_ADULTS = `
+  SELECT p.pco_id
+    FROM pco_people p
+    JOIN person_activity pa ON pa.person_id = p.pco_id AND pa.org_id = :orgId
+   WHERE p.org_id = :orgId AND p.is_minor = 0
+     AND pa.classification IN ('shepherded','active','present')`;
+
+/** The group types that constitute adult discipleship at Faith Church. Kids /
+ *  student / childcare / foster-org group types are deliberately excluded — the
+ *  report's audience is adults. Edit this list as PCO group types change. */
+const ADULT_DISCIPLESHIP_TYPES = `
+  'Small Groups','Disciple-making Groups','ABF Groups',
+  'Women''s AM Bible Studies','Women''s PM Bible Studies',
+  'Mens'' Groups','Young Adults Groups','Seniors In Action (SIA)',
+  'Organic Groups'`;
+
+/** One row per (person, group type, role) in an adult discipleship group. */
+const DISCIPLESHIP_MEMBERS = `
+  SELECT m.person_id, gt.name AS type_name, m.role, m.joined_at
+    FROM pco_group_memberships m
+    JOIN pco_groups g       ON g.pco_id = m.group_id       AND g.org_id = :orgId
+    JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL
+     AND gt.name IN (${ADULT_DISCIPLESHIP_TYPES})`;
+
+const adultDiscipleshipMirSeed: SeedPage = {
+  slug: "mir-adult-discipleship",
+  title: "Adult Discipleship",
+  description:
+    "2025 Ministry Impact Report — the Logic Model as published, with the Outputs column measured against live PCO data.",
+  revision: 1,
+  navSection: "ministry-impact-reports",
+  blocks: [
+    {
+      kind: "text",
+      config: {
+        span: 12,
+        text: [
+          "# Adult Discipleship",
+          "",
+          "**Target audience:** Adults engaged with Faith Church",
+          "",
+          "**Team:** Dave Steel [Lead], Dan Marzari, Dave Peters [Sponsor]",
+          "",
+          "_2025 Ministry Impact Report. The five columns below are the published Logic Model, read left to right as if/then statements: if these Resources, then these Activities; if these Activities, then these Outputs; if these Outputs, then these Outcomes; if these Outcomes, then this Impact._",
+        ].join("\n"),
+      },
+    },
+    { kind: "divider", config: { span: 12, title: "The Logic Model", sub: "As published in the 2025 report" } },
+    {
+      kind: "text",
+      config: {
+        span: 2,
+        title: "Resources",
+        text: [
+          "Ministry Team leaders and members (Women's, Men's, Young Adults, Seniors, Grandparenting)",
+          "",
+          "Leaders of Disciple-Making Groups",
+          "",
+          "Small Groups and Care Groups",
+          "",
+          "Topical Study Table Leaders for Women's, Men's, YA, Seniors, and Grandparenting Studies",
+          "",
+          "Bible teachers for periodic Bible studies",
+          "",
+          "Rooms for various ministry gatherings, Discipleship Workshops, Discover Courses, and leader trainings",
+          "",
+          "AV equipment",
+          "",
+          "1 FT staff member",
+          "",
+          "Shared admin staff",
+          "",
+          "$50k budget",
+        ].map((l) => (l ? `- ${l}` : l)).join("\n").replace(/^- $/gm, ""),
+      },
+    },
+    {
+      kind: "text",
+      config: {
+        span: 3,
+        title: "Activities",
+        text: [
+          "Ministry-specific retreats, events, and activities",
+          "",
+          "Discover Courses (Jesus, Baptism, Worship, Community, Generosity, Serving, Outreach, Disciple-Making)",
+          "",
+          "Discipleship Workshops (Christianity FAQs, Bible, Prayer, Evangelism)",
+          "",
+          "Hybrid and Mid-sized Bible and topical studies (Women, Men, Young Adults, Seniors, Grandparents, Co-ed/intergenerational)",
+          "",
+          "Disciple-Making Groups",
+          "",
+          "Leadership development gatherings",
+          "",
+          "Ministry Training Program",
+        ].map((l) => (l ? `- ${l}` : l)).join("\n").replace(/^- $/gm, ""),
+      },
+    },
+    {
+      kind: "text",
+      config: {
+        span: 3,
+        title: "Outputs",
+        sub: "measured below",
+        text: [
+          "# of people who come to faith in Christ",
+          "",
+          "# of baptisms",
+          "",
+          "# of people who attend adult discipleship events",
+          "",
+          "% of congregation who attend Discipleship Workshops",
+          "",
+          "% of congregation who attend Discover Courses",
+          "",
+          "% of congregation who complete a Disciple-Making Group",
+          "",
+          "% of Disciple-Making Group \"graduates\" who become leaders",
+          "",
+          "% of congregation who take Next Steps",
+          "",
+          "Identifiable spiritual growth as measured by the results of a standardized spiritual growth inventory administered periodically",
+        ].map((l) => (l ? `- ${l}` : l)).join("\n").replace(/^- $/gm, ""),
+      },
+    },
+    {
+      kind: "text",
+      config: {
+        span: 2,
+        title: "Outcomes",
+        text: [
+          "People come to faith in Jesus.",
+          "",
+          "People get baptized.",
+          "",
+          "People join groups (Small Groups, Disciple-Making Groups, Care Groups).",
+          "",
+          "People take Next Steps.",
+          "",
+          "People read their Bibles regularly.",
+          "",
+          "People pray regularly.",
+          "",
+          "People share the gospel.",
+          "",
+          "People are being deployed to the mission field.",
+          "",
+          "People embrace Faith Church values and distinctives in community.",
+          "",
+          "People exhibit spiritual hunger and Biblical obedience.",
+          "",
+          "People exhibit transformed convictions, …",
+        ].map((l) => (l ? `- ${l}` : l)).join("\n").replace(/^- $/gm, ""),
+      },
+    },
+    {
+      kind: "text",
+      config: {
+        span: 2,
+        title: "Impact",
+        color: "highlight",
+        text: [
+          "Adults at Faith Church become a vibrant and multiplying community of disciples of Jesus who are:",
+          "",
+          "**(1) EQUIPPED** to obey everything He commanded",
+          "",
+          "**(2) TRANSFORMED** in their convictions, character, and conduct",
+          "",
+          "**(3) MOBILIZED** to disciple others",
+        ].join("\n"),
+      },
+    },
+    {
+      kind: "divider",
+      config: {
+        span: 12,
+        title: "Outputs, measured",
+        sub: "The story of ministry impact through numbers — live from PCO",
+      },
+    },
+    {
+      kind: "stat",
+      config: {
+        title: "Engaged adults",
+        span: 3,
+        sub: "the denominator for every % below",
+        sql: `SELECT COUNT(*) FROM (${ENGAGED_ADULTS})`,
+      },
+    },
+    {
+      kind: "stat",
+      config: {
+        title: "In a discipleship group",
+        span: 3,
+        color: "highlight",
+        sub: "engaged adults in an adult discipleship group",
+        sql: `SELECT COUNT(DISTINCT d.person_id)
+                FROM (${DISCIPLESHIP_MEMBERS}) d
+                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id`,
+      },
+    },
+    {
+      kind: "progress",
+      config: {
+        title: "% of congregation in a discipleship group",
+        span: 3,
+        goal: 4942,
+        sub: "engaged adults in a group, toward every engaged adult",
+        sql: `SELECT COUNT(DISTINCT d.person_id)
+                FROM (${DISCIPLESHIP_MEMBERS}) d
+                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id`,
+      },
+    },
+    {
+      kind: "stat",
+      config: {
+        title: "Discipleship group leaders",
+        span: 3,
+        sub: "engaged adults leading a group",
+        sql: `SELECT COUNT(DISTINCT d.person_id)
+                FROM (${DISCIPLESHIP_MEMBERS}) d
+                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
+               WHERE d.role = 'leader'`,
+      },
+    },
+    {
+      kind: "stat",
+      config: {
+        title: "Disciple-Making Groups",
+        span: 3,
+        sub: "people currently in a DMG",
+        sql: `SELECT COUNT(DISTINCT person_id)
+                FROM (${DISCIPLESHIP_MEMBERS})
+               WHERE type_name = 'Disciple-making Groups'`,
+      },
+    },
+    {
+      kind: "stat",
+      config: {
+        title: "Adults taking Next Steps",
+        span: 3,
+        sub: "in a worship, community, or serving lane",
+        sql: `SELECT COUNT(*)
+                FROM person_activity pa
+                JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
+               WHERE pa.org_id = :orgId AND p.is_minor = 0
+                 AND (pa.in_lane_wors = 1 OR pa.in_lane_comm = 1 OR pa.in_lane_serv = 1)`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "Where adults are discipled",
+        span: 6,
+        chartType: "bar",
+        colorByCategory: true,
+        sub: "engaged adults by group type",
+        sql: `SELECT d.type_name AS "Group type", COUNT(DISTINCT d.person_id) AS "Adults"
+                FROM (${DISCIPLESHIP_MEMBERS}) d
+                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
+               GROUP BY 1 ORDER BY 2 DESC`,
+      },
+    },
+    {
+      kind: "chart",
+      config: {
+        title: "New discipleship-group joins by year",
+        span: 6,
+        chartType: "area",
+        sub: "people joining an adult discipleship group",
+        sql: `SELECT substr(d.joined_at, 1, 4) AS "Year",
+                     COUNT(DISTINCT d.person_id) AS "Joined"
+                FROM (${DISCIPLESHIP_MEMBERS}) d
+               WHERE d.joined_at IS NOT NULL AND substr(d.joined_at, 1, 4) >= '2019'
+               GROUP BY 1 ORDER BY 1`,
+      },
+    },
+    {
+      kind: "table",
+      config: {
+        title: "Disciple-Making Groups",
+        span: 6,
+        sortable: true,
+        sub: "the multiplying core — each group and who leads it",
+        sql: `SELECT g.name AS "Group",
+                     COUNT(DISTINCT m.person_id) AS "Members",
+                     SUM(CASE WHEN m.role = 'leader' THEN 1 ELSE 0 END) AS "Leaders"
+                FROM pco_groups g
+                JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+                LEFT JOIN pco_group_memberships m
+                       ON m.group_id = g.pco_id AND m.org_id = :orgId AND m.archived_at IS NULL
+               WHERE g.org_id = :orgId AND gt.name = 'Disciple-making Groups'
+               GROUP BY g.name ORDER BY 2 DESC`,
+      },
+    },
+    {
+      kind: "table",
+      config: {
+        title: "Discipleship reach by group type",
+        span: 6,
+        sortable: true,
+        sub: "adults reached, and how many of them lead",
+        sql: `SELECT d.type_name AS "Group type",
+                     COUNT(DISTINCT d.person_id) AS "Adults",
+                     COUNT(DISTINCT CASE WHEN d.role = 'leader' THEN d.person_id END) AS "Leaders"
+                FROM (${DISCIPLESHIP_MEMBERS}) d
+                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
+               GROUP BY 1 ORDER BY 2 DESC`,
+      },
+    },
+    {
+      kind: "text",
+      config: {
+        span: 12,
+        title: "Outputs we cannot measure yet",
+        color: "warning",
+        text: [
+          "These Outputs are in the published report but have no data behind them today. Listed here rather than dropped, so the gap is visible and fixable:",
+          "",
+          "- **# of people who come to faith in Christ** — no faith-decision is recorded anywhere we sync. Needs a PCO form or workflow that stamps the person's record.",
+          "- **# of baptisms** — a `Going Public (Baptism)` check-in event exists in PCO but has never had a single check-in. Checking people in at baptisms would make this live immediately.",
+          "- **% who attend Discover Courses** — the Discover Faith Church check-in events stop in **February 2020**. Nothing since has been tracked.",
+          "- **% who attend Discipleship Workshops** — no check-in event or group type corresponds to the workshops.",
+          "- **% who complete a Disciple-Making Group** — we can see current membership, not completion. Needs an archived-with-outcome convention, or a \"graduated\" list.",
+          "- **% of DMG graduates who become leaders** — depends on completion above.",
+          "- **Standardized spiritual growth inventory** — no instrument has been administered, so there is nothing to report.",
+          "",
+          "_The three Outputs that ARE live above (group participation, leaders, Next Steps) come from PCO group membership and the app's own lane classification._",
+        ].join("\n"),
+      },
+    },
+  ],
+};
+
 export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [givingSeed.slug]: givingSeed,
   [checkinsSeed.slug]: checkinsSeed,
@@ -1089,6 +1441,7 @@ export const BUILDER_SEEDS: Record<string, SeedPage> = {
   [emailDashboardSeed.slug]: emailDashboardSeed,
   [retentionSeed.slug]: retentionSeed,
   [pipelineSeed.slug]: pipelineSeed,
+  [adultDiscipleshipMirSeed.slug]: adultDiscipleshipMirSeed,
 };
 
 // ─── Seeder ──────────────────────────────────────────────────────────

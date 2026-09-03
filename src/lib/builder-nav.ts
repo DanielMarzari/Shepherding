@@ -13,6 +13,7 @@ export const NAV_SECTIONS: Array<{ value: string; label: string }> = [
   { value: "mappings", label: "Maps" },
   { value: "settings", label: "Settings & Integration" },
   { value: "more", label: "More" },
+  { value: "ministry-impact-reports", label: "Ministry Impact Reports" },
 ];
 
 export const NAV_SECTION_VALUES = new Set(NAV_SECTIONS.map((s) => s.value).filter(Boolean));

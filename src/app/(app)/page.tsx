@@ -24,7 +24,7 @@ export default async function HomePage() {
   const hubSections = buildHomeHubSections(session.orgId);
   const pinned = getPinnedKeys(session.orgId, session.user.id);
   return (
-    <AppShell active="Home" breadcrumb="Home">
+    <AppShell active="Home" breadcrumb="Home" rail={false}>
       <div className="px-5 md:px-7 py-7">
         <GalleryHub
           sections={hubSections}

@@ -33,7 +33,7 @@ export default async function SettingsPage() {
   const session = await requireOrg();
   const pinned = getPinnedKeys(session.orgId, session.user.id);
   return (
-    <AppShell active="Settings & Integration" breadcrumb="Settings & Integration">
+    <AppShell active="Settings & Integration" breadcrumb="Settings & Integration" rail={false}>
       <div className="px-5 md:px-7 py-7">
         <GalleryHub
           sections={SECTIONS}

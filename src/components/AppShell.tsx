@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { getSession } from "@/lib/auth";
 import { SearchBar } from "./SearchBar";
 import { UserMenu } from "./UserMenu";
+import { NavRail } from "./NavRail";
 
 // There is no left sidebar anymore — navigation lives on the home hub (the
 // See-More-style gallery) reached via the logo, and the account menu floats
@@ -35,10 +36,14 @@ export async function AppShell({
   children,
   active,
   breadcrumb,
+  rail = true,
 }: {
   children: ReactNode;
   active: string;
   breadcrumb: string;
+  /** Set false on pages that render the full GalleryHub themselves (Home,
+   *  Settings) — they already show the navigation, so a rail would double up. */
+  rail?: boolean;
 }) {
   const session = await getSession();
   const name = session?.user.name ?? "";
@@ -55,7 +60,10 @@ export async function AppShell({
           )}
         </div>
       </header>
-      <main>{children}</main>
+      <div className="flex items-stretch">
+        {rail && session?.orgId != null && <NavRail active={active} orgId={session.orgId} />}
+        <main className="flex-1 min-w-0">{children}</main>
+      </div>
     </div>
   );
 }
@@ -87,7 +95,11 @@ export function AppShellSkeleton({
           <div className="w-8 h-8 rounded-full bg-bg-elev-2/60" />
         </div>
       </header>
-      <main>{children}</main>
+      <div className="flex items-stretch">
+        {/* Reserve the rail's width so the page doesn't jump when it loads. */}
+        <div className="shrink-0 w-44 lg:w-52 border-r border-border-soft bg-bg-elev-2/30 hidden md:block" />
+        <main className="flex-1 min-w-0">{children}</main>
+      </div>
     </div>
   );
 }

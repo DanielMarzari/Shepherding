@@ -11,5 +11,8 @@ export default async function BuilderCustomPage({
   const session = await requireOrg();
   const { slug } = await params;
   const sp = await searchParams;
-  return renderBuilderRoute({ session, slug, edit: sp.edit === "1" });
+  // seed: a slug with a definition in BUILDER_SEEDS (e.g. the Ministry Impact
+  // Report pages) is created on first visit; ensureSeededPage is a no-op for
+  // every other slug, and never overwrites a page someone has edited.
+  return renderBuilderRoute({ session, slug, edit: sp.edit === "1", seed: true });
 }
