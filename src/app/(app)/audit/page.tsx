@@ -55,7 +55,14 @@ export default async function AuditPage({
             One-time cleanup view. Flags rows in your member roster that look
             wrong — deceased, long-inactive, junk names, possible duplicates,
             etc. Fix them in PCO directly; this page doesn&apos;t write
-            anything back.
+            anything back.{" "}
+            <Link
+              href="/audit/membership-fit"
+              className="text-accent hover:underline"
+            >
+              Checking whether people are in the right membership type is a
+              separate audit &rarr;
+            </Link>
           </p>
         </div>
 

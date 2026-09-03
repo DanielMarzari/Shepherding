@@ -48,6 +48,7 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   // Utility / report / audit pages. Not in the default layout, but addable to
   // any layer via the nav builder (they otherwise live on the See More hub).
   "audit-membership": { href: "/audit", defaultLabel: "Membership audit", activeAliases: ["Membership audit"] },
+  "audit-membership-fit": { href: "/audit/membership-fit", defaultLabel: "Membership fit audit", activeAliases: ["Membership fit"] },
   "audit-duplicates": { href: "/audit/duplicates", defaultLabel: "Duplicate audit", activeAliases: ["Duplicate audit"] },
   "audit-names": { href: "/audit/names", defaultLabel: "Name audit", activeAliases: ["Name audit"] },
   "audit-pushpay": { href: "/audit/pushpay", defaultLabel: "PushPay connections", activeAliases: ["PushPay connections"] },
