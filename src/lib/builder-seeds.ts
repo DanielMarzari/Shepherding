@@ -1115,7 +1115,7 @@ const adultDiscipleshipMirSeed: SeedPage = {
   title: "Adult Discipleship",
   description:
     "2025 Ministry Impact Report — the Logic Model as published, with the Outputs column measured against live PCO data.",
-  revision: 1,
+  revision: 2,
   navSection: "ministry-impact-reports",
   blocks: [
     {
@@ -1288,15 +1288,19 @@ const adultDiscipleshipMirSeed: SeedPage = {
       },
     },
     {
-      kind: "progress",
+      kind: "stat",
       config: {
-        title: "% of congregation in a discipleship group",
+        title: "% of congregation in a group",
         span: 3,
-        goal: 4942,
-        sub: "engaged adults in a group, toward every engaged adult",
-        sql: `SELECT COUNT(DISTINCT d.person_id)
-                FROM (${DISCIPLESHIP_MEMBERS}) d
-                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id`,
+        // Computed against the live denominator rather than a `progress` block
+        // with a fixed goal — a hard-coded congregation size silently goes
+        // stale the moment the roster moves.
+        sub: "share of engaged adults in a discipleship group",
+        sql: `SELECT ROUND(
+                  100.0 * (SELECT COUNT(DISTINCT d.person_id)
+                             FROM (${DISCIPLESHIP_MEMBERS}) d
+                             JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id)
+                        / NULLIF((SELECT COUNT(*) FROM (${ENGAGED_ADULTS})), 0), 1) || '%'`,
       },
     },
     {

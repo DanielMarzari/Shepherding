@@ -4,6 +4,7 @@ import { listNavPages } from "./builder";
 import {
   DEFAULT_NAV_CONFIG,
   PAGE_REGISTRY,
+  migrateNavConfig,
   sanitizeNavConfig,
   type NavConfig,
 } from "./nav-registry";
@@ -41,11 +42,22 @@ export function getNavConfig(orgId: number): NavConfig {
     .prepare(`SELECT config FROM nav_config WHERE org_id = ?`)
     .get(orgId) as { config: string } | undefined;
   if (!row) return DEFAULT_NAV_CONFIG;
+  let stored: NavConfig | null = null;
   try {
-    return sanitizeNavConfig(JSON.parse(row.config)) ?? DEFAULT_NAV_CONFIG;
+    stored = sanitizeNavConfig(JSON.parse(row.config));
   } catch {
-    return DEFAULT_NAV_CONFIG;
+    stored = null;
   }
+  if (!stored) return DEFAULT_NAV_CONFIG;
+  // An org that saved a layout before a new default layer existed would never
+  // see that layer. Fold it in once, and persist so it's editable from then on.
+  const { config, changed } = migrateNavConfig(stored);
+  if (changed) {
+    getDb()
+      .prepare(`UPDATE nav_config SET config = ? WHERE org_id = ?`)
+      .run(JSON.stringify(config), orgId);
+  }
+  return config;
 }
 
 /** Validate + persist. Returns the cleaned config actually stored. */
