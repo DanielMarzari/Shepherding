@@ -411,6 +411,8 @@ async function syncPeople(
         maxUpdatedAt = updatedAt;
       }
 
+      const nickname = (attrs.nickname as string | undefined) ?? null;
+      const givenName = (attrs.given_name as string | undefined) ?? null;
       const pii = {
         first_name: (attrs.first_name as string | undefined) ?? null,
         last_name: (attrs.last_name as string | undefined) ?? null,
@@ -429,6 +431,8 @@ async function syncPeople(
         encPii: encryptJson(pii),
         firstName: pii.first_name,
         lastName: pii.last_name,
+        nickname,
+        givenName,
         gender: (attrs.gender as string | undefined) ?? null,
         membershipType: (attrs.membership as string | undefined) ?? null,
         maritalStatus: maritalValue,
@@ -579,6 +583,8 @@ function upsertPerson(
     encPii: string;
     firstName: string | null;
     lastName: string | null;
+    nickname: string | null;
+    givenName: string | null;
     gender: string | null;
     membershipType: string | null;
     maritalStatus: string | null;
@@ -591,13 +597,15 @@ function upsertPerson(
   getDb()
     .prepare(
       `INSERT INTO pco_people
-        (org_id, pco_id, enc_pii, first_name, last_name, gender, membership_type, marital_status,
-         status, pco_created_at, pco_updated_at, inactivated_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        (org_id, pco_id, enc_pii, first_name, last_name, nickname, given_name, gender, membership_type,
+         marital_status, status, pco_created_at, pco_updated_at, inactivated_at, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id, pco_id) DO UPDATE SET
          enc_pii = excluded.enc_pii,
          first_name = excluded.first_name,
          last_name = excluded.last_name,
+         nickname = excluded.nickname,
+         given_name = excluded.given_name,
          gender = excluded.gender,
          membership_type = excluded.membership_type,
          marital_status = excluded.marital_status,
@@ -613,6 +621,8 @@ function upsertPerson(
       p.encPii,
       p.firstName,
       p.lastName,
+      p.nickname,
+      p.givenName,
       p.gender,
       p.membershipType,
       p.maritalStatus,

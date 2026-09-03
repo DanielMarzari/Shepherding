@@ -87,11 +87,13 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
   const byFullName = new Map<string, string[]>();
   const birthYear = new Map<string, number>();
   for (const p of db
-    .prepare(`SELECT pco_id, first_name, last_name, enc_pii, birth_year FROM pco_people WHERE org_id = ?`)
+    .prepare(`SELECT pco_id, first_name, last_name, nickname, given_name, enc_pii, birth_year FROM pco_people WHERE org_id = ?`)
     .all(orgId) as Array<{
     pco_id: string;
     first_name: string | null;
     last_name: string | null;
+    nickname: string | null;
+    given_name: string | null;
     enc_pii: string | null;
     birth_year: number | null;
   }>) {
@@ -103,13 +105,19 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
       l = pii?.last_name ?? null;
     }
     const ln = normNamePart(l ?? "");
-    const fn = normNamePart(f ?? "");
-    if (ln && fn) {
+    // PCO keeps up to three first-name forms and a donor may use any of them:
+    // first_name "John", given_name "Jung", nickname "Johnny" — one person.
+    const firstForms = [f, p.nickname, p.given_name]
+      .map((x) => normNamePart(x ?? ""))
+      .filter((x) => x.length > 0);
+    if (ln && firstForms.length) {
       const arr = byLast.get(ln) ?? byLast.set(ln, []).get(ln)!;
-      arr.push({ id: p.pco_id, first: fn, last: ln });
+      for (const fn of new Set(firstForms)) arr.push({ id: p.pco_id, first: fn, last: ln });
     }
-    const fk = fullNameKey(f, l);
-    if (fk) (byFullName.get(fk) ?? byFullName.set(fk, []).get(fk)!).push(p.pco_id);
+    for (const form of new Set(firstForms)) {
+      const fk = fullNameKey(form, l);
+      if (fk) (byFullName.get(fk) ?? byFullName.set(fk, []).get(fk)!).push(p.pco_id);
+    }
     if (p.birth_year != null) birthYear.set(p.pco_id, p.birth_year);
   }
   const email = new Map<string, string[]>();
