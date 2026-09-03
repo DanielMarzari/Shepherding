@@ -217,6 +217,19 @@ function decideMatch(
     return { personId: pick, status: "matched", candidates: top };
   }
 
+  // Same name, and exactly one of them actually has contact info on file.
+  // PushPay creates a bare PCO record whenever it can't match a donor (no
+  // email/phone on the PushPay side to match on), leaving a stub with nothing
+  // but a name. The populated record is the real person; the empty one is that
+  // stub, and they get merged later in the duplicate audit. If SEVERAL have
+  // contact details we don't guess — conflicting info goes to review.
+  const hasContact = (id: string) =>
+    (ix.emailsOf.get(id)?.size ?? 0) > 0 || (ix.phonesOf.get(id)?.size ?? 0) > 0;
+  const populated = top.filter(hasContact);
+  if (populated.length === 1) {
+    return { personId: populated[0], status: "matched", candidates: top };
+  }
+
   const act = top.filter((id) => ix.active.has(id));
   if (act.length === 1) return { personId: act[0], status: "matched", candidates: null };
   return { personId: null, status: "ambiguous", candidates: top };
