@@ -24,7 +24,7 @@ const SECTIONS: GallerySection[] = [
       { href: "/metrics", title: "Metrics", description: "The activity windows and thresholds the dashboards use to classify people." },
       { href: "/settings/appearance", title: "Appearance", description: "Theme, and the syntax colors for the SQL editor." },
       { href: "/settings/performance", title: "Performance", description: "Why pages are slow, what's expensive, and the optimizations you can approve." },
-      { href: "/settings/navigation", title: "Navigation", description: "Arrange the left sidebar — define headings and choose which pages live where." },
+      { href: "/settings/navigation", title: "Navigation", description: "Arrange the home hub — name your layers and choose which pages live in each." },
     ],
   },
 ];

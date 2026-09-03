@@ -50,14 +50,11 @@ export function getNavConfig(orgId: number): NavConfig {
   }
   if (!stored) return DEFAULT_NAV_CONFIG;
   // An org that saved a layout before a new default layer existed would never
-  // see that layer. Fold it in once, and persist so it's editable from then on.
-  const { config, changed } = migrateNavConfig(stored);
-  if (changed) {
-    getDb()
-      .prepare(`UPDATE nav_config SET config = ? WHERE org_id = ?`)
-      .run(JSON.stringify(config), orgId);
-  }
-  return config;
+  // see that layer. Fold it in for the caller — in memory only, like
+  // MANAGED_GROUPS below: a read has no business rewriting the admin's saved
+  // layout. The editor stamps the current version on its next save, which is
+  // what stops this from re-adding a layer the admin has since deleted.
+  return migrateNavConfig(stored).config;
 }
 
 /** Validate + persist. Returns the cleaned config actually stored. */

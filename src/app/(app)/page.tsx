@@ -5,7 +5,7 @@ import { GalleryHub } from "@/components/GalleryHub";
 import { PieChart } from "@/components/charts";
 import { requireOrg } from "@/lib/auth";
 import { getOrgSnapshot } from "@/lib/dashboard-refresh";
-import { buildHomeHubSections } from "@/lib/hub-sections";
+import { buildHubSections } from "@/lib/hub-sections";
 import { getPinnedKeys } from "@/lib/nav-config-db";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
@@ -21,7 +21,7 @@ import { RefreshSnapshotsButton } from "./refresh-button";
 export default async function HomePage() {
   const session = await requireOrg();
   const snapshot = getOrgSnapshot(session.orgId);
-  const hubSections = buildHomeHubSections(session.orgId);
+  const hubSections = buildHubSections(session.orgId);
   const pinned = getPinnedKeys(session.orgId, session.user.id);
   return (
     <AppShell active="Home" breadcrumb="Home" rail={false}>

@@ -1,55 +1,75 @@
 import "server-only";
 import { resolveNavConfig } from "./nav-config-db";
 import { PAGE_REGISTRY } from "./nav-registry";
-import { getMoreSections } from "./more-sections";
+import { listMorePages } from "./builder";
 import type { GalleryLink, GallerySection } from "./gallery-types";
 
-// Short descriptions for the main-nav pages (the See More pages carry their own
-// rich descriptions via more-sections). Keyed by nav-registry pageKey.
-const HUB_DESC: Record<string, string> = {
-  "care-queue": "People flagged for follow-up — who needs a touch this week.",
-  "shepherd-team": "The shepherd team and who each member is caring for.",
-  shepherds: "Everyone who leads a group or team, and who oversees them.",
-  people: "Search and browse every synced person, with their engagement.",
-  groups: "Active groups, membership, health, and who's in them.",
-  teams: "Serving teams, rosters, and who's serving lately.",
-  checkins: "Check-in events and attendance from Planning Center.",
-  "lanes-overview": "The next-steps pathway at a glance — who's in each lane.",
-  "lanes-list": "Every lane with its people and recent movement.",
-  "shepherd-map": "Who shepherds whom, mapped across the church.",
-  "care-map": "Care assignments mapped across the congregation.",
-  giving: "Giving from the PushPay import — coverage, stages, and funds.",
-};
-
-/** Sections for the home hub: the main-nav pages (from the org's nav config)
- *  followed by the See More sections — everything reachable from home. Skips
- *  Home itself, the See-More link (its contents are expanded here), and the
- *  Settings & Integration group (that lives in the top-right menu). */
-export function buildHomeHubSections(orgId: number): GallerySection[] {
+/** Every layer of the hub, built from the org's nav config — the one thing
+ *  /settings/navigation edits, so everything on the hub is editable there.
+ *
+ *  The audit / reports / email / internal layers used to be a hardcoded array
+ *  in more-sections.ts appended after the configured layers. They rendered on
+ *  the hub but were invisible to the editor, so there was no way to rename,
+ *  reorder, re-icon or remove them. They're seeded groups now — see
+ *  DEFAULT_NAV_CONFIG and migrateNavConfig, which folds them into a layout
+ *  that was saved before they existed.
+ *
+ *  Skips Home itself, the See-More link (its contents ARE these layers), and
+ *  the Settings & Integration group, which lives in the top-right menu. */
+export function buildHubSections(orgId: number): GallerySection[] {
   const { config } = resolveNavConfig(orgId);
+
+  // Builder pages the admin filed under a free-text heading rather than a
+  // layer id. Matched to a layer by label so existing placements survive.
+  const byHeading = new Map<string, { label: string; links: GalleryLink[] }>();
+  for (const p of listMorePages(orgId)) {
+    const label = p.moreSection.trim();
+    const key = label.toLowerCase();
+    const link: GalleryLink = {
+      href: `/builder/${p.slug}`,
+      title: p.title,
+      description: p.description ?? "Custom page.",
+    };
+    (byHeading.get(key) ?? byHeading.set(key, { label, links: [] }).get(key)!).links.push(link);
+  }
+
   const sections: GallerySection[] = [];
-  const placed = new Set<string>(); // hrefs already sitting in a layer
   for (const g of config.groups) {
     if (g.id === "settings-integration") continue;
     const links: GalleryLink[] = [];
+    const seen = new Set<string>();
+    const add = (l: GalleryLink) => {
+      if (seen.has(l.href)) return;
+      seen.add(l.href);
+      links.push(l);
+    };
     for (const it of g.items) {
       if (it.kind === "page") {
         if (it.pageKey === "home" || it.pageKey === "more") continue;
         const def = PAGE_REGISTRY[it.pageKey];
         if (!def) continue;
-        placed.add(def.href);
-        links.push({ href: def.href, title: def.defaultLabel, description: HUB_DESC[it.pageKey] ?? "" });
+        add({
+          href: def.href,
+          title: def.defaultLabel,
+          description: def.description ?? "",
+          ...(def.external ? { external: true } : {}),
+        });
       } else {
-        placed.add(`/builder/${it.slug}`);
-        links.push({ href: `/builder/${it.slug}`, title: it.label, description: "Custom page." });
+        add({ href: `/builder/${it.slug}`, title: it.label, description: "Custom page." });
       }
     }
-    if (links.length) sections.push({ id: g.id, label: g.label, icon: g.icon, links });
+    const heading = g.label.trim().toLowerCase();
+    for (const l of byHeading.get(heading)?.links ?? []) add(l);
+    byHeading.delete(heading);
+    if (links.length) {
+      sections.push({ id: g.id, label: g.label, icon: g.icon, blurb: g.blurb, links });
+    }
   }
-  // Append the See More sections, dropping any page the admin has already
-  // placed into one of their own layers (so it isn't listed twice).
-  const more = getMoreSections(orgId)
-    .map((s) => ({ ...s, links: s.links.filter((l) => !placed.has(l.href)) }))
-    .filter((s) => s.links.length > 0);
-  return sections.concat(more);
+
+  // A builder heading matching no layer still gets a section of its own, so a
+  // page can't fall off the hub just because a layer was renamed.
+  for (const [key, { label, links }] of byHeading) {
+    sections.push({ id: `heading-${key.replace(/[^a-z0-9]+/g, "-")}`, label, links });
+  }
+  return sections;
 }

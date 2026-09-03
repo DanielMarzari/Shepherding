@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import {
   DEFAULT_NAV_CONFIG,
+  NAV_CONFIG_VERSION,
   PAGE_REGISTRY,
   type NavConfig,
   type NavGroup,
@@ -15,6 +16,9 @@ interface BuilderPageRef { slug: string; title: string }
 
 const clone = <T,>(v: T): T => structuredClone(v);
 const itemLabel = (it: NavItemRef) => (it.kind === "builder" ? it.label : PAGE_REGISTRY[it.pageKey]?.defaultLabel ?? it.pageKey);
+/** The same copy the hub card shows, so the editor reads like the result. */
+const itemDesc = (it: NavItemRef) =>
+  it.kind === "builder" ? "Page Builder page" : PAGE_REGISTRY[it.pageKey]?.description ?? "Page";
 const itemKey = (it: NavItemRef) => (it.kind === "builder" ? `builder:${it.slug}` : it.pageKey);
 const hubGroups = (c: NavConfig) => c.groups.filter((g) => g.id !== "settings-integration");
 
@@ -67,7 +71,9 @@ export function NavEditor({
 
   function save() {
     start(async () => {
-      const res = await saveNavConfigAction({ version: 1, groups: [...groups, ...preserved.current] });
+      // Stamping the current version is what tells getNavConfig this layout has
+      // seen the latest seeded layers — so a layer deleted here stays deleted.
+      const res = await saveNavConfigAction({ version: NAV_CONFIG_VERSION, groups: [...groups, ...preserved.current] });
       setMsg({ ok: res.ok, text: res.message });
       if (res.ok) setDirty(false);
     });
@@ -191,6 +197,14 @@ export function NavEditor({
                 </div>
               )}
 
+              <input
+                value={selected.blurb ?? ""}
+                onChange={(e) => mutate((gs) => { gs[selIndex].blurb = e.target.value.trim() ? e.target.value : undefined; })}
+                placeholder="Describe this layer (optional)"
+                aria-label="Layer description"
+                className="w-full text-sm text-muted bg-transparent focus:outline-none focus:bg-bg-elev-2 rounded px-1 mb-3 placeholder:text-subtle"
+              />
+
               {selected.items.length === 0 ? (
                 <div
                   className={`rounded-lg border border-dashed px-5 py-8 text-center text-sm text-muted mb-3 ${over === `body:${selIndex}` ? "border-accent bg-accent-soft-bg" : "border-border-soft"}`}
@@ -216,7 +230,7 @@ export function NavEditor({
                         <span aria-hidden className="text-subtle text-xs">⠿</span>
                         <span className="font-semibold text-sm truncate">{itemLabel(it)}</span>
                       </div>
-                      <div className="text-[11px] text-subtle mt-1">{it.kind === "builder" ? "Page Builder page" : "Page"}</div>
+                      <div className="text-[11px] text-subtle mt-1 line-clamp-2">{itemDesc(it)}</div>
                     </div>
                   ))}
                 </div>
@@ -246,6 +260,7 @@ export function NavEditor({
                       <div className="flex flex-wrap gap-1.5 max-h-56 overflow-y-auto">
                         {unassignedRegistry.map((k) => (
                           <button key={k} type="button" onClick={() => addItem({ kind: "page", pageKey: k })}
+                            title={PAGE_REGISTRY[k].description ?? PAGE_REGISTRY[k].defaultLabel}
                             className="text-xs px-2 py-1 rounded-lg border border-border-soft hover:border-accent hover:text-accent cursor-pointer">
                             {PAGE_REGISTRY[k].defaultLabel}
                           </button>
