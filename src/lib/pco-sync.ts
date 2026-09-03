@@ -530,37 +530,41 @@ function replacePersonPhones(
   for (const h of hashes) stmt.run(orgId, personId, h);
 }
 
-/** True when a name field looks like a placeholder/system-entry, not a
- *  real person. Returns false for empty/missing so an absent last name
- *  doesn't drag a real person ("John", no last name) into the junk
- *  bucket — empty is "no signal," it's the explicit junk patterns we
- *  reject:
- *    - only punctuation ("-", "_", "—", "...")
- *    - starts with non-letter ("- TRACKS COMPUTER", "_ ROOM 101",
- *      "* DO NOT USE") — admins use this convention to sort non-person
- *      rows to the top of alphabetical lists. */
-function isJunkName(name: string | null): boolean {
-  if (!name) return false;
-  const trimmed = name.trim();
-  if (trimmed.length === 0) return false;
-  if (!/\p{L}/u.test(trimmed)) return true;
-  if (!/^\p{L}/u.test(trimmed)) return true;
-  return false;
-}
+/** First names that mean "we didn't get a name", not a name. Only ever
+ *  consulted when the last name has no letters either. */
+const PLACEHOLDER_FIRST_NAMES = new Set([
+  "guest", "test", "testing", "visitor", "unknown", "tbd", "none", "na", "n/a",
+]);
 
-/** True when a row's first AND last name combined indicate "not a real
- *  person" — used at sync time and in the post-sync cleanup pass.
- *  Skip if every name is empty (no signal) OR if either name carries a
- *  junk pattern (catches admins who put "-" only in first AND a real
- *  word in last). */
+const hasLetter = (s: string) => /\p{L}/u.test(s);
+
+/** True when a row carries no real name at all — used at sync time and in the
+ *  post-sync cleanup pass, which DELETES what this rejects.
+ *
+ *  This used to reject any field that didn't start with a letter, on the
+ *  theory that admins prefix non-person rows to sort them to the top. That
+ *  swept up two populations that belong here, and dropped 149 of PCO's 34,461
+ *  records on the floor:
+ *
+ *    - **Organizations.** PCO files them as "_" plus the org name — "_" /
+ *      "Way of Life Mission Church Inc". 102 of them, and they give, so PushPay
+ *      donors had nothing to match against (see decideMatch in
+ *      pushpay-import.ts, which matches organizations on the org name).
+ *    - **People with no surname**, recorded as "-" — "Paw Pah" / "-". This is
+ *      how the Karen and Burmese families are entered; they were invisible to
+ *      attendance, care, groups and every audit.
+ *
+ *  One letterless field is a filing convention, not junk. Actual junk is a row
+ *  with no letters anywhere ("-" / "-") or a numbered walk-in placeholder
+ *  ("Guest" / "1", "Test" / "#!"). */
 function looksLikeNonPerson(
   firstName: string | null,
   lastName: string | null,
 ): boolean {
-  const fTrim = firstName?.trim() ?? "";
-  const lTrim = lastName?.trim() ?? "";
-  if (!fTrim && !lTrim) return true;
-  if (isJunkName(firstName) || isJunkName(lastName)) return true;
+  const f = firstName?.trim() ?? "";
+  const l = lastName?.trim() ?? "";
+  if (!hasLetter(f) && !hasLetter(l)) return true;
+  if (!hasLetter(l) && PLACEHOLDER_FIRST_NAMES.has(f.toLowerCase())) return true;
   return false;
 }
 
@@ -913,16 +917,17 @@ function refreshLastActivity(orgId: number) {
 /** Refresh the is_minor + birth_year denormalized columns by decrypting
  *  each person's birthdate from enc_pii. is_minor gates the kids-checked-
  *  in-to-shepherded-event rule; birth_year drives the demographic charts.
- *  Also opportunistically deletes pre-existing rows whose names are pure
- *  punctuation — they were synced before isJunkName was added at sync
- *  time and clutter every list. */
+ *  Also deletes rows that carry no real name at all (see
+ *  looksLikeNonPerson) — they clutter every list. Organizations ("_" / "Acme
+ *  LLC") and people with no surname ("Paw Pah" / "-") are NOT that, and are
+ *  kept. */
 function refreshIsMinor(orgId: number) {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT pco_id, enc_pii FROM pco_people WHERE org_id = ?`,
+      `SELECT pco_id, first_name, last_name, enc_pii FROM pco_people WHERE org_id = ?`,
     )
-    .all(orgId) as Array<{ pco_id: string; enc_pii: string | null }>;
+    .all(orgId) as Array<{ pco_id: string; first_name: string | null; last_name: string | null; enc_pii: string | null }>;
   const now = Date.now();
   const update = db.prepare(
     `UPDATE pco_people SET is_minor = ?, birth_year = ? WHERE org_id = ? AND pco_id = ?`,
@@ -960,9 +965,12 @@ function refreshIsMinor(orgId: number) {
           last_name?: string | null;
         }>(r.enc_pii)
       : null;
+    // Names live in the plaintext columns; enc_pii is only a fallback for
+    // rows predating that move. Reading enc_pii alone would see no name at
+    // all for a plaintext-only row and DELETE a real person.
     const junk = looksLikeNonPerson(
-      pii?.first_name ?? null,
-      pii?.last_name ?? null,
+      r.first_name ?? pii?.first_name ?? null,
+      r.last_name ?? pii?.last_name ?? null,
     );
     const b = pii?.birthdate ?? null;
     let birthYear: number | null = null;
