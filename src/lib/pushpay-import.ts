@@ -1,7 +1,7 @@
 import "server-only";
 import { getDb } from "./db";
 import { decryptJson, encryptJson, hmac } from "./encryption";
-import { firstNameSimilar, normNamePart, fullNameKey } from "./name-match";
+import { firstNameSimilar, normNamePart, fullNameKey, organizationKey, looksLikeOrgName } from "./name-match";
 import { normPhone } from "./phone";
 
 // PushPay giving import + person matching. No API — an admin uploads the
@@ -67,6 +67,9 @@ interface MatchIndexes {
   byLast: Map<string, Array<{ id: string; first: string; last: string }>>;
   /** Whole-name key → people, so a differently-split name still matches. */
   byFullName: Map<string, string[]>;
+  /** Organization name → the org records filed under it. Organizations have no
+   *  first name to agree on, so they're matched on the name alone. */
+  byOrg: Map<string, string[]>;
   email: Map<string, string[]>;
   phone: Map<string, string[]>;
   /** Per-person contact hashes + birth year, used to tell whether two tied
@@ -85,6 +88,7 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
   const db = getDb();
   const byLast = new Map<string, Array<{ id: string; first: string; last: string }>>();
   const byFullName = new Map<string, string[]>();
+  const byOrg = new Map<string, string[]>();
   const birthYear = new Map<string, number>();
   for (const p of db
     .prepare(`SELECT pco_id, first_name, last_name, nickname, given_name, enc_pii, birth_year FROM pco_people WHERE org_id = ?`)
@@ -118,6 +122,12 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
       const fk = fullNameKey(form, l);
       if (fk) (byFullName.get(fk) ?? byFullName.set(fk, []).get(fk)!).push(p.pco_id);
     }
+    // Organizations are people rows too, and PCO parks a "_" in the first-name
+    // field — which normalizes away to nothing, so firstForms is empty and the
+    // record never lands in byLast or byFullName at all. Without this index no
+    // donor could ever match a church, foundation or business.
+    const ok = organizationKey(f, l);
+    if (ok) (byOrg.get(ok) ?? byOrg.set(ok, []).get(ok)!).push(p.pco_id);
     if (p.birth_year != null) birthYear.set(p.pco_id, p.birth_year);
   }
   const email = new Map<string, string[]>();
@@ -135,7 +145,7 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
   const active = new Set<string>(
     (db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'inactive'`).all(orgId) as Array<{ person_id: string }>).map((r) => r.person_id),
   );
-  return { byLast, byFullName, email, phone, emailsOf, phonesOf, birthYear, active };
+  return { byLast, byFullName, byOrg, email, phone, emailsOf, phonesOf, birthYear, active };
 }
 
 /** Are these tied candidates duplicate records of ONE person? PushPay's own
@@ -169,7 +179,9 @@ function areDuplicateRecords(ids: string[], ix: MatchIndexes): boolean {
  *  must be equal or a known nickname / spelling variant. Households share an
  *  inbox and a phone, so matching on contact info alone will happily point at
  *  someone's kid — a name mismatch disqualifies a candidate outright no matter
- *  how well the email and phone line up.
+ *  how well the email and phone line up. Organizations are matched on the org
+ *  name alone: their "first name" is a sort placeholder on both sides ("_" in
+ *  PCO, "Z" in the PushPay export), and there's no household to confuse.
  *
  *  Among name-qualified people, whoever matches the most of (email, phone)
  *  wins. On a tie we pick either one IF they're duplicate records of the same
@@ -184,12 +196,27 @@ function decideMatch(
 ): { personId: string | null; status: string; candidates: string[] | null } {
   const ln = normNamePart(last);
   const fn = normNamePart(first);
-  if (!ln || !fn) return { personId: null, status: "unmatched", candidates: null };
+  // An organization has no first name for the mandatory check to run on, so it
+  // gets its own key; a person still needs both fields.
+  const org = organizationKey(first, last);
+  if (!org && (!ln || !fn)) return { personId: null, status: "unmatched", candidates: null };
 
   const ids = new Set<string>();
   for (const c of ix.byLast.get(ln) ?? []) if (firstNameSimilar(fn, c.first)) ids.add(c.id);
   // Same whole name, split differently across the first/last fields.
-  for (const id of ix.byFullName.get(fullNameKey(first, last)) ?? []) ids.add(id);
+  const fk = fullNameKey(first, last);
+  for (const id of ix.byFullName.get(fk) ?? []) ids.add(id);
+  // Organizations: "_" on the PCO side and "Z" on the PushPay side are sort
+  // placeholders, not given names, so the org name alone decides the match.
+  if (org) {
+    for (const id of ix.byOrg.get(org) ?? []) ids.add(id);
+  } else if (ids.size === 0 && looksLikeOrgName(fk)) {
+    // No placeholder to drop — an org whose name got split across both fields.
+    // Consulted only when nothing matched as a person, so a real person whose
+    // name happens to read like an org ("Grace Church") can never be dragged
+    // into a tie with an org record and turned ambiguous.
+    for (const id of ix.byOrg.get(fk) ?? []) ids.add(id);
+  }
   const qualified = [...ids].map((id) => ({ id }));
 
   if (qualified.length === 0) {
@@ -371,19 +398,34 @@ function candidateContext(orgId: number, ids: string[]): { emails: Map<string, S
   return { emails, phones, active };
 }
 
+/** "First Last" from the plaintext columns, falling back to enc_pii, and to the
+ *  PCO id when the record genuinely has no name on file. */
+function personLabel(first: string | null, last: string | null, enc: string | null, pcoId: string): string {
+  let f = first;
+  let l = last;
+  if (f == null && l == null && enc) {
+    const pii = decryptJson<PII>(enc);
+    f = pii?.first_name ?? null;
+    l = pii?.last_name ?? null;
+  }
+  return [f, l].filter(Boolean).join(" ").trim() || `#${pcoId}`;
+}
+
 const donorName = (enc: string): { fullName: string; email: string; phone: string } => {
   const p = decryptJson<DonorPII>(enc);
   return { fullName: [p?.firstName, p?.lastName].filter(Boolean).join(" ") || "—", email: p?.email ?? "", phone: p?.phone ?? "" };
 };
 
-/** Decrypted person names, for resolving ambiguous candidates. */
+/** Person names, for resolving ambiguous candidates. Names live in plaintext
+ *  columns; enc_pii is only a fallback for rows predating that move — reading
+ *  enc_pii alone renders anyone already on the plaintext columns as a bare
+ *  "#12345678" in the reconcile list. */
 function personNames(orgId: number, ids: string[]): Map<string, string> {
   const out = new Map<string, string>();
   if (!ids.length) return out;
   const ph = ids.map(() => "?").join(",");
-  for (const r of getDb().prepare(`SELECT pco_id, enc_pii FROM pco_people WHERE org_id = ? AND pco_id IN (${ph})`).all(orgId, ...ids) as Array<{ pco_id: string; enc_pii: string | null }>) {
-    const pii = r.enc_pii ? decryptJson<PII>(r.enc_pii) : null;
-    out.set(r.pco_id, [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") || `#${r.pco_id}`);
+  for (const r of getDb().prepare(`SELECT pco_id, first_name, last_name, enc_pii FROM pco_people WHERE org_id = ? AND pco_id IN (${ph})`).all(orgId, ...ids) as Array<{ pco_id: string; first_name: string | null; last_name: string | null; enc_pii: string | null }>) {
+    out.set(r.pco_id, personLabel(r.first_name, r.last_name, r.enc_pii, r.pco_id));
   }
   return out;
 }
@@ -426,14 +468,13 @@ export function listMatchedDonors(orgId: number, opts: { stage?: string; limit?:
   if (opts.stage) { where += ` AND d.donor_stage = ?`; args.push(opts.stage); }
   args.push(opts.limit ?? 1000);
   const rows = getDb().prepare(
-    `SELECT d.person_id AS pco, d.donor_stage AS stage, d.last_gift_fund AS fund, d.giving_channel AS channel, d.last_gift_date AS lg, p.enc_pii AS enc
+    `SELECT d.person_id AS pco, d.donor_stage AS stage, d.last_gift_fund AS fund, d.giving_channel AS channel, d.last_gift_date AS lg, p.first_name AS fn, p.last_name AS ln, p.enc_pii AS enc
        FROM pushpay_donors d JOIN pco_people p ON p.org_id = d.org_id AND p.pco_id = d.person_id
        ${where} ORDER BY d.last_gift_date DESC LIMIT ?`,
-  ).all(...args) as Array<{ pco: string; stage: string | null; fund: string | null; channel: string | null; lg: string | null; enc: string | null }>;
-  return rows.map((r) => {
-    const pii = r.enc ? decryptJson<PII>(r.enc) : null;
-    return { pcoId: r.pco, name: [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") || `#${r.pco}`, stage: r.stage, fund: r.fund, channel: r.channel, lastGiftDate: r.lg };
-  });
+  ).all(...args) as Array<{ pco: string; stage: string | null; fund: string | null; channel: string | null; lg: string | null; fn: string | null; ln: string | null; enc: string | null }>;
+  return rows.map((r) => ({
+    pcoId: r.pco, name: personLabel(r.fn, r.ln, r.enc, r.pco), stage: r.stage, fund: r.fund, channel: r.channel, lastGiftDate: r.lg,
+  }));
 }
 
 /** Distinct people tied to at least one imported gift — the "has given"

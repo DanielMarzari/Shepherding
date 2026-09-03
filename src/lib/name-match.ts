@@ -7,6 +7,10 @@
 // share an inbox and a phone number, so contact info alone will happily point
 // at someone's kid. A nickname / spelling variant of the first name is the
 // only allowed difference.
+//
+// Organizations are the one exception, at the bottom of this file: a church or
+// business has no first name for that rule to run on, and no household inbox
+// to be confused by either.
 
 /** Levenshtein edit distance, capped early — only used on short first
  *  names so it's cheap. */
@@ -95,4 +99,48 @@ export function sameNamePerson(
  *  human, different field split, so compare the whole name too. */
 export function fullNameKey(first: string | null | undefined, last: string | null | undefined): string {
   return normNamePart(`${first ?? ""} ${last ?? ""}`);
+}
+
+/** Words that only turn up in an organization's name. */
+const ORG_TOKENS = new Set([
+  "inc", "incorporated", "llc", "llp", "lp", "ltd", "corp", "corporation", "company", "co",
+  "church", "chapel", "ministry", "ministries", "mission", "missions", "fellowship",
+  "congregation", "parish", "diocese", "tabernacle", "temple", "synagogue", "assembly",
+  "foundation", "trust", "fund", "endowment", "charity", "charities", "society",
+  "association", "institute", "academy", "school", "college", "university",
+  "partners", "holdings", "enterprises", "estate",
+]);
+
+/** Does a whole name read as an organization rather than a person? Three or
+ *  more words is already unlike a person's name once the placeholder is gone
+ *  ("way of life mission church inc"); a two-word name has to carry an
+ *  organization word ("grace church"). */
+export function looksLikeOrgName(name: string): boolean {
+  const words = name.split(" ").filter(Boolean);
+  if (words.length >= 3) return true;
+  return words.some((w) => ORG_TOKENS.has(w));
+}
+
+/** Key an organization by its name alone, or null if this reads as a person.
+ *
+ *  Organizations live in the people table, and neither system has a real first
+ *  name to put in the first-name field — PCO writes "_" and the PushPay export
+ *  writes "Z" so the record sorts to the end. Those are sort placeholders, not
+ *  given names, so requiring them to agree (the rule that keeps a donor off
+ *  someone's kid) permanently disqualifies every organization. Drop any field
+ *  that normalizes to at most one character and match on what's left, which is
+ *  what lets PCO's "_ / Way of Life Mission Church Inc" line up with PushPay's
+ *  "Z / Way of Life Mission Church Inc".
+ *
+ *  A placeholder field is required: "Grace" + "Church" is a person and must
+ *  keep going through the normal first-name check. */
+export function organizationKey(
+  first: string | null | undefined,
+  last: string | null | undefined,
+): string | null {
+  const parts = [normNamePart(first), normNamePart(last)];
+  if (!parts.some((p) => p.length <= 1)) return null;
+  const name = parts.filter((p) => p.length > 1).join(" ").trim();
+  if (!name || !looksLikeOrgName(name)) return null;
+  return name;
 }
