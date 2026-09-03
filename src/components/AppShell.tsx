@@ -4,7 +4,9 @@ import type { ReactNode } from "react";
 import { getSession } from "@/lib/auth";
 import { SearchBar } from "./SearchBar";
 import { UserMenu } from "./UserMenu";
-import { NavRail } from "./NavRail";
+import { GalleryHub } from "./GalleryHub";
+import { buildHubSections } from "@/lib/hub-sections";
+import { getPinnedKeys } from "@/lib/nav-config-db";
 
 // There is no left sidebar anymore — navigation lives on the home hub (the
 // See-More-style gallery) reached via the logo, and the account menu floats
@@ -41,12 +43,14 @@ export async function AppShell({
   children: ReactNode;
   active: string;
   breadcrumb: string;
-  /** Set false on pages that render the full GalleryHub themselves (Home,
-   *  Settings) — they already show the navigation, so a rail would double up. */
+  /** Set false on pages that render the hub themselves (Home, Settings,
+   *  Settings > Navigation, See more) — they already show the navigation, so
+   *  wrapping them again would nest one hub inside another. */
   rail?: boolean;
 }) {
   const session = await getSession();
   const name = session?.user.name ?? "";
+  const useHub = rail && session?.orgId != null;
   return (
     <div className="min-h-screen bg-bg text-fg" data-active={active}>
       <header className={TOPBAR}>
@@ -60,10 +64,24 @@ export async function AppShell({
           )}
         </div>
       </header>
-      <div className="flex items-stretch">
-        {rail && session?.orgId != null && <NavRail active={active} orgId={session.orgId} />}
-        <main className="flex-1 min-w-0">{children}</main>
-      </div>
+      <main>
+        {useHub ? (
+          // Every page opens INSIDE the hub, exactly like the home page: the
+          // floating rail of layers on the left, this page's content in the
+          // detail pane on the right. `active` names the page in the rail, and
+          // it's selected by default because it's the first entry.
+          <div className="px-5 md:px-7 py-7">
+            <GalleryHub
+              sections={buildHubSections(session!.orgId!)}
+              pinned={getPinnedKeys(session!.orgId!, session!.user.id)}
+              homeLabel={active}
+              homeContent={children}
+            />
+          </div>
+        ) : (
+          children
+        )}
+      </main>
     </div>
   );
 }
@@ -95,11 +113,13 @@ export function AppShellSkeleton({
           <div className="w-8 h-8 rounded-full bg-bg-elev-2/60" />
         </div>
       </header>
-      <div className="flex items-stretch">
-        {/* Reserve the rail's width so the page doesn't jump when it loads. */}
-        <div className="shrink-0 w-44 lg:w-52 border-r border-border-soft bg-bg-elev-2/30 hidden md:block" />
-        <main className="flex-1 min-w-0">{children}</main>
-      </div>
+      <main className="px-5 md:px-7 py-7">
+        {/* Mirror the hub's shape so the page doesn't jump when it loads. */}
+        <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-0 rounded-xl border border-border-soft overflow-hidden">
+          <div className="bg-bg-elev-2/40 border-b md:border-b-0 md:border-r border-border-soft p-2.5 md:p-3" />
+          <div className="p-4 md:p-5 min-w-0">{children}</div>
+        </div>
+      </main>
     </div>
   );
 }
