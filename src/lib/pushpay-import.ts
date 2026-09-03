@@ -1,6 +1,7 @@
 import "server-only";
 import { getDb } from "./db";
 import { decryptJson, encryptJson, hmac } from "./encryption";
+import { firstNameSimilar, normNamePart, fullNameKey } from "./name-match";
 import { normPhone } from "./phone";
 
 // PushPay giving import + person matching. No API — an admin uploads the
@@ -60,69 +61,161 @@ function parseCsv(text: string): string[][] {
 export interface PushpayImportResult { total: number; matched: number; ambiguous: number; unmatched: number }
 
 interface MatchIndexes {
-  name: Map<string, string[]>;
+  /** Normalized last name → the people with it (first/last kept so we can
+   *  judge nicknames). Name agreement is MANDATORY, so this is the entry
+   *  point for finding candidates — email/phone only add confidence. */
+  byLast: Map<string, Array<{ id: string; first: string; last: string }>>;
+  /** Whole-name key → people, so a differently-split name still matches. */
+  byFullName: Map<string, string[]>;
   email: Map<string, string[]>;
   phone: Map<string, string[]>;
-  /** pco_ids that are NOT inactive (per person_activity) — used to pick the
-   *  live record when a name matches an active person + old inactive dupes. */
+  /** Per-person contact hashes + birth year, used to tell whether two tied
+   *  candidates are duplicate records of one person (safe to pick either) or
+   *  genuinely two different people (must ask). */
+  emailsOf: Map<string, Set<string>>;
+  phonesOf: Map<string, Set<string>>;
+  birthYear: Map<string, number>;
+  /** pco_ids that are NOT inactive — only ever a tiebreaker, never a gate. */
   active: Set<string>;
 }
 
-/** Build the name / email / phone → person-id indexes once (decrypts every
- *  person's name a single time), plus the active-person set. Shared by import
- *  and re-match. */
+/** Build the matching indexes once (decrypts a person's name only when the
+ *  plaintext columns are missing). Shared by import and re-match. */
 function buildMatchIndexes(orgId: number): MatchIndexes {
   const db = getDb();
-  const name = new Map<string, string[]>();
-  for (const p of db.prepare(`SELECT pco_id, first_name, last_name, enc_pii FROM pco_people WHERE org_id = ?`).all(orgId) as Array<{ pco_id: string; first_name: string | null; last_name: string | null; enc_pii: string | null }>) {
-    let f = p.first_name, l = p.last_name;
-    if (f == null && l == null && p.enc_pii) { const pii = decryptJson<PII>(p.enc_pii); f = pii?.first_name ?? null; l = pii?.last_name ?? null; }
-    const nn = normName(f ?? "", l ?? "");
-    if (nn) (name.get(nn) ?? name.set(nn, []).get(nn)!).push(p.pco_id);
+  const byLast = new Map<string, Array<{ id: string; first: string; last: string }>>();
+  const byFullName = new Map<string, string[]>();
+  const birthYear = new Map<string, number>();
+  for (const p of db
+    .prepare(`SELECT pco_id, first_name, last_name, enc_pii, birth_year FROM pco_people WHERE org_id = ?`)
+    .all(orgId) as Array<{
+    pco_id: string;
+    first_name: string | null;
+    last_name: string | null;
+    enc_pii: string | null;
+    birth_year: number | null;
+  }>) {
+    let f = p.first_name;
+    let l = p.last_name;
+    if (f == null && l == null && p.enc_pii) {
+      const pii = decryptJson<PII>(p.enc_pii);
+      f = pii?.first_name ?? null;
+      l = pii?.last_name ?? null;
+    }
+    const ln = normNamePart(l ?? "");
+    const fn = normNamePart(f ?? "");
+    if (ln && fn) {
+      const arr = byLast.get(ln) ?? byLast.set(ln, []).get(ln)!;
+      arr.push({ id: p.pco_id, first: fn, last: ln });
+    }
+    const fk = fullNameKey(f, l);
+    if (fk) (byFullName.get(fk) ?? byFullName.set(fk, []).get(fk)!).push(p.pco_id);
+    if (p.birth_year != null) birthYear.set(p.pco_id, p.birth_year);
   }
   const email = new Map<string, string[]>();
+  const emailsOf = new Map<string, Set<string>>();
   for (const e of db.prepare(`SELECT email_hash, person_id FROM pco_person_emails WHERE org_id = ?`).all(orgId) as Array<{ email_hash: string; person_id: string }>) {
     (email.get(e.email_hash) ?? email.set(e.email_hash, []).get(e.email_hash)!).push(e.person_id);
+    (emailsOf.get(e.person_id) ?? emailsOf.set(e.person_id, new Set()).get(e.person_id)!).add(e.email_hash);
   }
   const phone = new Map<string, string[]>();
+  const phonesOf = new Map<string, Set<string>>();
   for (const ph of db.prepare(`SELECT phone_hash, person_id FROM pco_person_phones WHERE org_id = ?`).all(orgId) as Array<{ phone_hash: string; person_id: string }>) {
     (phone.get(ph.phone_hash) ?? phone.set(ph.phone_hash, []).get(ph.phone_hash)!).push(ph.person_id);
+    (phonesOf.get(ph.person_id) ?? phonesOf.set(ph.person_id, new Set()).get(ph.person_id)!).add(ph.phone_hash);
   }
   const active = new Set<string>(
     (db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'inactive'`).all(orgId) as Array<{ person_id: string }>).map((r) => r.person_id),
   );
-  return { name, email, phone, active };
+  return { byLast, byFullName, email, phone, emailsOf, phonesOf, birthYear, active };
 }
 
-/** Decide who a donor matches from its normalized name + email/phone hashes.
- *  The person matching the MOST signals wins — all three (name + email +
- *  phone) beats two, which beats one. Inactive is NOT disqualifying: many
- *  donors are giver-only records with no other activity. Active is used only
- *  to break a tie between people who match equally well; a real tie is left
- *  ambiguous for manual reconciliation. */
+/** Are these tied candidates duplicate records of ONE person? PushPay's own
+ *  PCO integration creates duplicates whenever someone new gives, so this is
+ *  common — and when it's true, either record is a fine target (they get
+ *  merged later in the duplicate audit). We require the same name PLUS a
+ *  shared email, shared phone, or same birth year; a bare name match could be
+ *  two different people, which we refuse to guess at. */
+function areDuplicateRecords(ids: string[], ix: MatchIndexes): boolean {
+  if (ids.length < 2) return false;
+  const overlaps = (a: Set<string> | undefined, b: Set<string> | undefined) => {
+    if (!a || !b) return false;
+    for (const v of a) if (b.has(v)) return true;
+    return false;
+  };
+  for (let i = 1; i < ids.length; i++) {
+    const a = ids[0];
+    const b = ids[i];
+    const shared =
+      overlaps(ix.emailsOf.get(a), ix.emailsOf.get(b)) ||
+      overlaps(ix.phonesOf.get(a), ix.phonesOf.get(b)) ||
+      (ix.birthYear.has(a) && ix.birthYear.get(a) === ix.birthYear.get(b));
+    if (!shared) return false;
+  }
+  return true;
+}
+
+/** Decide who a donor matches.
+ *
+ *  Name agreement is MANDATORY: the last name must match and the first name
+ *  must be equal or a known nickname / spelling variant. Households share an
+ *  inbox and a phone, so matching on contact info alone will happily point at
+ *  someone's kid — a name mismatch disqualifies a candidate outright no matter
+ *  how well the email and phone line up.
+ *
+ *  Among name-qualified people, whoever matches the most of (email, phone)
+ *  wins. On a tie we pick either one IF they're duplicate records of the same
+ *  person (PushPay creates those constantly); active status breaks a remaining
+ *  tie; anything still tied is left ambiguous to be reconciled by hand. */
 function decideMatch(
-  nn: string,
+  first: string,
+  last: string,
   eh: string | null,
   phh: string | null,
   ix: MatchIndexes,
 ): { personId: string | null; status: string; candidates: string[] | null } {
-  const nm = nn ? ix.name.get(nn) ?? [] : [];
-  const em = eh ? ix.email.get(eh) ?? [] : [];
-  const ph = phh ? ix.phone.get(phh) ?? [] : [];
-  const votes = new Map<string, number>();
-  for (const set of [new Set(nm), new Set(em), new Set(ph)]) {
-    for (const id of set) votes.set(id, (votes.get(id) ?? 0) + 1);
-  }
-  if (votes.size === 0) return { personId: null, status: "unmatched", candidates: null };
+  const ln = normNamePart(last);
+  const fn = normNamePart(first);
+  if (!ln || !fn) return { personId: null, status: "unmatched", candidates: null };
 
-  // Strength of evidence decides: the person matching the MOST of
-  // (name, email, phone) wins. Someone matching all three is the same person
-  // even if PCO marks them inactive — plenty of donors are giver-only records
-  // with no other activity to make them "active". Active is only a tiebreaker
-  // when two people match equally well, never a gate on matching at all.
+  const ids = new Set<string>();
+  for (const c of ix.byLast.get(ln) ?? []) if (firstNameSimilar(fn, c.first)) ids.add(c.id);
+  // Same whole name, split differently across the first/last fields.
+  for (const id of ix.byFullName.get(fullNameKey(first, last)) ?? []) ids.add(id);
+  const qualified = [...ids].map((id) => ({ id }));
+
+  if (qualified.length === 0) {
+    // The name doesn't match anyone. Contact info alone is NOT enough — that's
+    // how you end up matched to someone's kid who shares the family inbox. But
+    // if the email/phone did land on somebody, surface it for a human decision
+    // instead of silently dropping the donor.
+    const near = new Set<string>([
+      ...(eh ? ix.email.get(eh) ?? [] : []),
+      ...(phh ? ix.phone.get(phh) ?? [] : []),
+    ]);
+    if (near.size > 0) return { personId: null, status: "ambiguous", candidates: [...near] };
+    return { personId: null, status: "unmatched", candidates: null };
+  }
+
+  const em = new Set(eh ? ix.email.get(eh) ?? [] : []);
+  const ph = new Set(phh ? ix.phone.get(phh) ?? [] : []);
+  const votes = new Map<string, number>();
+  for (const c of qualified) {
+    let v = 1; // the mandatory name match
+    if (em.has(c.id)) v++;
+    if (ph.has(c.id)) v++;
+    votes.set(c.id, v);
+  }
+
   const max = Math.max(...votes.values());
   const top = [...votes].filter(([, c]) => c === max).map(([id]) => id);
   if (top.length === 1) return { personId: top[0], status: "matched", candidates: null };
+
+  // Same person, duplicated in PCO → either record is fine.
+  if (areDuplicateRecords(top, ix)) {
+    const pick = top.find((id) => ix.active.has(id)) ?? [...top].sort()[0];
+    return { personId: pick, status: "matched", candidates: top };
+  }
 
   const act = top.filter((id) => ix.active.has(id));
   if (act.length === 1) return { personId: act[0], status: "matched", candidates: null };
@@ -154,7 +247,7 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
     const eh = email ? hmac(email.toLowerCase()) : null;
     const np = normPhone(phone);
     const phh = np ? hmac(np) : null;
-    const dec = decideMatch(nn, eh, phh, ix);
+    const dec = decideMatch(first, last, eh, phh, ix);
     return {
       key: String(i),
       enc: encryptJson({ firstName: first, lastName: last, email, phone } as DonorPII),
@@ -202,11 +295,10 @@ export function rematchDonors(orgId: number): RematchResult {
     for (const r of rows) {
       if (r.match_status === "manual") continue; // never clobber a human assignment
       const d = decryptJson<DonorPII>(r.enc);
-      const nn = normName(d?.firstName ?? "", d?.lastName ?? "");
       const eh = d?.email ? hmac(d.email.trim().toLowerCase()) : null;
       const np = normPhone(d?.phone ?? null);
       const phh = np ? hmac(np) : null;
-      const dec = decideMatch(nn, eh, phh, ix);
+      const dec = decideMatch(d?.firstName ?? "", d?.lastName ?? "", eh, phh, ix);
       if (dec.status !== r.match_status || dec.personId !== r.person_id) changed++;
       upd.run(dec.personId, dec.status, dec.candidates ? JSON.stringify(dec.candidates) : null, orgId, r.donor_key);
     }

@@ -1,5 +1,6 @@
 import "server-only";
 import { getDb } from "./db";
+import { firstNameSimilar } from "./name-match";
 import { decryptJson } from "./encryption";
 
 interface PIIBlob {
@@ -452,58 +453,6 @@ function loadEmailHashes(orgId: number): Map<string, Set<string>> {
     s.add(r.email_hash);
   }
   return m;
-}
-
-/** Levenshtein edit distance, capped early — only used on short first
- *  names so it's cheap. */
-function editDistance(a: string, b: string): number {
-  const m = a.length;
-  const n = b.length;
-  if (Math.abs(m - n) > 2) return 3;
-  const dp = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-    }
-  }
-  return dp[m][n];
-}
-
-const NICKNAMES: Record<string, string[]> = {
-  jon: ["john", "jonathan"],
-  john: ["jon", "jonathan"],
-  bob: ["robert", "rob"],
-  rob: ["robert", "bob"],
-  bill: ["william", "will"],
-  will: ["william", "bill"],
-  jim: ["james", "jimmy"],
-  mike: ["michael"],
-  tom: ["thomas"],
-  dave: ["david"],
-  dan: ["daniel", "danny"],
-  chris: ["christopher", "christina", "christine"],
-  matt: ["matthew"],
-  joe: ["joseph"],
-  steve: ["steven", "stephen"],
-  ben: ["benjamin"],
-  sam: ["samuel", "samantha"],
-  kate: ["katherine", "kathryn", "katelyn"],
-  liz: ["elizabeth"],
-  beth: ["elizabeth"],
-  becca: ["rebecca"],
-};
-
-/** Are two first names plausibly the same person (typo / nickname /
- *  one a prefix of the other)? */
-function firstNameSimilar(a: string, b: string): boolean {
-  if (!a || !b) return false;
-  if (a === b) return true;
-  if (a[0] === b[0] && (a.startsWith(b) || b.startsWith(a))) return true; // Jonathan / Jon
-  if ((NICKNAMES[a] ?? []).includes(b) || (NICKNAMES[b] ?? []).includes(a)) return true;
-  if (editDistance(a, b) <= 1) return true; // Jon / John, Sara / Sarah
-  return false;
 }
 
 /** Score one candidate pair: build the human reasons that explain why
