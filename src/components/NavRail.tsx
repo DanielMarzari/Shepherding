@@ -33,7 +33,13 @@ export async function NavRail({ active, orgId }: { active: string; orgId: number
   const items = group.items
     .map((it) => ({ key: keyOf(it), href: hrefOf(it), label: labelOf(it) }))
     .filter((it): it is { key: string; href: string; label: string } => !!it.href);
-  if (items.length === 0) return null;
+
+  // A rail whose only entry is the page you're already on is pure chrome —
+  // a whole column that navigates nowhere. This happens whenever a layer
+  // holds a single page (e.g. Ministry Impact Reports, whose builder pages
+  // are merged in at request time), so render nothing and let the page use
+  // the full width.
+  if (items.length < 2) return null;
 
   return (
     <nav
