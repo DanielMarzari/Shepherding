@@ -1,7 +1,6 @@
 import "server-only";
 import Database from "better-sqlite3";
 import { getDb } from "./db";
-import { NAV_SECTION_VALUES } from "./builder-nav";
 import { DEFAULT_CONFIG } from "./builder-defaults";
 
 // ─── Read-only query engine ──────────────────────────────────────────
@@ -450,7 +449,13 @@ export function createBuilderPage(orgId: number, title: string): string {
 }
 
 export function updateBuilderPage(orgId: number, id: number, title: string, description: string | null, navSection?: string | null, moreSection?: string | null): void {
-  const nav = navSection && NAV_SECTION_VALUES.has(navSection) ? navSection : null;
+  // A layer id, not a member of a fixed list. It used to be checked against
+  // eight hardcoded ids, so filing a page under any layer the admin had made
+  // silently stored null and the page vanished from the nav. resolveNavConfig
+  // is the authority on which ids resolve; importing it here would be a cycle
+  // (it reads this module), and an id matching no layer simply leaves the page
+  // unplaced — still reachable, and still placeable from the Nav Builder.
+  const nav = navSection && /^[A-Za-z0-9_-]{1,64}$/.test(navSection.trim()) ? navSection.trim() : null;
   const more = moreSection && moreSection.trim() ? moreSection.trim().slice(0, 40) : null;
   getDb()
     .prepare(

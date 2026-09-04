@@ -111,7 +111,7 @@ export default async function LanePage({
   // (transitionsOut reserved for future lane-exit feed)
 
   return (
-    <AppShell active={`lane:${laneKey}`} breadcrumb={`Lanes › ${laneStats.label}`}>
+    <AppShell active="Lanes" breadcrumb={`Lanes › ${laneStats.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
         {/* Header */}
         <div>
@@ -321,7 +321,7 @@ function CommunityLane({
   trackingMonths: number;
 }) {
   return (
-    <AppShell active="lane:comm" breadcrumb={`Lanes › ${laneStats.label}`}>
+    <AppShell active="Lanes" breadcrumb={`Lanes › ${laneStats.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <BackLink fallback="/lanes">← Back</BackLink>
@@ -506,7 +506,7 @@ function ServingLane({
   trackingMonths: number;
 }) {
   return (
-    <AppShell active="lane:serv" breadcrumb={`Lanes › ${laneStats.label}`}>
+    <AppShell active="Lanes" breadcrumb={`Lanes › ${laneStats.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <BackLink fallback="/lanes">← Back</BackLink>
@@ -700,7 +700,7 @@ function GivingLane({
   people: Awaited<ReturnType<typeof listGivingPeople>>;
 }) {
   return (
-    <AppShell active="lane:give" breadcrumb={`Lanes › ${laneStats.label}`}>
+    <AppShell active="Lanes" breadcrumb={`Lanes › ${laneStats.label}`}>
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div>
           <BackLink fallback="/lanes">← Back</BackLink>

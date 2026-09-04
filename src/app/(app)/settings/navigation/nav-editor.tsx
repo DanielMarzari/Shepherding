@@ -20,12 +20,15 @@ const itemLabel = (it: NavItemRef) => (it.kind === "builder" ? it.label : PAGE_R
 const itemDesc = (it: NavItemRef) =>
   it.kind === "builder" ? "Page Builder page" : PAGE_REGISTRY[it.pageKey]?.description ?? "Page";
 const itemKey = (it: NavItemRef) => (it.kind === "builder" ? `builder:${it.slug}` : it.pageKey);
-const hubGroups = (c: NavConfig) => c.groups.filter((g) => g.id !== "settings-integration");
+
 
 /** WYSIWYG nav/hub builder: looks like the real hub (left rail of layers + a
- *  right panel of that layer's pages). The Settings & Integration group is
- *  managed elsewhere, so it's kept out of here (and preserved on save) — which
- *  also makes its pages, incl. this Navigation page, selectable. */
+ *  right panel of that layer's pages).
+ *
+ *  EVERY layer is listed, with no exceptions. The Settings & Integration group
+ *  used to be filtered out here and quietly re-attached on save, so the two
+ *  tabs on /settings were live and uneditable — the same defect as the old
+ *  hardcoded hub sections. A layer's surface is now a control, not a filter. */
 export function NavEditor({
   initial,
   builderPages,
@@ -35,9 +38,7 @@ export function NavEditor({
   builderPages: BuilderPageRef[];
   isAdmin: boolean;
 }) {
-  // Preserve the (render-unused) settings-integration group across edits/saves.
-  const preserved = useRef<NavGroup[]>(initial.groups.filter((g) => g.id === "settings-integration"));
-  const [groups, setGroups] = useState<NavGroup[]>(() => clone(hubGroups(initial)));
+  const [groups, setGroups] = useState<NavGroup[]>(() => clone(initial.groups));
   const [sel, setSel] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [pending, start] = useTransition();
@@ -78,7 +79,7 @@ export function NavEditor({
     start(async () => {
       // Stamping the current version is what tells getNavConfig this layout has
       // seen the latest seeded layers — so a layer deleted here stays deleted.
-      const res = await saveNavConfigAction({ version: NAV_CONFIG_VERSION, groups: [...groups, ...preserved.current] });
+      const res = await saveNavConfigAction({ version: NAV_CONFIG_VERSION, groups });
       setMsg({ ok: res.ok, text: res.message });
       if (res.ok) setDirty(false);
     });
@@ -130,7 +131,7 @@ export function NavEditor({
           className="text-sm px-3 py-1.5 rounded-lg border border-accent text-accent hover:bg-accent hover:text-bg disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent cursor-pointer transition-colors">
           {pending ? "Saving…" : "Save"}
         </button>
-        <button type="button" onClick={() => { setGroups(clone(hubGroups(DEFAULT_NAV_CONFIG))); setSel(0); setDirty(true); setMsg(null); }}
+        <button type="button" onClick={() => { setGroups(clone(DEFAULT_NAV_CONFIG.groups)); setSel(0); setDirty(true); setMsg(null); }}
           disabled={pending} className="text-sm px-3 py-1.5 rounded-lg border border-border-soft text-muted hover:text-fg hover:border-accent cursor-pointer transition-colors">
           Reset to default
         </button>
@@ -161,6 +162,7 @@ export function NavEditor({
                 aria-label="Layer name"
                 className="flex-1 min-w-0 bg-transparent text-sm font-medium focus:outline-none focus:bg-bg rounded px-1 py-0.5"
               />
+              {g.surface === "settings" && <span className="text-[10px] text-subtle" title="Shows on the Settings page">⚙</span>}
               <span className="text-[11px] text-subtle tnum">{g.items.length}</span>
               <button type="button" onClick={(e) => { e.stopPropagation(); mutate((gs) => { gs.splice(gi, 1); }); if (selIndex >= gi) setSel(Math.max(0, selIndex - 1)); }}
                 aria-label="Delete layer" className="opacity-0 group-hover:opacity-100 text-subtle hover:text-warn-soft-fg text-xs cursor-pointer">✕</button>
@@ -202,6 +204,17 @@ export function NavEditor({
                 </div>
               )}
 
+              <label className="flex items-center gap-2 text-xs text-subtle mb-2">
+                Shows on
+                <select
+                  value={selected.surface ?? "hub"}
+                  onChange={(e) => mutate((gs) => { gs[selIndex].surface = e.target.value === "settings" ? "settings" : "hub"; })}
+                  className="bg-bg-elev-2 border border-border-soft rounded-lg px-2 py-1 text-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <option value="hub">the home hub</option>
+                  <option value="settings">the Settings page</option>
+                </select>
+              </label>
               <input
                 value={selected.blurb ?? ""}
                 onChange={(e) => mutate((gs) => { gs[selIndex].blurb = e.target.value.trim() ? e.target.value : undefined; })}

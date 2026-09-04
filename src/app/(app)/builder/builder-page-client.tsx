@@ -6,7 +6,6 @@ import Link from "next/link";
 import type { BlockConfig, BlockKind, DbSchema, PageRef, QueryDebug, QueryResult } from "@/lib/builder";
 import { DEFAULT_CONFIG, LEAF_KINDS, COLOR_PRESETS } from "@/lib/builder-defaults";
 import { SOURCE_META, sourceMeta } from "@/lib/builder-source-meta";
-import { NAV_SECTIONS } from "@/lib/builder-nav";
 import { BlockView, BLOCK_META } from "./blocks";
 import { CHART_TYPES, PICTO_ICONS } from "./echarts-block";
 import { FilterControl } from "./filter-control";
@@ -83,6 +82,7 @@ export function BuilderPageClient({
   pages,
   versionCount = 0,
   queryLog = [],
+  navSections,
 }: {
   page: PageInfo;
   blocks: ClientBlock[];
@@ -92,6 +92,8 @@ export function BuilderPageClient({
   pages: PageRef[];
   versionCount?: number;
   queryLog?: QueryDebug[];
+  /** This org's actual layers, from its nav config — not a hardcoded list. */
+  navSections: Array<{ value: string; label: string }>;
 }) {
   const router = useRouter();
   const [edit, setEdit] = useState(isAdmin && initialEdit);
@@ -121,7 +123,7 @@ export function BuilderPageClient({
         </button>
       </div>
       <QueryInspector queryLog={queryLog} slug={page.slug} />
-      <PageSettings page={page} onDone={() => setEdit(false)} busy={pending} mutate={mutate} />
+      <PageSettings navSections={navSections} page={page} onDone={() => setEdit(false)} busy={pending} mutate={mutate} />
       <div className="rounded-xl border border-border-soft bg-bg-elev-2/40 p-4 space-y-3">
         <div className="text-xs text-muted font-medium">Add a block</div>
         {PALETTE_GROUPS.map((grp) => (
@@ -392,7 +394,7 @@ function EmptyPage({ isAdmin, onEdit }: { isAdmin: boolean; onEdit: () => void }
   );
 }
 
-function PageSettings({ page, onDone, busy, mutate }: { page: PageInfo; onDone: () => void; busy: boolean; mutate: (fn: () => Promise<unknown>) => void }) {
+function PageSettings({ page, onDone, busy, mutate, navSections }: { page: PageInfo; onDone: () => void; busy: boolean; mutate: (fn: () => Promise<unknown>) => void; navSections: Array<{ value: string; label: string }> }) {
   const [title, setTitle] = useState(page.title);
   const [desc, setDesc] = useState(page.description ?? "");
   const [nav, setNav] = useState(page.navSection ?? "");
@@ -411,10 +413,10 @@ function PageSettings({ page, onDone, busy, mutate }: { page: PageInfo; onDone: 
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Page title" className="bg-bg-elev-2 border border-border-soft rounded-lg px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
         <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Short description (optional)" className="bg-bg-elev-2 border border-border-soft rounded-lg px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
         <label className="flex flex-col gap-1">
-          <span className="text-[10px] uppercase tracking-wide text-subtle">Left sidebar</span>
-          <select value={nav} onChange={(e) => setNav(e.target.value)} title="Which left-sidebar group this page's link appears in"
+          <span className="text-[10px] uppercase tracking-wide text-subtle">Layer</span>
+          <select value={nav} onChange={(e) => setNav(e.target.value)} title="Which hub layer this page appears in"
             className="bg-bg-elev-2 border border-border-soft rounded-lg px-3 py-2 text-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-            {NAV_SECTIONS.map((s) => <option key={s.value} value={s.value}>{s.value ? `Sidebar: ${s.label}` : s.label}</option>)}
+            {navSections.map((s) => <option key={s.value} value={s.value}>{s.value ? `Layer: ${s.label}` : s.label}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1">

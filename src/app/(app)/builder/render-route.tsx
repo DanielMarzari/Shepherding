@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
-import { NAV_SECTIONS } from "@/lib/builder-nav";
+import { resolveNavConfig } from "@/lib/nav-config-db";
 import type { SessionContext } from "@/lib/auth";
 import {
   countPageVersions,
@@ -26,14 +26,26 @@ const NO_SQL = new Set(["text", "divider", "embed", "pagelist", "group"]);
  *  editable). `seed: true` creates the page from its seed definition on first
  *  visit; otherwise a missing page 404s. `active` / `breadcrumb` override the
  *  shell chrome so an overridden route keeps its original nav highlight. */
+/** The layers this org actually has, for the page's "Layer" picker and crumb.
+ *  It used to be a frozen eight-entry list in builder-nav.ts that no longer
+ *  matched anybody's nav — a second hardcoded layer list, offering headings
+ *  that had been renamed and hiding every layer the admin had made. */
+function layerOptions(orgId: number): Array<{ value: string; label: string }> {
+  return [
+    { value: "", label: "Not in the nav" },
+    ...resolveNavConfig(orgId).config.groups.map((g) => ({ value: g.id, label: g.label })),
+  ];
+}
+
 /** A builder page filed under a hub layer belongs to that layer, not to the
  *  Page Builder that happens to render it — "See more › Page Builder › Adult
- *  Discipleship" tells a reader the wrong thing about where they are. Reads the
- *  label straight from NAV_SECTIONS (client-safe constants, no extra query) and
- *  falls back to the old crumb for pages with no layer. */
-function defaultBreadcrumb(page: { title: string; navSection: string | null; moreSection: string | null }): string {
+ *  Discipleship" tells a reader the wrong thing about where they are. */
+function defaultBreadcrumb(
+  page: { title: string; navSection: string | null; moreSection: string | null },
+  layers: Array<{ value: string; label: string }>,
+): string {
   const layer =
-    NAV_SECTIONS.find((s) => s.value && s.value === page.navSection)?.label ??
+    layers.find((s) => s.value && s.value === page.navSection)?.label ??
     page.moreSection?.trim();
   return layer ? `${layer} › ${page.title}` : `See more › Page Builder › ${page.title}`;
 }
@@ -54,6 +66,7 @@ export async function renderBuilderRoute({
   breadcrumb?: string;
 }) {
   if (seed) ensureSeededPage(session.orgId, slug);
+  const layers = layerOptions(session.orgId);
 
   const page = getBuilderPage(session.orgId, slug);
   if (!page) notFound();
@@ -128,9 +141,10 @@ export async function renderBuilderRoute({
     .map((p) => ({ slug: p.slug, title: p.title, description: p.description }));
 
   return (
-    <AppShell active={active ?? page.title} breadcrumb={breadcrumb ?? defaultBreadcrumb(page)}>
+    <AppShell active={active ?? page.title} breadcrumb={breadcrumb ?? defaultBreadcrumb(page, layers)}>
       <div className="px-5 md:px-7 py-7">
         <BuilderPageClient
+          navSections={layers}
           page={{ id: page.id, slug: page.slug, title: page.title, description: page.description, navSection: page.navSection, moreSection: page.moreSection }}
           blocks={blocks}
           isAdmin={session.role === "admin"}

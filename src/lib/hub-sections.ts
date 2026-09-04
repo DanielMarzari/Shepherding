@@ -1,6 +1,6 @@
 import "server-only";
 import { resolveNavConfig } from "./nav-config-db";
-import { PAGE_REGISTRY } from "./nav-registry";
+import { PAGE_REGISTRY, type NavSurface } from "./nav-registry";
 import { listNavPages } from "./builder";
 import { BUILDER_SEEDS } from "./builder-seeds";
 import type { GalleryLink, GallerySection } from "./gallery-types";
@@ -13,9 +13,23 @@ import type { GalleryLink, GallerySection } from "./gallery-types";
  *  pages filed under a free-text "See more" heading used to be exactly that;
  *  resolveNavConfig now turns the heading into a real group instead.
  *
- *  Skips Home itself, the See-More link (its contents ARE these layers), and
- *  the Settings & Integration group, which lives in the top-right menu. */
+ *  Every item an admin places becomes a card — including Home and See more.
+ *  Skipping those two meant the default "More" layer (whose only page IS See
+ *  more) showed in the Nav Builder and rendered nowhere, and a Dashboard layer
+ *  of two pages drew one card. The editor is supposed to look like the result.
+ *  A layer marked surface:"settings" renders on /settings instead — held back
+ *  from the hub, never dropped, and edited in the same Nav Builder. */
 export function buildHubSections(orgId: number): GallerySection[] {
+  return sectionsFor(orgId, "hub");
+}
+
+/** The layers that render on /settings, reached from the top-right menu. Same
+ *  config, same Nav Builder — just a different surface. */
+export function buildSettingsSections(orgId: number): GallerySection[] {
+  return sectionsFor(orgId, "settings");
+}
+
+function sectionsFor(orgId: number, surface: NavSurface): GallerySection[] {
   const { config } = resolveNavConfig(orgId);
 
   // What a builder page is actually about. Without this every card in a layer
@@ -34,7 +48,7 @@ export function buildHubSections(orgId: number): GallerySection[] {
 
   const sections: GallerySection[] = [];
   for (const g of config.groups) {
-    if (g.id === "settings-integration") continue;
+    if ((g.surface ?? "hub") !== surface) continue;
     const links: GalleryLink[] = [];
     const seen = new Set<string>();
     const add = (l: GalleryLink) => {
@@ -44,7 +58,6 @@ export function buildHubSections(orgId: number): GallerySection[] {
     };
     for (const it of g.items) {
       if (it.kind === "page") {
-        if (it.pageKey === "home" || it.pageKey === "more") continue;
         const def = PAGE_REGISTRY[it.pageKey];
         if (!def) continue;
         add({

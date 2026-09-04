@@ -78,6 +78,8 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   examples: { href: "/examples", defaultLabel: "Design references", activeAliases: ["Design references"], description: "Internal style guide — the design tokens, component variants, and chart variants the rest of the app pulls from." },
   "sql-admin": { href: "https://shepherdly-sql.danmarzari.com", defaultLabel: "SQL Admin", activeAliases: ["SQL Admin"], external: true, description: "Browse tables and views, inspect the schema, and run ad-hoc SQL against the live database (sqlite-web, behind a separate login). Opens in a new tab." },
 
+  settings: { href: "/settings", defaultLabel: "Settings & Integration", activeAliases: ["Settings & Integration"], description: "Everything that connects Shepherdly to your other systems and tunes how it behaves." },
+
   // Reachable pages not in any default layer — addable to one from the editor.
   movement: { href: "/movement", defaultLabel: "Movement", activeAliases: ["Movement"], description: "How people move between activity levels over time." },
   staff: { href: "/staff", defaultLabel: "Staff", activeAliases: ["Staff"], description: "Staff members and what each of them oversees." },
@@ -98,6 +100,7 @@ export const ACTIVE_TO_KEY: Record<string, string> = (() => {
 })();
 
 export type NavMode = "top" | "drill";
+export type NavSurface = "hub" | "settings";
 export type NavItemRef =
   | { kind: "page"; pageKey: string }
   | { kind: "builder"; slug: string; label: string };
@@ -110,6 +113,11 @@ export interface NavGroup {
   icon?: string;
   /** One line under the layer title on the hub. */
   blurb?: string;
+  /** Which surface this layer renders on. "settings" layers appear on
+   *  /settings (reached from the top-right menu) instead of the home hub.
+   *  Defaults to "hub". Both are edited in the same Nav Builder — a layer that
+   *  renders somewhere the builder cannot see is the whole bug this closes. */
+  surface?: NavSurface;
   items: NavItemRef[];
 }
 export interface NavConfig {
@@ -119,7 +127,7 @@ export interface NavConfig {
 
 /** Bumped when DEFAULT_NAV_CONFIG grows groups that an already-saved config
  *  should inherit. See migrateNavConfig. */
-export const NAV_CONFIG_VERSION = 2;
+export const NAV_CONFIG_VERSION = 3;
 
 const P = (pageKey: string): NavItemRef => ({ kind: "page", pageKey });
 
@@ -170,11 +178,26 @@ export const DEFAULT_NAV_CONFIG: NavConfig = {
       icon: "admin-key",
       items: [P("builder"), P("examples"), P("sql-admin")],
     },
+    // The two layers /settings renders. They used to be a hardcoded array in
+    // settings/page.tsx, invisible to the Nav Builder like every other
+    // hardcoded section list.
     {
       id: "settings-integration",
-      label: "Settings & Integration",
+      label: "Integrations",
       mode: "drill",
-      items: [P("pco"), P("pushpay"), P("constant-contact"), P("subsplash"), P("filters"), P("metrics"), P("appearance"), P("performance"), P("navigation")],
+      surface: "settings",
+      icon: "database",
+      blurb: "The systems Shepherdly reads from.",
+      items: [P("pco"), P("pushpay"), P("constant-contact"), P("subsplash")],
+    },
+    {
+      id: "settings-configuration",
+      label: "Configuration",
+      mode: "drill",
+      surface: "settings",
+      icon: "sliders",
+      blurb: "How the app computes, measures, and looks.",
+      items: [P("filters"), P("metrics"), P("appearance"), P("performance"), P("navigation")],
     },
   ],
 };
@@ -214,16 +237,29 @@ export function sanitizeNavConfig(raw: unknown): NavConfig | null {
     }
     const icon = typeof gg.icon === "string" && gg.icon.trim() ? gg.icon.trim().slice(0, 40) : undefined;
     const blurb = typeof gg.blurb === "string" && gg.blurb.trim() ? gg.blurb.trim().slice(0, 200) : undefined;
-    groups.push({ id, label, mode, collapsible: gg.collapsible === true, icon, blurb, items });
+    // An explicit choice always wins. With the field absent — every config
+    // saved before v3 — the old settings-integration group keeps rendering on
+    // /settings rather than silently moving onto the home hub.
+    const surface: NavSurface | undefined =
+      gg.surface === "settings" || gg.surface === "hub"
+        ? gg.surface
+        : id === "settings-integration"
+          ? "settings"
+          : undefined;
+    groups.push({ id, label, mode, collapsible: gg.collapsible === true, icon, blurb, surface, items });
   }
   if (groups.length === 0) return null;
   const version = typeof (raw as { version?: unknown }).version === "number" ? (raw as { version: number }).version : 1;
   return { version, groups };
 }
 
-/** Groups introduced in config v2 — the hub layers that used to be hardcoded
- *  in more-sections.ts. */
-const V2_GROUP_IDS = ["audit", "reports", "email", "internal"];
+/** Groups introduced per config version — the layers that used to be hardcoded
+ *  somewhere else. Only these are backfilled, and only into a config older than
+ *  the version that added them. */
+const NEW_GROUPS_BY_VERSION: Record<number, string[]> = {
+  2: ["audit", "reports", "email", "internal"],
+  3: ["settings-configuration"],
+};
 
 /** Bring an already-saved config up to the current version.
  *
@@ -237,8 +273,11 @@ export function migrateNavConfig(config: NavConfig): { config: NavConfig; change
   const havePage = new Set(
     config.groups.flatMap((g) => g.items.filter((it) => it.kind === "page").map((it) => (it as { pageKey: string }).pageKey)),
   );
+  const added = Object.entries(NEW_GROUPS_BY_VERSION)
+    .filter(([v]) => config.version < Number(v))
+    .flatMap(([, ids]) => ids);
   const incoming = DEFAULT_NAV_CONFIG.groups
-    .filter((g) => V2_GROUP_IDS.includes(g.id) && !haveGroup.has(g.id))
+    .filter((g) => added.includes(g.id) && !haveGroup.has(g.id))
     .map((g) => ({ ...g, items: g.items.filter((it) => it.kind !== "page" || !havePage.has(it.pageKey)) }))
     .filter((g) => g.items.length > 0);
   return {
