@@ -75,6 +75,38 @@ const checkIns = (eventClause: string) => `
     JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
    WHERE c.org_id = :orgId AND c.person_id IS NOT NULL AND (${eventClause})`;
 
+/** Faith Church Music's own catalogue — the songs the church wrote and released
+ *  (Spotify artist 0uGQrDiryyi7PtrYRgoRz9, "Faith Church Music"): the Room Of
+ *  Resurrections album and the This Is Christmas EP.
+ *
+ *  These are the PCO plan-item spellings, lower-cased and trimmed, matched
+ *  EXACTLY rather than with LIKE — a substring match on "promise" pulls in
+ *  "Standing On The Promises" and "God Of The Promise", which are not ours.
+ *  The page lists every matched title in a table, so a missing or wrongly
+ *  matched song is visible rather than silently wrong. Add new releases here.
+ *  A "(REPRISE)" is folded back into its parent with a CASE rather than
+ *  replace() — the builder's read-only engine rejects replace() as a write
+ *  keyword, and a query it rejects renders as an error card, not a number. */
+const ORIGINAL_SONG_TITLES = `
+  'room of resurrections','the kingdom of god','the promises you''ve sown',
+  'my helper','this is christmas','this is christmas (reprise)'`;
+
+/** One row per time an original song appears on a service plan. `song` folds a
+ *  "(REPRISE)" back into its parent title so the distinct-song count is a count
+ *  of songs, not of arrangements. */
+const ORIGINAL_SONG_USES = `
+  SELECT CASE WHEN lower(trim(i.title)) = 'this is christmas (reprise)'
+              THEN 'this is christmas'
+              ELSE lower(trim(i.title)) END AS song,
+         trim(i.title)                AS printed_title,
+         substr(pl.sort_date, 1, 10)  AS used_on,
+         st.name                      AS service_type
+    FROM pco_plan_items i
+    JOIN pco_plans pl         ON pl.pco_id = i.plan_id          AND pl.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+   WHERE i.org_id = :orgId AND i.item_type = 'song'
+     AND lower(trim(i.title)) IN (${ORIGINAL_SONG_TITLES})`;
+
 const YEAR = `datetime('now','-365 day')`;
 
 // ─── Block helpers ───────────────────────────────────────────────────
@@ -1000,5 +1032,59 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       "planning volume and the scheduling load across every service type in PCO Services.",
       "Not measured: how far ahead plans were finished, how often they changed late, or whether the planning process felt sustainable to the staff doing it — the published Outputs about lead time and rework have no data behind them.",
     ),
+  },
+
+  "mir-worship-original-music": {
+    metrics: [
+      stat("Sundays with an original song", "distinct service dates using a Faith Church song",
+        `SELECT COUNT(DISTINCT used_on) FROM (${ORIGINAL_SONG_USES})`, { color: "highlight" }),
+      stat("Times an original song was sung", "every appearance on a service plan",
+        `SELECT COUNT(*) FROM (${ORIGINAL_SONG_USES})`),
+      stat("Songs in rotation", "distinct original songs used in a service",
+        `SELECT COUNT(DISTINCT song) FROM (${ORIGINAL_SONG_USES})`),
+      stat("Share of planned Sundays", "since 2024, of Sundays with a LIVE or CLASSIC plan",
+        `SELECT ROUND(
+             100.0 * (SELECT COUNT(DISTINCT used_on) FROM (${ORIGINAL_SONG_USES})
+                       WHERE used_on >= '2024-01-01')
+                   / NULLIF((SELECT COUNT(DISTINCT substr(pl.sort_date,1,10))
+                               FROM pco_plans pl
+                               JOIN pco_service_types st
+                                 ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+                              WHERE pl.org_id = :orgId
+                                AND (st.name LIKE 'LIVE%' OR st.name LIKE 'CLASSIC%')
+                                AND pl.sort_date >= '2024-01-01'
+                                AND pl.sort_date <= datetime('now')), 0), 0) || '%'`),
+      chart("Original songs in services by year", "times sung, and Sundays they were sung on",
+        `SELECT substr(used_on,1,4) AS "Year",
+                COUNT(*) AS "Times sung",
+                COUNT(DISTINCT used_on) AS "Sundays"
+           FROM (${ORIGINAL_SONG_USES})
+          GROUP BY 1 ORDER BY 1`, "bar"),
+      chart("Where they are sung", "times sung by service",
+        `SELECT service_type AS "Service", COUNT(*) AS "Times sung"
+           FROM (${ORIGINAL_SONG_USES})
+          GROUP BY 1 ORDER BY 2 DESC`, "donut"),
+      table("Every original song, and when it was used", "the exact titles this page matches on",
+        `SELECT printed_title AS "Song",
+                COUNT(*) AS "Times sung",
+                COUNT(DISTINCT used_on) AS "Sundays",
+                MIN(used_on) AS "First used",
+                MAX(used_on) AS "Last used"
+           FROM (${ORIGINAL_SONG_USES})
+          GROUP BY 1 ORDER BY 2 DESC`, 12),
+    ],
+    gaps: {
+      title: "What these numbers cover, and what still needs Spotify",
+      intro:
+        "Measured here: every time a Faith Church Music song appears on a service plan, from PCO Services. The table above lists the exact titles being matched — if a release is missing from it, it is missing from every number on this page.",
+      items: [
+        "- **Only LIVE and CLASSIC services are visible.** PCO plan items are synced for those two service types only, so an original song sung at Students, Prayer Works, a special service or a memorial does not appear here. The real totals are at least these.",
+        "- **# songs downloaded** and **demographic of downloads** — Spotify is a streaming service and does not report downloads at all. These would have to come from the distributor (DistroKid, CD Baby, TuneCore or similar) or from Apple Music.",
+        "- **# songs streamed** — stream counts and monthly listeners are not in the public Spotify API. They live in Spotify for Artists, which has no open API; the practical route is a CSV export from that dashboard, imported the way PushPay giving already is.",
+        "- **# songs written**, **# songs produced**, **# Creatives**, **Diversity of Creatives**, **# CCLI permissions**, **% of worship volunteers who also write** — none of these are recorded anywhere we sync. Songs written but never sung on a Sunday are invisible to this page entirely.",
+      ],
+      footer:
+        "_With a Spotify app client ID and secret, follower count and the full released catalogue (which answers \"# songs released\") can be pulled automatically. Streams, listeners and demographics cannot — see the note above._",
+    },
   },
 };
