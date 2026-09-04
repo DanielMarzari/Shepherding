@@ -59,7 +59,12 @@ export function NavEditor({
     else assignedSlugs.add(it.slug);
   }
   const unassignedRegistry = Object.keys(PAGE_REGISTRY).filter((k) => !assignedPages.has(k));
-  const availableBuilder = builderPages.filter((p) => !assignedSlugs.has(p.slug) && !PAGE_REGISTRY[p.slug]);
+  // Builder slugs and registry page keys are SEPARATE namespaces, so a builder
+  // page must not be judged by whether its slug happens to collide with a page
+  // key. It did, and that quietly withheld eleven real pages from this picker
+  // (giving, people, groups, teams, home, staff, checkins, demographics,
+  // shepherds, shepherd-team, audit-duplicates) — every page has to be placeable.
+  const availableBuilder = builderPages.filter((p) => !assignedSlugs.has(p.slug));
 
   const mutate = (fn: (gs: NavGroup[]) => void) => {
     const next = clone(groups);

@@ -1,6 +1,6 @@
 import "server-only";
 import { getDb } from "./db";
-import { listNavPages } from "./builder";
+import { listMorePages, listNavPages } from "./builder";
 import { BUILDER_SEEDS } from "./builder-seeds";
 import {
   DEFAULT_NAV_CONFIG,
@@ -8,6 +8,7 @@ import {
   migrateNavConfig,
   sanitizeNavConfig,
   type NavConfig,
+  type NavGroup,
 } from "./nav-registry";
 
 // Legacy builder nav_section keys → the new group ids. "settings" folds into
@@ -77,15 +78,58 @@ export interface ResolvedNav {
   activeToKey: Record<string, string>;
 }
 
-/** The org's config with builder-pinned pages merged into their groups, plus
- *  the active→key map (including builder page titles). Deep-clones first so the
- *  shared DEFAULT_NAV_CONFIG constant is never mutated across requests. */
+/** The org's config with every builder page merged into a real group, plus the
+ *  active→key map. Deep-clones first so the shared DEFAULT_NAV_CONFIG constant
+ *  is never mutated across requests.
+ *
+ *  This is what BOTH the hub and the Nav Builder read. They must not diverge:
+ *  a layer or page that renders on the hub but is missing from the editor is a
+ *  layer the admin cannot touch. */
 export function resolveNavConfig(orgId: number): ResolvedNav {
   const config: NavConfig = structuredClone(getNavConfig(orgId));
   const activeToKey: Record<string, string> = {};
   for (const [key, def] of Object.entries(PAGE_REGISTRY)) {
     for (const a of def.activeAliases) activeToKey[a] = key;
   }
+
+  const groupById = new Map(config.groups.map((g) => [g.id, g]));
+  const norm = (s: string) => s.trim().toLowerCase();
+  const groupByLabel = new Map(config.groups.map((g) => [norm(g.label), g]));
+  /** Every builder slug already sitting somewhere in the config. The check has
+   *  to be config-wide, not per-group: once an admin drags a merged page into a
+   *  layer of their own, a per-group check would happily re-add it to the group
+   *  its seed names and the page would show up twice. */
+  const placed = new Set(
+    config.groups.flatMap((g) => g.items.filter((it) => it.kind === "builder").map((it) => it.slug)),
+  );
+  /** Groups this call invented. They exist only in memory and were never
+   *  arranged by an admin, so they are safe to sort; a group the admin ordered
+   *  by hand is left exactly as they left it. */
+  const invented = new Set<string>();
+
+  /** The group a merged page belongs in — reusing the admin's own layer when
+   *  they already made one by that name. Matching on id alone would sit a
+   *  second "Ministry Impact Reports" next to theirs, same heading twice. */
+  function groupFor(id: string, label: string, icon?: string, mode: "top" | "drill" = "top") {
+    const existing = groupById.get(id) ?? groupByLabel.get(norm(label));
+    if (existing) {
+      groupById.set(id, existing);
+      return existing;
+    }
+    const g: NavGroup = { id, label, mode, icon, items: [] };
+    config.groups.push(g);
+    groupById.set(id, g);
+    groupByLabel.set(norm(label), g);
+    invented.add(g.id);
+    return g;
+  }
+
+  const attach = (g: NavGroup, slug: string, label: string) => {
+    if (placed.has(slug)) return;
+    placed.add(slug);
+    g.items.push({ kind: "builder", slug, label });
+    activeToKey[label] = `builder:${slug}`;
+  };
 
   // A builder page only lands in `builder_pages` when somebody first opens its
   // route, so listing the nav from the database alone means a page nobody has
@@ -94,32 +138,33 @@ export function resolveNavConfig(orgId: number): ResolvedNav {
   // the nav shows every page that COULD exist, and opening one creates it
   // (see `/builder/[slug]`, which seeds). A row in the database always wins, so
   // a page an admin has renamed or re-filed keeps their version.
-  const fromDb = listNavPages(orgId) as Array<{ slug: string; title: string; navSection: string | null }>;
-  const seen = new Set(fromDb.map((p) => p.slug));
-  const fromSeeds = Object.values(BUILDER_SEEDS)
-    .filter((s) => s.navSection && !seen.has(s.slug))
-    .map((s) => ({ slug: s.slug, title: s.title, navSection: s.navSection ?? null }));
-  const navPages = [...fromDb, ...fromSeeds];
+  const dbNav = listNavPages(orgId) as Array<{ slug: string; title: string; navSection: string | null }>;
+  const dbMore = listMorePages(orgId) as Array<{ slug: string; title: string; moreSection: string }>;
+  const known = new Set([...dbNav, ...dbMore].map((p) => p.slug));
+  const seeds = Object.values(BUILDER_SEEDS).filter((s) => !known.has(s.slug));
 
-  const groupById = new Map(config.groups.map((g) => [g.id, g]));
-  /** Groups this call invented (see MANAGED_GROUPS). They exist only in memory
-   *  and were never arranged by an admin, so they are safe to sort; a group the
-   *  admin ordered by hand is left exactly as they left it. */
-  const invented = new Set<string>();
-  for (const p of navPages) {
+  for (const p of [
+    ...dbNav,
+    ...seeds.filter((s) => s.navSection).map((s) => ({ slug: s.slug, title: s.title, navSection: s.navSection ?? null })),
+  ]) {
     const gid = SECTION_TO_GROUP[p.navSection ?? ""] ?? p.navSection ?? "";
-    let g = groupById.get(gid);
-    if (!g) {
-      const managed = MANAGED_GROUPS[gid];
-      if (!managed) continue;
-      g = { id: gid, label: managed.label, mode: managed.mode, icon: managed.icon, items: [] };
-      config.groups.push(g);
-      groupById.set(gid, g);
-      invented.add(gid);
-    }
-    if (g.items.some((it) => it.kind === "builder" && it.slug === p.slug)) continue;
-    g.items.push({ kind: "builder", slug: p.slug, label: p.title });
-    activeToKey[p.title] = `builder:${p.slug}`;
+    const managed = MANAGED_GROUPS[gid];
+    const g = groupById.get(gid) ?? (managed ? groupFor(gid, managed.label, managed.icon, managed.mode) : null);
+    if (!g) continue;
+    attach(g, p.slug, p.title);
+  }
+
+  // Pages filed under a free-text "See more" heading. The heading becomes a
+  // real layer rather than a section conjured at render time — otherwise it
+  // shows on the hub and the Nav Builder has nothing to edit.
+  for (const p of [
+    ...dbMore,
+    ...seeds.filter((s) => s.moreSection).map((s) => ({ slug: s.slug, title: s.title, moreSection: s.moreSection as string })),
+  ]) {
+    const label = p.moreSection.trim();
+    if (!label) continue;
+    const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "more-pages";
+    attach(groupFor(id, label), p.slug, p.title);
   }
 
   // Forty ministry reports in database-then-seed order would read as noise.
