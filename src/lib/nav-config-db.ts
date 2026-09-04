@@ -31,6 +31,22 @@ const SECTION_TO_GROUP: Record<string, string> = {
  *  the first time a page targets it means a new ministry report just appears,
  *  with no nav surgery and no overwrite of the admin's own layout. Only ever
  *  ADDs a group — never reorders or edits what the admin arranged. */
+/** Registry pages the app keeps in a layer even for an org whose nav was saved
+ *  before the page existed. Faith Church customised its nav long ago, so a new
+ *  integration added only to DEFAULT_NAV_CONFIG would be reachable by URL and
+ *  invisible everywhere else. Only ever ADDS a missing page to a group that
+ *  already exists — it never reorders, renames, or removes what an admin set,
+ *  and it stays quiet if they deliberately deleted the group.
+ *
+ *  KNOWN LIMIT: removing the page itself (rather than the group) does not stick
+ *  — nothing distinguishes "deliberately removed" from "never had it", so it
+ *  reappears on the next render. Making that stick needs the removal persisted
+ *  (a dismissed-pages list on nav_config); not worth the machinery until
+ *  somebody actually wants one of these gone. */
+const MANAGED_PAGES: Record<string, string> = {
+  spotify: "settings-integration",
+};
+
 const MANAGED_GROUPS: Record<string, { label: string; icon?: string; mode: "top" | "drill" }> = {
   "ministry-impact-reports": {
     label: "Ministry Impact Reports",
@@ -165,6 +181,21 @@ export function resolveNavConfig(orgId: number): ResolvedNav {
     if (!label) continue;
     const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "more-pages";
     attach(groupFor(id, label), p.slug, p.title);
+  }
+
+  // Config-WIDE, not per-group: an admin who drags Spotify out of Integrations
+  // into a layer of their own would otherwise get it re-added to Integrations
+  // too, and see it twice. Same reasoning as the `placed` set above.
+  const placedPages = new Set(
+    config.groups.flatMap((g) =>
+      g.items.filter((it) => it.kind === "page").map((it) => it.pageKey),
+    ),
+  );
+  for (const [pageKey, gid] of Object.entries(MANAGED_PAGES)) {
+    if (placedPages.has(pageKey)) continue;
+    const g = groupById.get(gid);
+    if (!g) continue; // the admin removed the group; respect that
+    g.items.push({ kind: "page", pageKey });
   }
 
   // Forty ministry reports in database-then-seed order would read as noise.

@@ -44,6 +44,7 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   pushpay: { href: "/pushpay", defaultLabel: "PushPay", activeAliases: ["PushPay"], description: "Drop the donor export to line giving up against people, and reconcile the ambiguous matches." },
   "constant-contact": { href: "/constant-contact", defaultLabel: "Constant Contact", activeAliases: ["Constant Contact"], description: "Email engagement — contacts, campaigns, opens and clicks — joined to your PCO people." },
   subsplash: { href: "/subsplash", defaultLabel: "Subsplash", activeAliases: ["Subsplash"], description: "Connect your Subsplash account." },
+  spotify: { href: "/spotify", defaultLabel: "Spotify", activeAliases: ["Spotify"], description: "Connect the church's Spotify catalogue for the Original Music impact report." },
   filters: { href: "/pco/filters", defaultLabel: "Filters", activeAliases: ["Filters"], description: "Which group types, team types, and events count toward engagement and the lanes." },
   metrics: { href: "/metrics", defaultLabel: "Metrics", activeAliases: ["Metrics"], description: "The activity windows and thresholds the dashboards use to classify people." },
   appearance: { href: "/settings/appearance", defaultLabel: "Appearance", activeAliases: ["Appearance"], description: "Theme, and the syntax colors for the SQL editor." },
@@ -195,7 +196,7 @@ export const DEFAULT_NAV_CONFIG: NavConfig = {
       surface: "settings",
       icon: "database",
       blurb: "The systems Shepherdly reads from.",
-      items: [P("pco"), P("pushpay"), P("constant-contact"), P("subsplash")],
+      items: [P("pco"), P("pushpay"), P("constant-contact"), P("subsplash"), P("spotify")],
     },
     {
       id: "settings-configuration",
