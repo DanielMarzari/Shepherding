@@ -11,7 +11,7 @@ export default async function CheckinsPage() {
   // <Suspense> below so users see the page outline immediately instead
   // of staring at a blank screen while we scan 265k check-in rows.
   return (
-    <AppShell active="Check-ins" breadcrumb="Check-ins (original design)">
+    <AppShell active="Check-ins (original)" breadcrumb="Check-ins (original design)">
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 flex items-center justify-between flex-wrap gap-2">
           <span>Original hand-coded design, kept for comparison during the Page Builder remodel.</span>

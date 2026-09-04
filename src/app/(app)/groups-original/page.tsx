@@ -37,7 +37,7 @@ export default async function GroupsPage({
   );
 
   return (
-    <AppShell active="Groups" breadcrumb="Groups (original design)">
+    <AppShell active="Groups (original)" breadcrumb="Groups (original design)">
       <div className="px-5 md:px-7 py-7 space-y-6">
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 flex items-center justify-between flex-wrap gap-2">
           <span>Original hand-coded design, kept for comparison during the Page Builder remodel.</span>

@@ -80,6 +80,13 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
 
   settings: { href: "/settings", defaultLabel: "Settings & Integration", activeAliases: ["Settings & Integration"], description: "Everything that connects Shepherdly to your other systems and tunes how it behaves." },
 
+  // The hand-coded originals of three pages the Page Builder now renders. Kept
+  // live for comparison; deliberately NOT reusing the live pages' aliases,
+  // since ACTIVE_TO_KEY is last-write-wins and would steal their highlighting.
+  "checkins-original": { href: "/checkins-original", defaultLabel: "Check-ins (original design)", activeAliases: ["Check-ins (original)"], description: "The hand-coded Check-ins page, kept for comparison against the Page Builder rebuild." },
+  "demographics-original": { href: "/demographics-original", defaultLabel: "Membership demographics (original design)", activeAliases: ["Membership demographics (original)"], description: "The hand-coded demographics page, kept for comparison against the Page Builder rebuild." },
+  "groups-original": { href: "/groups-original", defaultLabel: "Groups (original design)", activeAliases: ["Groups (original)"], description: "The hand-coded Groups page, kept for comparison against the Page Builder rebuild." },
+
   // Reachable pages not in any default layer — addable to one from the editor.
   movement: { href: "/movement", defaultLabel: "Movement", activeAliases: ["Movement"], description: "How people move between activity levels over time." },
   staff: { href: "/staff", defaultLabel: "Staff", activeAliases: ["Staff"], description: "Staff members and what each of them oversees." },
@@ -248,7 +255,11 @@ export function sanitizeNavConfig(raw: unknown): NavConfig | null {
           : undefined;
     groups.push({ id, label, mode, collapsible: gg.collapsible === true, icon, blurb, surface, items });
   }
-  if (groups.length === 0) return null;
+  // An admin who deletes every layer to rebuild from scratch means it. Only
+  // treat the row as corrupt when it HAD groups and every one was garbage —
+  // returning null for a deliberate empty layout handed back the factory
+  // default and reported the save as successful.
+  if (groups.length === 0 && (obj.groups as unknown[]).length > 0) return null;
   const version = typeof (raw as { version?: unknown }).version === "number" ? (raw as { version: number }).version : 1;
   return { version, groups };
 }
