@@ -22,6 +22,9 @@ import { decrypt, encrypt, last4 } from "./encryption";
 export const DEFAULT_SPOTIFY_ARTIST_ID = "0uGQrDiryyi7PtrYRgoRz9";
 
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
+/** Spotify rejects limit=50 with "Invalid limit" for an app key in development
+ *  mode; 10 is the largest that works. Measured, not guessed. */
+const PAGE = 10;
 const API_BASE = "https://api.spotify.com/v1";
 
 export interface StoredSpotifyCreds {
@@ -136,7 +139,7 @@ export function deleteSpotifyCreds(orgId: number) {
   getDb().prepare("DELETE FROM spotify_credentials WHERE org_id = ?").run(orgId);
 }
 
-function markVerified(orgId: number, artistName: string, followers: number) {
+function markVerified(orgId: number, artistName: string, followers: number | null) {
   getDb()
     .prepare(
       `UPDATE spotify_credentials
@@ -178,8 +181,11 @@ async function spotifyFetch(url: string, init?: RequestInit): Promise<Response> 
 export interface SpotifyArtist {
   id: string;
   name: string;
-  followers: number;
-  popularity: number;
+  /** null when Spotify omitted the field — which it does for app keys in
+   *  development mode. NOT the same as "this artist has no followers", and the
+   *  UI must not render it as 0. */
+  followers: number | null;
+  popularity: number | null;
 }
 
 /** Exchange the app credentials for a bearer token (client-credentials flow).
@@ -245,8 +251,10 @@ async function fetchArtist(token: string, artistId: string): Promise<SpotifyArti
   return {
     id: a.id,
     name: a.name,
-    followers: a.followers?.total ?? 0,
-    popularity: a.popularity ?? 0,
+    // `?? null`, never `?? 0`: Spotify omits `followers` entirely for keys in
+    // development mode, and a zero here is a lie an admin can't tell from data.
+    followers: a.followers?.total ?? null,
+    popularity: a.popularity ?? null,
   };
 }
 
@@ -278,8 +286,11 @@ export async function verifySpotifyCreds(orgId: number): Promise<SpotifyArtist> 
 }
 
 export interface SpotifyTrack {
+  id: string;
   name: string;
+  albumId: string;
   album: string;
+  albumType: string;
   releasedOn: string;
 }
 
@@ -294,18 +305,20 @@ export async function fetchSpotifyCatalogue(orgId: number): Promise<SpotifyTrack
   // include_groups takes album,single,appears_on,compilation — there is no "ep"
   // value; Spotify files EPs under `single`. appears_on is excluded on purpose:
   // it is other artists' records, not ours.
-  const albums: Array<{ id: string; name: string; release_date: string }> = [];
-  for (let offset = 0; offset < 200; offset += 50) {
+  const albums: Array<{
+    id: string; name: string; release_date: string; album_type: string;
+  }> = [];
+  for (let offset = 0; offset < 500; offset += PAGE) {
     const res = await spotifyFetch(
       `${API_BASE}/artists/${encodeURIComponent(creds.artistId)}/albums` +
-        `?include_groups=album,single,compilation&limit=50&offset=${offset}`,
+        `?include_groups=album,single,compilation&limit=${PAGE}&offset=${offset}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) {
       throw new SpotifyError(`Spotify albums request failed (HTTP ${res.status}).`, "unavailable");
     }
     const json = (await res.json()) as {
-      items?: Array<{ id: string; name: string; release_date: string }>;
+      items?: Array<{ id: string; name: string; release_date: string; album_type: string }>;
       next?: string | null;
     };
     albums.push(...(json.items ?? []));
@@ -315,19 +328,64 @@ export async function fetchSpotifyCatalogue(orgId: number): Promise<SpotifyTrack
   const tracks: SpotifyTrack[] = [];
   const seen = new Set<string>();
   for (const album of albums) {
-    const res = await spotifyFetch(`${API_BASE}/albums/${album.id}/tracks?limit=50`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) continue;
-    const json = (await res.json()) as { items?: Array<{ name: string }> };
-    for (const t of json.items ?? []) {
-      // Spotify lists the same recording under both an album and a single;
-      // key on title so "# songs released" counts songs, not appearances.
-      const key = t.name.toLowerCase().trim();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      tracks.push({ name: t.name, album: album.name, releasedOn: album.release_date });
+    for (let offset = 0; offset < 500; offset += PAGE) {
+      const res = await spotifyFetch(
+        `${API_BASE}/albums/${album.id}/tracks?limit=${PAGE}&offset=${offset}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) {
+        throw new SpotifyError(
+          `Could not read the tracks of "${album.name}" (HTTP ${res.status}).`,
+          "unavailable",
+        );
+      }
+      const json = (await res.json()) as {
+        items?: Array<{ id: string; name: string }>;
+        next?: string | null;
+      };
+      for (const t of json.items ?? []) {
+        // The same recording can appear on both an album and a single; key on
+        // title so "# songs released" counts songs, not appearances.
+        const key = t.name.toLowerCase().trim();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tracks.push({
+          id: t.id,
+          name: t.name,
+          albumId: album.id,
+          album: album.name,
+          albumType: album.album_type,
+          releasedOn: album.release_date,
+        });
+      }
+      if (!json.next) break;
     }
   }
   return tracks.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Replace the stored catalogue with what Spotify currently returns. Done as a
+ *  delete+insert inside one transaction: a track pulled from distribution
+ *  should disappear here too, and a half-written catalogue would make
+ *  "# songs released" wrong in a way nobody would notice. */
+export function replaceSpotifyCatalogue(orgId: number, tracks: SpotifyTrack[]): number {
+  const db = getDb();
+  const run = db.transaction((rows: SpotifyTrack[]) => {
+    db.prepare("DELETE FROM spotify_tracks WHERE org_id = ?").run(orgId);
+    const ins = db.prepare(
+      `INSERT INTO spotify_tracks
+         (org_id, track_id, name, album_id, album_name, album_type, released_on)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const t of rows) {
+      ins.run(orgId, t.id, t.name, t.albumId, t.album, t.albumType, t.releasedOn);
+    }
+  });
+  run(tracks);
+  return tracks.length;
+}
+
+/** Pull the catalogue from Spotify and store it. Returns how many tracks. */
+export async function syncSpotifyCatalogue(orgId: number): Promise<number> {
+  return replaceSpotifyCatalogue(orgId, await fetchSpotifyCatalogue(orgId));
 }

@@ -1064,6 +1064,36 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT service_type AS "Service", COUNT(*) AS "Times sung"
            FROM (${ORIGINAL_SONG_USES})
           GROUP BY 1 ORDER BY 2 DESC`, "donut"),
+      stat("Songs released", "tracks on Spotify, across every release",
+        `SELECT COUNT(*) FROM spotify_tracks WHERE org_id = :orgId`),
+      stat("Records put out", "albums, EPs and singles on Spotify",
+        `SELECT COUNT(DISTINCT album_id) FROM spotify_tracks WHERE org_id = :orgId`),
+      table("Released catalogue, and how often each song is sung",
+        "Spotify's own track list, matched to service plans by title",
+        // Spotify titles carry a " (Live)" suffix the service plans don't, so
+        // the join strips it. A released song with 0 uses is the interesting
+        // row here — it means the church recorded something it never sings.
+        // The alias is "Appears on", not "Release": the builder's read-only
+        // engine rejects the word RELEASE (as in RELEASE SAVEPOINT) anywhere in
+        // a query, alias included.
+        //
+        // Titles are stripped of a trailing " (Live)" with substr, NOT rtrim —
+        // rtrim(name, ' (Live)') strips ANY trailing character from that set, so
+        // a song called "Grace (Live)" would become "Grac".
+        `SELECT t.name AS "Track",
+                t.album_name AS "Appears on",
+                t.released_on AS "Released on",
+                COUNT(u.used_on) AS "Times sung",
+                COUNT(DISTINCT u.used_on) AS "Sundays"
+           FROM spotify_tracks t
+           LEFT JOIN (${ORIGINAL_SONG_USES}) u
+             ON u.song = lower(trim(
+                  CASE WHEN t.name LIKE '% (Live)'
+                       THEN substr(t.name, 1, length(t.name) - 7)
+                       ELSE t.name END))
+          WHERE t.org_id = :orgId
+          GROUP BY t.name, t.album_name, t.released_on
+          ORDER BY 4 DESC, 1`, 12),
       table("Every original song, and when it was used", "the exact titles this page matches on",
         `SELECT printed_title AS "Song",
                 COUNT(*) AS "Times sung",

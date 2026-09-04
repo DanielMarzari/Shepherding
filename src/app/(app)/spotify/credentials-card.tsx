@@ -4,8 +4,10 @@ import { useActionState, useState, useTransition } from "react";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import {
   type SaveState,
+  type SyncState,
   removeSpotifyCredentialsAction,
   saveSpotifyCredentialsAction,
+  syncSpotifyCatalogueAction,
   verifySpotifyCredentialsAction,
 } from "./actions";
 
@@ -42,6 +44,8 @@ export function SpotifyCredentialsCard({
   );
   const [recheck, setRecheck] = useState<SaveState | null>(null);
   const [rechecking, startRecheck] = useTransition();
+  const [sync, setSync] = useState<SyncState | null>(null);
+  const [syncing, startSync] = useTransition();
 
   const masked = (l4: string | null) => (l4 ? `••••••••••••${l4}` : "");
   const state = saveState ?? recheck;
@@ -87,12 +91,13 @@ export function SpotifyCredentialsCard({
         {initial.verifiedAt && initial.artistName && (
           <div className="rounded-lg border border-border-soft bg-bg-elev-2/50 px-3 py-2.5 text-xs">
             <span className="text-fg font-medium">{initial.artistName}</span>
-            {initial.followerCount != null && (
-              <span className="text-muted">
-                {" "}
-                · {initial.followerCount.toLocaleString()} followers
-              </span>
-            )}
+            <span className="text-muted">
+              {" "}
+              ·{" "}
+              {initial.followerCount != null
+                ? `${initial.followerCount.toLocaleString()} followers`
+                : "follower count not reported for this key"}
+            </span>
             <span className="text-subtle">
               {" "}
               · checked {new Date(initial.verifiedAt).toLocaleDateString()}
@@ -134,6 +139,10 @@ export function SpotifyCredentialsCard({
           {state?.status === "error" && (
             <p className="text-xs text-warn-soft-fg">{state.message}</p>
           )}
+          {sync?.status === "ok" && <p className="text-xs text-good-soft-fg">{sync.message}</p>}
+          {sync?.status === "error" && (
+            <p className="text-xs text-warn-soft-fg">{sync.message}</p>
+          )}
 
           {isAdmin && (
             <div className="flex items-center gap-2 pt-1">
@@ -174,6 +183,17 @@ export function SpotifyCredentialsCard({
                     className="px-3 py-1.5 rounded-lg border border-border-soft text-muted hover:text-fg text-xs disabled:opacity-50 cursor-pointer"
                   >
                     {rechecking ? "Checking…" : "Re-check"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={syncing}
+                    onClick={() =>
+                      startSync(async () => setSync(await syncSpotifyCatalogueAction()))
+                    }
+                    className="px-3 py-1.5 rounded-lg border border-border-soft text-muted hover:text-fg text-xs disabled:opacity-50 cursor-pointer"
+                    title="Pull the released catalogue into the Original Music report"
+                  >
+                    {syncing ? "Syncing…" : "Sync catalogue"}
                   </button>
                 </>
               )}

@@ -8,6 +8,7 @@ import {
   deleteSpotifyCreds,
   markSpotifyVerified,
   saveSpotifyCreds,
+  syncSpotifyCatalogue,
   verifyCredentials,
   verifySpotifyCreds,
 } from "@/lib/spotify";
@@ -112,10 +113,18 @@ export async function saveSpotifyCredentialsAction(
   revalidatePath("/spotify");
   return {
     status: "saved",
-    message:
-      `Connected to ${artist.name} — ${artist.followers.toLocaleString()} follower` +
-      `${artist.followers === 1 ? "" : "s"}. Credentials stored encrypted.`,
+    message: `Connected to ${artist.name}. ${describeFollowers(artist.followers)}`,
   };
+}
+
+/** Spotify omits `followers` entirely for an app key in development mode. Say
+ *  that, rather than printing a zero the admin knows is wrong — they follow the
+ *  artist themselves. */
+function describeFollowers(followers: number | null): string {
+  if (followers === null) {
+    return "Spotify didn't report a follower count for this key — see the note below.";
+  }
+  return `${followers.toLocaleString()} follower${followers === 1 ? "" : "s"}.`;
 }
 
 /** Re-check stored credentials without re-entering them (they rotate, and a key
@@ -128,7 +137,7 @@ export async function verifySpotifyCredentialsAction(): Promise<SaveState> {
     revalidatePath("/spotify");
     return {
       status: "saved",
-      message: `Still connected to ${artist.name} — ${artist.followers.toLocaleString()} followers.`,
+      message: `Still connected to ${artist.name}. ${describeFollowers(artist.followers)}`,
     };
   } catch (err) {
     revalidatePath("/spotify");
@@ -144,4 +153,30 @@ export async function removeSpotifyCredentialsAction() {
   if (s.role !== "admin") throw new Error("Admin only");
   deleteSpotifyCreds(s.orgId);
   revalidatePath("/spotify");
+}
+
+export interface SyncState {
+  status: "idle" | "ok" | "error";
+  message?: string;
+}
+
+/** Pull the released catalogue from Spotify into the database, so the
+ *  Original Music report can count it. */
+export async function syncSpotifyCatalogueAction(): Promise<SyncState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") return { status: "error", message: "Admin only." };
+  try {
+    const n = await syncSpotifyCatalogue(s.orgId);
+    revalidatePath("/spotify");
+    revalidatePath("/builder/mir-worship-original-music");
+    return {
+      status: "ok",
+      message: `Catalogue synced — ${n} released track${n === 1 ? "" : "s"}.`,
+    };
+  } catch (err) {
+    return {
+      status: "error",
+      message: err instanceof Error ? err.message : "Could not read the catalogue.",
+    };
+  }
 }
