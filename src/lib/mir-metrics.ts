@@ -14,13 +14,13 @@ import type { MirExtras } from "./mir-seeds";
 // label says which — a count of volunteers scheduled is not a count of people
 // served, and we do not let one stand in for the other.
 //
-// Ministries deliberately left unmeasured: Anathallo (its data lives in an
-// external EHR), Contracts, Human Resources, Reception, Information Technology,
-// Facilities, Finance-adjacent admin, Christmas Tree Lighting, Global Outreach,
-// Local Outreach, Spanish Language Opportunities, Unreached Language Group,
-// Faith Preschool, Care Groups (the "Care Ministries" group type exists in PCO
-// but has no members), and the Communications/Technology/Worship pages not
-// listed below.
+// Ministries deliberately left unmeasured, because nothing we sync speaks to
+// them: Anathallo (its records live in an external EHR), both Contracts pages,
+// Human Resources, Reception, Information Technology, Technology - General,
+// Christmas Tree Lighting, Global Outreach, Spanish Language Opportunities,
+// Unreached Language Group, Communications - Content Creation, Worship -
+// Original Music, Kids - Specialized Needs, and Care Groups — whose
+// "Care Ministries" group type exists in PCO with no members at all.
 
 // ─── Shared SQL fragments ────────────────────────────────────────────
 
@@ -545,6 +545,460 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     gaps: measuredNote(
       "email reach and engagement from Constant Contact — sends, opens, clicks and unsubscribes.",
       "Email is only one channel. Social reach, app engagement, website traffic and print are not synced, so the published Outputs covering those stay unmeasured.",
+    ),
+  },
+
+  "mir-finance": {
+    metrics: [
+      stat("Donors on record", "PushPay donors matched to a person",
+        `SELECT COUNT(DISTINCT person_id) FROM pushpay_donors
+          WHERE org_id = :orgId AND person_id IS NOT NULL`, { color: "highlight" }),
+      stat("Gave in the last year", "donors with a gift in the last 12 months",
+        `SELECT COUNT(*) FROM pushpay_donors
+          WHERE org_id = :orgId AND last_gift_date >= date('now','-365 day')`),
+      stat("Recurring donors", "donors PushPay classes as recurring",
+        `SELECT COUNT(*) FROM pushpay_donors
+          WHERE org_id = :orgId AND donor_stage = 'Recurring Donor'`),
+      stat("Giving households reached", "distinct households with a matched donor",
+        `SELECT COUNT(DISTINCT hm.household_id)
+           FROM pushpay_donors d
+           JOIN pco_household_memberships hm
+             ON hm.person_id = d.person_id AND hm.org_id = :orgId
+          WHERE d.org_id = :orgId AND d.person_id IS NOT NULL`),
+      chart("Donors by stage", "how PushPay classifies each donor",
+        `SELECT COALESCE(donor_stage,'(unclassified)') AS "Stage", COUNT(*) AS "Donors"
+           FROM pushpay_donors WHERE org_id = :orgId
+          GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
+      chart("How people give", "offline vs digital",
+        `SELECT COALESCE(giving_channel,'(unknown)') AS "Channel", COUNT(*) AS "Donors"
+           FROM pushpay_donors WHERE org_id = :orgId
+          GROUP BY 1 ORDER BY 2 DESC`, "donut"),
+    ],
+    gaps: measuredNote(
+      "donor counts, recency and stage from the PushPay export, plus how people give.",
+      "Amounts are deliberately absent: the import carries donor stage and last-gift date, not gift values, so nothing here is a financial total. Budget performance, expense ratios and designated-fund balances live in the accounting system, which is not synced.",
+    ),
+  },
+
+  "mir-next-steps": {
+    metrics: [
+      stat("Adults taking a next step", "in at least one lane",
+        `SELECT COUNT(*) FROM person_activity pa
+           JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
+          WHERE pa.org_id = :orgId AND p.is_minor = 0
+            AND (pa.in_lane_wors = 1 OR pa.in_lane_comm = 1 OR pa.in_lane_serv = 1)`,
+        { color: "highlight" }),
+      stat("In the worship lane", "attending or scheduled recently",
+        `SELECT COUNT(*) FROM person_activity pa
+           JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
+          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.in_lane_wors = 1`),
+      stat("In the community lane", "in at least one active group",
+        `SELECT COUNT(*) FROM person_activity pa
+           JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
+          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.in_lane_comm = 1`),
+      stat("In the serving lane", "on at least one active team",
+        `SELECT COUNT(*) FROM person_activity pa
+           JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
+          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.in_lane_serv = 1`),
+      chart("How engaged adults are classified", "the app's own activity classification",
+        `SELECT pa.classification AS "Classification", COUNT(*) AS "Adults"
+           FROM person_activity pa
+           JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
+          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.classification IS NOT NULL
+          GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
+      table("Lane combinations", "how many lanes an adult is in",
+        `SELECT (pa.in_lane_wors + pa.in_lane_comm + pa.in_lane_serv) AS "Lanes",
+                COUNT(*) AS "Adults"
+           FROM person_activity pa
+           JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
+          WHERE pa.org_id = :orgId AND p.is_minor = 0
+          GROUP BY 1 ORDER BY 1 DESC`),
+    ],
+    gaps: measuredNote(
+      "lane membership from the app's own activity rollup — worship, community and serving.",
+      "A lane says someone is currently doing something, not that they took a deliberate next step. Whether a person was invited, said yes, and followed through is not recorded anywhere we sync.",
+    ),
+  },
+
+  "mir-foster-and-adoption": {
+    metrics: [
+      stat("People connected", "active members of a Foster & Adoption group",
+        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'Foster Adopt Volunteers','Foster Adopt Organizations','Foster Adopt Care Communities'")})`,
+        { color: "highlight" }),
+      stat("Volunteers", "in the Foster Adopt Volunteers groups",
+        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'Foster Adopt Volunteers'")})`),
+      stat("Care communities", "wrap-around groups around a family",
+        `SELECT COUNT(DISTINCT g.pco_id) FROM pco_groups g
+           JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+          WHERE g.org_id = :orgId AND gt.name = 'Foster Adopt Care Communities'`),
+      stat("Partner organisations", "agencies and partners tracked as groups",
+        `SELECT COUNT(DISTINCT g.pco_id) FROM pco_groups g
+           JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+          WHERE g.org_id = :orgId AND gt.name = 'Foster Adopt Organizations'`),
+      chart("Where people are connected", "by group type",
+        `SELECT gt.name AS "Group type", COUNT(DISTINCT m.person_id) AS "People"
+           FROM pco_group_memberships m
+           JOIN pco_groups g       ON g.pco_id = m.group_id       AND g.org_id = :orgId
+           JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+          WHERE m.org_id = :orgId AND m.archived_at IS NULL AND gt.name LIKE 'Foster%'
+          GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
+    ],
+    gaps: measuredNote(
+      "who is connected to the ministry through PCO groups — volunteers, care communities and partner organisations.",
+      "Not measured: placements supported, children served, or family outcomes. Those live with the agencies, not in PCO.",
+    ),
+  },
+
+  "mir-english-as-a-second-language": {
+    metrics: [
+      // 10 of the 14 carry the leader role, so this is everyone attached to an
+      // ESL group — teachers included — not a student count.
+      stat("People connected", "everyone in an ESL group, teachers included",
+        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'ESL (non-PTS)'")})`,
+        { color: "highlight" }),
+      stat("ESL groups", "classes tracked as PCO groups",
+        `SELECT COUNT(DISTINCT g.pco_id) FROM pco_groups g
+           JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+          WHERE g.org_id = :orgId AND gt.name = 'ESL (non-PTS)'`),
+      stat("Group leaders", "members with the leader role",
+        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'ESL (non-PTS)'")})
+          WHERE role = 'leader'`),
+      table("ESL groups", "membership by class",
+        `SELECT group_name AS "Group", COUNT(DISTINCT person_id) AS "People"
+           FROM (${groupTypeMembers("'ESL (non-PTS)'")})
+          GROUP BY 1 ORDER BY 2 DESC`),
+    ],
+    gaps: measuredNote(
+      "everyone attached to an ESL group in PCO, and how many carry the leader role.",
+      "Most of this roster is leaders — only 4 of the 14 are not — so it does not tell you how many students the ministry reaches. ESL attendance is not checked in, and students are largely not entered into PCO at all, so class size, sessions run and English progress are all unmeasured.",
+    ),
+  },
+
+  "mir-shepherd-team": {
+    metrics: [
+      stat("Shepherd team", "people on the Shepherd Team reference list",
+        `SELECT COUNT(*) FROM pco_list_memberships m
+           JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+          WHERE m.org_id = :orgId AND l.name = 'REFERENCE - Shepherd Team'`,
+        { color: "highlight" }),
+      stat("Shepherds with an assignment", "shepherds who have something assigned",
+        `SELECT COUNT(DISTINCT shepherd_person_id) FROM shepherd_assignments
+          WHERE org_id = :orgId`),
+      stat("Assignments", "shepherding assignments on record",
+        `SELECT COUNT(*) FROM shepherd_assignments WHERE org_id = :orgId`),
+      stat("Engaged adults", "the flock the team is shepherding",
+        `SELECT COUNT(*) FROM (${ENGAGED_ADULTS})`),
+      table("Assignments by kind", "what shepherds are assigned to",
+        `SELECT target_kind AS "Assigned to", COUNT(*) AS "Assignments",
+                COUNT(DISTINCT shepherd_person_id) AS "Shepherds"
+           FROM shepherd_assignments WHERE org_id = :orgId
+          GROUP BY 1 ORDER BY 2 DESC`),
+    ],
+    gaps: measuredNote(
+      "the size of the shepherd team and how many assignments exist.",
+      "Not measured: whether shepherding actually happened. Contacts made, visits, and care conversations are not recorded — the care queue and care map are the places that work would show up, and neither feeds this page.",
+    ),
+  },
+
+  "mir-elders": {
+    metrics: [
+      stat("Elders", "on the Elders reference list",
+        `SELECT COUNT(*) FROM pco_list_memberships m
+           JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+          WHERE m.org_id = :orgId AND l.name = 'REFERENCE - Elders'`, { color: "highlight" }),
+      stat("Elders also shepherding", "elders with a shepherding assignment",
+        `SELECT COUNT(DISTINCT s.shepherd_person_id)
+           FROM shepherd_assignments s
+           JOIN pco_list_memberships m ON m.person_id = s.shepherd_person_id AND m.org_id = :orgId
+           JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+          WHERE s.org_id = :orgId AND l.name = 'REFERENCE - Elders'`),
+      stat("Engaged adults per elder", "the flock each elder carries",
+        `SELECT CAST(ROUND(
+             (SELECT COUNT(*) FROM (${ENGAGED_ADULTS})) * 1.0
+             / NULLIF((SELECT COUNT(*) FROM pco_list_memberships m
+                         JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+                        WHERE m.org_id = :orgId AND l.name = 'REFERENCE - Elders'), 0)) AS INT)`),
+    ],
+    gaps: measuredNote(
+      "the size of the eldership and the ratio of engaged adults to elders.",
+      "This is a roster count only. Elder meetings, decisions, doctrinal oversight and member care are not recorded in any system we sync.",
+    ),
+  },
+
+  "mir-deacons": {
+    metrics: [
+      stat("Deacons", "on the Deacons reference list",
+        `SELECT COUNT(*) FROM pco_list_memberships m
+           JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+          WHERE m.org_id = :orgId AND l.name = 'REFERENCE - Deacons'`, { color: "highlight" }),
+      stat("Deacons serving on a team", "also on an active serving team",
+        `SELECT COUNT(DISTINCT tm.person_id)
+           FROM pco_team_memberships tm
+           JOIN pco_list_memberships m ON m.person_id = tm.person_id AND m.org_id = :orgId
+           JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+          WHERE tm.org_id = :orgId AND tm.archived_at IS NULL AND tm.person_id != ''
+            AND l.name = 'REFERENCE - Deacons'`),
+      stat("Benevolence-only records", "people PCO classes as Benevolence Only",
+        `SELECT COUNT(*) FROM pco_people
+          WHERE org_id = :orgId AND membership_type = 'Benevolence Only'`),
+    ],
+    gaps: measuredNote(
+      "the size of the diaconate and the standing count of benevolence-only records.",
+      "Not measured: benevolence requests received, assistance given, or need met. None of that is recorded in PCO, so the published Outputs about care delivered stay unmeasured.",
+    ),
+  },
+
+  "mir-worship-live": {
+    metrics: [
+      stat("Volunteers scheduled", "distinct people on a LIVE plan, last 12 months",
+        `SELECT COUNT(DISTINCT person_id) FROM (${servingSlots("st.name LIKE 'LIVE%'")})
+          WHERE sort_date >= ${YEAR}`, { color: "highlight" }),
+      stat("Serving slots filled", "LIVE assignments, last 12 months",
+        `SELECT COUNT(*) FROM (${servingSlots("st.name LIKE 'LIVE%'")})
+          WHERE sort_date >= ${YEAR}`),
+      stat("Services planned", "LIVE plans, last 12 months",
+        `SELECT COUNT(DISTINCT pl.pco_id) FROM pco_plans pl
+           JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+          WHERE pl.org_id = :orgId AND st.name LIKE 'LIVE%'
+            AND pl.sort_date >= ${YEAR} AND pl.sort_date <= datetime('now')`),
+      stat("Average attendance in the Center", "per service, last 12 months",
+        `SELECT CAST(ROUND(AVG(count)) AS INT) FROM attendance_service
+          WHERE org_id = :orgId AND room = 'center'
+            AND week_date >= date('now','-365 day')`),
+      chart("Center attendance by service", "average headcount per service time",
+        `SELECT service AS "Service", CAST(ROUND(AVG(count)) AS INT) AS "Average"
+           FROM attendance_service
+          WHERE org_id = :orgId AND room = 'center'
+            AND week_date >= date('now','-365 day')
+          GROUP BY 1 ORDER BY 1`, "bar", { colorByCategory: true }),
+      chart("LIVE serving by month", "assignments filled",
+        `SELECT substr(sort_date,1,7) AS "Month", COUNT(*) AS "Slots"
+           FROM (${servingSlots("st.name LIKE 'LIVE%'")})
+          WHERE sort_date >= datetime('now','-730 day') AND sort_date <= datetime('now')
+          GROUP BY 1 ORDER BY 1`, "area"),
+    ],
+    gaps: measuredNote(
+      "the serving roster behind the LIVE services and the attendance they drew.",
+      "Attendance comes from a manually maintained sheet, so check its most recent week before quoting it. Not measured: anything about the worship itself — song selection, engagement, or how people responded.",
+    ),
+  },
+
+  "mir-worship-classic": {
+    metrics: [
+      stat("Volunteers scheduled", "distinct people on a CLASSIC plan, last 12 months",
+        `SELECT COUNT(DISTINCT person_id) FROM (${servingSlots("st.name LIKE 'CLASSIC%'")})
+          WHERE sort_date >= ${YEAR}`, { color: "highlight" }),
+      stat("Serving slots filled", "CLASSIC assignments, last 12 months",
+        `SELECT COUNT(*) FROM (${servingSlots("st.name LIKE 'CLASSIC%'")})
+          WHERE sort_date >= ${YEAR}`),
+      stat("Services planned", "CLASSIC plans, last 12 months",
+        `SELECT COUNT(DISTINCT pl.pco_id) FROM pco_plans pl
+           JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+          WHERE pl.org_id = :orgId AND st.name LIKE 'CLASSIC%'
+            AND pl.sort_date >= ${YEAR} AND pl.sort_date <= datetime('now')`),
+      stat("Average attendance in the Chapel", "per service, last 12 months",
+        `SELECT CAST(ROUND(AVG(count)) AS INT) FROM attendance_service
+          WHERE org_id = :orgId AND room = 'chapel'
+            AND week_date >= date('now','-365 day')`),
+      chart("Chapel attendance by week", "headcount in the Chapel",
+        `SELECT week_date AS "Week", SUM(count) AS "Attendance"
+           FROM attendance_service
+          WHERE org_id = :orgId AND room = 'chapel'
+            AND week_date >= date('now','-730 day')
+          GROUP BY 1 ORDER BY 1`, "line"),
+      table("Chapel services", "average headcount per service time, last 12 months",
+        `SELECT service AS "Service", CAST(ROUND(AVG(count)) AS INT) AS "Average",
+                COUNT(*) AS "Weeks"
+           FROM attendance_service
+          WHERE org_id = :orgId AND room = 'chapel'
+            AND week_date >= date('now','-365 day')
+          GROUP BY 1 ORDER BY 2 DESC`),
+    ],
+    gaps: measuredNote(
+      "the serving roster behind the Classic service and the attendance it drew.",
+      "Attendance comes from a manually maintained sheet. Not measured: the congregation's experience of the service, or how the Classic and LIVE congregations overlap.",
+    ),
+  },
+
+  "mir-worship-music": {
+    metrics: [
+      stat("Musicians and vocalists", "active members of a music or worship team",
+        `SELECT COUNT(DISTINCT m.person_id)
+           FROM pco_team_memberships m
+           JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+          WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+            AND (lower(t.name) LIKE '%music%' OR lower(t.name) = 'choir'
+                 OR lower(t.name) LIKE '%worship%')`, { color: "highlight" }),
+      stat("In the choir", "active choir membership",
+        `SELECT COUNT(DISTINCT m.person_id)
+           FROM pco_team_memberships m
+           JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+          WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+            AND lower(t.name) = 'choir'`),
+      stat("Auditioned", "people on the Auditions team",
+        `SELECT COUNT(DISTINCT m.person_id)
+           FROM pco_team_memberships m
+           JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+          WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+            AND t.name = 'Auditions'`),
+      stat("Songs planned", "items on LIVE and CLASSIC plans, last 12 months",
+        `SELECT COUNT(*) FROM pco_plan_items i
+           JOIN pco_plans pl ON pl.pco_id = i.plan_id AND pl.org_id = :orgId
+          WHERE i.org_id = :orgId AND pl.sort_date >= ${YEAR}
+            AND pl.sort_date <= datetime('now')`),
+      table("Music and worship teams", "active membership",
+        `SELECT t.name AS "Team", COUNT(DISTINCT m.person_id) AS "Members"
+           FROM pco_teams t
+           JOIN pco_team_memberships m ON m.team_id = t.pco_id AND m.org_id = :orgId
+            AND m.archived_at IS NULL AND m.person_id != ''
+          WHERE t.org_id = :orgId
+            AND (lower(t.name) LIKE '%music%' OR lower(t.name) = 'choir'
+                 OR lower(t.name) LIKE '%worship%')
+          GROUP BY 1 ORDER BY 2 DESC`),
+    ],
+    gaps: measuredNote(
+      "the size of the music and worship teams and how much service content is planned.",
+      "\"Songs planned\" counts every item on a service plan, not only songs — plan items are only synced for the LIVE and CLASSIC service types. Original music, rehearsal time and musical development are not tracked.",
+    ),
+  },
+
+  "mir-technology-worship": {
+    metrics: [
+      stat("Production volunteers", "active members of a production or AV team",
+        `SELECT COUNT(DISTINCT m.person_id)
+           FROM pco_team_memberships m
+           JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+          WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+            AND (lower(t.name) LIKE '%production%' OR lower(t.name) LIKE '%audio%'
+                 OR lower(t.name) LIKE '%visual%')`, { color: "highlight" }),
+      stat("Services supported", "LIVE and CLASSIC plans, last 12 months",
+        `SELECT COUNT(DISTINCT pl.pco_id) FROM pco_plans pl
+           JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+          WHERE pl.org_id = :orgId AND (st.name LIKE 'LIVE%' OR st.name LIKE 'CLASSIC%')
+            AND pl.sort_date >= ${YEAR} AND pl.sort_date <= datetime('now')`),
+      stat("Average live viewers", "the online service this team delivers",
+        `SELECT CAST(ROUND(AVG(online_live)) AS INT) FROM attendance_weekly
+          WHERE org_id = :orgId AND online_live IS NOT NULL
+            AND week_date >= date('now','-365 day')`),
+      table("Production teams", "active membership",
+        `SELECT t.name AS "Team", COUNT(DISTINCT m.person_id) AS "Members"
+           FROM pco_teams t
+           JOIN pco_team_memberships m ON m.team_id = t.pco_id AND m.org_id = :orgId
+            AND m.archived_at IS NULL AND m.person_id != ''
+          WHERE t.org_id = :orgId
+            AND (lower(t.name) LIKE '%production%' OR lower(t.name) LIKE '%audio%'
+                 OR lower(t.name) LIKE '%visual%')
+          GROUP BY 1 ORDER BY 2 DESC`),
+    ],
+    gaps: measuredNote(
+      "the production volunteer roster, the services they support, and the online audience they reach.",
+      "Not measured: equipment reliability, stream uptime, technical failures, or replacement cycles — none of it reaches a system we sync.",
+    ),
+  },
+
+  "mir-facilities": {
+    metrics: [
+      stat("Facilities volunteers", "active members of a facilities or chair team",
+        `SELECT COUNT(DISTINCT m.person_id)
+           FROM pco_team_memberships m
+           JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+          WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+            AND (lower(t.name) LIKE '%facilit%' OR lower(t.name) LIKE '%chair%')`,
+        { color: "highlight" }),
+      stat("Setup shifts filled", "chair and facilities assignments, last 12 months",
+        `SELECT COUNT(*) FROM (${servingSlots("lower(st.name) LIKE '%chair%' OR lower(st.name) LIKE '%facilit%'")})
+          WHERE sort_date >= ${YEAR}`),
+      stat("Events to support", "plans across every service type, last 12 months",
+        `SELECT COUNT(*) FROM pco_plans
+          WHERE org_id = :orgId AND sort_date >= ${YEAR} AND sort_date <= datetime('now')`),
+      table("Facilities teams", "active membership",
+        `SELECT t.name AS "Team", COUNT(DISTINCT m.person_id) AS "Members"
+           FROM pco_teams t
+           JOIN pco_team_memberships m ON m.team_id = t.pco_id AND m.org_id = :orgId
+            AND m.archived_at IS NULL AND m.person_id != ''
+          WHERE t.org_id = :orgId
+            AND (lower(t.name) LIKE '%facilit%' OR lower(t.name) LIKE '%chair%')
+          GROUP BY 1 ORDER BY 2 DESC`),
+    ],
+    gaps: measuredNote(
+      "the volunteer roster and the volume of events the building has to support.",
+      "Not measured: work orders, maintenance cost, room utilisation, cleaning standards or capital condition. Facilities work is managed outside PCO entirely, so almost every published Output here is unmeasured.",
+    ),
+  },
+
+  "mir-local-outreach": {
+    metrics: [
+      stat("Unleashing Servants", "active members of the Unleashing Servants team",
+        `SELECT COUNT(DISTINCT m.person_id)
+           FROM pco_team_memberships m
+           JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+          WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+            AND lower(t.name) LIKE '%unleashing%'`, { color: "highlight" }),
+      stat("Project assignments", "Unleashing Servants Projects slots, all time",
+        `SELECT COUNT(*) FROM (${servingSlots("lower(st.name) LIKE '%unleashing%'")})`),
+      stat("People on a project", "distinct volunteers, all time",
+        `SELECT COUNT(DISTINCT person_id) FROM (${servingSlots("lower(st.name) LIKE '%unleashing%'")})`),
+    ],
+    gaps: measuredNote(
+      "the Unleashing Servants roster and the project assignments recorded in PCO Services.",
+      "The Unleashing Servants Projects service type has not been used since 2019, so the project figures are historical. Partnerships, hours served, and community need met are not recorded anywhere we sync.",
+    ),
+  },
+
+  "mir-faith-preschool": {
+    metrics: [
+      stat("Preschool staff", "on the Preschool Staff reference list",
+        `SELECT COUNT(*) FROM pco_list_memberships m
+           JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+          WHERE m.org_id = :orgId AND l.name = 'REFERENCE - Preschool Staff'`,
+        { color: "highlight" }),
+      stat("Staff also serving", "preschool staff on an active team",
+        `SELECT COUNT(DISTINCT tm.person_id)
+           FROM pco_team_memberships tm
+           JOIN pco_list_memberships m ON m.person_id = tm.person_id AND m.org_id = :orgId
+           JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+          WHERE tm.org_id = :orgId AND tm.archived_at IS NULL AND tm.person_id != ''
+            AND l.name = 'REFERENCE - Preschool Staff'`),
+    ],
+    gaps: measuredNote(
+      "the staff roster, which is the only preschool data in PCO.",
+      "Enrolment, families served, waiting lists, tuition, ratios and licensing all live in the preschool's own systems. Everything the report's Outputs ask for is unmeasured here until that data is brought in.",
+    ),
+  },
+
+  "mir-service-planning": {
+    metrics: [
+      stat("Plans built", "across every service type, last 12 months",
+        `SELECT COUNT(*) FROM pco_plans
+          WHERE org_id = :orgId AND sort_date >= ${YEAR} AND sort_date <= datetime('now')`,
+        { color: "highlight" }),
+      stat("Service types in use", "with a plan in the last 12 months",
+        `SELECT COUNT(DISTINCT st.pco_id) FROM pco_plans pl
+           JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+          WHERE pl.org_id = :orgId AND pl.sort_date >= ${YEAR}
+            AND pl.sort_date <= datetime('now')`),
+      stat("People scheduled", "distinct volunteers across all plans, last 12 months",
+        `SELECT COUNT(DISTINCT person_id) FROM (${servingSlots("1 = 1")})
+          WHERE sort_date >= ${YEAR}`),
+      stat("Assignments filled", "non-declined slots, last 12 months",
+        `SELECT COUNT(*) FROM (${servingSlots("1 = 1")}) WHERE sort_date >= ${YEAR}`),
+      chart("Planning volume by month", "plans built",
+        `SELECT substr(sort_date,1,7) AS "Month", COUNT(*) AS "Plans"
+           FROM pco_plans
+          WHERE org_id = :orgId AND sort_date >= datetime('now','-730 day')
+            AND sort_date <= datetime('now')
+          GROUP BY 1 ORDER BY 1`, "area"),
+      table("Busiest service types", "plans and volunteers, last 12 months",
+        `SELECT service_type AS "Service type",
+                COUNT(DISTINCT person_id) AS "Volunteers",
+                COUNT(*) AS "Assignments"
+           FROM (${servingSlots("1 = 1")})
+          WHERE sort_date >= ${YEAR}
+          GROUP BY 1 ORDER BY 3 DESC LIMIT 15`),
+    ],
+    gaps: measuredNote(
+      "planning volume and the scheduling load across every service type in PCO Services.",
+      "Not measured: how far ahead plans were finished, how often they changed late, or whether the planning process felt sustainable to the staff doing it — the published Outputs about lead time and rework have no data behind them.",
     ),
   },
 };
