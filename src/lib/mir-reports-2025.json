@@ -21,7 +21,7 @@
       "Ministry-specific retreats, events, and activities",
       "Discover Courses (Jesus, Baptism, Worship, Community, Generosity, Serving, Outreach, Disciple-Making)",
       "Discipleship Workshops (Christianity FAQs, Bible, Prayer, Evangelism)",
-      "Hybrid and Mid-sized Bible and topical studies (Women, Men, Young Adults, Seniors, Grandparents, Co-ed/intergenerational)",
+      "Hybrid and Mid-sized Bible and topical studies (Women, Men, Young Adults, Seniors, Granparents, Co-ed/intergenerational)",
       "Disciple-Making Groups",
       "Leadership development gatherings",
       "Ministry Training Program"
@@ -29,7 +29,7 @@
     "outputs": [
       "# of people who come to faith in Christ",
       "# of baptisms",
-      "# of people who attend adult discipleship events",
+      "#of people who attend adult discipleship events",
       "% of congregation who attend Discipleship Workshops",
       "% of congregation who attend Discover Courses",
       "% of congregation who complete a Disciple-Making Group",
@@ -52,9 +52,9 @@
     ],
     "impact": [
       "Adults at Faith Church become a vibrant and multiplying community of disciples of Jesus who are:",
-      "**(1) EQUIPPED** to obey everything He commanded",
-      "**(2) TRANSFORMED** in their convictions, character, and conduct",
-      "**(3) MOBILIZED** to disciple others"
+      "(1) EQUIPPED to obey everything He commanded",
+      "(2) TRANSFORMED in their convictions, character, and conduct",
+      "(3) MOBILIZED to disciple others"
     ],
     "clipped": [
       {
@@ -63,8 +63,9 @@
       }
     ],
     "sourceNotes": [
-      "page prints 'Granparents' (sic); corrected to 'Grandparents'",
-      "page prints '#of people who attend adult discipleship events' (no space); normalised to '# of'"
+      "page prints 'Granparents' (sic) in Activities; transcribed verbatim",
+      "page prints '#of people who attend adult discipleship events' (sic, no space after #); transcribed verbatim",
+      "the IMPACT numbered items are printed at normal weight, not bold"
     ]
   },
   {
@@ -313,7 +314,7 @@
       "Resources: 'Committee - 9 staff' and '# of Volunteers - 200' use en dashes; 'hrs/mo ea,' prints a space before the comma; the '# of Volunteers' bullet ends with a trailing comma as printed",
       "Outputs: 'Feedback - include volunteer/staff connection' uses an en dash",
       "Activities: 'Observe lines, coffee/ hot chocolate' breaks after the slash in the source",
-      "All five columns use bullet glyphs on this page"
+      "Resources, Activities, Outputs and Outcomes use bullet glyphs; the IMPACT column is a bullet-less paragraph"
     ]
   },
   {

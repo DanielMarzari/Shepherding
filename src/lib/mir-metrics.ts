@@ -122,7 +122,7 @@ const measuredNote = (covered: string, uncovered: string): MirExtras["gaps"] => 
 
 export const MIR_EXTRAS: Record<string, MirExtras> = {
   "mir-adult-discipleship": {
-    revision: 7,
+    revision: 8,
     metrics: [
       stat("Engaged adults", "the denominator for every % below",
         `SELECT COUNT(*) FROM (${ENGAGED_ADULTS})`),
