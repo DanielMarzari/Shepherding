@@ -1,6 +1,7 @@
 import "server-only";
 import { getDb } from "./db";
 import { listNavPages } from "./builder";
+import { BUILDER_SEEDS } from "./builder-seeds";
 import {
   DEFAULT_NAV_CONFIG,
   PAGE_REGISTRY,
@@ -86,8 +87,25 @@ export function resolveNavConfig(orgId: number): ResolvedNav {
     for (const a of def.activeAliases) activeToKey[a] = key;
   }
 
-  const navPages = listNavPages(orgId) as Array<{ slug: string; title: string; navSection: string | null }>;
+  // A builder page only lands in `builder_pages` when somebody first opens its
+  // route, so listing the nav from the database alone means a page nobody has
+  // visited yet is invisible — and a page you can't see is a page you can't
+  // visit, which is a deadlock. The seeded definitions are therefore merged in:
+  // the nav shows every page that COULD exist, and opening one creates it
+  // (see `/builder/[slug]`, which seeds). A row in the database always wins, so
+  // a page an admin has renamed or re-filed keeps their version.
+  const fromDb = listNavPages(orgId) as Array<{ slug: string; title: string; navSection: string | null }>;
+  const seen = new Set(fromDb.map((p) => p.slug));
+  const fromSeeds = Object.values(BUILDER_SEEDS)
+    .filter((s) => s.navSection && !seen.has(s.slug))
+    .map((s) => ({ slug: s.slug, title: s.title, navSection: s.navSection ?? null }));
+  const navPages = [...fromDb, ...fromSeeds];
+
   const groupById = new Map(config.groups.map((g) => [g.id, g]));
+  /** Groups this call invented (see MANAGED_GROUPS). They exist only in memory
+   *  and were never arranged by an admin, so they are safe to sort; a group the
+   *  admin ordered by hand is left exactly as they left it. */
+  const invented = new Set<string>();
   for (const p of navPages) {
     const gid = SECTION_TO_GROUP[p.navSection ?? ""] ?? p.navSection ?? "";
     let g = groupById.get(gid);
@@ -97,10 +115,20 @@ export function resolveNavConfig(orgId: number): ResolvedNav {
       g = { id: gid, label: managed.label, mode: managed.mode, icon: managed.icon, items: [] };
       config.groups.push(g);
       groupById.set(gid, g);
+      invented.add(gid);
     }
     if (g.items.some((it) => it.kind === "builder" && it.slug === p.slug)) continue;
     g.items.push({ kind: "builder", slug: p.slug, label: p.title });
     activeToKey[p.title] = `builder:${p.slug}`;
+  }
+
+  // Forty ministry reports in database-then-seed order would read as noise.
+  for (const gid of invented) {
+    groupById.get(gid)?.items.sort((a, b) =>
+      (a.kind === "builder" ? a.label : a.pageKey).localeCompare(
+        b.kind === "builder" ? b.label : b.pageKey,
+      ),
+    );
   }
   return { config, activeToKey };
 }

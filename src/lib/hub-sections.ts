@@ -1,7 +1,8 @@
 import "server-only";
 import { resolveNavConfig } from "./nav-config-db";
 import { PAGE_REGISTRY } from "./nav-registry";
-import { listMorePages } from "./builder";
+import { listMorePages, listNavPages } from "./builder";
+import { BUILDER_SEEDS } from "./builder-seeds";
 import type { GalleryLink, GallerySection } from "./gallery-types";
 
 /** Every layer of the hub, built from the org's nav config — the one thing
@@ -18,6 +19,20 @@ import type { GalleryLink, GallerySection } from "./gallery-types";
  *  the Settings & Integration group, which lives in the top-right menu. */
 export function buildHubSections(orgId: number): GallerySection[] {
   const { config } = resolveNavConfig(orgId);
+
+  // What a builder page is actually about. Without this every card in a layer
+  // reads "Custom page.", which is no help at all when a layer holds forty
+  // ministry reports. A saved page's own description wins; a page nobody has
+  // opened yet falls back to its seed definition, so the card is useful before
+  // the page exists.
+  const describe = new Map<string, string>();
+  for (const s of Object.values(BUILDER_SEEDS)) {
+    if (s.description) describe.set(s.slug, s.description);
+  }
+  for (const p of listNavPages(orgId)) {
+    const d = (p.description ?? "").trim();
+    if (d) describe.set(p.slug, d);
+  }
 
   // Builder pages the admin filed under a free-text heading rather than a
   // layer id. Matched to a layer by label so existing placements survive.
@@ -55,7 +70,11 @@ export function buildHubSections(orgId: number): GallerySection[] {
           ...(def.external ? { external: true } : {}),
         });
       } else {
-        add({ href: `/builder/${it.slug}`, title: it.label, description: "Custom page." });
+        add({
+          href: `/builder/${it.slug}`,
+          title: it.label,
+          description: describe.get(it.slug) ?? "Custom page.",
+        });
       }
     }
     const heading = g.label.trim().toLowerCase();

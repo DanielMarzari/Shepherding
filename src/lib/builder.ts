@@ -360,15 +360,22 @@ export function getBuilderPage(orgId: number, slug: string): BuilderPage | null 
 }
 
 /** Pages assigned to a sidebar section, for the left nav. */
-export function listNavPages(orgId: number): Array<{ slug: string; title: string; navSection: string }> {
+export function listNavPages(
+  orgId: number,
+): Array<{ slug: string; title: string; navSection: string; description: string | null }> {
   return getDb()
     .prepare(
-      `SELECT slug, title, nav_section AS navSection
+      `SELECT slug, title, nav_section AS navSection, description
          FROM builder_pages
         WHERE org_id = ? AND nav_section IS NOT NULL AND nav_section <> ''
         ORDER BY title`,
     )
-    .all(orgId) as Array<{ slug: string; title: string; navSection: string }>;
+    .all(orgId) as Array<{
+    slug: string;
+    title: string;
+    navSection: string;
+    description: string | null;
+  }>;
 }
 
 /** Pages listed on the "See More" page, grouped by their heading. */
