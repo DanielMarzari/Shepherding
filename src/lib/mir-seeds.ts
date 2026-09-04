@@ -3,6 +3,7 @@ import "server-only";
 // MIR_SEEDS from here without a runtime circular dependency.
 import type { BlockConfig } from "./builder";
 import type { SeedBlock, SeedPage } from "./builder-seeds";
+import { MIR_EXTRAS } from "./mir-metrics";
 import reports2025 from "./mir-reports-2025.json";
 
 // Ministry Impact Reports — one builder page per ministry, generated from the
@@ -62,7 +63,7 @@ export interface MirReport {
  *  honest account of which published Outputs we still can't measure. */
 export interface MirExtras {
   metrics?: SeedBlock[];
-  gaps?: { intro: string; items: string[]; footer?: string };
+  gaps?: { title?: string; intro: string; items: string[]; footer?: string };
   /** Bump to re-seed a page that nobody has edited. */
   revision?: number;
 }
@@ -166,7 +167,7 @@ export function mirSeedPage(report: MirReport, extras: MirExtras = {}): SeedPage
         // Heading goes in the body for the same reason the columns' does:
         // BlockView drops `title` on text blocks.
         text: [
-          "### Outputs we cannot measure yet",
+          `### ${extras.gaps.title ?? "Outputs we cannot measure yet"}`,
           "",
           extras.gaps.intro,
           "",
@@ -188,201 +189,6 @@ export function mirSeedPage(report: MirReport, extras: MirExtras = {}): SeedPage
     blocks,
   };
 }
-
-// ─── Adult Discipleship: the one report with live metrics ────────────
-// The other 39 ministries carry the published Outputs as text until the data
-// behind them exists; see the gap list at the bottom of this page for what
-// "exists" would take.
-
-/** Adults engaged with Faith Church, per the app's own activity classification.
- *  This is the denominator every "% of congregation" Output is measured against
- *  — it matches the report's target audience ("Adults engaged with Faith
- *  Church") far better than a raw people count, 64% of which is inactive. */
-const ENGAGED_ADULTS = `
-  SELECT p.pco_id
-    FROM pco_people p
-    JOIN person_activity pa ON pa.person_id = p.pco_id AND pa.org_id = :orgId
-   WHERE p.org_id = :orgId AND p.is_minor = 0
-     AND pa.classification IN ('shepherded','active','present')`;
-
-/** The group types that constitute adult discipleship at Faith Church. Kids /
- *  student / childcare / foster-org group types are deliberately excluded — the
- *  report's audience is adults. Edit this list as PCO group types change. */
-const ADULT_DISCIPLESHIP_TYPES = `
-  'Small Groups','Disciple-making Groups','ABF Groups',
-  'Women''s AM Bible Studies','Women''s PM Bible Studies',
-  'Mens'' Groups','Young Adults Groups','Seniors In Action (SIA)',
-  'Organic Groups'`;
-
-/** One row per (person, group type, role) in an adult discipleship group. */
-const DISCIPLESHIP_MEMBERS = `
-  SELECT m.person_id, gt.name AS type_name, m.role, m.joined_at
-    FROM pco_group_memberships m
-    JOIN pco_groups g       ON g.pco_id = m.group_id       AND g.org_id = :orgId
-    JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
-   WHERE m.org_id = :orgId AND m.archived_at IS NULL
-     AND gt.name IN (${ADULT_DISCIPLESHIP_TYPES})`;
-
-/** Per-ministry additions, keyed by slug. Everything in here is ours rather
- *  than the report's: the live metric blocks and the honest account of which
- *  published Outputs we still cannot measure. A ministry with no entry renders
- *  its Logic Model alone. */
-const MIR_EXTRAS: Record<string, MirExtras> = {
-  "mir-adult-discipleship": {
-    revision: 5,
-    metrics: [
-    {
-      kind: "stat",
-      config: {
-        title: "Engaged adults",
-        span: 3,
-        sub: "the denominator for every % below",
-        sql: `SELECT COUNT(*) FROM (${ENGAGED_ADULTS})`,
-      },
-    },
-    {
-      kind: "stat",
-      config: {
-        title: "In a discipleship group",
-        span: 3,
-        color: "highlight",
-        sub: "engaged adults in an adult discipleship group",
-        sql: `SELECT COUNT(DISTINCT d.person_id)
-                FROM (${DISCIPLESHIP_MEMBERS}) d
-                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id`,
-      },
-    },
-    {
-      kind: "stat",
-      config: {
-        title: "% of congregation in a group",
-        span: 3,
-        // Computed against the live denominator rather than a `progress` block
-        // with a fixed goal — a hard-coded congregation size silently goes
-        // stale the moment the roster moves.
-        sub: "share of engaged adults in a discipleship group",
-        sql: `SELECT ROUND(
-                  100.0 * (SELECT COUNT(DISTINCT d.person_id)
-                             FROM (${DISCIPLESHIP_MEMBERS}) d
-                             JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id)
-                        / NULLIF((SELECT COUNT(*) FROM (${ENGAGED_ADULTS})), 0), 1) || '%'`,
-      },
-    },
-    {
-      kind: "stat",
-      config: {
-        title: "Discipleship group leaders",
-        span: 3,
-        sub: "engaged adults leading a group",
-        sql: `SELECT COUNT(DISTINCT d.person_id)
-                FROM (${DISCIPLESHIP_MEMBERS}) d
-                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
-               WHERE d.role = 'leader'`,
-      },
-    },
-    {
-      kind: "stat",
-      config: {
-        title: "Disciple-Making Groups",
-        span: 3,
-        sub: "people currently in a DMG",
-        sql: `SELECT COUNT(DISTINCT person_id)
-                FROM (${DISCIPLESHIP_MEMBERS})
-               WHERE type_name = 'Disciple-making Groups'`,
-      },
-    },
-    {
-      kind: "stat",
-      config: {
-        title: "Adults taking Next Steps",
-        span: 3,
-        sub: "in a worship, community, or serving lane",
-        sql: `SELECT COUNT(*)
-                FROM person_activity pa
-                JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
-               WHERE pa.org_id = :orgId AND p.is_minor = 0
-                 AND (pa.in_lane_wors = 1 OR pa.in_lane_comm = 1 OR pa.in_lane_serv = 1)`,
-      },
-    },
-    {
-      kind: "chart",
-      config: {
-        title: "Where adults are discipled",
-        span: 6,
-        chartType: "bar",
-        colorByCategory: true,
-        sub: "engaged adults by group type",
-        sql: `SELECT d.type_name AS "Group type", COUNT(DISTINCT d.person_id) AS "Adults"
-                FROM (${DISCIPLESHIP_MEMBERS}) d
-                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
-               GROUP BY 1 ORDER BY 2 DESC`,
-      },
-    },
-    {
-      kind: "chart",
-      config: {
-        title: "New discipleship-group joins by year",
-        span: 6,
-        chartType: "area",
-        sub: "people joining an adult discipleship group",
-        sql: `SELECT substr(d.joined_at, 1, 4) AS "Year",
-                     COUNT(DISTINCT d.person_id) AS "Joined"
-                FROM (${DISCIPLESHIP_MEMBERS}) d
-               WHERE d.joined_at IS NOT NULL AND substr(d.joined_at, 1, 4) >= '2019'
-               GROUP BY 1 ORDER BY 1`,
-      },
-    },
-    {
-      kind: "table",
-      config: {
-        title: "Disciple-Making Groups",
-        span: 6,
-        sortable: true,
-        sub: "the multiplying core — each group and who leads it",
-        sql: `SELECT g.name AS "Group",
-                     COUNT(DISTINCT m.person_id) AS "Members",
-                     SUM(CASE WHEN m.role = 'leader' THEN 1 ELSE 0 END) AS "Leaders"
-                FROM pco_groups g
-                JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
-                LEFT JOIN pco_group_memberships m
-                       ON m.group_id = g.pco_id AND m.org_id = :orgId AND m.archived_at IS NULL
-               WHERE g.org_id = :orgId AND gt.name = 'Disciple-making Groups'
-               GROUP BY g.name ORDER BY 2 DESC`,
-      },
-    },
-    {
-      kind: "table",
-      config: {
-        title: "Discipleship reach by group type",
-        span: 6,
-        sortable: true,
-        sub: "adults reached, and how many of them lead",
-        sql: `SELECT d.type_name AS "Group type",
-                     COUNT(DISTINCT d.person_id) AS "Adults",
-                     COUNT(DISTINCT CASE WHEN d.role = 'leader' THEN d.person_id END) AS "Leaders"
-                FROM (${DISCIPLESHIP_MEMBERS}) d
-                JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
-               GROUP BY 1 ORDER BY 2 DESC`,
-      },
-    }
-    ],
-    gaps: {
-      intro:
-        "These Outputs are in the published report but have no data behind them today. Listed here rather than dropped, so the gap is visible and fixable:",
-      items: [
-        "- **# of people who come to faith in Christ** — no faith-decision is recorded anywhere we sync. Needs a PCO form or workflow that stamps the person's record.",
-        "- **# of baptisms** — a `Going Public (Baptism)` check-in event exists in PCO but has never had a single check-in. Checking people in at baptisms would make this live immediately.",
-        "- **% who attend Discover Courses** — the Discover Faith Church check-in events stop in **February 2020**. Nothing since has been tracked.",
-        "- **% who attend Discipleship Workshops** — no check-in event or group type corresponds to the workshops.",
-        "- **% who complete a Disciple-Making Group** — we can see current membership, not completion. Needs an archived-with-outcome convention, or a \"graduated\" list.",
-        "- **% of DMG graduates who become leaders** — depends on completion above.",
-        "- **Standardized spiritual growth inventory** — no instrument has been administered, so there is nothing to report.",
-      ],
-      footer:
-        "_The three Outputs that ARE live above (group participation, leaders, Next Steps) come from PCO group membership and the app's own lane classification._",
-    },
-  },
-};
 
 /** Every Ministry Impact Report page, built from the transcription. */
 export const MIR_SEEDS: SeedPage[] = (reports2025 as MirReport[]).map((r) =>
