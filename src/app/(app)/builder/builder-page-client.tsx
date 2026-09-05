@@ -30,9 +30,29 @@ export interface ClientBlock {
   kind: BlockKind;
   config: BlockConfig;
   result: QueryResult | null;
-  detailResult?: QueryResult | null;
   childResults?: (QueryResult | null)[];
 }
+
+/** A stat can point at another block on the page ("See more"). Seeded pages
+ *  name the target by title because they cannot know ids; the editor stores an
+ *  id. Resolve to an id here so the rest of the code only deals in ids. */
+function revealTargetId(b: ClientBlock, blocks: ClientBlock[]): number | null {
+  if (typeof b.config.revealsBlock === "number") return b.config.revealsBlock;
+  const t = b.config.revealsBlockTitle;
+  if (!t) return null;
+  return blocks.find((x) => (x.config.title ?? "").trim() === t.trim())?.id ?? null;
+}
+
+/** Blocks that only appear once their stat is asked to show them. */
+function revealableIds(blocks: ClientBlock[]): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const b of blocks) {
+    const target = revealTargetId(b, blocks);
+    if (target != null && target !== b.id) m.set(target, b.id);
+  }
+  return m;
+}
+
 interface PageInfo { id: number; slug: string; title: string; description: string | null; navSection: string | null; moreSection: string | null }
 interface SiblingRef { id: number; title: string; kind: BlockKind }
 
@@ -141,6 +161,16 @@ export function BuilderPageClient({
   }
 
   const siblings: SiblingRef[] = blocks.map((b) => ({ id: b.id, title: (b.config.title ?? "").trim() || BLOCK_META[b.kind].label, kind: b.kind }));
+  // In edit mode every card stays visible — a card you cannot see is a card you
+  // cannot fix — but the ones that only appear on click say so.
+  const revealTargetsInEdit = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const [targetId, statId] of revealableIds(blocks)) {
+      const stat = blocks.find((x) => x.id === statId);
+      m.set(targetId, (stat?.config.title ?? "").trim() || "a stat");
+    }
+    return m;
+  }, [blocks]);
 
   if (!edit) return <ViewMode page={page} blocks={blocks} isAdmin={isAdmin} pages={pages} onEdit={() => setEdit(true)} />;
 
@@ -198,6 +228,7 @@ export function BuilderPageClient({
           {order.map((b, i) => (
             <BlockEditor key={b.id} block={b} slug={page.slug} schema={schema} pages={pages}
               siblings={siblings.filter((s) => s.id !== b.id && DATA_KINDS.has(s.kind))}
+              revealedBy={revealTargetsInEdit.get(b.id) ?? null}
               mutate={mutate} busy={pending}
               dragging={dragIndex === i}
               dropTarget={overIndex === i && dragIndex !== null && dragIndex !== i}
@@ -365,6 +396,17 @@ function ViewMode({ page, blocks, isAdmin, pages, onEdit }: { page: PageInfo; bl
   const [params, setParams] = useState<Record<string, string>>(initialParams);
   const [results, setResults] = useState<Record<number, QueryResult | null>>(() => Object.fromEntries(blocks.map((b) => [b.id, b.result])));
   const [loadingIds, setLoadingIds] = useState<Set<number>>(new Set());
+  // Cards a stat can reveal: target block id -> the stat that reveals it. They
+  // stay out of the grid entirely until asked for, so nothing reserves space
+  // for them and the remaining cards close up.
+  const revealable = useMemo(() => revealableIds(blocks), [blocks]);
+  const [revealed, setRevealed] = useState<Set<number>>(new Set());
+  const toggleReveal = (targetId: number) =>
+    setRevealed((cur) => {
+      const n = new Set(cur);
+      if (n.has(targetId)) n.delete(targetId); else n.add(targetId);
+      return n;
+    });
 
   const deps = useMemo(() => blocks.map((b) => ({ id: b.id, sql: b.config.sql ?? "", source: b.config.source, params: paramsIn(b.config.sql ?? "") })), [blocks]);
   const filterByParam = useMemo(() => {
@@ -410,9 +452,12 @@ function ViewMode({ page, blocks, isAdmin, pages, onEdit }: { page: PageInfo; bl
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4">
           {blocks.map((b) => {
+            // Hidden until its stat asks for it.
+            if (revealable.has(b.id) && !revealed.has(b.id)) return null;
             if (b.kind === "divider") {
               return <div key={b.id} className={`py-1 ${spanClass(12)}`}><BlockView kind="divider" config={b.config} result={null} /></div>;
             }
+            const target = revealTargetId(b, blocks);
             return (
               <div key={b.id} className={`relative rounded-xl border border-border-soft bg-bg-elev p-5 ${spanClass(b.config.span)}`}>
                 {loadingIds.has(b.id) && (
@@ -421,7 +466,11 @@ function ViewMode({ page, blocks, isAdmin, pages, onEdit }: { page: PageInfo; bl
                 {b.kind === "filter" ? (
                   <FilterControl config={b.config} result={results[b.id]} value={params[b.config.param ?? ""] ?? ""} onChange={(v) => setParam(b.config.param ?? "", v)} />
                 ) : (
-                  <BlockView kind={b.kind} config={b.config} result={results[b.id]} detailResult={b.detailResult} pages={pages} childResults={b.childResults} />
+                  <BlockView
+                    kind={b.kind} config={b.config} result={results[b.id]} pages={pages}
+                    childResults={b.childResults}
+                    reveal={target != null ? { shown: revealed.has(target), toggle: () => toggleReveal(target) } : undefined}
+                  />
                 )}
               </div>
             );
@@ -631,6 +680,40 @@ function BlockFields({ kind, cfg, set, schema, pages, siblings, onSqlBlur, onRun
       {(kind === "stat" || kind === "kpi") && (
         <input value={cfg.sub ?? ""} onChange={(e) => set({ sub: e.target.value })} placeholder="Sub-label (optional)" className={INPUT_SM} />
       )}
+      {kind === "stat" && siblings && siblings.length > 0 && (
+        <div className="rounded-lg border border-border-soft/70 p-2 space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wide text-subtle">
+            &ldquo;See more&rdquo; opens another card
+          </div>
+          <select
+            value={cfg.revealsBlock ?? ""}
+            onChange={(e) =>
+              set({
+                revealsBlock: e.target.value ? Number(e.target.value) : undefined,
+                revealsBlockTitle: undefined,
+              })
+            }
+            className={`${SELECT} w-full`}
+          >
+            <option value="">Nothing — this is just a number</option>
+            {siblings.map((sib) => (
+              <option key={sib.id} value={sib.id}>{sib.title}</option>
+            ))}
+          </select>
+          {(cfg.revealsBlock || cfg.revealsBlockTitle) && (
+            <input
+              value={cfg.detailLabel ?? ""}
+              onChange={(e) => set({ detailLabel: e.target.value || undefined })}
+              placeholder={`Link text (default "See more")`}
+              className={INPUT_SM}
+            />
+          )}
+          <div className="text-[10px] text-subtle">
+            That card stays out of the page until this number is clicked, so it
+            doesn&apos;t leave a gap next to its neighbours.
+          </div>
+        </div>
+      )}
       {kind === "progress" && (
         <div className="grid grid-cols-2 gap-2">
           <input type="number" value={cfg.goal ?? 100} onChange={(e) => set({ goal: Number(e.target.value) })} placeholder="Goal" className={INPUT_SM} />
@@ -710,10 +793,12 @@ function GroupChildEditor({ cfg, set, schema }: { cfg: BlockConfig; set: (p: Par
 }
 
 function BlockEditor({
-  block, slug, schema, pages, siblings, mutate, busy,
+  block, slug, schema, pages, siblings, revealedBy, mutate, busy,
   dragging, dropTarget, onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
   block: ClientBlock; slug: string; schema: DbSchema; pages: PageRef[]; siblings: SiblingRef[];
+  /** Title of the stat that reveals this card, when it only appears on click. */
+  revealedBy?: string | null;
   mutate: (fn: () => Promise<unknown>) => void; busy: boolean;
   dragging: boolean; dropTarget: boolean;
   onDragStart: () => void; onDragOver: () => void; onDrop: () => void; onDragEnd: () => void;
@@ -768,7 +853,12 @@ function BlockEditor({
           <span className="text-[10px] text-accent px-1.5 py-0.5 rounded bg-accent/10">edit</span>
           {ctrl}
         </div>
-        <BlockView kind={kind} config={cfg} result={result} detailResult={block.detailResult} pages={pages} />
+        {revealedBy && (
+          <div className="absolute top-2 left-2 text-[10px] text-subtle px-1.5 py-0.5 rounded bg-bg-elev-2 border border-border-soft">
+            shown by &ldquo;{revealedBy}&rdquo;
+          </div>
+        )}
+        <BlockView kind={kind} config={cfg} result={result} pages={pages} />
       </div>
     );
   }
@@ -894,7 +984,7 @@ function BlockEditor({
       {kind !== "group" && (
         <div className="rounded-lg border border-border-soft bg-bg/40 p-3">
           <div className="text-[10px] uppercase tracking-wide text-subtle mb-2">Preview</div>
-          <BlockView kind={kind} config={cfg} result={hasSql ? result : null} detailResult={block.detailResult} pages={pages} />
+          <BlockView kind={kind} config={cfg} result={hasSql ? result : null} pages={pages} />
         </div>
       )}
     </div>

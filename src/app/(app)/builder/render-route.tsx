@@ -128,12 +128,6 @@ export async function renderBuilderRoute({
     kind: b.kind,
     config: b.config,
     result: NO_SQL.has(b.kind) ? null : runTimed(b, b.config),
-    // A stat can carry a second query whose rows it reveals on click. Run it
-    // through the same timed+deduped path so it shows up in the query
-    // inspector and doesn't quietly double a page's cost.
-    detailResult: b.config.detailSql
-      ? runTimed({ ...b, kind: `${b.kind}:detail` }, { sql: b.config.detailSql })
-      : null,
     childResults: b.kind === "group"
       ? (b.config.children ?? []).map((ch) =>
           NO_SQL.has(ch.kind)

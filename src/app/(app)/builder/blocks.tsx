@@ -39,13 +39,14 @@ function Empty({ children }: { children: React.ReactNode }) {
 
 /** Renders a single block from its config + pre-run query result. Used in both
  *  the live editor preview and the finished page. */
-export function BlockView({ kind, config, result, detailResult, pages, childResults }: {
+export function BlockView({ kind, config, result, pages, childResults, reveal }: {
   kind: BlockKind;
   config: BlockConfig;
   result: QueryResult | null;
-  detailResult?: QueryResult | null;
   pages?: PageRef[];
   childResults?: (QueryResult | null)[];
+  /** Present when this stat reveals another card on the page. */
+  reveal?: { shown: boolean; toggle: () => void };
 }) {
   const title = (config.title ?? "").trim();
 
@@ -143,18 +144,15 @@ export function BlockView({ kind, config, result, detailResult, pages, childResu
             )}
           </div>
           {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
-          {config.detailSql && (
-            <Collapsible label={config.detailLabel ?? "Show the detail"} className="mt-3">
-              {detailResult ? (
-                detailResult.error ? (
-                  <div className="text-xs text-warn-soft-fg">{detailResult.error}</div>
-                ) : (
-                  <TableView config={{ sortable: true, density: "condensed" }} result={detailResult} />
-                )
-              ) : (
-                <div className="text-xs text-subtle">No detail query has run yet.</div>
-              )}
-            </Collapsible>
+          {reveal && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); reveal.toggle(); }}
+              className="mt-2 text-xs text-accent hover:underline inline-flex items-center gap-1 cursor-pointer"
+            >
+              <span aria-hidden className={reveal.shown ? "rotate-90 inline-block" : "inline-block"}>›</span>
+              {reveal.shown ? "Hide" : config.detailLabel ?? "See more"}
+            </button>
           )}
         </div>
       );

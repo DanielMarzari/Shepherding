@@ -125,8 +125,9 @@ const stat = (
   opts: {
     span?: number;
     color?: SeedBlock["config"]["color"];
-    /** Rows revealed when the card is clicked — what the number is made of. */
-    detailSql?: string;
+    /** Title of another block on the page to reveal on "See more". The detail
+     *  gets its own card, so it takes a normal slot in the grid. */
+    revealsBlockTitle?: string;
     detailLabel?: string;
   } = {},
 ): SeedBlock => ({
@@ -135,7 +136,7 @@ const stat = (
     title, sub, sql,
     span: opts.span ?? 3,
     ...(opts.color ? { color: opts.color } : {}),
-    ...(opts.detailSql ? { detailSql: opts.detailSql } : {}),
+    ...(opts.revealsBlockTitle ? { revealsBlockTitle: opts.revealsBlockTitle } : {}),
     ...(opts.detailLabel ? { detailLabel: opts.detailLabel } : {}),
   },
 });
@@ -1058,13 +1059,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COUNT(DISTINCT used_on) FROM (${ORIGINAL_SONG_USES})`,
         {
           color: "highlight",
-          detailLabel: "Show every Sunday",
-          detailSql: `SELECT used_on AS "Sunday",
-                             COUNT(DISTINCT song) AS "Songs",
-                             group_concat(DISTINCT printed_title) AS "Which",
-                             COUNT(DISTINCT service_type) AS "Rooms"
-                        FROM (${ORIGINAL_SONG_USES})
-                       GROUP BY used_on ORDER BY used_on DESC`,
+          detailLabel: "See every Sunday",
+          revealsBlockTitle: "Every Sunday an original song was sung",
         }),
       stat("Times an original song was sung", "song-by-Sunday; both venues on one Sunday count once",
         `SELECT COUNT(*) FROM (SELECT DISTINCT song, used_on FROM (${ORIGINAL_SONG_USES}))`),
@@ -1082,6 +1078,14 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                                 AND (st.name LIKE 'LIVE%' OR st.name LIKE 'CLASSIC%')
                                 AND pl.sort_date >= '2024-01-01'
                                 AND pl.sort_date <= datetime('now')), 0), 0) || '%'`),
+      table("Every Sunday an original song was sung",
+        "opened by the Sundays card above",
+        `SELECT used_on AS "Sunday",
+                COUNT(DISTINCT song) AS "Songs",
+                group_concat(DISTINCT printed_title) AS "Which",
+                COUNT(DISTINCT service_type) AS "Rooms"
+           FROM (${ORIGINAL_SONG_USES})
+          GROUP BY used_on ORDER BY used_on DESC`, 12),
       chart("Original songs in services by year", "songs sung, and Sundays they were sung on",
         `SELECT substr(used_on,1,4) AS "Year",
                 COUNT(*) AS "Songs sung",

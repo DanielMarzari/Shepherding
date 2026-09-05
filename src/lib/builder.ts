@@ -321,11 +321,15 @@ export interface BlockConfig {
   chipColumns?: string[];
   /** Table: click column headers to sort. */
   sortable?: boolean;
-  /** Stat: a second query whose rows are revealed when the card is clicked.
-   *  A headline number is more useful when you can see what it is made of
-   *  without leaving the page. */
-  detailSql?: string;
-  /** Label on the disclosure control (default "Show the detail"). */
+  /** Stat: id of another block on this page to reveal when "See more" is
+   *  clicked. The detail lives in its OWN card, so it takes a normal place in
+   *  the grid — an in-card expansion stretches the stat and leaves its
+   *  neighbours sitting in blank space. */
+  revealsBlock?: number;
+  /** Seeded pages can't know block ids, so they name the target by title and
+   *  it is resolved at render. `revealsBlock` wins when both are set. */
+  revealsBlockTitle?: string;
+  /** Label on the reveal / collapse control (default "See more"). */
   detailLabel?: string;
   /** Text / stat: start folded away. A long explanation earns its place at the
    *  bottom of a page only if it isn't in the way. */
