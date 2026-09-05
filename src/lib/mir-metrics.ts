@@ -154,7 +154,6 @@ const measuredNote = (covered: string, uncovered: string): MirExtras["gaps"] => 
 
 export const MIR_EXTRAS: Record<string, MirExtras> = {
   "mir-adult-discipleship": {
-    revision: 8,
     metrics: [
       stat("Engaged adults", "the denominator for every % below",
         `SELECT COUNT(*) FROM (${ENGAGED_ADULTS})`),
@@ -1104,17 +1103,24 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           GROUP BY 1 ORDER BY 2 DESC`, 12),
     ],
     gaps: {
-      title: "What these numbers cover, and what still needs Spotify",
+      title: "Every published Output, and whether we can measure it",
       intro:
-        "Measured here: every time a Faith Church Music song appears on a service plan, from PCO Services. The table above lists the exact titles being matched — if a release is missing from it, it is missing from every number on this page.",
+        "The report lists twelve Outputs. Four are answered above; the rest have no data behind them, and this says why rather than leaving a blank. The catalogue table above lists the exact titles being matched — if a release is missing from it, it is missing from every number on this page.",
       items: [
-        "- **Only LIVE and CLASSIC services are visible.** PCO plan items are synced for those two service types only, so an original song sung at Students, Prayer Works, a special service or a memorial does not appear here. The real totals are at least these.",
-        "- **# songs downloaded** and **demographic of downloads** — Spotify is a streaming service and does not report downloads at all. These would have to come from the distributor (DistroKid, CD Baby, TuneCore or similar) or from Apple Music.",
-        "- **# songs streamed** — stream counts and monthly listeners are not in the public Spotify API. They live in Spotify for Artists, which has no open API; the practical route is a CSV export from that dashboard, imported the way PushPay giving already is.",
-        "- **# songs written**, **# songs produced**, **# Creatives**, **Diversity of Creatives**, **# CCLI permissions**, **% of worship volunteers who also write** — none of these are recorded anywhere we sync. Songs written but never sung on a Sunday are invisible to this page entirely.",
+        "- **# Total Sundays original song(s) are used in services** — measured. From PCO service plans.",
+        "- **# of times a song is used in services** — measured. From PCO service plans.",
+        "- **# songs released** — measured. Straight from Spotify's own catalogue for Faith Church Music.",
+        "- **# songs produced** — partly. We can count what was *released* (5). Anything recorded and produced but never put out is invisible to Spotify, so treat this as a floor.",
+        "- **# songs streamed** — not available. Stream counts are not in the Spotify Web API at any tier. Per-track play counts ARE public on the artist page (33,797 across the five tracks when last checked by hand), which is a page-scrape, not an API call.",
+        "- **# Songs downloaded** and **demographic of downloads** — not available. Spotify is a streaming service and reports neither. Downloads would come from the distributor (DistroKid, CD Baby, TuneCore) or Apple Music; demographics live in Spotify for Artists, whose export is a manual CSV.",
+        "- **# songs written** — not available. Nothing records a song that was written; only ones that reach a service plan or a release are visible here.",
+        "- **# Creatives** and **Diversity of Creatives** — not available. There is no creatives roster in PCO. A team of songwriters would make both measurable immediately.",
+        "- **# CCLI permissions** — not available. CCLI is a separate system we don't sync.",
+        "- **% of worship volunteers who also create songs** — not available. The denominator exists (worship team membership); the numerator is the missing creatives roster above.",
+        "- **Only LIVE and CLASSIC services are visible.** PCO plan items are synced for those two service types only, so an original song sung at Students, Prayer Works, a special service or a memorial does not appear. The Sunday and times-sung totals are floors, not ceilings.",
       ],
       footer:
-        "_With a Spotify app client ID and secret, follower count and the full released catalogue (which answers \"# songs released\") can be pulled automatically. Streams, listeners and demographics cannot — see the note above._",
+        "_Follower count is not shown because Spotify does not return it for this app key — it omits the field entirely for keys in development mode, along with popularity and genres. A zero there would be wrong, not empty. Monthly listeners (96 when last checked) are public on the artist page but likewise absent from the API._",
     },
   },
 };

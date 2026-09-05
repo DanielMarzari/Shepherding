@@ -184,7 +184,14 @@ export function mirSeedPage(report: MirReport, extras: MirExtras = {}): SeedPage
     description: hasMetrics
       ? "2025 Ministry Impact Report — the Logic Model as published, with the Outputs column measured against live PCO data."
       : `2025 Ministry Impact Report — the Logic Model as published (source page ${report.page}). Outputs are not yet measured.`,
-    revision: extras.revision ?? 1,
+    // Derived from the block count, NOT a hand-kept number. ensureSeededPage
+    // only re-seeds when the definition's revision EXCEEDS the stored one, so a
+    // page someone had already opened silently kept its old blocks every time
+    // metrics were added to it — which is exactly how the Original Music report
+    // ended up with a Logic Model and no statistics. Adding metrics always adds
+    // blocks, so the revision rises on its own and the page refreshes. An
+    // explicit revision still wins where one is set.
+    revision: extras.revision ?? blocks.length,
     navSection: "ministry-impact-reports",
     blocks,
   };
