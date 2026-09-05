@@ -47,7 +47,11 @@ export function getAttendanceTrend(
   const groupIdFilter =
     filterScope.kind === "group"
       ? ` AND a.group_id = ${escapeId(filterScope.id)}`
-      : filterScope.kind === "groupType"
+      : // Intentionally no gg.archived_at check. This is a 12-month history of
+        // past meetings: an event that happened in a group that has since been
+        // archived still happened, and filtering it out would punch holes in
+        // earlier months for every group that closed mid-window.
+        filterScope.kind === "groupType"
         ? ` AND EXISTS (
               SELECT 1 FROM pco_groups gg
               WHERE gg.org_id = a.org_id

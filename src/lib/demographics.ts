@@ -101,6 +101,11 @@ export function populatePeopleInScope(
       ).run(orgId);
       break;
     case "group":
+      // One group the user explicitly picked — deliberately no
+      // g.archived_at filter. Drilling into an archived group should
+      // still show who was in it, not an empty card. The aggregate
+      // "groups" / "groupType" scopes above do filter, so no current
+      // count can be inflated by archived groups.
       db.prepare(
         `INSERT OR IGNORE INTO temp.${tableName} (person_id)
            SELECT DISTINCT person_id

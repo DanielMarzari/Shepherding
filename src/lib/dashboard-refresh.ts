@@ -420,10 +420,17 @@ async function rebuildPersonActivityAsync(
 
   db.prepare(
     `CREATE TEMP TABLE _pa_grp_count AS
-       SELECT person_id, COUNT(*) AS n
-         FROM pco_group_memberships
-        WHERE org_id = ? AND archived_at IS NULL
-        GROUP BY person_id`,
+       -- active_group_count means "in a group RIGHT NOW", so the group
+       -- itself has to still be running: archived groups sync in for
+       -- history, and counting them here inflates the community lane,
+       -- the shepherded split and every classification built on them.
+       SELECT gm.person_id, COUNT(*) AS n
+         FROM pco_group_memberships gm
+         JOIN pco_groups g
+           ON g.org_id = gm.org_id AND g.pco_id = gm.group_id
+        WHERE gm.org_id = ? AND gm.archived_at IS NULL
+          AND g.archived_at IS NULL
+        GROUP BY gm.person_id`,
   ).run(orgId);
   db.exec(`CREATE INDEX _pa_grp_count_pid ON _pa_grp_count(person_id);`);
   await yieldTick();
@@ -440,6 +447,10 @@ async function rebuildPersonActivityAsync(
 
   db.prepare(
     `CREATE TEMP TABLE _pa_first_comm AS
+       -- Intentionally NOT filtered on the group's archived_at: this is
+       -- the person's own history — when they FIRST entered community —
+       -- and the lane sankey / journeys read it as a past event. A group
+       -- that has since folded still started their story.
        SELECT person_id, MIN(joined_at) AS at
          FROM pco_group_memberships
         WHERE org_id = ? AND joined_at IS NOT NULL AND joined_at <= ?
@@ -623,7 +634,11 @@ async function rebuildGroupSummaryAsync(
         WHERE org_id = ? AND starts_at IS NOT NULL AND starts_at >= ?
         GROUP BY group_id
      ) epg ON epg.group_id = g.pco_id
-     WHERE g.org_id = ?`,
+     WHERE g.org_id = ?
+       -- group_summary is the CURRENT state of live groups (members,
+       -- leaders, 30d flow, attendance %). Archived groups sync in for
+       -- history and would triple the group count off this table.
+       AND g.archived_at IS NULL`,
   ).run(
     cutoff30, cutoff30, orgId,
     orgId, trackingCutoff,
@@ -694,10 +709,17 @@ function rebuildPersonActivity(
   db.exec(`CREATE INDEX _pa_max_serve_pid ON _pa_max_serve(person_id);`);
   db.prepare(
     `CREATE TEMP TABLE _pa_grp_count AS
-       SELECT person_id, COUNT(*) AS n
-         FROM pco_group_memberships
-        WHERE org_id = ? AND archived_at IS NULL
-        GROUP BY person_id`,
+       -- active_group_count means "in a group RIGHT NOW", so the group
+       -- itself has to still be running: archived groups sync in for
+       -- history, and counting them here inflates the community lane,
+       -- the shepherded split and every classification built on them.
+       SELECT gm.person_id, COUNT(*) AS n
+         FROM pco_group_memberships gm
+         JOIN pco_groups g
+           ON g.org_id = gm.org_id AND g.pco_id = gm.group_id
+        WHERE gm.org_id = ? AND gm.archived_at IS NULL
+          AND g.archived_at IS NULL
+        GROUP BY gm.person_id`,
   ).run(orgId);
   db.exec(`CREATE INDEX _pa_grp_count_pid ON _pa_grp_count(person_id);`);
   db.prepare(
@@ -710,6 +732,10 @@ function rebuildPersonActivity(
   db.exec(`CREATE INDEX _pa_team_count_pid ON _pa_team_count(person_id);`);
   db.prepare(
     `CREATE TEMP TABLE _pa_first_comm AS
+       -- Intentionally NOT filtered on the group's archived_at: this is
+       -- the person's own history — when they FIRST entered community —
+       -- and the lane sankey / journeys read it as a past event. A group
+       -- that has since folded still started their story.
        SELECT person_id, MIN(joined_at) AS at
          FROM pco_group_memberships
         WHERE org_id = ? AND joined_at IS NOT NULL AND joined_at <= ?
@@ -943,7 +969,11 @@ function rebuildGroupSummary(
         WHERE org_id = ? AND starts_at IS NOT NULL AND starts_at >= ?
         GROUP BY group_id
      ) epg ON epg.group_id = g.pco_id
-     WHERE g.org_id = ?`,
+     WHERE g.org_id = ?
+       -- group_summary is the CURRENT state of live groups (members,
+       -- leaders, 30d flow, attendance %). Archived groups sync in for
+       -- history and would triple the group count off this table.
+       AND g.archived_at IS NULL`,
   ).run(
     cutoff30,
     cutoff30,
@@ -1028,8 +1058,13 @@ function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
     db
       .prepare(
         `SELECT COUNT(*) AS n FROM (
-           SELECT DISTINCT person_id FROM pco_group_memberships
-            WHERE org_id = ? AND joined_at IS NOT NULL AND joined_at >= ?
+           -- Live groups only: a headline "joined in the last 30 days"
+           -- shouldn't count an on-ramp into a group that has folded.
+           SELECT DISTINCT gm.person_id FROM pco_group_memberships gm
+             JOIN pco_groups g
+               ON g.org_id = gm.org_id AND g.pco_id = gm.group_id
+            WHERE gm.org_id = ? AND g.archived_at IS NULL
+              AND gm.joined_at IS NOT NULL AND gm.joined_at >= ?
            UNION
            SELECT DISTINCT person_id FROM pco_team_memberships
             WHERE org_id = ? AND person_id != ''
@@ -1043,8 +1078,14 @@ function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
     db
       .prepare(
         `SELECT COUNT(*) AS n FROM (
-           SELECT DISTINCT person_id FROM pco_group_memberships
-            WHERE org_id = ? AND archived_at IS NOT NULL AND archived_at >= ?
+           -- Same live-groups-only rule: archiving a whole group also
+           -- archives its memberships, and that bulk close-out isn't a
+           -- roomful of people "departing" on this dashboard.
+           SELECT DISTINCT gm.person_id FROM pco_group_memberships gm
+             JOIN pco_groups g
+               ON g.org_id = gm.org_id AND g.pco_id = gm.group_id
+            WHERE gm.org_id = ? AND g.archived_at IS NULL
+              AND gm.archived_at IS NOT NULL AND gm.archived_at >= ?
            UNION
            SELECT DISTINCT person_id FROM pco_team_memberships
             WHERE org_id = ? AND person_id != ''
@@ -1256,7 +1297,9 @@ function rebuildLaneTransitions(orgId: number): void {
   const db = getDb();
   // Pull every group + team membership row with the dates that
   // change lane state — joined_at / archived_at for groups,
-  // pco_created_at / archived_at for teams.
+  // pco_created_at / archived_at for teams. Intentionally NOT filtered
+  // on the group's archived_at: this is a chronology, and a group that
+  // has since folded still produced real transitions.
   const groupRows = db
     .prepare(
       `SELECT person_id, joined_at, archived_at

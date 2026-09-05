@@ -27,6 +27,10 @@ export interface PersonGroupAttendance {
  * they attended an event for, even if they aren't a member anymore.
  * Surfaces the "they were here, then they weren't" pattern that PCO loses
  * by simply removing the membership row.
+ *
+ * Intentionally includes archived groups (no archived_at filter on
+ * pco_groups): this is the person's history, and a group folding is
+ * exactly the kind of thing it should still show.
  */
 export function listGroupsAttendedByPerson(
   orgId: number,
@@ -149,10 +153,14 @@ export interface CommunityLaneStats {
 function nonExcludedJoin(
   excludedGroupTypes: string[],
 ): { join: string; args: string[] } {
+  // g.archived_at IS NULL keeps this to groups that are still running.
+  // The sync now stores PCO's archived groups too, and every caller of
+  // this helper counts who's in community NOW, not who ever was.
   const join = `
     JOIN pco_groups g
       ON g.org_id = m.org_id
      AND g.pco_id = m.group_id
+     AND g.archived_at IS NULL
   `;
   if (excludedGroupTypes.length === 0) {
     return { join, args: [] };
@@ -205,13 +213,19 @@ export function getCommunityLaneStats(
       ? 0
       : ((db
           .prepare(
-            `SELECT COUNT(DISTINCT person_id) AS n FROM pco_group_memberships m
+            `SELECT COUNT(DISTINCT m.person_id) AS n FROM pco_group_memberships m
+              -- Join through to the group on both sides so "only in excluded
+              -- types" is judged on groups that are still running; archived
+              -- groups are history and don't make anyone Community today.
+              JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
+                               AND g.archived_at IS NULL
               WHERE m.org_id = ?
                 AND m.archived_at IS NULL
                 AND m.person_id NOT IN (
                   SELECT m2.person_id
                     FROM pco_group_memberships m2
                     JOIN pco_groups g2 ON g2.org_id = m2.org_id AND g2.pco_id = m2.group_id
+                                      AND g2.archived_at IS NULL
                    WHERE m2.org_id = ?
                      AND m2.archived_at IS NULL
                      AND (g2.group_type_id IS NULL OR g2.group_type_id NOT IN (${excludedGroupTypes
@@ -478,6 +492,10 @@ export function listGroups(
        LEFT JOIN members_per_group   mpg ON mpg.group_id = g.pco_id
        LEFT JOIN events_per_group    epg ON epg.group_id = g.pco_id
        LEFT JOIN attendance_per_group apg ON apg.group_id = g.pco_id
+       -- Intentionally NOT filtered on g.archived_at: this list is the full
+       -- roster including groups that have folded. Archived ones come back
+       -- flagged (archivedAt / state "paused"), sort last, and are excluded
+       -- from the current headcounts by the callers and getGroupTotals.
        WHERE g.org_id = ?${excludeFilter}
        ORDER BY g.archived_at IS NULL DESC, members DESC, g.name ASC`,
     )

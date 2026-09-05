@@ -63,10 +63,14 @@ export function auditMembershipType(
   const rawRows = db
     .prepare(
       `WITH grp AS (
-         SELECT person_id, COUNT(DISTINCT group_id) AS n
-           FROM pco_group_memberships
-          WHERE org_id = ? AND archived_at IS NULL
-          GROUP BY person_id
+         -- Joined through pco_groups so a membership in a group that has since
+         -- been archived does not count as a group this person is in now.
+         SELECT gm.person_id, COUNT(DISTINCT gm.group_id) AS n
+           FROM pco_group_memberships gm
+           JOIN pco_groups gr ON gr.org_id = gm.org_id AND gr.pco_id = gm.group_id
+          WHERE gm.org_id = ? AND gm.archived_at IS NULL
+            AND gr.archived_at IS NULL
+          GROUP BY gm.person_id
        ),
        tm AS (
          SELECT person_id, COUNT(DISTINCT team_id) AS n

@@ -153,13 +153,18 @@ export function populateShepherdedTempTable(orgId: number) {
   db.exec("DELETE FROM temp.shep_set");
 
   // Source 1: anyone in an active group whose group_type isn't excluded.
+  // We now sync archived groups too, so join pco_groups and require
+  // g.archived_at IS NULL — a membership in a long-dead group is history,
+  // not present-day shepherding.
   if (excludedGroups.length === 0) {
     db.prepare(
       `INSERT OR IGNORE INTO temp.shep_set (person_id)
-        SELECT DISTINCT person_id
-          FROM pco_group_memberships
-         WHERE org_id = ?
-           AND archived_at IS NULL`,
+        SELECT DISTINCT m.person_id
+          FROM pco_group_memberships m
+          JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
+         WHERE m.org_id = ?
+           AND m.archived_at IS NULL
+           AND g.archived_at IS NULL`,
     ).run(orgId);
   } else {
     const placeholders = excludedGroups.map(() => "?").join(",");
@@ -170,6 +175,7 @@ export function populateShepherdedTempTable(orgId: number) {
           JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
          WHERE m.org_id = ?
            AND m.archived_at IS NULL
+           AND g.archived_at IS NULL
            AND (g.group_type_id IS NULL OR g.group_type_id NOT IN (${placeholders}))`,
     ).run(orgId, ...excludedGroups);
   }

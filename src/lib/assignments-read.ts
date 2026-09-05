@@ -158,6 +158,9 @@ export function listTargetOptions(
   const db = getDb();
   switch (kind) {
     case "group": {
+      // Currently-running groups only. Archived groups stay in
+      // pco_groups for history, but you can't hand a dead group to a
+      // shepherd to oversee.
       const rows = db
         .prepare(
           `SELECT pco_id AS id, name

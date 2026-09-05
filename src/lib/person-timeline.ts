@@ -56,6 +56,9 @@ export function getPersonTimeline(
   }
 
   // ─── Community: group applications ──────────────────────────────
+  // No g.archived_at filter on purpose: this is history, not a current
+  // roster. An application to a group that has since been archived is
+  // still something that happened to this person.
   for (const r of db
     .prepare(
       `SELECT a.applied_at AS appliedAt, g.name AS groupName
@@ -78,6 +81,9 @@ export function getPersonTimeline(
   }
 
   // ─── Community: group memberships ───────────────────────────────
+  // Also intentionally unfiltered on g.archived_at — joining and leaving
+  // are dated facts that must survive the group itself being archived.
+  // (m.archived_at below is the membership ending, a different column.)
   for (const r of db
     .prepare(
       `SELECT m.joined_at AS joinedAt, m.archived_at AS archivedAt,
@@ -114,6 +120,8 @@ export function getPersonTimeline(
   }
 
   // ─── Community: every attended group event ──────────────────────
+  // Archived groups stay in here too: dropping them would punch holes in
+  // the attendance cadence this timeline exists to show.
   for (const r of db
     .prepare(
       `SELECT a.event_starts_at AS at, g.name AS groupName

@@ -39,17 +39,26 @@ const ADULT_DISCIPLESHIP_TYPES = `
   'Mens'' Groups','Young Adults Groups','Seniors In Action (SIA)',
   'Organic Groups'`;
 
+/** Adult discipleship memberships. Carries the group's own archived_at rather
+ *  than filtering on it: PCO's archived groups are synced now, so a caller that
+ *  means "currently" adds group_archived_at IS NULL, and a caller telling the
+ *  story of a past year keeps them. */
 const DISCIPLESHIP_MEMBERS = `
-  SELECT m.person_id, gt.name AS type_name, m.role, m.joined_at
+  SELECT m.person_id, gt.name AS type_name, m.role, m.joined_at,
+         g.archived_at AS group_archived_at
     FROM pco_group_memberships m
     JOIN pco_groups g       ON g.pco_id = m.group_id       AND g.org_id = :orgId
     JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
    WHERE m.org_id = :orgId AND m.archived_at IS NULL
      AND gt.name IN (${ADULT_DISCIPLESHIP_TYPES})`;
 
-/** Active members of the groups under one PCO group type. */
+/** Active memberships of the groups under one PCO group type. Active is about
+ *  the membership; the GROUP may itself have been archived, and two thirds of
+ *  this church's groups have been. Callers meaning "currently" add
+ *  group_archived_at IS NULL; the history charts deliberately do not. */
 const groupTypeMembers = (types: string) => `
-  SELECT m.person_id, g.name AS group_name, m.role, m.joined_at
+  SELECT m.person_id, g.name AS group_name, m.role, m.joined_at,
+         g.archived_at AS group_archived_at
     FROM pco_group_memberships m
     JOIN pco_groups g       ON g.pco_id = m.group_id       AND g.org_id = :orgId
     JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
@@ -175,26 +184,31 @@ const measuredNote = (covered: string, uncovered: string): MirExtras["gaps"] => 
 export const MIR_EXTRAS: Record<string, MirExtras> = {
   "mir-adult-discipleship": {
     metrics: [
+      // PCO's archived groups sync now, so every current-state count below
+      // filters group_archived_at — a group that wound up in 2021 must not
+      // still read as running. The joins-by-year chart is the exception.
       stat("Engaged adults", "the denominator for every % below",
         `SELECT COUNT(*) FROM (${ENGAGED_ADULTS})`),
       stat("In a discipleship group", "engaged adults in an adult discipleship group",
         `SELECT COUNT(DISTINCT d.person_id)
            FROM (${DISCIPLESHIP_MEMBERS}) d
-           JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id`, { color: "highlight" }),
+           JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
+          WHERE d.group_archived_at IS NULL`, { color: "highlight" }),
       stat("% of congregation in a group", "share of engaged adults in a discipleship group",
         `SELECT ROUND(
              100.0 * (SELECT COUNT(DISTINCT d.person_id)
                         FROM (${DISCIPLESHIP_MEMBERS}) d
-                        JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id)
+                        JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
+                       WHERE d.group_archived_at IS NULL)
                    / NULLIF((SELECT COUNT(*) FROM (${ENGAGED_ADULTS})), 0), 1) || '%'`),
       stat("Discipleship group leaders", "engaged adults leading a group",
         `SELECT COUNT(DISTINCT d.person_id)
            FROM (${DISCIPLESHIP_MEMBERS}) d
            JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
-          WHERE d.role = 'leader'`),
+          WHERE d.role = 'leader' AND d.group_archived_at IS NULL`),
       stat("Disciple-Making Groups", "people currently in a DMG",
         `SELECT COUNT(DISTINCT person_id) FROM (${DISCIPLESHIP_MEMBERS})
-          WHERE type_name = 'Disciple-making Groups'`),
+          WHERE type_name = 'Disciple-making Groups' AND group_archived_at IS NULL`),
       stat("Adults taking Next Steps", "in a worship, community, or serving lane",
         `SELECT COUNT(*) FROM person_activity pa
            JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
@@ -204,7 +218,10 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT d.type_name AS "Group type", COUNT(DISTINCT d.person_id) AS "Adults"
            FROM (${DISCIPLESHIP_MEMBERS}) d
            JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
+          WHERE d.group_archived_at IS NULL
           GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
+      // Archived groups belong in this one: a join in 2019 into a group that
+      // has since wound up is still a join that happened in 2019.
       chart("New discipleship-group joins by year", "people joining an adult discipleship group",
         `SELECT substr(d.joined_at,1,4) AS "Year", COUNT(DISTINCT d.person_id) AS "Joined"
            FROM (${DISCIPLESHIP_MEMBERS}) d
@@ -219,6 +236,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            LEFT JOIN pco_group_memberships m
                   ON m.group_id = g.pco_id AND m.org_id = :orgId AND m.archived_at IS NULL
           WHERE g.org_id = :orgId AND gt.name = 'Disciple-making Groups'
+            AND g.archived_at IS NULL
           GROUP BY g.name ORDER BY 2 DESC`),
       table("Discipleship reach by group type", "adults reached, and how many of them lead",
         `SELECT d.type_name AS "Group type",
@@ -226,6 +244,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                 COUNT(DISTINCT CASE WHEN d.role = 'leader' THEN d.person_id END) AS "Leaders"
            FROM (${DISCIPLESHIP_MEMBERS}) d
            JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
+          WHERE d.group_archived_at IS NULL
           GROUP BY 1 ORDER BY 2 DESC`),
     ],
     gaps: {
@@ -247,27 +266,38 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-small-groups": {
     metrics: [
+      // The four cards and the sizes chart are the CURRENT picture, so they
+      // filter group_archived_at: 222 of this church's groups are archived, so
+      // "Active small groups" would otherwise read 153 instead of the 37 still
+      // running.
+      // Everything from the joins-by-year chart down is history and keeps them.
       stat("People in a small group", "active memberships, all ages",
-        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'Small Groups'")})`,
+        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'Small Groups'")})
+          WHERE group_archived_at IS NULL`,
         { color: "highlight" }),
       stat("Active small groups", "groups of the Small Groups type",
         `SELECT COUNT(DISTINCT g.pco_id)
            FROM pco_groups g
            JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
-          WHERE g.org_id = :orgId AND gt.name = 'Small Groups'`),
+          WHERE g.org_id = :orgId AND gt.name = 'Small Groups'
+            AND g.archived_at IS NULL`),
       stat("Small group leaders", "members with the leader role",
         `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'Small Groups'")})
-          WHERE role = 'leader'`),
+          WHERE role = 'leader' AND group_archived_at IS NULL`),
       stat("% of engaged adults", "adults in a small group",
         `SELECT ROUND(
              100.0 * (SELECT COUNT(DISTINCT m.person_id)
                         FROM (${groupTypeMembers("'Small Groups'")}) m
-                        JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = m.person_id)
+                        JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = m.person_id
+                       WHERE m.group_archived_at IS NULL)
                    / NULLIF((SELECT COUNT(*) FROM (${ENGAGED_ADULTS})), 0), 1) || '%'`),
       chart("Group sizes", "members per small group",
         `SELECT group_name AS "Group", COUNT(DISTINCT person_id) AS "Members"
            FROM (${groupTypeMembers("'Small Groups'")})
+          WHERE group_archived_at IS NULL
           GROUP BY 1 ORDER BY 2 DESC LIMIT 25`),
+      // Archived groups stay in from here down: a 2019 join into a group that
+      // has since wound up is still a 2019 join.
       chart("New small-group joins by year", "people joining a small group",
         `SELECT substr(joined_at,1,4) AS "Year", COUNT(DISTINCT person_id) AS "Joined"
            FROM (${groupTypeMembers("'Small Groups'")})
@@ -492,7 +522,20 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE season IS NOT NULL
         ),
         live_groups AS (
-          SELECT DISTINCT yr, season, group_id FROM meetings WHERE season IS NOT NULL
+          -- Groups ALIVE in the session, not groups with a MEETING on record.
+          -- Meeting records only become reliable around Fall 2019: 2019 Spring
+          -- has 4 groups with recorded meetings against 44 that existed, so
+          -- gating on meetings read as 8 leaders that session and 67 the next —
+          -- a change in record-keeping drawn as a change in leadership. This
+          -- also matches the "Small groups per session" chart beside it, which
+          -- has always counted groups this way.
+          SELECT s2.yr, s2.season, g.pco_id AS group_id
+            FROM sessions s2
+            JOIN pco_groups g       ON g.org_id  = :orgId
+            JOIN pco_group_types gt ON gt.org_id = :orgId AND gt.pco_id = g.group_type_id
+           WHERE gt.name = 'Small Groups'
+             AND date(g.pco_created_at) <= s2.session_end
+             AND (g.archived_at IS NULL OR date(g.archived_at) >= s2.session_start)
         ),
         per_session AS (
           SELECT s.ord, s.label, COUNT(DISTINCT m.person_id) AS leaders
@@ -1084,25 +1127,33 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-foster-and-adoption": {
     metrics: [
+      // Every block here is a standing roster, so all of them drop archived
+      // groups — a care community that has wound up is not still wrapped
+      // around a family, and a closed partner is not still a partner.
       stat("People connected", "active members of a Foster & Adoption group",
-        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'Foster Adopt Volunteers','Foster Adopt Organizations','Foster Adopt Care Communities'")})`,
+        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'Foster Adopt Volunteers','Foster Adopt Organizations','Foster Adopt Care Communities'")})
+          WHERE group_archived_at IS NULL`,
         { color: "highlight" }),
       stat("Volunteers", "in the Foster Adopt Volunteers groups",
-        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'Foster Adopt Volunteers'")})`),
+        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'Foster Adopt Volunteers'")})
+          WHERE group_archived_at IS NULL`),
       stat("Care communities", "wrap-around groups around a family",
         `SELECT COUNT(DISTINCT g.pco_id) FROM pco_groups g
            JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
-          WHERE g.org_id = :orgId AND gt.name = 'Foster Adopt Care Communities'`),
+          WHERE g.org_id = :orgId AND gt.name = 'Foster Adopt Care Communities'
+            AND g.archived_at IS NULL`),
       stat("Partner organisations", "agencies and partners tracked as groups",
         `SELECT COUNT(DISTINCT g.pco_id) FROM pco_groups g
            JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
-          WHERE g.org_id = :orgId AND gt.name = 'Foster Adopt Organizations'`),
+          WHERE g.org_id = :orgId AND gt.name = 'Foster Adopt Organizations'
+            AND g.archived_at IS NULL`),
       chart("Where people are connected", "by group type",
         `SELECT gt.name AS "Group type", COUNT(DISTINCT m.person_id) AS "People"
            FROM pco_group_memberships m
            JOIN pco_groups g       ON g.pco_id = m.group_id       AND g.org_id = :orgId
            JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
           WHERE m.org_id = :orgId AND m.archived_at IS NULL AND gt.name LIKE 'Foster%'
+            AND g.archived_at IS NULL
           GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
     ],
     gaps: measuredNote(
@@ -1113,21 +1164,27 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-english-as-a-second-language": {
     metrics: [
+      // All four are the classes running now, so archived groups are dropped:
+      // a class that finished years ago is not a class the ministry teaches.
+      //
       // 10 of the 14 carry the leader role, so this is everyone attached to an
       // ESL group — teachers included — not a student count.
       stat("People connected", "everyone in an ESL group, teachers included",
-        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'ESL (non-PTS)'")})`,
+        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'ESL (non-PTS)'")})
+          WHERE group_archived_at IS NULL`,
         { color: "highlight" }),
       stat("ESL groups", "classes tracked as PCO groups",
         `SELECT COUNT(DISTINCT g.pco_id) FROM pco_groups g
            JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
-          WHERE g.org_id = :orgId AND gt.name = 'ESL (non-PTS)'`),
+          WHERE g.org_id = :orgId AND gt.name = 'ESL (non-PTS)'
+            AND g.archived_at IS NULL`),
       stat("Group leaders", "members with the leader role",
         `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'ESL (non-PTS)'")})
-          WHERE role = 'leader'`),
+          WHERE role = 'leader' AND group_archived_at IS NULL`),
       table("ESL groups", "membership by class",
         `SELECT group_name AS "Group", COUNT(DISTINCT person_id) AS "People"
            FROM (${groupTypeMembers("'ESL (non-PTS)'")})
+          WHERE group_archived_at IS NULL
           GROUP BY 1 ORDER BY 2 DESC`),
     ],
     gaps: measuredNote(

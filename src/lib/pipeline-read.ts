@@ -377,6 +377,10 @@ export function getGroupPipeline(orgId: number): GroupPipelineSummary {
          JOIN first_att fatt
            ON fatt.person_id = fa.person_id
           AND fatt.group_id = fa.group_id
+         -- No archived_at filter on purpose: this is a historical
+         -- cohort (apply -> first attended) with a 5-year trend, so a
+         -- group archived since still owns its conversions and needs
+         -- its name for the breakdown rows.
          LEFT JOIN pco_groups g
            ON g.org_id = ? AND g.pco_id = fa.group_id
          LEFT JOIN pco_group_types gt
@@ -430,7 +434,9 @@ export function getGroupPipeline(orgId: number): GroupPipelineSummary {
  *  the same group", not "people who completed stage 1 first". This is
  *  intentional — joined_at may be missing in PCO for older
  *  memberships, and dropping them from stage 2 would understate how
- *  fast joiners typically attend. */
+ *  fast joiners typically attend.
+ *  Archived groups are intentionally included — these are past
+ *  milestone dates, not a current roster. */
 function getGroupPipelineStages(orgId: number): PipelineStages {
   const db = getDb();
 
@@ -710,7 +716,9 @@ export interface StagePoint {
 
 /** Per-person points showing BOTH waits for everyone who completed
  *  the full group pipeline. Each row is one (person, group) — a heavy
- *  joiner in 3 groups gives 3 points so per-group patterns surface. */
+ *  joiner in 3 groups gives 3 points so per-group patterns surface.
+ *  Archived groups are intentionally included — a wait that played
+ *  out in a group that has since closed is still a real wait. */
 export function getGroupStagePoints(orgId: number): StagePoint[] {
   const db = getDb();
   const rows = db
@@ -1124,6 +1132,9 @@ export function getGroupPipelineDetail(
   groupId: string,
 ): GroupPipelineDetail {
   const db = getDb();
+  // Lookup by id, so no archived_at filter: the "by group" table is
+  // historical and can link to a group that has since been archived —
+  // the drill-in still has to name it.
   const gInfo = db
     .prepare(
       `SELECT COALESCE(NULLIF(g.name, ''), '(unnamed group)') AS name,

@@ -923,9 +923,16 @@ export function getGroupTypeStats(orgId: number): {
       `SELECT
          g.group_type_id AS groupTypeId,
          t.name AS name,
+         -- totalGroups intentionally spans archived groups: it only feeds the
+         -- allArchived flag below. The counts the UI shows as current
+         -- (activeGroups, members) are gated on g.archived_at IS NULL, so a
+         -- folded group is history and never inflates them.
          COUNT(DISTINCT g.pco_id) AS totalGroups,
          COUNT(DISTINCT CASE WHEN g.archived_at IS NULL THEN g.pco_id END) AS activeGroups,
          COUNT(DISTINCT CASE WHEN g.archived_at IS NULL THEN m.person_id END) AS members,
+         -- Also intentionally unfiltered on archived_at: this is "when did this
+         -- type last meet", and a type whose groups have all folded should
+         -- still show its final meeting rather than a blank.
          (SELECT MAX(e.starts_at)
             FROM pco_group_events e
             JOIN pco_groups g2 ON g2.org_id = e.org_id AND g2.pco_id = e.group_id

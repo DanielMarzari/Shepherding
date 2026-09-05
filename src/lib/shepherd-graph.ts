@@ -102,9 +102,11 @@ function resolveAssignmentToPersonIds(
       return (
         db
           .prepare(
-            `SELECT DISTINCT person_id AS id FROM pco_group_memberships
-              WHERE org_id = ? AND group_id = ? AND archived_at IS NULL
-                AND lower(coalesce(role, '')) NOT LIKE '%leader%'`,
+            `SELECT DISTINCT gm.person_id AS id FROM pco_group_memberships gm
+               JOIN pco_groups gr ON gr.org_id = gm.org_id AND gr.pco_id = gm.group_id
+              WHERE gm.org_id = ? AND gm.group_id = ? AND gm.archived_at IS NULL
+                AND gr.archived_at IS NULL
+                AND lower(coalesce(gm.role, '')) NOT LIKE '%leader%'`,
           )
           .all(orgId, targetId) as Array<{ id: string }>
       ).map((r) => r.id);

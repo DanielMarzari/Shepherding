@@ -50,7 +50,10 @@ export function explainClassification(
   const activitySignals: string[] = [];
   const facts: Array<{ label: string; value: string }> = [];
 
-  // Groups
+  // Groups. Intentionally NOT filtered on g.archived_at — we want the
+  // archived ones back so the loop below can explain them as a blocker
+  // ("in the group, but the group is archived") rather than silently
+  // dropping them.
   const groupRows = db
     .prepare(
       `SELECT
@@ -306,9 +309,11 @@ export function explainClassification(
     label: "last check-in",
     value: checkinRow.latest ? formatAgo(checkinRow.latest) : "—",
   });
+  // groupRows deliberately carries archived groups (see above), so count
+  // only the live ones here — this fact says "active".
   facts.push({
     label: "active group memberships",
-    value: String(groupRows.length),
+    value: String(groupRows.filter((g) => !g.groupArchivedAt).length),
   });
   facts.push({
     label: "active team memberships",

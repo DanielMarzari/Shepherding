@@ -71,8 +71,15 @@ function loadSignalRows(orgId: number): RawSignalRow[] {
   return getDb()
     .prepare(
       `WITH
-         g AS (SELECT person_id AS pid FROM pco_group_memberships
-                WHERE org_id = @orgId AND archived_at IS NULL GROUP BY person_id),
+         -- Through pco_groups, not just the membership: PCO's archived groups
+         -- are synced now, and a membership row survives its group. Without the
+         -- join, 1,091 people whose only group wound up years ago read as being
+         -- in a group today.
+         g AS (SELECT gm.person_id AS pid FROM pco_group_memberships gm
+                JOIN pco_groups gr ON gr.org_id = gm.org_id AND gr.pco_id = gm.group_id
+               WHERE gm.org_id = @orgId AND gm.archived_at IS NULL
+                 AND gr.archived_at IS NULL
+               GROUP BY gm.person_id),
          t AS (SELECT person_id AS pid FROM pco_team_memberships
                 WHERE org_id = @orgId AND archived_at IS NULL AND person_id != ''
                 GROUP BY person_id),

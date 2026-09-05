@@ -75,13 +75,20 @@ export function getDashboardStats(
 
 function hasMembershipTimestamps(orgId: number): boolean {
   const db = getDb();
+  // Only live groups count as evidence here. This gate decides whether the
+  // 30-day joined/departed stats render as numbers or as an honest "—", and
+  // those stats are current-only — a joined_at hanging off an archived group
+  // would switch the gate on while the numbers it guards stay 0.
   return (
     (
       db
         .prepare(
           `SELECT EXISTS(
-             SELECT 1 FROM pco_group_memberships
-              WHERE org_id = ? AND joined_at IS NOT NULL
+             SELECT 1 FROM pco_group_memberships m
+              JOIN pco_groups g
+                ON g.org_id = m.org_id AND g.pco_id = m.group_id
+               AND g.archived_at IS NULL
+              WHERE m.org_id = ? AND m.joined_at IS NOT NULL
            ) OR EXISTS(
              SELECT 1 FROM pco_team_memberships
               WHERE org_id = ? AND pco_created_at IS NOT NULL
@@ -240,7 +247,12 @@ export interface MovementEvent {
 
 /** Latest joined/left across groups + teams. Pulled from joined_at /
  *  archived_at / pco_created_at — so the same surface area that drives
- *  the dashboard stats. */
+ *  the dashboard stats.
+ *
+ *  Archived groups are deliberately left in: this is a log of things that
+ *  happened inside the window, not a count of what's running now, and the
+ *  dates come from PCO rather than from sync time. Filtering closed groups
+ *  out would swallow exactly the departures a group winding down produces. */
 export function getRecentMovement(
   orgId: number,
   days: number = 14,

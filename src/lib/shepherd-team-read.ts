@@ -267,13 +267,19 @@ export function getShepherdTeamBreakdown(
     allRelevantGroupIds.size > 0
       ? (db
           .prepare(
-            `SELECT group_id AS groupId, person_id AS personId,
-                    CASE WHEN lower(coalesce(role,'')) LIKE '%leader%'
+            `SELECT m.group_id AS groupId, m.person_id AS personId,
+                    CASE WHEN lower(coalesce(m.role,'')) LIKE '%leader%'
                          THEN 1 ELSE 0 END AS isLeader
-               FROM pco_group_memberships
-              WHERE org_id = ?
-                AND archived_at IS NULL
-                AND group_id IN (${[...allRelevantGroupIds]
+               FROM pco_group_memberships m
+               JOIN pco_groups g
+                 ON g.org_id = m.org_id AND g.pco_id = m.group_id
+              WHERE m.org_id = ?
+                AND m.archived_at IS NULL
+                -- These rosters are "who's in this unit now", and a
+                -- directly-assigned group can itself be archived, so
+                -- drop archived groups here too.
+                AND g.archived_at IS NULL
+                AND m.group_id IN (${[...allRelevantGroupIds]
                   .map(() => "?")
                   .join(",")})`,
           )
@@ -322,8 +328,15 @@ export function getShepherdTeamBreakdown(
       db
         .prepare(
           `SELECT DISTINCT person_id FROM (
-             SELECT person_id FROM pco_group_memberships
-              WHERE org_id = ? AND archived_at IS NULL
+             -- "Currently" means a live group: a membership in an
+             -- archived group is history and must not keep someone
+             -- out of the care bucket.
+             SELECT m.person_id AS person_id
+               FROM pco_group_memberships m
+               JOIN pco_groups g
+                 ON g.org_id = m.org_id AND g.pco_id = m.group_id
+              WHERE m.org_id = ? AND m.archived_at IS NULL
+                AND g.archived_at IS NULL
              UNION
              SELECT person_id FROM pco_team_memberships
               WHERE org_id = ? AND archived_at IS NULL AND person_id != ''
