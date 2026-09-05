@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { resetPageToSeed } from "@/lib/builder-seeds";
 import { redirect } from "next/navigation";
 import { requireOrg } from "@/lib/auth";
 import {
@@ -94,15 +93,6 @@ export async function moveBlockAction(id: number, dir: "up" | "down", slug: stri
   const pid = pageIdOfBlock(s.orgId, id);
   if (pid) snapshotPageVersion(s.orgId, pid);
   moveBuilderBlock(s.orgId, id, dir);
-  revalidatePath(`/builder/${slug}`);
-}
-
-/** Rebuild a page from its template. Discards local edits — the caller warns
- *  first — and snapshots so Undo restores the previous layout. */
-export async function resetPageToSeedAction(pageId: number, slug: string) {
-  const s = await requireAdmin();
-  snapshotPageVersion(s.orgId, pageId);
-  resetPageToSeed(s.orgId, slug);
   revalidatePath(`/builder/${slug}`);
 }
 

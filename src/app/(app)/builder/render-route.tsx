@@ -14,7 +14,7 @@ import {
   type QueryDebug,
   type QueryResult,
 } from "@/lib/builder";
-import { ensureSeededPage, seedUpdateAvailable} from "@/lib/builder-seeds";
+import { ensureSeededPage} from "@/lib/builder-seeds";
 import { runSource } from "@/lib/builder-sources";
 import { BuilderPageClient, type ClientBlock } from "./builder-page-client";
 
@@ -152,7 +152,6 @@ export async function renderBuilderRoute({
           schema={getDbSchema()}
           pages={pages}
           versionCount={countPageVersions(session.orgId, page.id)}
-          seedUpdate={seedUpdateAvailable(session.orgId, slug)}
           queryLog={queryLog}
         />
       </div>

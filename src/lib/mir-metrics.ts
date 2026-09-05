@@ -1065,7 +1065,11 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Times an original song was sung", "song-by-Sunday; both venues on one Sunday count once",
         `SELECT COUNT(*) FROM (SELECT DISTINCT song, used_on FROM (${ORIGINAL_SONG_USES}))`),
       stat("Songs in rotation", "distinct original songs used in a service",
-        `SELECT COUNT(DISTINCT song) FROM (${ORIGINAL_SONG_USES})`),
+        `SELECT COUNT(DISTINCT song) FROM (${ORIGINAL_SONG_USES})`,
+        {
+          detailLabel: "See which songs",
+          revealsBlockTitle: "Every original song, and when it was sung",
+        }),
       stat("Share of planned Sundays", "since 2024, of Sundays with a LIVE or CLASSIC plan",
         `SELECT ROUND(
              100.0 * (SELECT COUNT(DISTINCT used_on) FROM (${ORIGINAL_SONG_USES})
@@ -1097,9 +1101,28 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM (SELECT DISTINCT song, used_on, service_type FROM (${ORIGINAL_SONG_USES}))
           GROUP BY 1 ORDER BY 2 DESC`, "donut"),
       stat("Songs released", "tracks on Spotify, across every release",
-        `SELECT COUNT(*) FROM spotify_tracks WHERE org_id = :orgId`),
+        `SELECT COUNT(*) FROM spotify_tracks WHERE org_id = :orgId`,
+        {
+          detailLabel: "See every track",
+          revealsBlockTitle: "Released catalogue, and how often each song is sung",
+        }),
       stat("Records put out", "albums, EPs and singles on Spotify",
-        `SELECT COUNT(DISTINCT album_id) FROM spotify_tracks WHERE org_id = :orgId`),
+        `SELECT COUNT(DISTINCT album_id) FROM spotify_tracks WHERE org_id = :orgId`,
+        {
+          detailLabel: "See the records",
+          revealsBlockTitle: "Every record released",
+        }),
+      table("Every record released", "opened by the records card above",
+        // Spotify calls a four-track record a "single" if the label registered
+        // it that way, so album_type is its word, not ours.
+        `SELECT album_name AS "Record",
+                album_type AS "Spotify calls it",
+                released_on AS "Released on",
+                COUNT(*) AS "Tracks"
+           FROM spotify_tracks
+          WHERE org_id = :orgId
+          GROUP BY album_id, album_name, album_type, released_on
+          ORDER BY released_on DESC`, 12),
       table("Released catalogue, and how often each song is sung",
         "Spotify's own track list, matched to service plans by title",
         // Spotify titles carry a " (Live)" suffix the service plans don't, so
