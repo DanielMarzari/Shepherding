@@ -21,6 +21,7 @@ import {
   updateBlockAction,
   updatePageAction,
   reorderBlocksAction,
+  resetPageToSeedAction,
 } from "./actions";
 
 export interface ClientBlock {
@@ -82,6 +83,7 @@ export function BuilderPageClient({
   schema,
   pages,
   versionCount = 0,
+  seedUpdate,
   queryLog = [],
   navSections,
 }: {
@@ -92,6 +94,7 @@ export function BuilderPageClient({
   schema: DbSchema;
   pages: PageRef[];
   versionCount?: number;
+  seedUpdate?: { available: boolean; storedRevision: number; seedRevision: number } | null;
   queryLog?: QueryDebug[];
   /** This org's actual layers, from its nav config — not a hardcoded list. */
   navSections: Array<{ value: string; label: string }>;
@@ -151,6 +154,20 @@ export function BuilderPageClient({
           <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" /></svg>
           Undo{versionCount > 0 ? ` (${versionCount})` : ""}
         </button>
+        {seedUpdate?.available && (
+          <button
+            type="button"
+            disabled={pending}
+            title={`This page has been edited, so it stopped taking template updates automatically. Rebuild it from the current template (revision ${seedUpdate.seedRevision}; this page is on ${seedUpdate.storedRevision}). Your layout changes are discarded, and Undo brings them back.`}
+            onClick={() => {
+              if (!confirm("Rebuild this page from the current template?\n\nLayout changes you made to this page will be discarded. Undo restores them.")) return;
+              mutate(() => resetPageToSeedAction(page.id, page.slug));
+            }}
+            className="text-xs px-2.5 py-1.5 rounded-lg border border-accent text-accent hover:bg-accent hover:text-bg font-medium disabled:opacity-40 cursor-pointer transition-colors"
+          >
+            Update from template
+          </button>
+        )}
       </div>
       <QueryInspector queryLog={queryLog} slug={page.slug} />
       <PageSettings navSections={navSections} page={page} onDone={() => setEdit(false)} busy={pending} mutate={mutate} />

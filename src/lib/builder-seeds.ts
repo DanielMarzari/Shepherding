@@ -1113,6 +1113,50 @@ function insertBlocks(db: ReturnType<typeof getDb>, orgId: number, pageId: numbe
  *    keeping updated_at = created_at so future revisions can still refresh it.
  *  - Present and edited → left untouched, so admin edits always win.
  *  No-op for unknown slugs. */
+/** Is there a newer template for this page than what is stored? Lets the editor
+ *  offer a refresh only when there is actually something to refresh to. */
+export function seedUpdateAvailable(
+  orgId: number,
+  slug: string,
+): { available: boolean; storedRevision: number; seedRevision: number } | null {
+  const seed = BUILDER_SEEDS[slug];
+  if (!seed) return null;
+  const row = getDb()
+    .prepare("SELECT seed_revision AS r FROM builder_pages WHERE org_id = ? AND slug = ?")
+    .get(orgId, slug) as { r: number | null } | undefined;
+  if (!row) return null;
+  const stored = row.r ?? 1;
+  return { available: seed.revision !== stored, storedRevision: stored, seedRevision: seed.revision };
+}
+
+/** Rebuild a page from its template, DISCARDING local edits.
+ *
+ *  ensureSeededPage deliberately refuses to touch a page anyone has edited —
+ *  which is right as an automatic behaviour, and wrong as the only behaviour:
+ *  rearranging one card should not cut a page off from every later correction.
+ *  This is the deliberate escape hatch, invoked by an admin who has been told
+ *  what it discards, and it snapshots first so Undo brings their layout back. */
+export function resetPageToSeed(orgId: number, slug: string): boolean {
+  const seed = BUILDER_SEEDS[slug];
+  if (!seed) return false;
+  const db = getDb();
+  const row = db
+    .prepare("SELECT id FROM builder_pages WHERE org_id = ? AND slug = ?")
+    .get(orgId, slug) as { id: number } | undefined;
+  if (!row) return false;
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM builder_blocks WHERE page_id = ?").run(row.id);
+    insertBlocks(db, orgId, row.id, seed);
+    db.prepare(
+      `UPDATE builder_pages
+          SET title = ?, description = ?, seed_revision = ?, updated_at = created_at
+        WHERE id = ?`,
+    ).run(seed.title, seed.description ?? null, seed.revision, row.id);
+  });
+  tx();
+  return true;
+}
+
 export function ensureSeededPage(orgId: number, slug: string): void {
   const seed = BUILDER_SEEDS[slug];
   if (!seed) return;
@@ -1143,7 +1187,10 @@ export function ensureSeededPage(orgId: number, slug: string): void {
   const storedRev = row.seedRevision ?? 1;
   const editedSecs = Math.abs((new Date(row.updatedAt).getTime() - new Date(row.createdAt).getTime()) / 1000);
   const pristine = Number.isFinite(editedSecs) && editedSecs < 5;
-  if (seed.revision > storedRev && pristine) {
+  // !== not >: the revision is a content fingerprint for generated pages, so
+  // "different" is the question, not "bigger". A hand-numbered seed still
+  // behaves the same on every real bump.
+  if (seed.revision !== storedRev && pristine) {
     const tx = db.transaction(() => {
       db.prepare("DELETE FROM builder_blocks WHERE page_id = ?").run(row.id);
       insertBlocks(db, orgId, row.id, seed);

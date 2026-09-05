@@ -107,6 +107,19 @@ function column(
   };
 }
 
+/** Stable 31-bit fingerprint of everything a reader would see. Deterministic
+ *  across processes (no hashing library, no salt), so the same definition always
+ *  produces the same number and a rebuild doesn't churn every page. */
+function seedFingerprint(report: MirReport, blocks: SeedBlock[]): number {
+  const text = JSON.stringify([report.title, report.page, blocks]);
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h | 0);
+}
+
 /** Build the builder page for one ministry. */
 export function mirSeedPage(report: MirReport, extras: MirExtras = {}): SeedPage {
   const hasMetrics = (extras.metrics?.length ?? 0) > 0;
@@ -190,14 +203,15 @@ export function mirSeedPage(report: MirReport, extras: MirExtras = {}): SeedPage
     description: hasMetrics
       ? "2025 Ministry Impact Report — the Logic Model as published, with the Outputs column measured against live PCO data."
       : `2025 Ministry Impact Report — the Logic Model as published (source page ${report.page}). Outputs are not yet measured.`,
-    // Derived from the block count, NOT a hand-kept number. ensureSeededPage
-    // only re-seeds when the definition's revision EXCEEDS the stored one, so a
-    // page someone had already opened silently kept its old blocks every time
-    // metrics were added to it — which is exactly how the Original Music report
-    // ended up with a Logic Model and no statistics. Adding metrics always adds
-    // blocks, so the revision rises on its own and the page refreshes. An
-    // explicit revision still wins where one is set.
-    revision: extras.revision ?? blocks.length,
+    // A fingerprint of the actual content, NOT a hand-kept number and NOT the
+    // block count. Hand-kept numbers get forgotten — that is how the Original
+    // Music report ended up with a Logic Model and no statistics. Block count
+    // is no better: correcting a query or adding a collapsible detail changes
+    // what the page SAYS without changing how many blocks it has, and the page
+    // would sit on stale content looking fine. Any edit to any block changes
+    // this value, and seeded pages are compared for difference, not for
+    // "newer". An explicit revision still wins where one is set.
+    revision: extras.revision ?? seedFingerprint(report, blocks),
     navSection: "ministry-impact-reports",
     blocks,
   };
