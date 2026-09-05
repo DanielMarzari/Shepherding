@@ -41,11 +41,30 @@ export async function syncGroupsAll(
     result.groupTypes.upserted++;
   }
 
-  // 2) Groups (metadata).
+  // 2) Groups (metadata), ACTIVE AND ARCHIVED.
+  //
+  //    PCO's default group listing returns active groups only. This church has
+  //    111 active and 222 archived, so listing the default alone saw a third of
+  //    its groups — and group history is mostly archived history. "How many
+  //    groups ran in 2019", "how many leaders did we have then", and every
+  //    conversion that starts in a group that has since wound up are all
+  //    unanswerable without them, and each archived group takes its members and
+  //    leaders with it. Both passes upsert into the same table; archived_at is
+  //    already on the row, so a consumer can filter on it (see mir-metrics,
+  //    which counts groups as of a date).
   const groupRecords: PCOResource[] = [];
-  for await (const { page } of client.paginate<PCOResource>("/groups/v2/groups?per_page=100")) {
-    const arr = Array.isArray(page.data) ? page.data : [page.data];
-    groupRecords.push(...arr);
+  const seenGroupIds = new Set<string>();
+  for (const filter of ["", "&filter=archived"]) {
+    for await (const { page } of client.paginate<PCOResource>(
+      `/groups/v2/groups?per_page=100${filter}`,
+    )) {
+      const arr = Array.isArray(page.data) ? page.data : [page.data];
+      for (const g of arr) {
+        if (seenGroupIds.has(g.id)) continue;
+        seenGroupIds.add(g.id);
+        groupRecords.push(g);
+      }
+    }
   }
   for (const g of groupRecords) {
     result.groups.fetched++;
