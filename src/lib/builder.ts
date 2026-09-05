@@ -321,6 +321,15 @@ export interface BlockConfig {
   chipColumns?: string[];
   /** Table: click column headers to sort. */
   sortable?: boolean;
+  /** Stat: a second query whose rows are revealed when the card is clicked.
+   *  A headline number is more useful when you can see what it is made of
+   *  without leaving the page. */
+  detailSql?: string;
+  /** Label on the disclosure control (default "Show the detail"). */
+  detailLabel?: string;
+  /** Text / stat: start folded away. A long explanation earns its place at the
+   *  bottom of a page only if it isn't in the way. */
+  collapsible?: boolean;
   /** Per-table-column preset text color, keyed by column name (a "parts" override). */
   columnColors?: Record<string, string>;
   /** Per-table-column threshold coloring, keyed by column name: cells at/above
@@ -561,6 +570,27 @@ export function undoPageVersion(orgId: number, pageId: number): boolean {
 }
 
 /** Swap a block with its neighbor in the given direction. */
+/** Persist an explicit block order — what a drag-and-drop reorder produces.
+ *  Takes the ids in their new order and renumbers positions to match, inside a
+ *  transaction so a half-applied order can never be read. Ids that don't belong
+ *  to the page are ignored rather than trusted, since this arrives from a
+ *  client. Any block the caller omitted keeps its relative order at the end,
+ *  so a stale client can't silently drop a block someone else just added. */
+export function reorderBuilderBlocks(orgId: number, pageId: number, orderedIds: number[]): void {
+  const db = getDb();
+  const owned = db
+    .prepare("SELECT id FROM builder_blocks WHERE org_id = ? AND page_id = ? ORDER BY position, id")
+    .all(orgId, pageId) as Array<{ id: number }>;
+  const ownedIds = owned.map((r) => r.id);
+  const valid = orderedIds.filter((id) => ownedIds.includes(id));
+  const missing = ownedIds.filter((id) => !valid.includes(id));
+  const final = [...valid, ...missing];
+  const upd = db.prepare("UPDATE builder_blocks SET position = ? WHERE id = ? AND page_id = ?");
+  db.transaction(() => {
+    final.forEach((id, idx) => upd.run(idx, id, pageId));
+  })();
+}
+
 export function moveBuilderBlock(orgId: number, id: number, dir: "up" | "down"): void {
   const db = getDb();
   const b = db.prepare("SELECT id, page_id AS pageId, position FROM builder_blocks WHERE id = ? AND org_id = ?").get(id, orgId) as

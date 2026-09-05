@@ -91,9 +91,16 @@ const ORIGINAL_SONG_TITLES = `
   'room of resurrections','the kingdom of god','the promises you''ve sown',
   'my helper','this is christmas','this is christmas (reprise)'`;
 
-/** One row per time an original song appears on a service plan. `song` folds a
- *  "(REPRISE)" back into its parent title so the distinct-song count is a count
- *  of songs, not of arrangements. */
+/** One row per appearance of an original song on a service plan.
+ *
+ *  IMPORTANT: LIVE and CLASSIC run at the same hour in different rooms with
+ *  different bands, so a song sung in both is ONE song sung on ONE Sunday, not
+ *  two. Every count below is therefore over DISTINCT (song, date) pairs, never
+ *  over rows. Rows are still what this returns, because the venue split is
+ *  worth showing — it just must not be summed.
+ *
+ *  `song` folds a "(REPRISE)" back into its parent: a reprise is the same song
+ *  again in the same service, not another song. */
 const ORIGINAL_SONG_USES = `
   SELECT CASE WHEN lower(trim(i.title)) = 'this is christmas (reprise)'
               THEN 'this is christmas'
@@ -115,10 +122,22 @@ const stat = (
   title: string,
   sub: string,
   sql: string,
-  opts: { span?: number; color?: SeedBlock["config"]["color"] } = {},
+  opts: {
+    span?: number;
+    color?: SeedBlock["config"]["color"];
+    /** Rows revealed when the card is clicked — what the number is made of. */
+    detailSql?: string;
+    detailLabel?: string;
+  } = {},
 ): SeedBlock => ({
   kind: "stat",
-  config: { title, sub, sql, span: opts.span ?? 3, ...(opts.color ? { color: opts.color } : {}) },
+  config: {
+    title, sub, sql,
+    span: opts.span ?? 3,
+    ...(opts.color ? { color: opts.color } : {}),
+    ...(opts.detailSql ? { detailSql: opts.detailSql } : {}),
+    ...(opts.detailLabel ? { detailLabel: opts.detailLabel } : {}),
+  },
 });
 
 const chart = (
@@ -1036,9 +1055,19 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
   "mir-worship-original-music": {
     metrics: [
       stat("Sundays with an original song", "distinct service dates using a Faith Church song",
-        `SELECT COUNT(DISTINCT used_on) FROM (${ORIGINAL_SONG_USES})`, { color: "highlight" }),
-      stat("Times an original song was sung", "every appearance on a service plan",
-        `SELECT COUNT(*) FROM (${ORIGINAL_SONG_USES})`),
+        `SELECT COUNT(DISTINCT used_on) FROM (${ORIGINAL_SONG_USES})`,
+        {
+          color: "highlight",
+          detailLabel: "Show every Sunday",
+          detailSql: `SELECT used_on AS "Sunday",
+                             COUNT(DISTINCT song) AS "Songs",
+                             group_concat(DISTINCT printed_title) AS "Which",
+                             COUNT(DISTINCT service_type) AS "Rooms"
+                        FROM (${ORIGINAL_SONG_USES})
+                       GROUP BY used_on ORDER BY used_on DESC`,
+        }),
+      stat("Times an original song was sung", "song-by-Sunday; both venues on one Sunday count once",
+        `SELECT COUNT(*) FROM (SELECT DISTINCT song, used_on FROM (${ORIGINAL_SONG_USES}))`),
       stat("Songs in rotation", "distinct original songs used in a service",
         `SELECT COUNT(DISTINCT song) FROM (${ORIGINAL_SONG_USES})`),
       stat("Share of planned Sundays", "since 2024, of Sundays with a LIVE or CLASSIC plan",
@@ -1053,15 +1082,15 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                                 AND (st.name LIKE 'LIVE%' OR st.name LIKE 'CLASSIC%')
                                 AND pl.sort_date >= '2024-01-01'
                                 AND pl.sort_date <= datetime('now')), 0), 0) || '%'`),
-      chart("Original songs in services by year", "times sung, and Sundays they were sung on",
+      chart("Original songs in services by year", "songs sung, and Sundays they were sung on",
         `SELECT substr(used_on,1,4) AS "Year",
-                COUNT(*) AS "Times sung",
+                COUNT(*) AS "Songs sung",
                 COUNT(DISTINCT used_on) AS "Sundays"
-           FROM (${ORIGINAL_SONG_USES})
+           FROM (SELECT DISTINCT song, used_on FROM (${ORIGINAL_SONG_USES}))
           GROUP BY 1 ORDER BY 1`, "bar"),
-      chart("Where they are sung", "times sung by service",
-        `SELECT service_type AS "Service", COUNT(*) AS "Times sung"
-           FROM (${ORIGINAL_SONG_USES})
+      chart("Where they are sung", "song-by-Sunday in each room; a song in both counts in both",
+        `SELECT service_type AS "Service", COUNT(*) AS "Songs sung"
+           FROM (SELECT DISTINCT song, used_on, service_type FROM (${ORIGINAL_SONG_USES}))
           GROUP BY 1 ORDER BY 2 DESC`, "donut"),
       stat("Songs released", "tracks on Spotify, across every release",
         `SELECT COUNT(*) FROM spotify_tracks WHERE org_id = :orgId`),
@@ -1082,8 +1111,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT t.name AS "Track",
                 t.album_name AS "Appears on",
                 t.released_on AS "Released on",
-                COUNT(u.used_on) AS "Times sung",
-                COUNT(DISTINCT u.used_on) AS "Sundays"
+                COUNT(DISTINCT u.used_on) AS "Sundays sung"
            FROM spotify_tracks t
            LEFT JOIN (${ORIGINAL_SONG_USES}) u
              ON u.song = lower(trim(
@@ -1093,16 +1121,19 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE t.org_id = :orgId
           GROUP BY t.name, t.album_name, t.released_on
           ORDER BY 4 DESC, 1`, 12),
-      table("Every original song, and when it was used", "the exact titles this page matches on",
-        `SELECT printed_title AS "Song",
-                COUNT(*) AS "Times sung",
-                COUNT(DISTINCT used_on) AS "Sundays",
-                MIN(used_on) AS "First used",
-                MAX(used_on) AS "Last used"
+      table("Every original song, and when it was sung", "the exact titles this page matches on",
+        // Grouped by the folded song, so a "(REPRISE)" doesn't appear as a
+        // second song. MIN(printed_title) picks the plain title over the
+        // "(REPRISE)" variant, which sorts after it.
+        `SELECT MIN(printed_title) AS "Song",
+                COUNT(DISTINCT used_on) AS "Sundays sung",
+                MIN(used_on) AS "First sung",
+                MAX(used_on) AS "Last sung"
            FROM (${ORIGINAL_SONG_USES})
-          GROUP BY 1 ORDER BY 2 DESC`, 12),
+          GROUP BY song ORDER BY 2 DESC, 1`, 12),
     ],
     gaps: {
+      collapsible: true,
       title: "Every published Output, and whether we can measure it",
       intro:
         "The report lists twelve Outputs. Four are answered above; the rest have no data behind them, and this says why rather than leaving a blank. The catalogue table above lists the exact titles being matched — if a release is missing from it, it is missing from every number on this page.",

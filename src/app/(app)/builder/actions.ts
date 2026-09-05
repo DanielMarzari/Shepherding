@@ -21,7 +21,7 @@ import {
   undoPageVersion,
   updateBuilderBlock,
   updateBuilderPage,
-} from "@/lib/builder";
+  reorderBuilderBlocks,} from "@/lib/builder";
 
 async function requireAdmin() {
   const s = await requireOrg();
@@ -77,6 +77,14 @@ export async function deleteBlockAction(id: number, slug: string) {
   const pid = pageIdOfBlock(s.orgId, id);
   if (pid) snapshotPageVersion(s.orgId, pid);
   deleteBuilderBlock(s.orgId, id);
+  revalidatePath(`/builder/${slug}`);
+}
+
+/** Apply a drag-and-drop reorder. */
+export async function reorderBlocksAction(pageId: number, orderedIds: number[], slug: string) {
+  const s = await requireAdmin();
+  snapshotPageVersion(s.orgId, pageId);
+  reorderBuilderBlocks(s.orgId, pageId, orderedIds);
   revalidatePath(`/builder/${slug}`);
 }
 

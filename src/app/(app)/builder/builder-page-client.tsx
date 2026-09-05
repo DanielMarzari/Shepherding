@@ -14,13 +14,13 @@ import {
   addBlockAction,
   deleteBlockAction,
   deletePageAction,
-  moveBlockAction,
   runBlockAction,
   runQueryAction,
   runSourceAction,
   undoPageAction,
   updateBlockAction,
   updatePageAction,
+  reorderBlocksAction,
 } from "./actions";
 
 export interface ClientBlock {
@@ -29,6 +29,7 @@ export interface ClientBlock {
   kind: BlockKind;
   config: BlockConfig;
   result: QueryResult | null;
+  detailResult?: QueryResult | null;
   childResults?: (QueryResult | null)[];
 }
 interface PageInfo { id: number; slug: string; title: string; description: string | null; navSection: string | null; moreSection: string | null }
@@ -107,6 +108,35 @@ export function BuilderPageClient({
     window.location.assign(`${window.location.pathname}?edit=1`);
   });
 
+  // Drag-and-drop ordering. Only the ID ORDER is held locally, so the grid
+  // reflows under the cursor immediately; the blocks themselves always come
+  // from props. When the server revalidates, `blocks` changes identity and the
+  // optimistic order is dropped during render — React's documented way to
+  // reset state on a prop change, rather than a setState inside an effect.
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+  const [orderIds, setOrderIds] = useState<number[] | null>(null);
+  const [seenBlocks, setSeenBlocks] = useState(blocks);
+  if (seenBlocks !== blocks) {
+    setSeenBlocks(blocks);
+    setOrderIds(null);
+  }
+  const order = orderIds
+    ? (orderIds.map((id) => blocks.find((b) => b.id === id)).filter(Boolean) as ClientBlock[])
+    : blocks;
+
+  function dropAt(to: number) {
+    const from = dragIndex;
+    setDragIndex(null);
+    setOverIndex(null);
+    if (from === null || from === to) return;
+    const next = order.slice();
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setOrderIds(next.map((b) => b.id));
+    mutate(() => reorderBlocksAction(page.id, next.map((b) => b.id), page.slug));
+  }
+
   const siblings: SiblingRef[] = blocks.map((b) => ({ id: b.id, title: (b.config.title ?? "").trim() || BLOCK_META[b.kind].label, kind: b.kind }));
 
   if (!edit) return <ViewMode page={page} blocks={blocks} isAdmin={isAdmin} pages={pages} onEdit={() => setEdit(true)} />;
@@ -148,10 +178,16 @@ export function BuilderPageClient({
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4">
-          {blocks.map((b, i) => (
+          {order.map((b, i) => (
             <BlockEditor key={b.id} block={b} slug={page.slug} schema={schema} pages={pages}
               siblings={siblings.filter((s) => s.id !== b.id && DATA_KINDS.has(s.kind))}
-              isFirst={i === 0} isLast={i === blocks.length - 1} mutate={mutate} busy={pending} />
+              mutate={mutate} busy={pending}
+              dragging={dragIndex === i}
+              dropTarget={overIndex === i && dragIndex !== null && dragIndex !== i}
+              onDragStart={() => setDragIndex(i)}
+              onDragOver={() => setOverIndex(i)}
+              onDrop={() => dropAt(i)}
+              onDragEnd={() => { setDragIndex(null); setOverIndex(null); }} />
           ))}
         </div>
       )}
@@ -368,7 +404,7 @@ function ViewMode({ page, blocks, isAdmin, pages, onEdit }: { page: PageInfo; bl
                 {b.kind === "filter" ? (
                   <FilterControl config={b.config} result={results[b.id]} value={params[b.config.param ?? ""] ?? ""} onChange={(v) => setParam(b.config.param ?? "", v)} />
                 ) : (
-                  <BlockView kind={b.kind} config={b.config} result={results[b.id]} pages={pages} childResults={b.childResults} />
+                  <BlockView kind={b.kind} config={b.config} result={results[b.id]} detailResult={b.detailResult} pages={pages} childResults={b.childResults} />
                 )}
               </div>
             );
@@ -656,9 +692,14 @@ function GroupChildEditor({ cfg, set, schema }: { cfg: BlockConfig; set: (p: Par
   );
 }
 
-function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mutate, busy }: {
+function BlockEditor({
+  block, slug, schema, pages, siblings, mutate, busy,
+  dragging, dropTarget, onDragStart, onDragOver, onDrop, onDragEnd,
+}: {
   block: ClientBlock; slug: string; schema: DbSchema; pages: PageRef[]; siblings: SiblingRef[];
-  isFirst: boolean; isLast: boolean; mutate: (fn: () => Promise<unknown>) => void; busy: boolean;
+  mutate: (fn: () => Promise<unknown>) => void; busy: boolean;
+  dragging: boolean; dropTarget: boolean;
+  onDragStart: () => void; onDragOver: () => void; onDrop: () => void; onDragEnd: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [cfg, setCfg] = useState<BlockConfig>(block.config);
@@ -680,8 +721,13 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
 
   const ctrl = (
     <div className="flex items-center gap-1 text-muted" onClick={(e) => e.stopPropagation()}>
-      <button type="button" disabled={busy || isFirst} title="Move up" onClick={() => mutate(() => moveBlockAction(block.id, "up", slug))} className="w-6 h-6 rounded hover:bg-bg-elev-2 disabled:opacity-30 cursor-pointer">↑</button>
-      <button type="button" disabled={busy || isLast} title="Move down" onClick={() => mutate(() => moveBlockAction(block.id, "down", slug))} className="w-6 h-6 rounded hover:bg-bg-elev-2 disabled:opacity-30 cursor-pointer">↓</button>
+      <span
+        title="Drag to reorder"
+        aria-label="Drag to reorder"
+        className="w-6 h-6 rounded hover:bg-bg-elev-2 grid place-items-center cursor-grab active:cursor-grabbing select-none leading-none"
+      >
+        ⠿
+      </span>
       <button type="button" disabled={busy} title="Delete block" onClick={() => mutate(() => deleteBlockAction(block.id, slug))} className="w-6 h-6 rounded hover:bg-bg-elev-2 hover:text-warn-soft-fg cursor-pointer">✕</button>
     </div>
   );
@@ -689,12 +735,23 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
   if (!editing) {
     return (
       <div onClick={() => setEditing(true)} title="Click to edit"
-        className={`group relative rounded-xl border border-border-soft bg-bg-elev p-5 cursor-pointer hover:border-accent transition-colors ${spanClass(cfg.span)}`}>
+        draggable={!busy}
+        onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; onDragStart(); }}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; onDragOver(); }}
+        onDrop={(e) => { e.preventDefault(); onDrop(); }}
+        onDragEnd={onDragEnd}
+        className={`group relative rounded-xl border bg-bg-elev p-5 cursor-pointer transition-colors ${spanClass(cfg.span)} ${
+          dragging
+            ? "opacity-40 border-accent"
+            : dropTarget
+              ? "border-accent ring-2 ring-accent/40"
+              : "border-border-soft hover:border-accent"
+        }`}>
         <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <span className="text-[10px] text-accent px-1.5 py-0.5 rounded bg-accent/10">edit</span>
           {ctrl}
         </div>
-        <BlockView kind={kind} config={cfg} result={result} pages={pages} />
+        <BlockView kind={kind} config={cfg} result={result} detailResult={block.detailResult} pages={pages} />
       </div>
     );
   }
@@ -820,7 +877,7 @@ function BlockEditor({ block, slug, schema, pages, siblings, isFirst, isLast, mu
       {kind !== "group" && (
         <div className="rounded-lg border border-border-soft bg-bg/40 p-3">
           <div className="text-[10px] uppercase tracking-wide text-subtle mb-2">Preview</div>
-          <BlockView kind={kind} config={cfg} result={hasSql ? result : null} pages={pages} />
+          <BlockView kind={kind} config={cfg} result={hasSql ? result : null} detailResult={block.detailResult} pages={pages} />
         </div>
       )}
     </div>

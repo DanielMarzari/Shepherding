@@ -39,17 +39,25 @@ function Empty({ children }: { children: React.ReactNode }) {
 
 /** Renders a single block from its config + pre-run query result. Used in both
  *  the live editor preview and the finished page. */
-export function BlockView({ kind, config, result, pages, childResults }: {
+export function BlockView({ kind, config, result, detailResult, pages, childResults }: {
   kind: BlockKind;
   config: BlockConfig;
   result: QueryResult | null;
+  detailResult?: QueryResult | null;
   pages?: PageRef[];
   childResults?: (QueryResult | null)[];
 }) {
   const title = (config.title ?? "").trim();
 
   if (kind === "text") {
-    return <div className={`${MD_CLASS} ${colorClass(config.color)}`} dangerouslySetInnerHTML={{ __html: renderMarkdown(config.text ?? "") }} />;
+    const md = (
+      <div
+        className={`${MD_CLASS} ${colorClass(config.color)}`}
+        dangerouslySetInnerHTML={{ __html: renderMarkdown(config.text ?? "") }}
+      />
+    );
+    if (!config.collapsible) return md;
+    return <Collapsible label={config.detailLabel ?? title ?? "Show the detail"}>{md}</Collapsible>;
   }
 
   if (kind === "pagelist") return <PageList config={config} pages={pages ?? []} />;
@@ -135,6 +143,19 @@ export function BlockView({ kind, config, result, pages, childResults }: {
             )}
           </div>
           {config.sub && <div className="text-xs text-subtle mt-1">{config.sub}</div>}
+          {config.detailSql && (
+            <Collapsible label={config.detailLabel ?? "Show the detail"} className="mt-3">
+              {detailResult ? (
+                detailResult.error ? (
+                  <div className="text-xs text-warn-soft-fg">{detailResult.error}</div>
+                ) : (
+                  <TableView config={{ sortable: true, density: "condensed" }} result={detailResult} />
+                )
+              ) : (
+                <div className="text-xs text-subtle">No detail query has run yet.</div>
+              )}
+            </Collapsible>
+          )}
         </div>
       );
     }
@@ -450,3 +471,32 @@ export const BLOCK_META: Record<BlockKind, { label: string; hint: string; dataHi
   pagelist: { label: "Page list", hint: "Link to other builder pages (a menu page)." },
   group: { label: "Group", hint: "A container that nests other blocks (KPIs in a list…)." },
 };
+
+/** A fold-away section. Used for a stat's detail rows and for long explanatory
+ *  text that shouldn't crowd the top of a page. Uses <details>/<summary> so it
+ *  works without JavaScript, is keyboard-operable, and is announced correctly
+ *  by a screen reader — none of which a div-and-useState version gets for free. */
+function Collapsible({
+  label,
+  children,
+  className = "",
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <details className={`group/collapse ${className}`}>
+      <summary className="cursor-pointer list-none text-xs text-accent hover:underline inline-flex items-center gap-1 select-none">
+        <span
+          aria-hidden
+          className="inline-block transition-transform group-open/collapse:rotate-90"
+        >
+          ›
+        </span>
+        {label}
+      </summary>
+      <div className="mt-2">{children}</div>
+    </details>
+  );
+}

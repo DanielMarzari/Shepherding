@@ -63,7 +63,7 @@ export interface MirReport {
  *  honest account of which published Outputs we still can't measure. */
 export interface MirExtras {
   metrics?: SeedBlock[];
-  gaps?: { title?: string; intro: string; items: string[]; footer?: string };
+  gaps?: { title?: string; intro: string; items: string[]; footer?: string; collapsible?: boolean };
   /** Bump to re-seed a page that nobody has edited. */
   revision?: number;
 }
@@ -164,6 +164,12 @@ export function mirSeedPage(report: MirReport, extras: MirExtras = {}): SeedPage
       config: {
         span: 12,
         color: "warning",
+        ...(extras.gaps.collapsible
+          ? {
+              collapsible: true,
+              detailLabel: extras.gaps.title ?? "Outputs we cannot measure yet",
+            }
+          : {}),
         // Heading goes in the body for the same reason the columns' does:
         // BlockView drops `title` on text blocks.
         text: [
