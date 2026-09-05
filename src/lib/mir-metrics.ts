@@ -273,10 +273,421 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM (${groupTypeMembers("'Small Groups'")})
           WHERE joined_at IS NOT NULL AND substr(joined_at,1,4) >= '2019'
           GROUP BY 1 ORDER BY 1`, "area"),
+
+      // ─── Outputs added 2026-09-05, on the session calendar the ministry
+      // actually runs: Winter (Jan 1 – Mar 20), Spring (Mar 21 – Jun 30),
+      // Fall (Sep 1 – Nov 30). July, August and December are off; the season
+      // boundaries were checked against the meetings themselves, which show a
+      // real two-to-four week gap in mid-March.
+      //
+      // These depend on two things that were missing until now: PCO's ARCHIVED
+      // groups (222 of them, two thirds of this church's group history, never
+      // synced because PCO's group list defaults to active-only), and the
+      // per-person attendance records, which the rolling three-month sync
+      // window had left at 2026 only until they were backfilled to 2019.
+      chart("Attendance spread across groups, by session", "one box per session; each value inside it is a single group's attendance rate, so the width of the box is how differently groups are doing",
+        `
+        WITH att AS (
+          SELECT
+            e.group_id                  AS group_id,
+            e.pco_id                    AS event_id,
+            a.attended                  AS attended,
+            strftime('%Y', e.starts_at) AS yr,
+            CASE
+              WHEN CAST(strftime('%m', e.starts_at) AS INTEGER) IN (1,2)
+                OR (CAST(strftime('%m', e.starts_at) AS INTEGER) = 3
+                    AND CAST(strftime('%d', e.starts_at) AS INTEGER) <= 20) THEN 'Winter'
+              WHEN (CAST(strftime('%m', e.starts_at) AS INTEGER) = 3
+                    AND CAST(strftime('%d', e.starts_at) AS INTEGER) > 20)
+                OR CAST(strftime('%m', e.starts_at) AS INTEGER) IN (4,5,6)  THEN 'Spring'
+              WHEN CAST(strftime('%m', e.starts_at) AS INTEGER) IN (9,10,11) THEN 'Fall'
+              ELSE NULL
+            END AS season
+          FROM pco_event_attendances a
+          JOIN pco_group_events e  ON e.org_id  = :orgId AND e.pco_id = a.event_id
+          JOIN pco_groups       g  ON g.org_id  = :orgId AND g.pco_id = e.group_id
+          JOIN pco_group_types  gt ON gt.org_id = :orgId AND gt.pco_id = g.group_type_id
+          WHERE a.org_id = :orgId
+            AND gt.name = 'Small Groups'
+            AND COALESCE(e.canceled, 0) = 0
+            AND e.starts_at IS NOT NULL
+            AND e.starts_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            AND CAST(strftime('%Y', e.starts_at) AS INTEGER) >= 2019
+        ),
+        group_session AS (
+          -- One row per group per session: that group's own attendance rate.
+          -- Floor of 3 recorded meetings drops sparsely-recorded groups.
+          SELECT
+            att.yr      AS yr,
+            att.season  AS season,
+            att.group_id AS group_id,
+            ROUND(100.0 * SUM(COALESCE(att.attended, 0)) / NULLIF(COUNT(*), 0), 1) AS rate
+          FROM att
+          WHERE att.season IS NOT NULL
+          GROUP BY att.yr, att.season, att.group_id
+          HAVING COUNT(DISTINCT att.event_id) >= 3
+        )
+        SELECT
+          gs.yr || ' ' || gs.season AS "Session",
+          gs.rate                   AS "Group attendance %"
+        FROM group_session gs
+        WHERE gs.rate IS NOT NULL
+          -- Session-level floor: never draw a box for a session until enough
+          -- groups have reported, so a just-started session cannot render a
+          -- distribution built from the two or three fastest-reporting groups.
+          AND (SELECT COUNT(*) FROM group_session s2
+                WHERE s2.yr = gs.yr AND s2.season = gs.season) >= 5
+        ORDER BY gs.yr,
+                 CASE gs.season WHEN 'Winter' THEN 1 WHEN 'Spring' THEN 2 ELSE 3 END`, "boxplot", { span: 12 }),
+      chart("Attendance by session, year over year", "median rate across groups, one line per year — the overlay shows whether a session always dips",
+        `
+        WITH sessions(sess, sort) AS (
+          VALUES ('Winter', 1), ('Spring', 2), ('Fall', 3)
+        ),
+        meeting AS (
+          SELECT
+            a.group_id,
+            a.event_id,
+            a.attended,
+            strftime('%Y', e.starts_at) AS yr,
+            CASE
+              WHEN CAST(strftime('%m', e.starts_at) AS INTEGER) IN (1,2)
+                OR (CAST(strftime('%m', e.starts_at) AS INTEGER) = 3
+                    AND CAST(strftime('%d', e.starts_at) AS INTEGER) <= 20) THEN 'Winter'
+              WHEN (CAST(strftime('%m', e.starts_at) AS INTEGER) = 3
+                    AND CAST(strftime('%d', e.starts_at) AS INTEGER) > 20)
+                OR CAST(strftime('%m', e.starts_at) AS INTEGER) IN (4,5,6) THEN 'Spring'
+              WHEN CAST(strftime('%m', e.starts_at) AS INTEGER) IN (9,10,11) THEN 'Fall'
+              ELSE NULL END AS sess
+          FROM pco_event_attendances a
+          JOIN pco_group_events e
+            ON e.pco_id = a.event_id AND e.org_id = :orgId AND COALESCE(e.canceled, 0) = 0
+          JOIN pco_groups g
+            ON g.pco_id = a.group_id AND g.org_id = :orgId
+          JOIN pco_group_types gt
+            ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+          WHERE a.org_id = :orgId
+            AND gt.name = 'Small Groups'
+            AND e.starts_at IS NOT NULL
+            AND e.starts_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        ),
+        group_session AS (
+          SELECT yr, sess, group_id,
+                 100.0 * SUM(attended) / NULLIF(COUNT(*), 0) AS rate
+          FROM meeting
+          WHERE sess IS NOT NULL AND yr >= '2019'
+          GROUP BY yr, sess, group_id
+          HAVING COUNT(DISTINCT event_id) >= 2
+        ),
+        ranked AS (
+          SELECT yr, sess, rate,
+                 ROW_NUMBER() OVER (PARTITION BY yr, sess ORDER BY rate) AS rn,
+                 COUNT(*)     OVER (PARTITION BY yr, sess)               AS n
+          FROM group_session
+        ),
+        med AS (
+          SELECT yr, sess, ROUND(AVG(rate), 1) AS median_rate
+          FROM ranked
+          WHERE rn IN ((n + 1) / 2, (n + 2) / 2)
+          GROUP BY yr, sess
+        )
+        SELECT
+          s.sess AS "Session",
+          MAX(CASE WHEN m.yr = '2019' THEN m.median_rate END) AS "2019",
+          MAX(CASE WHEN m.yr = '2020' THEN m.median_rate END) AS "2020",
+          MAX(CASE WHEN m.yr = '2021' THEN m.median_rate END) AS "2021",
+          MAX(CASE WHEN m.yr = '2022' THEN m.median_rate END) AS "2022",
+          MAX(CASE WHEN m.yr = '2023' THEN m.median_rate END) AS "2023",
+          MAX(CASE WHEN m.yr = '2024' THEN m.median_rate END) AS "2024",
+          MAX(CASE WHEN m.yr = '2025' THEN m.median_rate END) AS "2025",
+          MAX(CASE WHEN m.yr = '2026' THEN m.median_rate END) AS "2026"
+        FROM sessions s
+        LEFT JOIN med m ON m.sess = s.sess
+        GROUP BY s.sess, s.sort
+        ORDER BY s.sort`, "line", { span: 6 }),
+      chart("Small groups per session", "groups alive in each session, with the change from the session before",
+        `
+        WITH RECURSIVE
+        years(y) AS (
+          SELECT 2018
+          UNION ALL
+          SELECT y + 1 FROM years WHERE y < CAST(strftime('%Y','now') AS INTEGER)
+        ),
+        session_spine(y, seq, session_name, starts_on, ends_on) AS (
+          SELECT y, 1, 'Winter', y || '-01-01', y || '-03-20' FROM years
+          UNION ALL
+          SELECT y, 2, 'Spring', y || '-03-21', y || '-06-30' FROM years
+          UNION ALL
+          SELECT y, 3, 'Fall',   y || '-09-01', y || '-11-30' FROM years
+        ),
+        sessions AS (
+          SELECT y, seq, y || ' ' || session_name AS label, starts_on, ends_on
+          FROM session_spine
+          WHERE starts_on <= date('now')
+        ),
+        small_groups AS (
+          SELECT g.pco_id,
+                 date(g.pco_created_at) AS created_on,
+                 date(g.archived_at)    AS archived_on
+          FROM pco_groups g
+          JOIN pco_group_types gt
+            ON gt.pco_id = g.group_type_id
+           AND gt.org_id = :orgId
+          WHERE g.org_id = :orgId
+            AND gt.name = 'Small Groups'
+        ),
+        counted AS (
+          SELECT s.y, s.seq, s.label, COUNT(sg.pco_id) AS n
+          FROM sessions s
+          LEFT JOIN small_groups sg
+            ON sg.created_on <= s.ends_on
+           AND (sg.archived_on IS NULL OR sg.archived_on >= s.starts_on)
+          GROUP BY s.y, s.seq, s.label
+        ),
+        with_change AS (
+          SELECT y, seq, label, n,
+                 n - LAG(n) OVER (ORDER BY y, seq) AS delta
+          FROM counted
+        )
+        SELECT
+          label AS "Session",
+          n     AS "Groups",
+          delta AS "Change"
+        FROM with_change
+        WHERE y >= 2019
+        ORDER BY y, seq;`, "combo", { span: 6 }),
+      chart("Small group leaders per session", "distinct people leading a group that met, with the change from the session before",
+        `
+        WITH meetings AS (
+          SELECT
+            e.group_id                                   AS group_id,
+            CAST(strftime('%Y', e.starts_at) AS INTEGER) AS yr,
+            CASE
+              WHEN CAST(strftime('%m', e.starts_at) AS INTEGER) IN (1,2)
+                OR (CAST(strftime('%m', e.starts_at) AS INTEGER) = 3 AND CAST(strftime('%d', e.starts_at) AS INTEGER) <= 20) THEN 'Winter'
+              WHEN (CAST(strftime('%m', e.starts_at) AS INTEGER) = 3 AND CAST(strftime('%d', e.starts_at) AS INTEGER) > 20)
+                OR CAST(strftime('%m', e.starts_at) AS INTEGER) IN (4,5,6) THEN 'Spring'
+              WHEN CAST(strftime('%m', e.starts_at) AS INTEGER) IN (9,10,11) THEN 'Fall'
+              ELSE NULL END                              AS season
+          FROM pco_group_events e
+          JOIN pco_groups      g  ON g.pco_id  = e.group_id      AND g.org_id  = :orgId
+          JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+          WHERE e.org_id = :orgId
+            AND gt.name  = 'Small Groups'
+            AND COALESCE(e.canceled, 0) = 0
+            AND datetime(e.starts_at) <= datetime('now')
+            AND CAST(strftime('%Y', e.starts_at) AS INTEGER) >= 2019
+        ),
+        sessions AS (
+          SELECT DISTINCT
+            yr,
+            season,
+            -- Gap-free chronological ordinal: consecutive sessions differ by exactly 1,
+            -- including across the year boundary (Fall 2019 = 6060, Winter 2020 = 6061).
+            yr * 3 + (CASE season WHEN 'Winter' THEN 1 WHEN 'Spring' THEN 2 ELSE 3 END) AS ord,
+            yr || ' ' || season AS label,
+            CASE season WHEN 'Winter' THEN yr || '-01-01' WHEN 'Spring' THEN yr || '-03-21' ELSE yr || '-09-01' END AS session_start,
+            CASE season WHEN 'Winter' THEN yr || '-03-20' WHEN 'Spring' THEN yr || '-06-30' ELSE yr || '-11-30' END AS session_end
+          FROM meetings
+          WHERE season IS NOT NULL
+        ),
+        live_groups AS (
+          SELECT DISTINCT yr, season, group_id FROM meetings WHERE season IS NOT NULL
+        ),
+        per_session AS (
+          SELECT s.ord, s.label, COUNT(DISTINCT m.person_id) AS leaders
+          FROM sessions s
+          JOIN live_groups lg
+            ON lg.yr = s.yr AND lg.season = s.season
+          -- LEFT JOIN: a session whose meeting groups have no leader on record plots 0,
+          -- instead of vanishing from the series as if the session never happened.
+          LEFT JOIN pco_group_memberships m
+            ON m.org_id   = :orgId
+           AND m.group_id = lg.group_id
+           AND m.role     = 'leader'
+           AND date(m.joined_at) <= s.session_end
+           AND (m.archived_at IS NULL OR date(m.archived_at) >= s.session_start)
+          WHERE date(s.session_end) < date('now')
+          GROUP BY s.ord, s.label
+        )
+        SELECT
+          label    AS "Session",
+          leaders  AS "Leaders",
+          -- Only a genuinely adjacent session yields a delta. If the preceding session
+          -- had no small-group meetings at all (e.g. Spring 2020), it is absent from the
+          -- series and the change is NULL rather than a silent two-session jump.
+          CASE WHEN LAG(ord) OVER (ORDER BY ord) = ord - 1
+               THEN leaders - LAG(leaders) OVER (ORDER BY ord)
+          END      AS "Change vs prior session"
+        FROM per_session
+        ORDER BY ord;`, "combo", { span: 6 }),
+      chart("From application to leading a group", "every person who has applied to or joined a small group since 2016, and how far along they got",
+        `
+        WITH sg AS (                       -- every Small Groups group, archived ones included
+          SELECT g.pco_id
+            FROM pco_groups g
+            JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+           WHERE g.org_id = :orgId AND gt.name = 'Small Groups'
+        ),
+        app AS (                           -- people who ever applied to a small group
+          SELECT DISTINCT a.person_id AS person_id
+            FROM pco_group_applications a
+            JOIN sg ON sg.pco_id = a.group_id
+           WHERE a.org_id = :orgId AND a.person_id IS NOT NULL
+        ),
+        mem AS (                           -- people who ever held a small-group membership
+          SELECT DISTINCT m.person_id AS person_id
+            FROM pco_group_memberships m
+            JOIN sg ON sg.pco_id = m.group_id
+           WHERE m.org_id = :orgId AND m.person_id IS NOT NULL
+        ),
+        led AS (                           -- of those, the ones holding a leader role anywhere
+          SELECT DISTINCT m.person_id AS person_id
+            FROM pco_group_memberships m
+            JOIN sg ON sg.pco_id = m.group_id
+           WHERE m.org_id = :orgId AND m.person_id IS NOT NULL AND m.role = 'leader'
+        ),
+        led_also_member AS (               -- leaders who are also a plain member of a DIFFERENT small group
+          SELECT DISTINCT l.person_id AS person_id
+            FROM pco_group_memberships l
+            JOIN sg lg ON lg.pco_id = l.group_id
+            JOIN pco_group_memberships o
+              ON o.org_id = :orgId AND o.person_id = l.person_id AND o.group_id <> l.group_id
+            JOIN sg og ON og.pco_id = o.group_id
+           WHERE l.org_id = :orgId AND l.role = 'leader' AND o.role = 'member'
+             AND l.person_id IS NOT NULL
+        ),
+        flows AS (
+          SELECT 'Applied to join' AS "From", 'In a group' AS "To",
+                 (SELECT COUNT(*) FROM app WHERE person_id IN (SELECT person_id FROM mem)) AS "People"
+          UNION ALL SELECT 'Applied to join', 'Applied, never in a group',
+                 (SELECT COUNT(*) FROM app WHERE person_id NOT IN (SELECT person_id FROM mem))
+          UNION ALL SELECT 'Added without applying', 'In a group',
+                 (SELECT COUNT(*) FROM mem WHERE person_id NOT IN (SELECT person_id FROM app))
+          UNION ALL SELECT 'In a group', 'Leads a group',
+                 (SELECT COUNT(*) FROM led)
+          UNION ALL SELECT 'In a group', 'Member only',
+                 (SELECT COUNT(*) FROM mem WHERE person_id NOT IN (SELECT person_id FROM led))
+          UNION ALL SELECT 'Leads a group', 'Also a member elsewhere',
+                 (SELECT COUNT(*) FROM led_also_member)
+          UNION ALL SELECT 'Leads a group', 'Leads only',
+                 (SELECT COUNT(*) FROM led WHERE person_id NOT IN (SELECT person_id FROM led_also_member))
+        )
+        -- Drop zero-count bands: the block renderer coerces a 0 link value to 1
+        -- (echarts-block.tsx renders a zero as num(r[2]) || 1), which would draw a phantom
+        -- person and unbalance the node it hangs off. Removing a 0 changes no sum,
+        -- so every node still balances exactly.
+        SELECT "From", "To", "People"
+          FROM flows
+         WHERE "People" > 0;`, "sankey", { span: 12 }),
+      chart("Other next steps among small group members", "people in a small group who are also serving or giving",
+        `
+        WITH sg AS (
+          SELECT DISTINCT gm.person_id AS person_id
+            FROM pco_group_memberships gm
+            JOIN pco_groups       g  ON g.org_id  = gm.org_id AND g.pco_id  = gm.group_id
+            JOIN pco_group_types  gt ON gt.org_id = g.org_id  AND gt.pco_id = g.group_type_id
+           WHERE gm.org_id = :orgId
+             AND gt.name = 'Small Groups'
+             AND g.archived_at  IS NULL
+             AND gm.archived_at IS NULL
+        ),
+        flags AS (
+          SELECT sg.person_id,
+                 CASE WHEN EXISTS (SELECT 1 FROM pco_team_memberships tm
+                                    WHERE tm.org_id = :orgId
+                                      AND tm.person_id = sg.person_id
+                                      AND tm.archived_at IS NULL) THEN 1 ELSE 0 END AS serving,
+                 CASE WHEN EXISTS (SELECT 1 FROM pushpay_donors d
+                                    WHERE d.org_id = :orgId
+                                      AND d.person_id = sg.person_id) THEN 1 ELSE 0 END AS giving
+            FROM sg
+        )
+        SELECT "Next step", "People" FROM (
+          SELECT 'In a small group'       AS "Next step", COUNT(*) AS "People", 1 AS ord FROM flags
+          UNION ALL
+          SELECT 'Also serving on a team', COALESCE(SUM(serving), 0), 2 FROM flags
+          UNION ALL
+          SELECT 'Also giving',            COALESCE(SUM(giving), 0),  3 FROM flags
+          UNION ALL
+          SELECT 'Serving and giving',
+                 COALESCE(SUM(CASE WHEN serving = 1 AND giving = 1 THEN 1 ELSE 0 END), 0), 4 FROM flags
+        ) ORDER BY ord`, "bar", { span: 6 }),
+      chart("Share of the church in a small group", "against three different denominators, because they disagree",
+        `
+        WITH sg AS (
+          SELECT DISTINCT gm.person_id AS person_id
+            FROM pco_group_memberships gm
+            JOIN pco_groups       g  ON g.org_id  = gm.org_id AND g.pco_id  = gm.group_id
+            JOIN pco_group_types  gt ON gt.org_id = g.org_id  AND gt.pco_id = g.group_type_id
+           WHERE gm.org_id = :orgId
+             AND gt.name = 'Small Groups'
+             AND g.archived_at  IS NULL
+             AND gm.archived_at IS NULL
+        ),
+        aw_ok AS (
+          SELECT aw.in_person_total AS n
+            FROM attendance_weekly aw
+           WHERE aw.org_id = :orgId
+             AND aw.in_person_total IS NOT NULL
+             AND aw.week_date >= date('now', '-365 day')
+             AND aw.week_date <= date('now')
+             AND (aw.exception_reason IS NULL OR (
+                      lower(aw.exception_reason) NOT LIKE '%snow%'
+                  AND lower(aw.exception_reason) NOT LIKE '%sleet%'
+                  AND lower(aw.exception_reason) NOT LIKE '%icy%'
+                  AND ' ' || lower(aw.exception_reason) || ' ' NOT LIKE '% ice %'
+                  AND lower(aw.exception_reason) NOT LIKE '%storm%'
+                  AND lower(aw.exception_reason) NOT LIKE '%blizzard%'
+                  AND lower(aw.exception_reason) NOT LIKE '%hurricane%'
+                  AND lower(aw.exception_reason) NOT LIKE '%weather%'
+                  AND lower(aw.exception_reason) NOT LIKE '%clos%'
+                  AND lower(aw.exception_reason) NOT LIKE '%cancel%'
+                  AND lower(aw.exception_reason) NOT LIKE '%no service%'
+                  AND lower(aw.exception_reason) NOT LIKE '%did not meet%'
+                  AND lower(aw.exception_reason) NOT LIKE '%didn%meet%'
+                  AND lower(aw.exception_reason) NOT LIKE '%outage%'
+                  AND lower(aw.exception_reason) NOT LIKE '%power out%'
+                  AND lower(aw.exception_reason) NOT LIKE '%covid%'
+                  AND lower(aw.exception_reason) NOT LIKE '%pandemic%'
+                  AND lower(aw.exception_reason) NOT LIKE '%quarantine%'
+                  AND lower(aw.exception_reason) NOT LIKE '%flood%'
+             ))
+        ),
+        awa AS (
+          SELECT AVG(n) AS avg_weekly, COUNT(*) AS weeks FROM aw_ok
+        )
+        SELECT "Population", "% in a small group" FROM (
+          SELECT '% of active people' AS "Population",
+                 ROUND(100.0 * COUNT(sg.person_id) / NULLIF(COUNT(*), 0), 1) AS "% in a small group",
+                 1 AS ord
+            FROM person_activity pa
+            LEFT JOIN sg ON sg.person_id = pa.person_id
+           WHERE pa.org_id = :orgId
+             AND pa.classification <> 'inactive'
+          UNION ALL
+          SELECT '% of members',
+                 ROUND(100.0 * COUNT(sg.person_id) / NULLIF(COUNT(*), 0), 1), 2
+            FROM pco_people p
+            LEFT JOIN sg ON sg.person_id = p.pco_id
+           WHERE p.org_id = :orgId
+             AND lower(p.membership_type) LIKE '%member%'
+             AND lower(p.membership_type) NOT LIKE '%former%'
+             AND lower(p.membership_type) NOT LIKE '%non-member%'
+             AND lower(p.membership_type) NOT LIKE '%non member%'
+             AND lower(p.membership_type) NOT LIKE '%nonmember%'
+             AND lower(p.membership_type) NOT LIKE '%system use%'
+             AND lower(COALESCE(p.status, '')) <> 'inactive'
+             AND p.inactivated_at IS NULL
+          UNION ALL
+          SELECT '% of average weekly attendance',
+                 ROUND(100.0 * (SELECT COUNT(*) FROM sg)
+                             / NULLIF((SELECT avg_weekly FROM awa WHERE weeks >= 26), 0), 1), 3
+        ) ORDER BY ord`, "bar", { span: 6 }),
     ],
     gaps: measuredNote(
-      "group count, membership, leaders, and the share of engaged adults in a small group — all from live PCO group membership.",
-      "Not measured: anything about what happens inside a group. Attendance, multiplication, curriculum progress and leader-development milestones are not recorded in PCO, so the published Outputs that depend on them stay unmeasured.",
+      "groups and leaders per session including groups since archived, each group's own attendance rate per session from PCO's per-person records, the path from application to leading, and the share of the church in a small group.",
+      "Attendance is only as complete as the groups that take it: 22 to 27 of them submit sheets in a given session, and a group that never takes roll is absent from the spread rather than counted low. The rate is against the group's roster, so a group that leaves departed members on its list reads the same as one whose members stopped coming. PCO records no leave date on a membership, so leader counts mean \u201chad become a leader by then, in a group still running\u201d rather than a roster for that week. Multiplication, curriculum progress and leader-development milestones are still recorded nowhere.",
     ),
   },
 
