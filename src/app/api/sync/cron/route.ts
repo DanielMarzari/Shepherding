@@ -12,10 +12,20 @@ import { getCcSyncSettings, getStoredConstantContactCreds, isCcSyncDue } from "@
 import { runCcSync } from "@/lib/constant-contact-sync";
 
 /**
- * Cron-tickable endpoint. The Oracle host runs a system crontab every
- * 15 minutes that hits this URL. For each org with `auto-sync enabled`,
- * we check whether the next-scheduled run has arrived since the last
- * sync and trigger a run if so.
+ * Cron-tickable endpoint. For each org with `auto-sync enabled`, we check
+ * whether the next-scheduled run has arrived since the last sync and trigger a
+ * run if so.
+ *
+ * The heartbeat is the ubuntu crontab on the Oracle host, every 15 minutes:
+ *
+ *   every 15 min -> /usr/bin/flock -n /tmp/shepherdly-sync.lock \
+ *                     /home/ubuntu/bin/shepherdly-sync-cron.sh
+ *
+ * flock because a full sync takes ~20 minutes and this fires every 15; the log
+ * is /home/ubuntu/logs/shepherdly-sync-cron.log. This comment used to claim
+ * that crontab existed. It did not — there was no schedule on the host at all,
+ * and the last automatic sync had been 2026-07-28, seven weeks before anyone
+ * noticed. Installed 2026-09-14. If data looks stale, check that log first.
  *
  * Auth: requires localhost origin OR a Bearer token matching CRON_SECRET.
  * Caddy adds an X-Forwarded-For header on any externally-proxied request,

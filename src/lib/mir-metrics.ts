@@ -1368,39 +1368,104 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-worship-classic": {
     metrics: [
-      stat("Volunteers scheduled", "distinct people on a CLASSIC plan, last 12 months",
-        `SELECT COUNT(DISTINCT person_id) FROM (${servingSlots("st.name LIKE 'CLASSIC%'")})
-          WHERE sort_date >= ${YEAR}`, { color: "highlight" }),
-      stat("Serving slots filled", "CLASSIC assignments, last 12 months",
-        `SELECT COUNT(*) FROM (${servingSlots("st.name LIKE 'CLASSIC%'")})
-          WHERE sort_date >= ${YEAR}`),
-      stat("Services planned", "CLASSIC plans, last 12 months",
+      // The venue is THE CHAPEL AT 9:30, per the ministry lead — not "the
+      // chapel". The chapel also seats an 11:00/11:15 service, and averaging
+      // the room together mixes two congregations into one number.
+      stat("Average weekly attendance", "the Chapel at 9:30, last 12 months",
+        `SELECT CAST(ROUND(AVG(count)) AS INT) FROM attendance_service
+          WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'
+            AND week_date >= date('now','-365 day')`, { color: "highlight" }),
+      stat("Weeks on record", "Sundays counted in the Chapel at 9:30",
+        `SELECT COUNT(*) FROM attendance_service
+          WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'`),
+      stat("Volunteers serving", "distinct people on a Classic or Chapel PrayerWorks crew, last 12 months",
+        `SELECT COUNT(DISTINCT pp.person_id)
+           FROM pco_plan_people pp
+           JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+           JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+           LEFT JOIN pco_teams t ON t.pco_id = pp.team_id AND t.org_id = :orgId
+          WHERE pp.org_id = :orgId AND pp.person_id IS NOT NULL AND pp.person_id != ''
+            AND (st.name LIKE 'CLASSIC SERVICE%'
+              OR (st.name = 'PRAYER WORKS' AND lower(t.name) LIKE '%chapel%'))
+            AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now')`),
+      stat("Services planned", "Classic services in the last 12 months",
         `SELECT COUNT(DISTINCT pl.pco_id) FROM pco_plans pl
            JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
-          WHERE pl.org_id = :orgId AND st.name LIKE 'CLASSIC%'
-            AND pl.sort_date >= ${YEAR} AND pl.sort_date <= datetime('now')`),
-      stat("Average attendance in the Chapel", "per service, last 12 months",
-        `SELECT CAST(ROUND(AVG(count)) AS INT) FROM attendance_service
-          WHERE org_id = :orgId AND room = 'chapel'
-            AND week_date >= date('now','-365 day')`),
-      chart("Chapel attendance by week", "headcount in the Chapel",
-        `SELECT week_date AS "Week", SUM(count) AS "Attendance"
+          WHERE pl.org_id = :orgId AND st.name LIKE 'CLASSIC SERVICE%'
+            AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now')`),
+      chart("Attendance by week", "headcount in the Chapel at 9:30, every Sunday on record",
+        `SELECT week_date AS "Week", count AS "Attendance"
            FROM attendance_service
-          WHERE org_id = :orgId AND room = 'chapel'
-            AND week_date >= date('now','-730 day')
-          GROUP BY 1 ORDER BY 1`, "line"),
-      table("Chapel services", "average headcount per service time, last 12 months",
-        `SELECT service AS "Service", CAST(ROUND(AVG(count)) AS INT) AS "Average",
-                COUNT(*) AS "Weeks"
-           FROM attendance_service
-          WHERE org_id = :orgId AND room = 'chapel'
-            AND week_date >= date('now','-365 day')
+          WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'
+          ORDER BY week_date`, "line", { span: 12 }),
+      chart("Average weekly attendance, year to year", "the bar is the average Sunday; the line is the change on the year before",
+        `WITH y AS (
+           SELECT substr(week_date,1,4) AS yr, ROUND(AVG(count),1) AS avg_att
+             FROM attendance_service
+            WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'
+            GROUP BY 1
+         )
+         SELECT yr AS "Year", avg_att AS "Average Sunday",
+                ROUND(100.0 * (avg_att - LAG(avg_att) OVER (ORDER BY yr))
+                      / NULLIF(LAG(avg_att) OVER (ORDER BY yr), 0), 1) AS "% change"
+           FROM y ORDER BY yr`, "combo"),
+      // From 2020 on purpose. The Classic plans go back to 2012 and every year
+      // has somebody scheduled, but 2019 records 101 filled slots against 929
+      // in 2020 — before 2020 only the speaker and worship leader went into
+      // PCO, not the crews. Starting earlier would draw a change in
+      // record-keeping as a tenfold jump in volunteering.
+      chart("Volunteers by year", "distinct people who served the Classic or Chapel PrayerWorks, 2020 on",
+        `SELECT substr(pl.sort_date,1,4) AS "Year",
+                COUNT(DISTINCT pp.person_id) AS "Volunteers"
+           FROM pco_plan_people pp
+           JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+           JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+           LEFT JOIN pco_teams t ON t.pco_id = pp.team_id AND t.org_id = :orgId
+          WHERE pp.org_id = :orgId AND pp.person_id IS NOT NULL AND pp.person_id != ''
+            AND (st.name LIKE 'CLASSIC SERVICE%'
+              OR (st.name = 'PRAYER WORKS' AND lower(t.name) LIKE '%chapel%'))
+            AND pl.sort_date <= date('now') AND substr(pl.sort_date,1,4) >= '2020'
+          GROUP BY 1 ORDER BY 1`, "area"),
+      table("Attendance year to year", "average Sunday in the Chapel at 9:30, and how many Sundays that average rests on",
+        `WITH y AS (
+           SELECT substr(week_date,1,4) AS yr, ROUND(AVG(count),1) AS avg_att, COUNT(*) AS weeks
+             FROM attendance_service
+            WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'
+            GROUP BY 1
+         )
+         SELECT yr AS "Year", avg_att AS "Average Sunday", weeks AS "Sundays counted",
+                ROUND(100.0 * (avg_att - LAG(avg_att) OVER (ORDER BY yr))
+                      / NULLIF(LAG(avg_att) OVER (ORDER BY yr), 0), 1) AS "% change"
+           FROM y ORDER BY yr`),
+      table("The crews", "who serves the Classic, by team, last 12 months",
+        `SELECT COALESCE(t.name,'(no team)') AS "Crew",
+                COUNT(DISTINCT pp.person_id) AS "Volunteers",
+                COUNT(*) AS "Slots filled"
+           FROM pco_plan_people pp
+           JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+           JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+           LEFT JOIN pco_teams t ON t.pco_id = pp.team_id AND t.org_id = :orgId
+          WHERE pp.org_id = :orgId AND pp.person_id IS NOT NULL AND pp.person_id != ''
+            AND (st.name LIKE 'CLASSIC SERVICE%'
+              OR (st.name = 'PRAYER WORKS' AND lower(t.name) LIKE '%chapel%'))
+            AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now')
           GROUP BY 1 ORDER BY 2 DESC`),
     ],
-    gaps: measuredNote(
-      "the serving roster behind the Classic service and the attendance it drew.",
-      "Attendance comes from a manually maintained sheet. Not measured: the congregation's experience of the service, or how the Classic and LIVE congregations overlap.",
-    ),
+    gaps: {
+      intro:
+        "These Outputs are in the published report and cannot be answered from the data we hold. The reason is the same for nearly all of them, and it is worth stating once: **attendance in the Chapel is a headcount, not a list of names.** Nobody checks in to the 9:30 Classic, so we know how many came and never who:",
+      items: [
+        "- **% of attendees actively engaged in the service** — singing, giving attention and the rest are not observable in any system. The ministry lead's own note: too broad to measure as written, and it needs breaking into parts somebody can actually count.",
+        "- **# of visitors per year** — a visitor is only identifiable if they identify themselves. Nothing at the 9:30 Classic asks them to.",
+        "- **% of attendance taking steps on the Pathway** — the Pathway lanes are per person; Chapel attendance is per Sunday. The two cannot be joined without knowing who was in the room.",
+        "- **# from Classic baptized / becoming members / Family Dedications** — all three are recorded per person (baptism now is, on the person record), but none of them records which service that person attends.",
+        "- **% that check kids into Kids' Ministry** — kids check-ins carry the child, not which service the parent sat in.",
+        "- **Ratio of historic attendees versus others** — depends on identifying the room, as above.",
+        "- **Retention rate of volunteers** — the roster is measurable and is above; retention needs a definition from the ministry (served again within how long?) before it means anything.",
+      ],
+      footer:
+        "_Attendance is the manually maintained service sheet, scoped to **room = chapel, service = 9:30** — the chapel also seats an 11:00/11:15 service, and averaging the room together would mix two congregations. 2026 rests on 20 Sundays (January to May), so its average is a part-year figure against full years elsewhere, and the year-to-year table shows the Sunday count beside every average for exactly that reason. Volunteers are people actually scheduled on a plan, not team rosters: several Chapel crews carry no membership rows at all yet appear on plans every week._",
+    },
   },
 
   "mir-worship-music": {
