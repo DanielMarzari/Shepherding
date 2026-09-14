@@ -977,42 +977,170 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-prayer-works": {
     metrics: [
-      stat("Prayer volunteers", "active members of a prayer team",
-        `SELECT COUNT(DISTINCT m.person_id)
-           FROM pco_team_memberships m
-           JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
-          WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
-            AND lower(t.name) LIKE '%prayer%'`, { color: "highlight" }),
-      stat("Prayer requests received", "Network Prayer Request form submissions, all time",
+      // Scoped to the PRAYER WORKS service type, NOT to any team whose name
+      // contains "prayer". That older filter returned 208 people because it
+      // swept in the 182-strong Network Prayer Team — the email prayer network,
+      // a different ministry with a different job. A PrayerWorks report counting
+      // them as prayer partners overstates the roster sixfold.
+      stat("Serving as a prayer partner", "distinct people scheduled in the last 12 months",
+        `SELECT COUNT(*) FROM (
+  SELECT DISTINCT pp.person_id
+    FROM pco_plan_people pp
+    JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+   WHERE pp.org_id = :orgId AND pp.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%'
+     AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now'))`, { color: "highlight" }),
+      stat("On the team roster", "tagged onto a PrayerWorks team right now",
+        `SELECT COUNT(*) FROM (
+  SELECT DISTINCT m.person_id
+    FROM pco_team_memberships m
+    JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = t.service_type_id AND st.org_id = :orgId
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%')`),
+      stat("Serving without being tagged", "scheduled in the last 12 months, not on any roster",
+        `SELECT COUNT(*) FROM (
+  SELECT DISTINCT pp.person_id
+    FROM pco_plan_people pp
+    JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+   WHERE pp.org_id = :orgId AND pp.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%'
+     AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now')) s
+          WHERE s.person_id NOT IN (SELECT person_id FROM (
+  SELECT DISTINCT m.person_id
+    FROM pco_team_memberships m
+    JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = t.service_type_id AND st.org_id = :orgId
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%'))`),
+      stat("Prayer partners ever", "distinct people scheduled since PrayerWorks began, Oct 2020",
+        `SELECT COUNT(*) FROM (
+  SELECT pp.person_id,
+         MIN(date(pl.sort_date)) AS first_served,
+         MAX(date(pl.sort_date)) AS last_served,
+         COUNT(DISTINCT pl.pco_id) AS times
+    FROM pco_plan_people pp
+    JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+   WHERE pp.org_id = :orgId AND pp.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%'
+     AND pl.sort_date <= date('now')
+   GROUP BY pp.person_id)`),
+      chart("Roster against who actually serves", "the two lists are not the same people",
+        `WITH roster AS (
+  SELECT DISTINCT m.person_id
+    FROM pco_team_memberships m
+    JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = t.service_type_id AND st.org_id = :orgId
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%'), served AS (
+  SELECT DISTINCT pp.person_id
+    FROM pco_plan_people pp
+    JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+   WHERE pp.org_id = :orgId AND pp.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%'
+     AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now'))
+         SELECT 'On the roster' AS "Group", (SELECT COUNT(*) FROM roster) AS "People"
+         UNION ALL SELECT 'Served, last 12 months', (SELECT COUNT(*) FROM served)
+         UNION ALL SELECT 'On the roster, did not serve',
+           (SELECT COUNT(*) FROM roster WHERE person_id NOT IN (SELECT person_id FROM served))
+         UNION ALL SELECT 'Served, not on the roster',
+           (SELECT COUNT(*) FROM served WHERE person_id NOT IN (SELECT person_id FROM roster))`,
+        "bar", { colorByCategory: true }),
+      chart("Retention by the year they started", "how many of each year's new partners are still serving",
+        `SELECT substr(first_served,1,4) AS "Started",
+                COUNT(*) AS "Partners",
+                ROUND(100.0 * SUM(CASE WHEN last_served >= date('now','-365 day') THEN 1 ELSE 0 END)
+                      / NULLIF(COUNT(*), 0), 1) AS "% still serving"
+           FROM (
+  SELECT pp.person_id,
+         MIN(date(pl.sort_date)) AS first_served,
+         MAX(date(pl.sort_date)) AS last_served,
+         COUNT(DISTINCT pl.pco_id) AS times
+    FROM pco_plan_people pp
+    JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+   WHERE pp.org_id = :orgId AND pp.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%'
+     AND pl.sort_date <= date('now')
+   GROUP BY pp.person_id)
+          GROUP BY 1 ORDER BY 1`, "combo"),
+      table("Every prayer partner, first served to last", "the span each partner has served, and whether they are still tagged on the team",
+        `WITH span AS (
+  SELECT pp.person_id,
+         MIN(date(pl.sort_date)) AS first_served,
+         MAX(date(pl.sort_date)) AS last_served,
+         COUNT(DISTINCT pl.pco_id) AS times
+    FROM pco_plan_people pp
+    JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+   WHERE pp.org_id = :orgId AND pp.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%'
+     AND pl.sort_date <= date('now')
+   GROUP BY pp.person_id), roster AS (
+  SELECT DISTINCT m.person_id
+    FROM pco_team_memberships m
+    JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = t.service_type_id AND st.org_id = :orgId
+   WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%')
+         SELECT COALESCE(NULLIF(TRIM(COALESCE(p.first_name,'') || ' ' || COALESCE(p.last_name,'')), ''), '#' || s.person_id) AS "Partner",
+                s.first_served AS "First served",
+                s.last_served AS "Last served",
+                CAST(ROUND((julianday(s.last_served) - julianday(s.first_served)) / 30.44) AS INTEGER) AS "Months serving",
+                s.times AS "Times",
+                CAST(ROUND((julianday('now') - julianday(s.last_served)) / 30.44) AS INTEGER) AS "Months since",
+                CASE WHEN r.person_id IS NOT NULL THEN 'yes' ELSE 'no' END AS "Still on team"
+           FROM span s
+           LEFT JOIN roster r ON r.person_id = s.person_id
+           LEFT JOIN pco_people p ON p.pco_id = s.person_id AND p.org_id = :orgId
+          ORDER BY s.last_served DESC, s.first_served`, 12),
+      table("Average tenure by starting year", "how long each year's partners lasted",
+        `SELECT substr(first_served,1,4) AS "Started",
+                COUNT(*) AS "Partners",
+                SUM(CASE WHEN last_served >= date('now','-365 day') THEN 1 ELSE 0 END) AS "Still serving",
+                CAST(ROUND(AVG((julianday(last_served) - julianday(first_served)) / 30.44)) AS INTEGER) AS "Avg months serving"
+           FROM (
+  SELECT pp.person_id,
+         MIN(date(pl.sort_date)) AS first_served,
+         MAX(date(pl.sort_date)) AS last_served,
+         COUNT(DISTINCT pl.pco_id) AS times
+    FROM pco_plan_people pp
+    JOIN pco_plans pl ON pl.pco_id = pp.plan_id AND pl.org_id = :orgId
+    JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+   WHERE pp.org_id = :orgId AND pp.person_id != ''
+     AND st.name LIKE 'PRAYER WORKS%'
+     AND pl.sort_date <= date('now')
+   GROUP BY pp.person_id)
+          GROUP BY 1 ORDER BY 1`),
+      stat("Network prayer requests", "Network Prayer Request form, all time — a DIFFERENT intake to PrayerWorks",
         `SELECT COUNT(*) FROM pco_form_submissions s
            JOIN pco_forms f ON f.pco_id = s.form_id AND f.org_id = :orgId
           WHERE s.org_id = :orgId AND f.name = 'Network Prayer Request'`),
-      stat("Prayer serving slots", "PRAYER WORKS assignments, last 12 months",
-        `SELECT COUNT(*) FROM (${servingSlots("st.name LIKE 'PRAYER%'")})
-          WHERE sort_date >= ${YEAR}`),
-      stat("People serving in prayer", "distinct volunteers scheduled, last 12 months",
-        `SELECT COUNT(DISTINCT person_id) FROM (${servingSlots("st.name LIKE 'PRAYER%'")})
-          WHERE sort_date >= ${YEAR}`),
-      chart("Prayer requests by month", "Network Prayer Request submissions",
+      chart("Network prayer requests by month", "the online form, not the prayer cards handed in at PrayerWorks",
         `SELECT substr(s.pco_created_at,1,7) AS "Month", COUNT(*) AS "Requests"
            FROM pco_form_submissions s
            JOIN pco_forms f ON f.pco_id = s.form_id AND f.org_id = :orgId
           WHERE s.org_id = :orgId AND f.name = 'Network Prayer Request'
             AND s.pco_created_at >= datetime('now','-730 day')
           GROUP BY 1 ORDER BY 1`, "area"),
-      table("Prayer teams", "active membership",
-        `SELECT t.name AS "Team", COUNT(DISTINCT m.person_id) AS "Members"
-           FROM pco_teams t
-           JOIN pco_team_memberships m
-             ON m.team_id = t.pco_id AND m.org_id = :orgId
-            AND m.archived_at IS NULL AND m.person_id != ''
-          WHERE t.org_id = :orgId AND lower(t.name) LIKE '%prayer%'
-          GROUP BY 1 ORDER BY 2 DESC`),
     ],
-    gaps: measuredNote(
-      "prayer requests received through the Network Prayer Request form, the prayer volunteer roster, and Sunday prayer serving.",
-      "Not measured: what happened to a request after it was received — whether it was prayed over, answered, or followed up. Requests submitted any other way (in person, by phone, on a card) never reach a system we sync.",
-    ),
+    gaps: {
+      intro:
+        "These Outputs are in the published report and have no data behind them. One of them is a process gap worth fixing rather than a limit of the system:",
+      items: [
+        "- **Prayer cards are not recorded anywhere.** PCO holds exactly three forms — Network Prayer Request, Serve Form and Membership Application — and none of them is the prayer card handed in at PrayerWorks. The ministry lead's own read is that those requests go out by email instead, which means the count of people who came to PrayerWorks for prayer, the requests they brought, and anything that followed all leave no trace. **This is the single change that would make Outputs 3, 4, 5 and 6 answerable**: put the prayer card into a PCO form.",
+        "- **# of testimonies of answered prayers** — nothing records an outcome against a request, so a prayer that was answered looks identical to one that was not.",
+        "- **# of Next Steps taken as a result of a visit to Prayer Works** — needs a visit to be recorded first. See above.",
+        "- **% of adult attendees coming to Prayer Works for prayer** — the numerator does not exist. Sunday attendance is a headcount, so even a visit count could not be turned into a share of attendees without knowing who was in the building.",
+        "- **% year over year of the same** — depends on the above.",
+      ],
+      footer:
+        "_Prayer partners are scoped to the **PRAYER WORKS** service type. A previous version counted any team with \u201cprayer\u201d in its name and reported 208, which swept in the 182-strong Network Prayer Team — the email prayer network, a different ministry. Serving comes from who was actually scheduled on a plan, not the roster: the PrayerWorks Sunday Team carries no membership rows at all yet appears on plans constantly, so a roster count alone would have read zero. PrayerWorks plans begin 11 October 2020, so no partner can show a span longer than that, and nobody\u2019s tenure before that date is visible._",
+    },
   },
 
   "mir-sunday-teaching": {
