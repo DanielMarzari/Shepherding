@@ -838,28 +838,154 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-kids-vbx": {
     metrics: [
-      stat("Children reached at VBX", "distinct children, all VBX years",
-        `SELECT COUNT(DISTINCT person_id) FROM (${checkIns("e.name LIKE 'VBX%'")})`,
+      // Children and mums are split by ROOM, never by the is_minor flag.
+      // is_minor means "under 18 as of the last sync", so a 17-year-old who
+      // came to VBX 2024 and has since turned 18 would quietly move out of that
+      // year's children — a past year's number changing because time passed.
+      // The rooms are an exact partition: every location is entirely minors
+      // except Moms' Class, and the two sets never overlap.
+      stat("Children at the last VBX", "distinct children checked into any room but the Moms' Class",
+        `SELECT COUNT(DISTINCT c.person_id)
+           FROM pco_check_ins c
+           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+          WHERE c.org_id = :orgId
+       AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
+       AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+            AND (l.name NOT LIKE '%Moms%Class%' OR l.name IS NULL)
+            -- The latest VBX EVENT, resolved from the four-row events table.
+            -- Deriving the year by scanning 275k check-ins instead cost 6.4s a block.
+            AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
+                               WHERE e2.org_id = :orgId AND e2.name LIKE 'VBX%'
+                                 AND e2.name <> 'VBX Middle School'
+                               ORDER BY e2.pco_created_at DESC LIMIT 1)`,
         { color: "highlight" }),
-      stat("VBX check-ins", "every check-in across all VBX years",
-        `SELECT COUNT(*) FROM (${checkIns("e.name LIKE 'VBX%'")})`),
-      stat("VBX years tracked", "years with check-in data",
-        `SELECT COUNT(DISTINCT substr(event_name, 5, 4)) FROM (${checkIns("e.name LIKE 'VBX%'")})`),
-      chart("VBX attendance by year", "distinct children checked in",
-        `SELECT event_name AS "VBX", COUNT(DISTINCT person_id) AS "Children"
-           FROM (${checkIns("e.name LIKE 'VBX%'")})
-          GROUP BY 1 ORDER BY 1`, "bar", { colorByCategory: true }),
-      table("VBX by year", "children and total check-ins per year",
-        `SELECT event_name AS "VBX",
-                COUNT(DISTINCT person_id) AS "Children",
+      stat("Mums in the Moms' Class", "distinct adults in the Moms' Class at the last VBX",
+        `SELECT COUNT(DISTINCT c.person_id)
+           FROM pco_check_ins c
+           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+          WHERE c.org_id = :orgId
+       AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
+       AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+            AND l.name LIKE '%Moms%Class%'
+            -- The latest VBX EVENT, resolved from the four-row events table.
+            -- Deriving the year by scanning 275k check-ins instead cost 6.4s a block.
+            AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
+                               WHERE e2.org_id = :orgId AND e2.name LIKE 'VBX%'
+                                 AND e2.name <> 'VBX Middle School'
+                               ORDER BY e2.pco_created_at DESC LIMIT 1)`),
+      stat("Selections offered", "rooms children could sign up for at the last VBX",
+        `SELECT COUNT(DISTINCT c.location_id)
+           FROM pco_check_ins c
+           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+          WHERE c.org_id = :orgId
+       AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
+       AND c.event_time_at IS NOT NULL AND c.event_time_at <> '' AND c.location_id IS NOT NULL
+            -- The latest VBX EVENT, resolved from the four-row events table.
+            -- Deriving the year by scanning 275k check-ins instead cost 6.4s a block.
+            AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
+                               WHERE e2.org_id = :orgId AND e2.name LIKE 'VBX%'
+                                 AND e2.name <> 'VBX Middle School'
+                               ORDER BY e2.pco_created_at DESC LIMIT 1)`),
+      stat("High school teens on Mission Serve", "confirmed on the most recent trip",
+        `SELECT COUNT(DISTINCT CASE WHEN p.birth_year IS NOT NULL
+                 AND (CAST(substr(s.pco_created_at,1,4) AS INTEGER) - p.birth_year) BETWEEN 13 AND 19
+                 THEN a.person_id END)
+           FROM pco_registration_signups s
+           JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+           LEFT JOIN pco_people p ON p.pco_id = a.person_id AND p.org_id = :orgId
+          WHERE s.org_id = :orgId AND a.canceled = 0 AND a.person_id IS NOT NULL
+            AND lower(s.name) LIKE '%mission serve%high school%'
+            AND substr(s.pco_created_at,1,4) = (
+              SELECT MAX(substr(s2.pco_created_at,1,4)) FROM pco_registration_signups s2
+               WHERE s2.org_id = :orgId AND lower(s2.name) LIKE '%mission serve%high school%')`),
+      // Stacked, not a combo: 7-22 mums against 327-534 children on one shared
+      // value axis puts the mums line flat on the axis, unreadable. Stacked
+      // keeps both in the same unit — people — and the bar height is the week.
+      chart("VBX attendance by year", "everyone who came, split by the room they were in",
+        `SELECT substr(c.event_time_at,1,4) AS "VBX",
+                COUNT(DISTINCT CASE WHEN l.name NOT LIKE '%Moms%Class%' OR l.name IS NULL
+                                    THEN c.person_id END) AS "Children",
+                COUNT(DISTINCT CASE WHEN l.name LIKE '%Moms%Class%' THEN c.person_id END) AS "Mums"
+           FROM pco_check_ins c
+           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+          WHERE c.org_id = :orgId
+       AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
+       AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+          GROUP BY 1 ORDER BY 1`, "stacked-bar"),
+      chart("The Moms' Class", "its own chart, because 7 to 22 mums vanish beside 500 children",
+        `SELECT substr(c.event_time_at,1,4) AS "VBX",
+                COUNT(DISTINCT c.person_id) AS "Mums",
                 COUNT(*) AS "Check-ins"
-           FROM (${checkIns("e.name LIKE 'VBX%'")})
-          GROUP BY 1 ORDER BY 1 DESC`),
+           FROM pco_check_ins c
+           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+          WHERE c.org_id = :orgId
+       AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
+       AND c.event_time_at IS NOT NULL AND c.event_time_at <> '' AND l.name LIKE '%Moms%Class%'
+          GROUP BY 1 ORDER BY 1`, "combo"),
+      chart("Attendance through the week", "distinct people each day, the three weeks overlaid",
+        `WITH days AS (
+           SELECT substr(c.event_time_at,1,4) AS yr, substr(c.event_time_at,1,10) AS d, c.person_id
+             FROM pco_check_ins c
+             JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+            WHERE c.org_id = :orgId
+       AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
+       AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+         ),
+         ranked AS (
+           SELECT yr, DENSE_RANK() OVER (PARTITION BY yr ORDER BY d) AS day_no, person_id FROM days
+         )
+         SELECT 'Day ' || day_no AS "Day",
+                COUNT(DISTINCT CASE WHEN yr='2024' THEN person_id END) AS "2024",
+                COUNT(DISTINCT CASE WHEN yr='2025' THEN person_id END) AS "2025",
+                COUNT(DISTINCT CASE WHEN yr='2026' THEN person_id END) AS "2026"
+           FROM ranked GROUP BY day_no ORDER BY day_no`, "line"),
+      chart("High school teens on Mission Serve", "confirmed teens against everyone on the trip",
+        `SELECT substr(s.pco_created_at,1,4) AS "Year",
+                COUNT(DISTINCT CASE WHEN p.birth_year IS NOT NULL
+                      AND (CAST(substr(s.pco_created_at,1,4) AS INTEGER) - p.birth_year) BETWEEN 13 AND 19
+                      THEN a.person_id END) AS "High school teens",
+                COUNT(DISTINCT a.person_id) AS "On the trip"
+           FROM pco_registration_signups s
+           JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+           LEFT JOIN pco_people p ON p.pco_id = a.person_id AND p.org_id = :orgId
+          WHERE s.org_id = :orgId AND a.canceled = 0 AND a.person_id IS NOT NULL
+            AND lower(s.name) LIKE '%mission serve%high school%'
+          GROUP BY 1 ORDER BY 1`, "bar"),
+      table("Every selection at the last VBX", "the room each person signed up for — team names are re-themed yearly, so this does not compare with a prior year",
+        `SELECT COALESCE(NULLIF(TRIM(CASE WHEN TRIM(l.name) LIKE 'Team: %'
+                                          THEN substr(TRIM(l.name), 7) ELSE TRIM(l.name) END), ''),
+                         'No selection recorded') AS "Selection",
+                COUNT(DISTINCT c.person_id) AS "People",
+                COUNT(*) AS "Check-ins",
+                COUNT(DISTINCT substr(c.event_time_at,1,10)) AS "Days running"
+           FROM pco_check_ins c
+           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+          WHERE c.org_id = :orgId
+            AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+            AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
+                               WHERE e2.org_id = :orgId AND e2.name LIKE 'VBX%'
+                                 AND e2.name <> 'VBX Middle School'
+                               ORDER BY e2.pco_created_at DESC LIMIT 1)
+          GROUP BY 1 ORDER BY 2 DESC, 3 DESC`, 12),
     ],
-    gaps: measuredNote(
-      "children reached and check-in volume per VBX year, from PCO check-ins.",
-      "Not measured: volunteer hours, salvation decisions, first-time-guest conversion into ongoing attendance, or budget per child.",
-    ),
+    gaps: {
+      intro:
+        "These Outputs are in the published report with no data behind them. One is a system that exists and is not being used; the rest have no source at all:",
+      items: [
+        "- **Volunteers — both Outputs.** No check-in in this data is marked as a volunteer, and no VBX volunteer roster reaches PCO at all. The ministry lead's own words: volunteers are not in PCO right now, and they should be. **The records exist — Patti has them** — so this is a question of getting them into the system, not of measuring something unmeasurable. Until then neither the count of returning volunteers nor their retention can be answered.",
+        "- **Friendship connections (# friends brought to VBX)** — nothing records who invited whom, and the lead's own read is that this cannot be known.",
+        "- **# memory verses learned** — recorded by the ministry, not in PCO.",
+        "- **# kids crossing the line of faith** — same: the ministry knows, PCO does not.",
+        "- **# Bibles given out**, **incidents of children lost**, **God stories collected**, **# of relationships formed among volunteers** — none of these touches a system we sync.",
+      ],
+      footer:
+        "_Children and mums are split by the ROOM they were in, never by an age flag. The app's is_minor means \u201cunder 18 as of the last sync\u201d, so a seventeen-year-old who came in 2024 and has since turned eighteen would quietly leave that year\u2019s children — a past number changing because time passed. The rooms are an exact partition here: every location is entirely minors except the Moms\u2019 Class, and no one appears in both. \u201cMums\u201d means whoever was checked into that room; nothing in the data confirms they are mothers, or tells attending apart from staffing it. The 2019 \u201cVBX Middle School\u201d event is excluded — it was middle-school only, not the full week, and 48 people beside 2024-2026 would read as a collapse that never happened. Team names are re-themed every year (astronauts, then colours, then cabins), so the selections table describes one year and cannot be trended. Mission Serve teens come from the Registrations roster, where every attendee has a birth year, so the teen count is exact rather than inferred — but 2023 to 2025 are APPLICATION forms and 2026 is a ROSTER, which is why the chart shows everyone on the trip beside the teens._",
+    },
   },
 
   "mir-students-high-school": {
