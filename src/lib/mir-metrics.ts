@@ -33,6 +33,23 @@ const ENGAGED_ADULTS = `
    WHERE p.org_id = :orgId AND p.is_minor = 0
      AND pa.classification IN ('shepherded','active','present')`;
 
+/** The Discover courses that count as adult discipleship events.
+ *  Everything named "Discover ..." EXCEPT Discover Faith Church and Discover
+ *  Membership — the ministry lead's rule: those two are the assimilation track,
+ *  not discipleship. They live in PCO Registrations, not groups or check-ins.
+ *  TRIM because several are stored with a trailing space ("Discover Jesus "). */
+const DISCOVER_COURSES = `
+  SELECT a.person_id, a.pco_created_at, TRIM(s.name) AS course
+    FROM pco_registration_attendees a
+    JOIN pco_registration_signups s
+      ON s.org_id = a.org_id AND s.pco_id = a.signup_id
+   WHERE a.org_id = :orgId
+     AND a.canceled = 0
+     AND a.person_id IS NOT NULL
+     AND lower(TRIM(s.name)) LIKE 'discover%'
+     AND lower(TRIM(s.name)) NOT LIKE 'discover faith church%'
+     AND lower(TRIM(s.name)) NOT LIKE 'discover membership%'`;
+
 const ADULT_DISCIPLESHIP_TYPES = `
   'Small Groups','Disciple-making Groups','ABF Groups',
   'Women''s AM Bible Studies','Women''s PM Bible Studies',
@@ -246,21 +263,68 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = d.person_id
           WHERE d.group_archived_at IS NULL
           GROUP BY 1 ORDER BY 2 DESC`),
+
+      // ─── Added 2026-09-14. Two Outputs that had been listed as gaps are
+      // measurable after all, from sources the app had never read: baptism is
+      // a date on the "Membership and Assimilation" person tab, and the
+      // Discover courses are PCO Registrations signups.
+      stat("Baptisms recorded", "people with a baptism date on file",
+        `SELECT COUNT(*) FROM pco_person_fields
+          WHERE org_id = :orgId AND field_name = 'Baptism' AND value_date IS NOT NULL`,
+        { color: "highlight" }),
+      stat("Attended a Discover course", "distinct people, every course and year",
+        `SELECT COUNT(DISTINCT person_id) FROM (${DISCOVER_COURSES})`),
+      stat("% of engaged adults", "who have attended a Discover course",
+        `SELECT ROUND(
+             100.0 * (SELECT COUNT(DISTINCT c.person_id)
+                        FROM (${DISCOVER_COURSES}) c
+                        JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = c.person_id)
+                   / NULLIF((SELECT COUNT(*) FROM (${ENGAGED_ADULTS})), 0), 1) || '%'`),
+      // Dense year series on purpose: 2024 has no baptism recorded at all, and
+      // a line that skips the year would join 2023 to 2025 as if nothing had
+      // happened. A zero that is drawn is a question somebody can answer.
+      chart("Baptisms by year", "from the Baptism date on each person's record",
+        `WITH RECURSIVE yrs(y) AS (
+           SELECT 2015
+           UNION ALL SELECT y + 1 FROM yrs WHERE y < CAST(strftime('%Y','now') AS INTEGER)
+         )
+         SELECT CAST(yrs.y AS TEXT) AS "Year",
+                COALESCE((SELECT COUNT(*) FROM pco_person_fields f
+                           WHERE f.org_id = :orgId AND f.field_name = 'Baptism'
+                             AND f.value_date IS NOT NULL
+                             AND CAST(substr(f.value_date,1,4) AS INTEGER) = yrs.y), 0) AS "Baptisms"
+           FROM yrs ORDER BY yrs.y`, "bar"),
+      chart("Discover course attendance", "distinct people per course, all runs combined",
+        `SELECT course AS "Course", COUNT(DISTINCT person_id) AS "People"
+           FROM (${DISCOVER_COURSES})
+          GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
+      chart("Discover attendance by year", "distinct people attending a course each year",
+        `SELECT substr(pco_created_at,1,4) AS "Year", COUNT(DISTINCT person_id) AS "People"
+           FROM (${DISCOVER_COURSES})
+          WHERE pco_created_at IS NOT NULL
+          GROUP BY 1 ORDER BY 1`, "area"),
+      table("Who attends which Discover course", "each course, its people, and how many are engaged adults",
+        `SELECT c.course AS "Course",
+                COUNT(DISTINCT c.person_id) AS "People",
+                COUNT(DISTINCT CASE WHEN a.pco_id IS NOT NULL THEN c.person_id END) AS "Engaged adults",
+                MIN(substr(c.pco_created_at,1,4)) AS "First run",
+                MAX(substr(c.pco_created_at,1,4)) AS "Latest run"
+           FROM (${DISCOVER_COURSES}) c
+           LEFT JOIN (${ENGAGED_ADULTS}) a ON a.pco_id = c.person_id
+          GROUP BY 1 ORDER BY 2 DESC`),
     ],
     gaps: {
       intro:
         "These Outputs are in the published report but have no data behind them today. Listed here rather than dropped, so the gap is visible and fixable:",
       items: [
         "- **# of people who come to faith in Christ** — no faith-decision is recorded anywhere we sync. Needs a PCO form or workflow that stamps the person's record.",
-        "- **# of baptisms** — baptism *services* are on the calendar (a BAPTISMS service type, roughly twice a year, most recently 13 Sep 2026), but the only people recorded against them are the volunteers serving. Nobody records who was baptised. The `Going Public (Baptism)` check-in event exists and has never had a single check-in — using it would make this live immediately.",
-        "- **% who attend Discover Courses** — the course is still running (Discover Faith Church is scheduled through **September 2026**); what stopped in **February 2020** is checking attendees in. We can see the sessions happened and who staffed them, not who came.",
         "- **% who attend Discipleship Workshops** — no check-in event or group type corresponds to the workshops.",
         "- **% who complete a Disciple-Making Group** — we can see current membership, not completion. Needs an archived-with-outcome convention, or a \"graduated\" list.",
         "- **% of DMG graduates who become leaders** — depends on completion above.",
         "- **Standardized spiritual growth inventory** — no instrument has been administered, so there is nothing to report.",
       ],
       footer:
-        "_The Outputs that ARE live above come from PCO group membership and the app's own lane classification._",
+        "_Baptisms come from the Baptism date on the Membership and Assimilation tab of a person's record — 1,006 people have one, back to 1942. **No baptism is recorded for 2024 at all**, between 111 in 2023 and 47 in 2025, which reads as a year nobody filled the field in rather than a year nobody was baptised. Discover attendance comes from PCO Registrations, counting everything named Discover except Discover Faith Church and Discover Membership; the date is when the person registered, not the night the class met, so a course running across a year boundary lands in the year it opened. The remaining live Outputs come from PCO group membership and the app's own lane classification._",
     },
   },
 
