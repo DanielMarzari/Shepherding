@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getSyncSettings } from "@/lib/pco";
 import { isSyncDue } from "@/lib/pco-schedule";
-import { runSync } from "@/lib/pco-sync";
+import { cleanupStaleSyncRuns, runSync } from "@/lib/pco-sync";
 import { startGeocodeRun } from "@/lib/geocode-runner";
 import { startDriveRun } from "@/lib/drive-runner";
 import { startMeshRun } from "@/lib/mesh-runner";
@@ -79,6 +79,11 @@ export async function GET(req: Request) {
       results.push({ orgId: id, skipped: true, reason: "auto-sync disabled" });
       continue;
     }
+    // Clear any run left "running" by a process that died — a deploy restart
+    // mid-sync is the usual cause. Has to happen before the due check, because
+    // isSyncDue counts a running row as a completed sync at that timestamp and
+    // would otherwise skip every tick until the next scheduled window.
+    cleanupStaleSyncRuns(id);
     if (!isSyncDue(id, settings)) {
       results.push({ orgId: id, skipped: true, reason: "not due yet" });
       continue;

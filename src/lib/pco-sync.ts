@@ -69,8 +69,15 @@ const STALE_RUN_MINUTES = 65;
 
 /** Mark any leftover "running" rows older than STALE_RUN_MINUTES as
  *  failed. Catches processes killed mid-sync by a deploy/restart so the
- *  UI doesn't show "running" forever. */
-function cleanupStaleSyncRuns(orgId: number) {
+ *  UI doesn't show "running" forever.
+ *
+ *  Exported because the scheduler has to call it BEFORE deciding whether a run
+ *  is due. isSyncDue reads the last run with status 'ok' OR 'running', so a row
+ *  left running by a killed process reads as "we synced at that time" and
+ *  suppresses every tick until the next scheduled window comes round. Running
+ *  the cleanup only inside runSync — which the due check gates — meant the one
+ *  thing that clears the jam sat behind the jam. */
+export function cleanupStaleSyncRuns(orgId: number) {
   const cutoff = new Date(
     Date.now() - STALE_RUN_MINUTES * 60 * 1000,
   ).toISOString();
