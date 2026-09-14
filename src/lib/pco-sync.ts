@@ -13,6 +13,7 @@ import {
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 import { refreshLastCheckIn, syncCheckinsAll } from "./pco-sync-checkins";
 import { refreshLastAttended, syncGroupsAll } from "./pco-sync-groups";
+import { syncRegistrationsAll } from "./pco-sync-registrations";
 import { refreshIsParent, syncHouseholdsAll } from "./pco-sync-households";
 import { syncListsAll } from "./pco-sync-lists";
 import { refreshLastServed, syncServicesAll } from "./pco-sync-services";
@@ -53,6 +54,9 @@ export interface SyncDetails {
   plans: { fetched: number; upserted: number };
   planPeople: { fetched: number; upserted: number };
   planItems: { fetched: number; upserted: number };
+  personFields: { fetched: number; upserted: number };
+  registrationSignups: { fetched: number; upserted: number };
+  registrationAttendees: { fetched: number; upserted: number };
   cutoff: string | null;
   durationMs: number;
   startedAt: string;
@@ -139,6 +143,9 @@ export async function runSync(
     plans: { fetched: 0, upserted: 0 },
     planPeople: { fetched: 0, upserted: 0 },
     planItems: { fetched: 0, upserted: 0 },
+    personFields: { fetched: 0, upserted: 0 },
+    registrationSignups: { fetched: 0, upserted: 0 },
+    registrationAttendees: { fetched: 0, upserted: 0 },
     cutoff: null,
     durationMs: 0,
     startedAt,
@@ -193,6 +200,35 @@ export async function runSync(
         warning = appendWarning(
           warning,
           `Lists: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
+
+      // Person custom fields. Faith Church records Baptism as a date on the
+      // "Membership and Assimilation" tab; nothing read it until now, so the
+      // Adult Discipleship report's "# of baptisms" had no source. Only the
+      // allowlisted fields are stored — the same tab holds Date of Death and
+      // Date Widowed, which nothing needs.
+      try {
+        const f = await syncPersonFields(client, orgId);
+        details.personFields = f;
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Person fields: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
+    }
+
+    // ── Registrations (signups + attendees) ─────────────────────────────
+    if (enabled.registrations) {
+      try {
+        const r = await syncRegistrationsAll(client, orgId, settings.syncThresholdMonths);
+        details.registrationSignups = r.signups;
+        details.registrationAttendees = r.attendees;
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Registrations: ${e instanceof Error ? e.message : "failed"}`,
         );
       }
     }
@@ -1158,4 +1194,92 @@ export function getSyncedCounts(orgId: number): SyncedDataCounts {
       "SELECT COUNT(*) AS n FROM pco_plan_people WHERE org_id = ?",
     ),
   };
+}
+// ─── Person custom fields ───────────────────────────────────────────────
+
+/** The custom fields worth storing, by their PCO name. Deliberately an
+ *  allowlist, not "every date field": the Membership and Assimilation tab also
+ *  holds Date of Death and Date Widowed, and a table nobody asked for is a
+ *  liability. Add a name here when something in the app needs it. */
+const PERSON_FIELD_ALLOWLIST = new Set(["Baptism"]);
+
+/** PCO returns a date field as the admin typed it — "06/29/2003" — which sorts
+ *  and groups as nonsense. Normalize once, here, so every query downstream can
+ *  just use substr(value_date,1,4). Returns null for anything unparseable
+ *  rather than guessing. */
+function toIsoDate(raw: string | null): string | null {
+  const v = (raw ?? "").trim();
+  if (!v) return null;
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
+  if (m) {
+    const mo = Number(m[1]);
+    const d = Number(m[2]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return `${m[3]}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  return null;
+}
+
+/** Sync the allowlisted person custom fields. One request per field definition
+ *  page — Baptism alone is ~1,000 rows, ten pages. */
+async function syncPersonFields(
+  client: PCOClient,
+  orgId: number,
+): Promise<{ fetched: number; upserted: number }> {
+  const out = { fetched: 0, upserted: 0 };
+  const defs = await client.getAll<PCOResource>(
+    "/people/v2/field_definitions?per_page=100",
+  );
+  const wanted = (defs.data ?? []).filter((d) => {
+    const a = (d.attributes ?? {}) as Record<string, unknown>;
+    return (
+      !a.deleted_at &&
+      typeof a.name === "string" &&
+      PERSON_FIELD_ALLOWLIST.has(a.name as string)
+    );
+  });
+  if (!wanted.length) return out;
+
+  const db = getDb();
+  const ins = db.prepare(
+    `INSERT INTO pco_person_fields
+      (org_id, person_id, field_id, field_name, value, value_date, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, person_id, field_id) DO UPDATE SET
+       field_name = excluded.field_name,
+       value = excluded.value,
+       value_date = excluded.value_date,
+       synced_at = excluded.synced_at`,
+  );
+
+  for (const def of wanted) {
+    const name = ((def.attributes ?? {}) as Record<string, unknown>).name as string;
+    const rows: Array<[string, string, string, string | null, string | null]> = [];
+    for await (const { page } of client.paginate<PCOResource>(
+      `/people/v2/field_data?where[field_definition_id]=${def.id}&per_page=100`,
+    )) {
+      const arr = Array.isArray(page.data) ? page.data : [page.data];
+      for (const fd of arr) {
+        out.fetched++;
+        const a = (fd.attributes ?? {}) as Record<string, unknown>;
+        // The owning person is the "customizable" relationship, not "person".
+        const rel = fd.relationships?.customizable?.data;
+        const personId = !Array.isArray(rel) && rel ? rel.id : null;
+        if (!personId) continue;
+        const value = typeof a.value === "string" ? a.value : a.value == null ? null : String(a.value);
+        rows.push([personId, def.id, name, value, toIsoDate(value)]);
+      }
+    }
+    // A field cleared in PCO leaves no field_data row, so replace the whole
+    // set for this definition rather than upserting over a stale value.
+    const tx = db.transaction(() => {
+      db.prepare(`DELETE FROM pco_person_fields WHERE org_id = ? AND field_id = ?`).run(orgId, def.id);
+      for (const r of rows) ins.run(orgId, r[0], r[1], r[2], r[3], r[4]);
+    });
+    tx();
+    out.upserted += rows.length;
+  }
+  return out;
 }

@@ -994,6 +994,13 @@ export const SYNC_ENTITIES: SyncEntity[] = [
     defaultEnabled: true,
   },
   {
+    key: "registrations",
+    label: "Registrations",
+    description:
+      "Signups and their attendees — where the Discover courses live. Attendees carry a PCO person id, so course attendance joins to the congregation.",
+    defaultEnabled: true,
+  },
+  {
     key: "teams",
     label: "Service teams & plans",
     description:
