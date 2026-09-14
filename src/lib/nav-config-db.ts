@@ -9,6 +9,7 @@ import {
   sanitizeNavConfig,
   type NavConfig,
   type NavGroup,
+  type NavItemRef,
 } from "./nav-registry";
 
 // Legacy builder nav_section keys → the new group ids. "settings" folds into
@@ -118,10 +119,12 @@ export function resolveNavConfig(orgId: number): ResolvedNav {
   const placed = new Set(
     config.groups.flatMap((g) => g.items.filter((it) => it.kind === "builder").map((it) => it.slug)),
   );
-  /** Groups this call invented. They exist only in memory and were never
-   *  arranged by an admin, so they are safe to sort; a group the admin ordered
-   *  by hand is left exactly as they left it. */
-  const invented = new Set<string>();
+  /** Pages this call merged in, per group id, held back rather than pushed
+   *  straight onto the group. They arrive in database-then-seed order, which
+   *  for forty ministry reports reads as noise — so they are sorted by name and
+   *  appended once the merge is done. Items the admin placed by hand keep both
+   *  their position and their order; only the auto-merged tail is sorted. */
+  const merged = new Map<string, NavItemRef[]>();
 
   /** The group a merged page belongs in — reusing the admin's own layer when
    *  they already made one by that name. Matching on id alone would sit a
@@ -136,14 +139,13 @@ export function resolveNavConfig(orgId: number): ResolvedNav {
     config.groups.push(g);
     groupById.set(id, g);
     groupByLabel.set(norm(label), g);
-    invented.add(g.id);
     return g;
   }
 
   const attach = (g: NavGroup, slug: string, label: string) => {
     if (placed.has(slug)) return;
     placed.add(slug);
-    g.items.push({ kind: "builder", slug, label });
+    (merged.get(g.id) ?? merged.set(g.id, []).get(g.id)!).push({ kind: "builder", slug, label });
     activeToKey[label] = `builder:${slug}`;
   };
 
@@ -198,13 +200,21 @@ export function resolveNavConfig(orgId: number): ResolvedNav {
     g.items.push({ kind: "page", pageKey });
   }
 
-  // Forty ministry reports in database-then-seed order would read as noise.
-  for (const gid of invented) {
-    groupById.get(gid)?.items.sort((a, b) =>
+  // Append the merged pages, A-Z by name. Sorting here rather than sorting the
+  // whole group means a layer the admin arranged by hand keeps that
+  // arrangement, and the pages the app added itself still read alphabetically —
+  // which is the only way forty ministry reports are findable.
+  for (const [gid, items] of merged) {
+    const g = groupById.get(gid);
+    if (!g) continue;
+    items.sort((a, b) =>
       (a.kind === "builder" ? a.label : a.pageKey).localeCompare(
         b.kind === "builder" ? b.label : b.pageKey,
+        undefined,
+        { sensitivity: "base", numeric: true },
       ),
     );
+    g.items.push(...items);
   }
   return { config, activeToKey };
 }
