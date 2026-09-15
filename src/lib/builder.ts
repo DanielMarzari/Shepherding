@@ -62,14 +62,32 @@ export interface QueryDebug {
 /** Filter parameters injected into a query as :name placeholders. */
 export type QueryParams = Record<string, string>;
 
+/** A statement with string literals and comments blanked out, so nothing that
+ *  scans the SQL can be fooled by text SQLite will never execute.
+ *
+ *  Both callers need this and only one of them used to do it. `extractParams`
+ *  stripped comments; the FORBIDDEN keyword screen did not, so a query was
+ *  rejected for a word in its own documentation. That is not hypothetical: the
+ *  Small Groups conversion Sankey carried the comment "-- Drop zero-count
+ *  bands" and the whole block rendered an error on the live page.
+ *
+ *  Comments become a SPACE, not nothing, so `DROP/(asterisk)x(asterisk)/TABLE`
+ *  cannot be glued into a token the screen no longer recognises. Blanking
+ *  cannot open a hole: bound parameters are never interpolated, SQLite does not
+ *  execute the contents of a literal or a comment, and runBuilderQuery holds a
+ *  read-only connection regardless. */
+function blankLiteralsAndComments(sql: string): string {
+  return (sql ?? "")
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/"(?:[^"]|"")*"/g, '""')
+    .replace(/--[^\n]*/g, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ");
+}
+
 /** Named `:param` tokens referenced in a statement, ignoring string literals
  *  and comments so `strftime('%H:%M')` doesn't look like a `:M` parameter. */
 export function extractParams(sql: string): string[] {
-  const stripped = (sql ?? "")
-    .replace(/'(?:[^']|'')*'/g, "''")
-    .replace(/"(?:[^"]|"")*"/g, '""')
-    .replace(/--[^\n]*/g, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "");
+  const stripped = blankLiteralsAndComments(sql);
   const found = new Set<string>();
   for (const m of stripped.matchAll(/:([a-zA-Z_]\w*)/g)) found.add(m[1]);
   return [...found];
@@ -83,7 +101,8 @@ export function runBuilderQuery(sql: string, params?: QueryParams): QueryResult 
   if (!q) return empty("Write a SELECT query to power this block.");
   if (q.includes(";")) return empty("Only a single statement is allowed (no semicolons).");
   if (!/^(select|with)\b/i.test(q)) return empty("Only SELECT / WITH queries are allowed here.");
-  if (FORBIDDEN.test(q)) return empty("That query uses a keyword that isn’t allowed (read-only).");
+  if (FORBIDDEN.test(blankLiteralsAndComments(q)))
+    return empty("That query uses a keyword that isn’t allowed (read-only).");
   try {
     const stmt = roDb().prepare(q);
     const names = extractParams(q);
