@@ -1034,6 +1034,13 @@ export const SYNC_ENTITIES: SyncEntity[] = [
     defaultEnabled: true,
   },
   {
+    key: "calendar",
+    label: "Calendar",
+    description:
+      "Events, their occurrences, rooms and setup requests. The only record of what the building is asked to do \u2014 funerals, weddings, rentals and preschool events never appear in Services plans.",
+    defaultEnabled: true,
+  },
+  {
     key: "teams",
     label: "Service teams & plans",
     description:

@@ -33,6 +33,62 @@ const ENGAGED_ADULTS = `
    WHERE p.org_id = :orgId AND p.is_minor = 0
      AND pa.classification IN ('shepherded','active','present')`;
 
+/** Every occurrence on the church calendar — the unit of "an event the
+ *  building served". A PCO Calendar *Event* carries no date at all; the dated
+ *  thing is an *EventInstance*, so a weekly rehearsal is one event and about
+ *  fifty-two occurrences, and it is the occurrences the building is opened for.
+ *
+ *  No on-campus filter. It was checked rather than assumed: of 33,400
+ *  occurrences, 460 carry a location that is neither the campus address nor the
+ *  name of a room, and reading those 460 they are almost all still on campus
+ *  ("Conference Room Lower Level", "Center commons", the Sunday ministry
+ *  tables). What is genuinely off site — Lake Champion, Spruce Lake, Victory
+ *  Valley, Lone Lane Park, Raub Middle School — comes to about 25 occurrences,
+ *  under a tenth of one percent. A name filter to remove them would be the
+ *  brittle kind that silently drops a whole ministry the day somebody renames a
+ *  camp, and it would move no number on this page.
+ *
+ *  `day` is the LOCAL date. starts_at is UTC, and a 7pm service is already
+ *  tomorrow in UTC, which would push evening events into the next month at
+ *  every month boundary. -5 hours lands every evening event on the right local
+ *  day in both EST and EDT. */
+const CALENDAR_OCCURRENCES = `
+  SELECT i.pco_id, i.event_id, i.name, i.starts_at, i.ends_at,
+         date(i.starts_at, '-5 hours') AS day, e.owner_id
+    FROM pco_calendar_event_instances i
+    JOIN pco_calendar_events e ON e.pco_id = i.event_id AND e.org_id = :orgId
+   WHERE i.org_id = :orgId AND i.starts_at IS NOT NULL`;
+
+/** Events somebody has to physically set up, as opposed to events that merely
+ *  happen in a room. Nearly every calendar event books a room — 3,490 of 3,589
+ *  in 2025 — so "has a resource request" is not the line. The line is whether
+ *  the request carries instructions: free-text notes ("Please set up two
+ *  circles of chairs - 45 chairs each"), or a saved room layout. That is 58% of
+ *  occurrences, and it is the work. */
+const SETUP_EVENTS = `
+  SELECT DISTINCT rq.event_id
+    FROM pco_calendar_resource_requests rq
+   WHERE rq.org_id = :orgId
+     AND (rq.room_setup_id IS NOT NULL
+          OR (rq.notes IS NOT NULL AND TRIM(rq.notes) <> ''))`;
+
+/** The eldership, from the PCO reference list. */
+const ELDERS = `
+  SELECT m.person_id
+    FROM pco_list_memberships m
+    JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+   WHERE m.org_id = :orgId AND l.name = 'REFERENCE - Elders'`;
+
+/** Elder ages, for the ONE demographic PCO holds on them.
+ *  Age is this year minus the birth year, so it is out by up to a year for
+ *  anyone whose birthday has not come round yet — fine for a distribution
+ *  across a roster of ten, and not to be quoted as an individual's age. */
+const ELDER_AGES = `
+  SELECT CAST(strftime('%Y','now') AS INTEGER) - p.birth_year AS age
+    FROM (${ELDERS}) e
+    JOIN pco_people p ON p.pco_id = e.person_id AND p.org_id = :orgId
+   WHERE p.birth_year IS NOT NULL`;
+
 /** The Discover courses that count as adult discipleship events.
  *  Everything named "Discover ..." EXCEPT Discover Faith Church and Discover
  *  Membership — the ministry lead's rule: those two are the assimilation track,
@@ -1796,13 +1852,26 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Engaged adults per elder", "the flock each elder carries",
         `SELECT CAST(ROUND(
              (SELECT COUNT(*) FROM (${ENGAGED_ADULTS})) * 1.0
-             / NULLIF((SELECT COUNT(*) FROM pco_list_memberships m
-                         JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
-                        WHERE m.org_id = :orgId AND l.name = 'REFERENCE - Elders'), 0)) AS INT)`),
+             / NULLIF((SELECT COUNT(*) FROM (${ELDERS})), 0)) AS INT)`),
+      // Diversity of the eldership, as far as PCO can answer it — which is age
+      // and nothing else. Ethnicity is not a field on these records, and
+      // tenure as an elder is not recorded anywhere: the list has no join date.
+      stat("Median elder age", "from the birth year on the PCO profile",
+        `SELECT age FROM (${ELDER_AGES}) ORDER BY age
+          LIMIT 1 OFFSET (SELECT (COUNT(*) - 1) / 2 FROM (${ELDER_AGES}))`),
+      stat("Age range", "youngest to oldest elder",
+        `SELECT MIN(age) || '\u2013' || MAX(age) FROM (${ELDER_AGES})`),
+      stat("Elders with a birth year", "the rest have none on file",
+        `SELECT (SELECT COUNT(*) FROM (${ELDER_AGES})) || ' of ' ||
+                (SELECT COUNT(*) FROM (${ELDERS}))`),
+      chart("Elders by decade of life", "the only demographic PCO holds on them",
+        `SELECT ((age / 10) * 10) || 's' AS "Age", COUNT(*) AS "Elders"
+           FROM (${ELDER_AGES}) GROUP BY 1 ORDER BY MIN(age)`, "bar",
+        { colorByCategory: true }),
     ],
     gaps: measuredNote(
-      "the size of the eldership and the ratio of engaged adults to elders.",
-      "This is a roster count only. Elder meetings, decisions, doctrinal oversight and member care are not recorded in any system we sync.",
+      "the size of the eldership, the ratio of engaged adults to elders, and the age spread of the board.",
+      "Age is the only part of \u201cdiversity of elders\u201d that PCO can answer, and it is approximate \u2014 birth year only, so it is out by up to a year for anyone yet to have a birthday this year. Ethnicity is not a field on these records. Nothing records how long a man has served as an elder: the reference list has no join date, so tenure and turnover cannot be shown. Beyond the roster, elder meetings, decisions, doctrinal oversight and member care are not recorded in any system we sync.",
     ),
   },
 
@@ -2044,19 +2113,54 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-facilities": {
     metrics: [
+      // Every number about events now comes from PCO CALENDAR. It used to come
+      // from pco_plans, which is PCO *Services* — Sunday services and
+      // rehearsals only. A funeral, a wedding, the Preschool open house and
+      // every outside group renting the Center were invisible, and those are
+      // exactly the events the building has to be opened, set up and cleaned
+      // for. Calendar holds 33,400 occurrences against Services' handful.
+      stat("Events served", "occurrences on the church calendar, last 12 months",
+        `SELECT COUNT(*) FROM (${CALENDAR_OCCURRENCES})
+          WHERE day >= date('now','-365 day') AND day <= date('now')`,
+        { color: "highlight" }),
+      stat("Events needing a setup", "with room-layout or written setup instructions",
+        `SELECT COUNT(*) FROM (${CALENDAR_OCCURRENCES}) o
+          WHERE o.day >= date('now','-365 day') AND o.day <= date('now')
+            AND o.event_id IN (${SETUP_EVENTS})`),
+      stat("Staff served", "people whose event requests the building answered",
+        `SELECT COUNT(DISTINCT owner_id) FROM (${CALENDAR_OCCURRENCES})
+          WHERE day >= date('now','-365 day') AND day <= date('now')
+            AND owner_id IS NOT NULL`),
       stat("Facilities volunteers", "active members of a facilities or chair team",
         `SELECT COUNT(DISTINCT m.person_id)
            FROM pco_team_memberships m
            JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
           WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
-            AND (lower(t.name) LIKE '%facilit%' OR lower(t.name) LIKE '%chair%')`,
-        { color: "highlight" }),
+            AND (lower(t.name) LIKE '%facilit%' OR lower(t.name) LIKE '%chair%')`),
       stat("Setup shifts filled", "chair and facilities assignments, last 12 months",
         `SELECT COUNT(*) FROM (${servingSlots("lower(st.name) LIKE '%chair%' OR lower(st.name) LIKE '%facilit%'")})
           WHERE sort_date >= ${YEAR}`),
-      stat("Events to support", "plans across every service type, last 12 months",
-        `SELECT COUNT(*) FROM pco_plans
-          WHERE org_id = :orgId AND sort_date >= ${YEAR} AND sort_date <= datetime('now')`),
+      chart("Events served by year", "every occurrence, and the share needing a setup",
+        `SELECT substr(o.day,1,4) AS "Year",
+                COUNT(*) AS "Events served",
+                SUM(CASE WHEN o.event_id IN (${SETUP_EVENTS}) THEN 1 ELSE 0 END) AS "Needing a setup"
+           FROM (${CALENDAR_OCCURRENCES}) o
+          WHERE o.day >= '2019-01-01' AND o.day <= date('now')
+          GROUP BY 1 ORDER BY 1`, "line"),
+      chart("Events served by month", "the shape of the building's year",
+        `SELECT substr(o.day,1,7) AS "Month", COUNT(*) AS "Events"
+           FROM (${CALENDAR_OCCURRENCES}) o
+          WHERE o.day >= date('now','-730 day') AND o.day <= date('now')
+          GROUP BY 1 ORDER BY 1`, "area"),
+      table("Staff served", "whose events the building carried, last 12 months",
+        `SELECT COALESCE(p.first_name || ' ' || p.last_name, '(not in PCO People)') AS "Requested by",
+                COUNT(DISTINCT o.event_id) AS "Events",
+                COUNT(*) AS "Occurrences"
+           FROM (${CALENDAR_OCCURRENCES}) o
+           LEFT JOIN pco_people p ON p.pco_id = o.owner_id AND p.org_id = :orgId
+          WHERE o.owner_id IS NOT NULL
+            AND o.day >= date('now','-365 day') AND o.day <= date('now')
+          GROUP BY 1 ORDER BY 3 DESC`),
       table("Facilities teams", "active membership",
         `SELECT t.name AS "Team", COUNT(DISTINCT m.person_id) AS "Members"
            FROM pco_teams t
@@ -2067,8 +2171,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           GROUP BY 1 ORDER BY 2 DESC`),
     ],
     gaps: measuredNote(
-      "the volunteer roster and the volume of events the building has to support.",
-      "Not measured: work orders, maintenance cost, room utilisation, cleaning standards or capital condition. Facilities work is managed outside PCO entirely, so almost every published Output here is unmeasured.",
+      "the events the building served, which of them needed a setup, the staff whose requests it answered, and the volunteer roster behind the work.",
+      "STAFF SERVED IS UNDER-COUNTED THE FURTHER BACK YOU LOOK, and the rise is record-keeping, not growth: 86% of 2018 occurrences have no named requester on the event, against 16% in 2025. Read the trend from 2023 on. The count is also of people, not requests — somebody who booked one room once counts the same as somebody who booked forty. Not measured: callbacks, complaints, work orders, maintenance cost, vendor management or capital condition — none of that is in PCO, and the published Outputs that ask for them stay unmeasured.",
     ),
   },
 

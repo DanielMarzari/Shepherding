@@ -13,6 +13,7 @@ import {
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 import { refreshLastCheckIn, syncCheckinsAll } from "./pco-sync-checkins";
 import { refreshLastAttended, syncGroupsAll } from "./pco-sync-groups";
+import { syncCalendarAll } from "./pco-sync-calendar";
 import { syncRegistrationsAll } from "./pco-sync-registrations";
 import { refreshIsParent, syncHouseholdsAll } from "./pco-sync-households";
 import { syncListsAll } from "./pco-sync-lists";
@@ -57,6 +58,11 @@ export interface SyncDetails {
   personFields: { fetched: number; upserted: number };
   registrationSignups: { fetched: number; upserted: number };
   registrationAttendees: { fetched: number; upserted: number };
+  calendarEvents: { fetched: number; upserted: number };
+  calendarEventInstances: { fetched: number; upserted: number };
+  calendarResources: { fetched: number; upserted: number };
+  calendarResourceRequests: { fetched: number; upserted: number };
+  calendarResourceBookings: { fetched: number; upserted: number };
   cutoff: string | null;
   durationMs: number;
   startedAt: string;
@@ -153,6 +159,11 @@ export async function runSync(
     personFields: { fetched: 0, upserted: 0 },
     registrationSignups: { fetched: 0, upserted: 0 },
     registrationAttendees: { fetched: 0, upserted: 0 },
+    calendarEvents: { fetched: 0, upserted: 0 },
+    calendarEventInstances: { fetched: 0, upserted: 0 },
+    calendarResources: { fetched: 0, upserted: 0 },
+    calendarResourceRequests: { fetched: 0, upserted: 0 },
+    calendarResourceBookings: { fetched: 0, upserted: 0 },
     cutoff: null,
     durationMs: 0,
     startedAt,
@@ -236,6 +247,26 @@ export async function runSync(
         warning = appendWarning(
           warning,
           `Registrations: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
+    }
+
+    // ── Calendar (events, occurrences, rooms, setup requests, bookings) ─
+    // The only record of what the building is asked to do. Windowed to the
+    // last three years and the next eighteen months; a first run needs
+    // scripts/backfill-calendar.mjs to reach further back.
+    if (enabled.calendar) {
+      try {
+        const c = await syncCalendarAll(client, orgId);
+        details.calendarEvents = c.events;
+        details.calendarEventInstances = c.eventInstances;
+        details.calendarResources = c.resources;
+        details.calendarResourceRequests = c.resourceRequests;
+        details.calendarResourceBookings = c.resourceBookings;
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Calendar: ${e instanceof Error ? e.message : "failed"}`,
         );
       }
     }
