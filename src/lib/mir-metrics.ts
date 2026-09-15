@@ -72,6 +72,74 @@ const SETUP_EVENTS = `
      AND (rq.room_setup_id IS NOT NULL
           OR (rq.notes IS NOT NULL AND TRIM(rq.notes) <> ''))`;
 
+/** The spaces the building actually has. PCO calls 66 things "Room", but
+ *  twelve of them are not spaces: four parking lots, six groups of exterior
+ *  doors (booking "Doors - East" means unlock them for this event), an
+ *  "Online" room and an audio system. Counting those in a building-utilisation
+ *  figure would be wrong, so they come out — and the exclusion is written
+ *  here, in the open, rather than buried in each query.
+ *
+ *  This list is a candidate for the report_sources pools in
+ *  docs/report-sources-plan.md: a `facilities.spaces` pool would hold PCO ids
+ *  and survive a rename, where these name patterns will not. */
+const BOOKABLE_SPACES = `
+  rs.kind = 'Room'
+  AND rs.name NOT LIKE 'Doors -%'
+  AND rs.name NOT LIKE '%Parking Lot'
+  AND rs.name NOT IN ('Online', '221 Audio System')`;
+
+/** Hours a space was genuinely occupied, which is NOT the sum of its bookings.
+ *
+ *  Two corrections, both measured before being applied:
+ *
+ *  1. OVERLAP. Rooms get booked twice over — a Sunday in The Center runs
+ *     "WORSHIP VENUE: LIVE Service" 7:00–12:30 straight into "THE CENTER:
+ *     MINISTRY BLACKOUT" 12:30–21:00, and PCO records both. Summing booking
+ *     hours put The Center at 114% of its own year. So overlapping bookings are
+ *     merged into islands first and each island counted once; The Center then
+ *     reads 91%, which is true — it is held nearly all day, nearly every day.
+ *  2. MULTI-DAY HOLDS. 109 bookings run past 24 hours: VBX takes eight rooms for
+ *     its whole week, and the Online Chat Team holds room 25 for three months.
+ *     Those are real reservations, but a room is not occupied for 24 hours of a
+ *     day, so each island is capped at 15 hours — 7am to 10pm — for every
+ *     calendar day it touches.
+ *
+ *  Available hours are therefore 15 x 365 = 5,475 per space per year. */
+const ROOM_HOURS = (where: string) => `
+  WITH src AS (
+    SELECT b.resource_id, b.starts_at AS s, b.ends_at AS e
+      FROM pco_calendar_resource_bookings b
+      JOIN pco_calendar_resources rs ON rs.pco_id = b.resource_id AND rs.org_id = :orgId
+     WHERE b.org_id = :orgId AND b.starts_at IS NOT NULL AND b.ends_at IS NOT NULL
+       AND b.ends_at > b.starts_at AND ${where}
+  ),
+  marked AS (
+    SELECT resource_id, s, e,
+           CASE WHEN MAX(e) OVER (PARTITION BY resource_id ORDER BY s
+                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) >= s
+                THEN 0 ELSE 1 END AS is_new
+      FROM src
+  ),
+  grouped AS (
+    SELECT resource_id, s, e,
+           SUM(is_new) OVER (PARTITION BY resource_id ORDER BY s
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS island
+      FROM marked
+  ),
+  islands AS (
+    SELECT resource_id, MIN(s) AS s, MAX(e) AS e FROM grouped GROUP BY resource_id, island
+  )
+  SELECT resource_id,
+         SUM(MIN((julianday(e) - julianday(s)) * 24.0,
+                 (julianday(date(e)) - julianday(date(s)) + 1) * 15.0)) AS hours
+    FROM islands GROUP BY resource_id`;
+
+/** Bookings inside the trailing year, by LOCAL date — see
+ *  CALENDAR_OCCURRENCES for why -5 hours. */
+const BOOKED_LAST_YEAR = `
+  date(b.starts_at,'-5 hours') >= date('now','-365 day')
+  AND date(b.starts_at,'-5 hours') <= date('now')`;
+
 /** The eldership, from the PCO reference list. */
 const ELDERS = `
   SELECT m.person_id
@@ -2152,6 +2220,24 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM (${CALENDAR_OCCURRENCES}) o
           WHERE o.day >= date('now','-730 day') AND o.day <= date('now')
           GROUP BY 1 ORDER BY 1`, "area"),
+      stat("Building utilisation", "of a 7am–10pm week, across the bookable spaces",
+        `SELECT ROUND(100.0 * (SELECT SUM(hours) FROM (${ROOM_HOURS(`${BOOKABLE_SPACES} AND ${BOOKED_LAST_YEAR}`)}))
+                    / NULLIF(5475.0 * (SELECT COUNT(*) FROM pco_calendar_resources rs
+                                        WHERE rs.org_id = :orgId AND ${BOOKABLE_SPACES}), 0), 1) || '%'`),
+      chart("Busiest spaces", "share of the bookable week each room was held, last 12 months",
+        `SELECT rs.name AS "Space", ROUND(100.0 * u.hours / 5475.0, 1) AS "% of the week"
+           FROM (${ROOM_HOURS(`${BOOKABLE_SPACES} AND ${BOOKED_LAST_YEAR}`)}) u
+           JOIN pco_calendar_resources rs ON rs.pco_id = u.resource_id AND rs.org_id = :orgId
+          ORDER BY 2 DESC LIMIT 15`, "bar"),
+      table("Every space", "hours held and share of the bookable week, last 12 months",
+        `SELECT rs.name AS "Space",
+                CAST(ROUND(COALESCE(u.hours, 0)) AS INT) AS "Hours held",
+                ROUND(100.0 * COALESCE(u.hours, 0) / 5475.0, 1) AS "% of the week"
+           FROM pco_calendar_resources rs
+           LEFT JOIN (${ROOM_HOURS(`${BOOKABLE_SPACES} AND ${BOOKED_LAST_YEAR}`)}) u
+             ON u.resource_id = rs.pco_id
+          WHERE rs.org_id = :orgId AND ${BOOKABLE_SPACES}
+          ORDER BY 3 DESC`),
       table("Staff served", "whose events the building carried, last 12 months",
         `SELECT COALESCE(p.first_name || ' ' || p.last_name, '(not in PCO People)') AS "Requested by",
                 COUNT(DISTINCT o.event_id) AS "Events",
@@ -2171,8 +2257,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           GROUP BY 1 ORDER BY 2 DESC`),
     ],
     gaps: measuredNote(
-      "the events the building served, which of them needed a setup, the staff whose requests it answered, and the volunteer roster behind the work.",
-      "STAFF SERVED IS UNDER-COUNTED THE FURTHER BACK YOU LOOK, and the rise is record-keeping, not growth: 86% of 2018 occurrences have no named requester on the event, against 16% in 2025. Read the trend from 2023 on. The count is also of people, not requests — somebody who booked one room once counts the same as somebody who booked forty. Not measured: callbacks, complaints, work orders, maintenance cost, vendor management or capital condition — none of that is in PCO, and the published Outputs that ask for them stay unmeasured.",
+      "the events the building served, which of them needed a setup, the staff whose requests it answered, how hard each room is worked, and the volunteer roster behind it.",
+      "STAFF SERVED IS UNDER-COUNTED THE FURTHER BACK YOU LOOK, and the rise is record-keeping, not growth: 86% of 2018 occurrences have no named requester on the event, against 16% in 2025. Read the trend from 2023 on. The count is also of people, not requests — somebody who booked one room once counts the same as somebody who booked forty. UTILISATION WEIGHTS EVERY SPACE EQUALLY: a 400-seat auditorium and a three-person office each count as one room out of 54, so the building-wide figure is a room average, not a floor-area one. Weighting it by square footage needs the floor plan — the one thing a blueprint would add. It also measures BOOKED, not occupied: a room held under a blackout reservation counts as in use, which is right for facilities and wrong for counting seats. Not measured: callbacks, complaints, work orders, maintenance cost, vendor management or capital condition — none of that is in PCO, and the published Outputs that ask for them stay unmeasured.",
     ),
   },
 
