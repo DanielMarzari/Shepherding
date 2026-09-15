@@ -1651,33 +1651,108 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-english-as-a-second-language": {
     metrics: [
-      // All four are the classes running now, so archived groups are dropped:
-      // a class that finished years ago is not a class the ministry teaches.
-      //
-      // 10 of the 14 carry the leader role, so this is everyone attached to an
-      // ESL group — teachers included — not a student count.
-      stat("People connected", "everyone in an ESL group, teachers included",
-        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'ESL (non-PTS)'")})
-          WHERE group_archived_at IS NULL`,
-        { color: "highlight" }),
-      stat("ESL groups", "classes tracked as PCO groups",
-        `SELECT COUNT(DISTINCT g.pco_id) FROM pco_groups g
-           JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
-          WHERE g.org_id = :orgId AND gt.name = 'ESL (non-PTS)'
-            AND g.archived_at IS NULL`),
-      stat("Group leaders", "members with the leader role",
-        `SELECT COUNT(DISTINCT person_id) FROM (${groupTypeMembers("'ESL (non-PTS)'")})
-          WHERE role = 'leader' AND group_archived_at IS NULL`),
-      table("ESL groups", "membership by class",
-        `SELECT group_name AS "Group", COUNT(DISTINCT person_id) AS "People"
-           FROM (${groupTypeMembers("'ESL (non-PTS)'")})
-          WHERE group_archived_at IS NULL
-          GROUP BY 1 ORDER BY 2 DESC`),
+      // Students come from PCO Registrations — one "English as a Second
+      // Language (ESL)" signup per school year. The 2019 "ESL Teacher Training"
+      // signup is excluded by name: those 24 are the teachers, and counting
+      // them as students would overstate a year by a third.
+      stat("Students this year", "registered for the current ESL signup",
+        `SELECT COUNT(DISTINCT a.person_id)
+    FROM pco_registration_signups s
+    JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+   WHERE s.org_id = :orgId AND a.canceled = 0 AND a.person_id IS NOT NULL
+     AND lower(s.name) LIKE '%english as a second language%'
+     AND lower(s.name) NOT LIKE '%teacher%'
+     AND substr(s.pco_created_at,1,4) = (
+       SELECT MAX(substr(s2.pco_created_at,1,4)) FROM pco_registration_signups s2
+        WHERE s2.org_id = :orgId
+          AND lower(s2.name) LIKE '%english as a second language%'
+          AND lower(s2.name) NOT LIKE '%teacher%')`, { color: "highlight" }),
+      stat("Students ever", "distinct people who have enrolled in any year",
+        `SELECT COUNT(DISTINCT a.person_id)
+    FROM pco_registration_signups s
+    JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+   WHERE s.org_id = :orgId AND a.canceled = 0 AND a.person_id IS NOT NULL
+     AND lower(s.name) LIKE '%english as a second language%'
+     AND lower(s.name) NOT LIKE '%teacher%'`),
+      stat("Average years enrolled", "per student, across every year on record",
+        `WITH enrol AS (
+           SELECT DISTINCT a.person_id, substr(s.pco_created_at,1,4) AS yr
+    FROM pco_registration_signups s
+    JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+   WHERE s.org_id = :orgId AND a.canceled = 0 AND a.person_id IS NOT NULL
+     AND lower(s.name) LIKE '%english as a second language%'
+     AND lower(s.name) NOT LIKE '%teacher%'
+         ),
+         per_person AS (SELECT person_id, COUNT(DISTINCT yr) AS yrs FROM enrol GROUP BY person_id)
+         SELECT ROUND(AVG(yrs), 2) FROM per_person`),
+      stat("Returning this year", "students who had enrolled in an earlier year",
+        `WITH enrol AS (
+           SELECT DISTINCT a.person_id, CAST(substr(s.pco_created_at,1,4) AS INTEGER) AS yr
+    FROM pco_registration_signups s
+    JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+   WHERE s.org_id = :orgId AND a.canceled = 0 AND a.person_id IS NOT NULL
+     AND lower(s.name) LIKE '%english as a second language%'
+     AND lower(s.name) NOT LIKE '%teacher%'
+         ),
+         first_year AS (SELECT person_id, MIN(yr) AS first_yr FROM enrol GROUP BY person_id)
+         SELECT COUNT(DISTINCT e.person_id)
+           FROM enrol e JOIN first_year f ON f.person_id = e.person_id
+          WHERE e.yr > f.first_yr AND e.yr = (SELECT MAX(yr) FROM enrol)`),
+      chart("Students registered each year", "new students against those coming back",
+        `WITH enrol AS (
+           SELECT DISTINCT a.person_id, CAST(substr(s.pco_created_at,1,4) AS INTEGER) AS yr
+    FROM pco_registration_signups s
+    JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+   WHERE s.org_id = :orgId AND a.canceled = 0 AND a.person_id IS NOT NULL
+     AND lower(s.name) LIKE '%english as a second language%'
+     AND lower(s.name) NOT LIKE '%teacher%'
+         ),
+         first_year AS (SELECT person_id, MIN(yr) AS first_yr FROM enrol GROUP BY person_id)
+         SELECT CAST(e.yr AS TEXT) AS "Year",
+                COUNT(DISTINCT CASE WHEN e.yr = f.first_yr THEN e.person_id END) AS "New students",
+                COUNT(DISTINCT CASE WHEN e.yr > f.first_yr THEN e.person_id END) AS "Returning"
+           FROM enrol e JOIN first_year f ON f.person_id = e.person_id
+          GROUP BY e.yr ORDER BY e.yr`, "stacked-bar"),
+      chart("How long students stay", "years enrolled, per student",
+        `WITH enrol AS (
+           SELECT DISTINCT a.person_id, substr(s.pco_created_at,1,4) AS yr
+    FROM pco_registration_signups s
+    JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+   WHERE s.org_id = :orgId AND a.canceled = 0 AND a.person_id IS NOT NULL
+     AND lower(s.name) LIKE '%english as a second language%'
+     AND lower(s.name) NOT LIKE '%teacher%'
+         ),
+         per_person AS (SELECT person_id, COUNT(DISTINCT yr) AS yrs FROM enrol GROUP BY person_id)
+         SELECT CASE WHEN yrs = 1 THEN '1 year'
+                     WHEN yrs = 2 THEN '2 years'
+                     WHEN yrs = 3 THEN '3 years'
+                     ELSE '4 or more' END AS "Years enrolled",
+                COUNT(*) AS "Students"
+           FROM per_person GROUP BY 1 ORDER BY MIN(yrs)`, "bar", { colorByCategory: true }),
+      table("Every ESL registration", "each year's signup and how many enrolled",
+        `SELECT substr(s.pco_created_at,1,4) AS "Year",
+                TRIM(s.name, char(9) || char(10) || char(13) || ' ') AS "Signup",
+                COUNT(DISTINCT CASE WHEN a.canceled = 0 THEN a.person_id END) AS "Enrolled"
+           FROM pco_registration_signups s
+           LEFT JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+          WHERE s.org_id = :orgId
+            AND (lower(s.name) LIKE '%english as a second language%' OR lower(s.name) LIKE '%esl%')
+          GROUP BY 1, 2
+         HAVING COUNT(DISTINCT CASE WHEN a.canceled = 0 THEN a.person_id END) > 0
+          ORDER BY 1 DESC`),
     ],
-    gaps: measuredNote(
-      "everyone attached to an ESL group in PCO, and how many carry the leader role.",
-      "Most of this roster is leaders — only 4 of the 14 are not — so it does not tell you how many students the ministry reaches. ESL attendance is not checked in, and students are largely not entered into PCO at all, so class size, sessions run and English progress are all unmeasured.",
-    ),
+    gaps: {
+      intro:
+        "Registration answers four of the eight Outputs. The other four need something recorded that currently is not:",
+      items: [
+        "- **# of students who stay in the program until May** — this would come from attendance, and ESL attendance exists for **2020 only** (66 meetings, 51 people). The level groups stopped being used after that, so there is nothing to measure persistence against for any later year. Taking attendance in the ESL groups again would make this live.",
+        "- **# of students advancing to the next level** — the same 2020 groups are the only place a level was ever recorded (ESL Level 1 through 5, plus Online). They hold 2 to 4 members each and have not been used since. Level has to be recorded somewhere per student per year before advancement can be counted.",
+        "- **# of countries represented** — not asked on the registration, or at least not in anything that reaches this app. A country field on the ESL signup form would answer it immediately, and it is the single highest-value thing to add.",
+        "- **# of resources offered on request** (resume writing and similar) — not recorded anywhere.",
+      ],
+      footer:
+        "_Students are the people registered on each year's \u201cEnglish as a Second Language (ESL)\u201d signup in PCO Registrations; the 2019 \u201cESL Teacher Training\u201d signup is excluded because those 24 are teachers. A year is the year its signup was created, so a course spanning the turn of the year is counted in the year it opened. **Retention is the striking number here: 214 of the 236 students ever enrolled appear in exactly one year**, and the average is 1.12 years — which is the context the \u201cstay until May\u201d and \u201cadvancing a level\u201d Outputs were written to examine. 2026 is still open, so its 29 will grow._",
+    },
   },
 
   "mir-shepherd-team": {
