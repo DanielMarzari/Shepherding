@@ -1271,22 +1271,75 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-sunday-teaching": {
     metrics: [
-      stat("Sermons on record", "every sermon we have captured",
-        `SELECT COUNT(*) FROM sermons WHERE org_id = :orgId`, { color: "highlight" }),
-      stat("Sermons in the last year", "preached in the last 12 months",
-        `SELECT COUNT(*) FROM sermons
-          WHERE org_id = :orgId AND preached_on >= date('now','-365 day')`),
-      stat("Speakers", "distinct people who have preached",
-        `SELECT COUNT(DISTINCT speaker) FROM sermons
-          WHERE org_id = :orgId AND speaker IS NOT NULL AND trim(speaker) != ''`),
-      stat("Average adult attendance", "adults per week, last 12 months",
-        `SELECT CAST(ROUND(AVG(adult_total)) AS INT) FROM attendance_weekly
-          WHERE org_id = :orgId AND adult_total IS NOT NULL
+      stat("Average Sunday on campus", "in the room, last 12 months",
+        `SELECT CAST(ROUND(AVG(in_person_total)) AS INT) FROM attendance_weekly
+          WHERE org_id = :orgId AND in_person_total IS NOT NULL
+            AND week_date >= date('now','-365 day')`, { color: "highlight" }),
+      stat("Average Sunday online", "live plus on demand, last 12 months",
+        `SELECT CAST(ROUND(AVG(COALESCE(online_live,0) + COALESCE(online_on_demand,0))) AS INT)
+           FROM attendance_weekly
+          WHERE org_id = :orgId AND (online_live IS NOT NULL OR online_on_demand IS NOT NULL)
             AND week_date >= date('now','-365 day')`),
+      stat("Baptisms in the last year", "from the Baptism date on each person's record",
+        `SELECT COUNT(*) FROM pco_person_fields
+          WHERE org_id = :orgId AND field_name = 'Baptism'
+            AND value_date IS NOT NULL AND value_date >= date('now','-365 day')`),
+      stat("People giving", "gave at least once in the last 12 months",
+        `SELECT COUNT(DISTINCT person_id) FROM pushpay_donors
+          WHERE org_id = :orgId AND person_id IS NOT NULL
+            AND last_gift_date IS NOT NULL AND last_gift_date >= date('now','-365 day')`),
+      chart("Sunday attendance", "on campus, live online, and on demand — every Sunday on the sheet",
+        `SELECT week_date AS "Week",
+                in_person_total AS "On campus",
+                online_live AS "Online live",
+                online_on_demand AS "On demand"
+           FROM attendance_weekly
+          WHERE org_id = :orgId AND week_date >= date('now','-730 day')
+          ORDER BY week_date`, "line", { span: 12 }),
+      chart("On campus and online, year by year", "average Sunday — the room has grown while online has settled",
+        `SELECT substr(week_date,1,4) AS "Year",
+                CAST(ROUND(AVG(in_person_total)) AS INT) AS "On campus",
+                CAST(ROUND(AVG(COALESCE(online_live,0) + COALESCE(online_on_demand,0))) AS INT) AS "Online"
+           FROM attendance_weekly
+          WHERE org_id = :orgId AND substr(week_date,1,4) >= '2021'
+          GROUP BY 1 ORDER BY 1`, "bar"),
       chart("Sermons by year", "how much teaching we have captured",
         `SELECT substr(preached_on,1,4) AS "Year", COUNT(*) AS "Sermons"
            FROM sermons WHERE org_id = :orgId AND preached_on IS NOT NULL
           GROUP BY 1 ORDER BY 1`, "bar"),
+      table("What Sunday leads to", "where the congregation has got to — each row counts distinct people",
+        `SELECT 'In a small group' AS "Next step",
+                (SELECT COUNT(DISTINCT gm.person_id)
+                   FROM pco_group_memberships gm
+                   JOIN pco_groups g ON g.pco_id = gm.group_id AND g.org_id = :orgId
+                   JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+                  WHERE gm.org_id = :orgId AND gm.archived_at IS NULL
+                    AND g.archived_at IS NULL AND gt.name = 'Small Groups') AS "People"
+         UNION ALL SELECT 'Serving on a team',
+                (SELECT COUNT(DISTINCT person_id) FROM pco_team_memberships
+                  WHERE org_id = :orgId AND archived_at IS NULL AND person_id <> '')
+         UNION ALL SELECT 'Giving (last 12 months)',
+                (SELECT COUNT(DISTINCT person_id) FROM pushpay_donors
+                  WHERE org_id = :orgId AND person_id IS NOT NULL
+                    AND last_gift_date IS NOT NULL AND last_gift_date >= date('now','-365 day'))
+         UNION ALL SELECT 'A member',
+                (SELECT COUNT(*) FROM pco_people
+                  WHERE org_id = :orgId AND membership_type = 'Member')
+         UNION ALL SELECT 'Baptised (all on record)',
+                (SELECT COUNT(*) FROM pco_person_fields
+                  WHERE org_id = :orgId AND field_name = 'Baptism' AND value_date IS NOT NULL)
+         UNION ALL SELECT 'Small groups running',
+                (SELECT COUNT(*) FROM pco_groups g
+                   JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
+                  WHERE g.org_id = :orgId AND gt.name = 'Small Groups' AND g.archived_at IS NULL)`),
+      table("Average Sunday, year by year", "with the number of Sundays each average rests on",
+        `SELECT substr(week_date,1,4) AS "Year",
+                CAST(ROUND(AVG(in_person_total)) AS INT) AS "On campus",
+                CAST(ROUND(AVG(COALESCE(online_live,0) + COALESCE(online_on_demand,0))) AS INT) AS "Online",
+                COUNT(*) AS "Sundays counted"
+           FROM attendance_weekly
+          WHERE org_id = :orgId AND substr(week_date,1,4) >= '2021'
+          GROUP BY 1 ORDER BY 1`),
       table("Who preaches", "sermons by speaker",
         `SELECT speaker AS "Speaker", COUNT(*) AS "Sermons",
                 MAX(substr(preached_on,1,10)) AS "Most recent"
@@ -1294,10 +1347,25 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE org_id = :orgId AND speaker IS NOT NULL AND trim(speaker) != ''
           GROUP BY 1 ORDER BY 2 DESC LIMIT 20`),
     ],
-    gaps: measuredNote(
-      "teaching volume, who preaches, and the adult attendance it reaches.",
-      "Not measured: whether the teaching landed. Comprehension, application, and the next steps people took because of a sermon are not recorded — the Sermon Lab work on next-step calls is the closest thing and is not wired into this page.",
-    ),
+    gaps: {
+      intro:
+        "The rest of the published Outputs, split by whether the data is coming or genuinely is not. **TO DO** means somebody is already working on the source:",
+      items: [
+        "- **TO DO — # of sermon views.** Online viewing lives with whoever runs the stream; nothing reaches this app yet.",
+        "- **TO DO — # of new givers.** The PushPay export we import is a donor snapshot with a last-gift date, not a gift history, so a first-ever gift cannot be dated. Expected once fuller giving data arrives.",
+        "- **TO DO — # participants in Extraordinary Giving Projects.** Steve is granting access to the giving records; not here yet.",
+        "- **TO DO — # of people serving in VBX and the Christmas Tree Lighting.** Neither is marked in PCO Services, so there is no roster to count. Once they are scheduled like other teams this becomes the same query as the serving count above.",
+        "- **TO DO — Sunday attendance from check-ins.** Attendance above is the manually maintained sheet. PCO check-ins already carry a room-by-room Sunday count; once a Sunday check-in event is nominated (see Settings → Filters) this page can read the real thing instead. **The sheet currently stops at 24 May 2026** — 2026 shows 21 Sundays against 52 in every full year, so this year's averages rest on January to May only.",
+        "- **TO DO — Care groups, both Outputs.** Small groups are counted above; there is no care-group structure in PCO to count. The nearest thing is a \u201cCare Ministries\u201d group type holding 2 groups, which is not the same thing.",
+        "- **# of people who cross the line of faith** — no faith decision is recorded anywhere we sync.",
+        "- **# of people leading or mentoring** — group and team leaders are known, but mentoring is not recorded.",
+        "- **Average $ per giver per year** — the import carries who gave and when, never how much. This one is not a matter of waiting: without amounts the figure cannot be produced here at all.",
+        "- **Annual spiritual health survey** and **# spiritual gift tests** — neither instrument has been run, so there is nothing to report.",
+        "- **Ratio of members to annual meeting votes** — vote counts are not in any system we read.",
+      ],
+      footer:
+        "_Attendance is the manually maintained weekly sheet, which is why it is a headcount and not a list of names — and why 2026 is short. Giving counts people whose PushPay donor record matches a person and who gave inside the last twelve months; the all-time matched figure is far larger because it includes everyone who has ever given. Sermons mirror the Sermon Lab app one-for-one — 429 of Faith Church's 429 — so nothing is missing on this side; the most recent is 3 August 2026, which is how far Sermon Lab's own feed has ingested._",
+    },
   },
 
   "mir-online-ministry": {

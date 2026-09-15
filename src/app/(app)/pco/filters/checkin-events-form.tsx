@@ -21,12 +21,14 @@ export function CheckinEventsForm({
   initialExcluded,
   initialAdult,
   initialKid,
+  initialSunday,
   isAdmin,
 }: {
   stats: Stat[];
   initialExcluded: string[];
   initialAdult: string[];
   initialKid: string[];
+  initialSunday: string[];
   isAdmin: boolean;
 }) {
   // Reconstruct the per-event kind. Default = neutral (uncategorized,
@@ -44,6 +46,18 @@ export function CheckinEventsForm({
     return m;
   }, [initialKid, initialAdult, initialExcluded]);
   const [kinds, setKinds] = useState<Map<string, Kind>>(initialKinds);
+  // Sunday morning is a SEPARATE flag, not a fourth kind: "Sunday AM Kids" is a
+  // kids programme AND a Sunday morning event, and a single dropdown would make
+  // you choose. Nominating events here lets the Sunday Teaching report count
+  // the room from PCO instead of the hand-kept spreadsheet.
+  const [sunday, setSunday] = useState<Set<string>>(() => new Set(initialSunday));
+  const toggleSunday = (id: string) =>
+    setSunday((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const [showArchived, setShowArchived] = useState(false);
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
     saveCheckinEventsAction,
@@ -156,6 +170,24 @@ export function CheckinEventsForm({
                 <span title="Distinct PCO people matched. Anonymous walk-ins (no linked person_id) aren't counted here.">
                   {s.distinctPeople.toLocaleString()} known people
                 </span>
+                <label
+                  title="This check-in event is part of Sunday morning. Nominated events feed the Sunday Teaching report."
+                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded border cursor-pointer select-none ${
+                    sunday.has(s.eventId)
+                      ? "border-accent text-accent font-medium"
+                      : "border-border-soft text-muted"
+                  } ${isAdmin ? "" : "opacity-60 cursor-default"}`}
+                >
+                  <input
+                    type="checkbox"
+                    name={`checkin_event_sunday[${s.eventId}]`}
+                    checked={sunday.has(s.eventId)}
+                    onChange={() => toggleSunday(s.eventId)}
+                    disabled={!isAdmin}
+                    className="accent-[var(--accent)] cursor-pointer"
+                  />
+                  Sunday AM
+                </label>
                 <select
                   name={`checkin_event_kind[${s.eventId}]`}
                   value={kind}

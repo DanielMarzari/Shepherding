@@ -10,6 +10,7 @@ import {
   saveExcludedTeamPositions,
   saveExcludedTeamTypes,
   saveKidCheckinEvents,
+  saveSundayCheckinEvents,
 } from "@/lib/pco";
 
 export interface FilterSaveState {
@@ -85,7 +86,14 @@ export async function saveCheckinEventsAction(
   const kidIds: string[] = [];
   const adultIds: string[] = [];
   const ignoreIds: string[] = [];
+  // Sunday morning is orthogonal to the kind above — its own checkbox per row.
+  const sundayIds: string[] = [];
   for (const [key, value] of formData.entries()) {
+    const sun = key.match(/^checkin_event_sunday\[(.+)\]$/);
+    if (sun) {
+      sundayIds.push(sun[1]);
+      continue;
+    }
     const m = key.match(/^checkin_event_kind\[(.+)\]$/);
     if (!m) continue;
     const eventId = m[1];
@@ -99,6 +107,7 @@ export async function saveCheckinEventsAction(
   saveExcludedCheckinEvents(s.orgId, excludedIds);
   saveAdultCheckinEvents(s.orgId, adultIds);
   saveKidCheckinEvents(s.orgId, kidIds);
+  saveSundayCheckinEvents(s.orgId, sundayIds);
   revalidatePath("/pco/filters");
   revalidatePath("/people");
   revalidatePath("/metrics");
@@ -113,6 +122,8 @@ export async function saveCheckinEventsAction(
     summary.push(`${adultIds.length} adult event${adultIds.length === 1 ? "" : "s"}`);
   if (ignoreIds.length > 0)
     summary.push(`${ignoreIds.length} ignored event${ignoreIds.length === 1 ? "" : "s"}`);
+  if (sundayIds.length > 0)
+    summary.push(`${sundayIds.length} Sunday morning event${sundayIds.length === 1 ? "" : "s"}`);
   return {
     status: "saved",
     message:

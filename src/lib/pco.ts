@@ -608,6 +608,39 @@ function getKidCheckinEventsImpl(orgId: number): string[] {
   }
 }
 
+/** Check-in events that ARE Sunday morning. Nominating them lets the Sunday
+ *  Teaching report count the room from PCO instead of the hand-kept
+ *  spreadsheet. Orthogonal to the kid/adult/ignore designation — "Sunday AM
+ *  Kids" is both a kids programme and a Sunday morning event. Empty list means
+ *  none nominated and the report falls back to the spreadsheet. */
+export const getSundayCheckinEvents = cache(getSundayCheckinEventsImpl);
+function getSundayCheckinEventsImpl(orgId: number): string[] {
+  const row = getDb()
+    .prepare("SELECT sunday_checkin_events FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId) as { sunday_checkin_events: string | null } | undefined;
+  if (!row?.sunday_checkin_events) return [];
+  try {
+    const parsed = JSON.parse(row.sunday_checkin_events);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveSundayCheckinEvents(orgId: number, ids: string[]) {
+  const cleaned = Array.from(new Set(ids.filter(Boolean)));
+  const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) saveSyncSettings(orgId, getSyncSettings(orgId));
+  getDb()
+    .prepare(
+      "UPDATE pco_sync_settings SET sunday_checkin_events = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?",
+    )
+    .run(json, orgId);
+}
+
 export function saveKidCheckinEvents(orgId: number, ids: string[]) {
   const cleaned = Array.from(new Set(ids.filter(Boolean)));
   const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);

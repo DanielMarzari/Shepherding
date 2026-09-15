@@ -1,0 +1,15 @@
+-- Which check-in events ARE Sunday morning.
+--
+-- Sunday attendance on the Sunday Teaching report is a manually maintained
+-- spreadsheet — a headcount, imported by hand, and currently five months
+-- behind. PCO already records the real thing room by room every week; nothing
+-- in the app knows which of the 106 check-in events constitute "Sunday
+-- morning", so it cannot read them.
+--
+-- Deliberately its own column rather than another value in the kid/adult/ignore
+-- selector: those are mutually exclusive and this is orthogonal. "Sunday AM
+-- Kids" is a kids programme AND a Sunday morning event, and forcing a choice
+-- between the two would break whichever one lost.
+--
+-- NULL / empty = none nominated, and the report keeps using the spreadsheet.
+ALTER TABLE pco_sync_settings ADD COLUMN sunday_checkin_events TEXT;
