@@ -56,6 +56,15 @@ jobs:
             db/migrations/ \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/apps/shepherdly/db/migrations/
 
+          # Maintenance scripts. The standalone build only traces what the app
+          # imports, so scripts/ never shipped — and the Wednesday sermon-sync
+          # cron on the host runs from this path, which meant it failed with
+          # MODULE_NOT_FOUND every week without telling anybody.
+          rsync -avz --mkpath \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            scripts/ \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/apps/shepherdly/scripts/
+
           # Write env file the standalone server reads at startup. ENCRYPTION_KEY
           # must persist across deploys so encrypted PCO creds remain decryptable.
           # GH Actions masks the secret in logs.

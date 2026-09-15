@@ -1307,6 +1307,25 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT substr(preached_on,1,4) AS "Year", COUNT(*) AS "Sermons"
            FROM sermons WHERE org_id = :orgId AND preached_on IS NOT NULL
           GROUP BY 1 ORDER BY 1`, "bar"),
+      // The analysis queue. A sermon arrives from Sermon Lab every Wednesday
+      // with its transcript and NO classification — running a model unattended
+      // from cron is not something to set going, so new sermons wait here to be
+      // analysed on request. Empty is the healthy state.
+      stat("Sermons awaiting analysis", "transcribed, not yet classified",
+        `SELECT COUNT(*) FROM sermons
+          WHERE org_id = :orgId AND classified_at IS NULL
+            AND transcript IS NOT NULL AND transcript <> ''`),
+      stat("Most recent sermon", "latest message on record",
+        `SELECT COALESCE(MAX(preached_on),'none') FROM sermons WHERE org_id = :orgId`),
+      table("Waiting to be analysed", "each one has a transcript and no classification yet — empty means the log is current",
+        `SELECT preached_on AS "Preached",
+                COALESCE(title,'(untitled)') AS "Title",
+                COALESCE(speaker,'?') AS "Speaker",
+                word_count AS "Words"
+           FROM sermons
+          WHERE org_id = :orgId AND classified_at IS NULL
+            AND transcript IS NOT NULL AND transcript <> ''
+          ORDER BY preached_on DESC LIMIT 25`),
       table("What Sunday leads to", "where the congregation has got to — each row counts distinct people",
         `SELECT 'In a small group' AS "Next step",
                 (SELECT COUNT(DISTINCT gm.person_id)
@@ -1364,7 +1383,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         "- **Ratio of members to annual meeting votes** — vote counts are not in any system we read.",
       ],
       footer:
-        "_Attendance is the manually maintained weekly sheet, which is why it is a headcount and not a list of names — and why 2026 is short. Giving counts people whose PushPay donor record matches a person and who gave inside the last twelve months; the all-time matched figure is far larger because it includes everyone who has ever given. Sermons mirror the Sermon Lab app one-for-one — 429 of Faith Church's 429 — so nothing is missing on this side; the most recent is 3 August 2026, which is how far Sermon Lab's own feed has ingested._",
+        "_Sermons arrive from the Sermon Lab app every Wednesday morning, transcribed and unclassified, and wait in the queue above until somebody asks for them to be analysed — a cron job does not invoke a model on its own. The mirror is one-for-one with Sermon Lab: 429 of Faith Church's 429. Attendance is the manually maintained weekly sheet, which is why it is a headcount and not a list of names — and why 2026 is short. Giving counts people whose PushPay donor record matches a person and who gave inside the last twelve months; the all-time matched figure is far larger because it includes everyone who has ever given. Sermons mirror the Sermon Lab app one-for-one — 429 of Faith Church's 429 — so nothing is missing on this side; the most recent is 3 August 2026, which is how far Sermon Lab's own feed has ingested._",
     },
   },
 
