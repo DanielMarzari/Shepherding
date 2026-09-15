@@ -1458,6 +1458,46 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     ),
   },
 
+  "mir-human-resources": {
+    metrics: [
+      // The staff roster is a PCO reference list, maintained by hand by the
+      // staff themselves. It is the only HR figure that reaches this app:
+      // everything else about employment lives in Paylocity, which is not
+      // connected and, per the ministry lead, is not going to be.
+      stat("Active employees", "people on the REFERENCE - Church Staff list",
+        `SELECT COUNT(DISTINCT m.person_id)
+           FROM pco_list_memberships m
+           JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+          WHERE m.org_id = :orgId AND l.name = 'REFERENCE - Church Staff'`,
+        { color: "highlight" }),
+      stat("Preschool staff", "people on the REFERENCE - Preschool Staff list",
+        `SELECT COUNT(DISTINCT m.person_id)
+           FROM pco_list_memberships m
+           JOIN pco_lists l ON l.pco_id = m.list_id AND l.org_id = :orgId
+          WHERE m.org_id = :orgId AND l.name = 'REFERENCE - Preschool Staff'`),
+      table("The staff reference lists", "where the count comes from, and when each list was last refreshed in PCO",
+        `SELECT l.name AS "Reference list",
+                COUNT(DISTINCT m.person_id) AS "People",
+                substr(MAX(l.refreshed_at),1,10) AS "Last refreshed"
+           FROM pco_lists l
+           LEFT JOIN pco_list_memberships m ON m.list_id = l.pco_id AND m.org_id = :orgId
+          WHERE l.org_id = :orgId AND lower(l.name) LIKE '%staff%'
+          GROUP BY 1 ORDER BY 2 DESC`),
+    ],
+    gaps: {
+      intro:
+        "Every other Output on this report is employment data, and it lives in **Paylocity**. That is not connected to this app and — the ministry lead's decision — is not going to be, so these are stated as out of scope rather than pending:",
+      items: [
+        "- **Employee turnover**, **average time-to-hire**, **# of internal promotions**, **# of new employees from employee referrals**, **# of applicants per job opening** — all of it is in the HR system.",
+        "- **Handbook / policy receipt**, **# of trainings**, **engagement survey participation and scores**, **performance review ratings**, **# on performance improvement plans**, **# of formal complaints** — HR records, and several of them are confidential by nature.",
+        "- **# of HR/employee 1:1 meetings** and **# of HR/coach collaborations** — not recorded in any system we read.",
+        "- **\u201cmeasuring identifiable\u2026\u201d** — this Output is cut off in the published report itself, not here. The 2025 PDF is flattened and its Outputs column overflows the template, so the rest of the sentence is gone from the source. Six reports have a column clipped this way; the text can only come back from whoever holds the original document.",
+      ],
+      footer:
+        "_The employee count is the membership of a hand-maintained PCO list, so it is only as current as the last time someone edited it — the table shows that date. It counts people on the list, not FTEs or contracted hours._",
+    },
+  },
+
   "mir-finance": {
     metrics: [
       stat("Donors on record", "PushPay donors matched to a person",
@@ -1479,10 +1519,30 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COALESCE(donor_stage,'(unclassified)') AS "Stage", COUNT(*) AS "Donors"
            FROM pushpay_donors WHERE org_id = :orgId
           GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
-      chart("How people give", "offline vs digital",
-        `SELECT COALESCE(giving_channel,'(unknown)') AS "Channel", COUNT(*) AS "Donors"
-           FROM pushpay_donors WHERE org_id = :orgId
+      // PushPay's own words are "Digital" and "Offline"; relabelled, because
+      // offline means a cheque or cash in the plate and that is the question
+      // being asked. Scoped to the last twelve months: across all time the
+      // split is dominated by lapsed donors and describes a church that no
+      // longer exists — 3,410 offline to 2,958 digital ever, against 639 to
+      // 1,016 in the last year.
+      chart("How people give", "donors who gave in the last 12 months, by method",
+        `SELECT CASE COALESCE(giving_channel,'(unknown)')
+                  WHEN 'Digital' THEN 'Online'
+                  WHEN 'Offline' THEN 'Check or cash'
+                  ELSE COALESCE(giving_channel,'(unknown)') END AS "How they gave",
+                COUNT(*) AS "Donors"
+           FROM pushpay_donors
+          WHERE org_id = :orgId AND last_gift_date IS NOT NULL
+            AND last_gift_date >= date('now','-365 day')
           GROUP BY 1 ORDER BY 2 DESC`, "donut"),
+      chart("How people give, all time", "every matched donor on record, by method",
+        `SELECT CASE COALESCE(giving_channel,'(unknown)')
+                  WHEN 'Digital' THEN 'Online'
+                  WHEN 'Offline' THEN 'Check or cash'
+                  ELSE COALESCE(giving_channel,'(unknown)') END AS "How they gave",
+                COUNT(*) AS "Donors"
+           FROM pushpay_donors WHERE org_id = :orgId
+          GROUP BY 1 ORDER BY 2 DESC`, "bar"),
     ],
     gaps: measuredNote(
       "donor counts, recency and stage from the PushPay export, plus how people give.",
@@ -1560,10 +1620,32 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE m.org_id = :orgId AND m.archived_at IS NULL AND gt.name LIKE 'Foster%'
             AND g.archived_at IS NULL
           GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
+      // Events are Registrations signups, the same product the Discover courses
+      // live in. Groups show who is committed; this shows who turned up to look.
+      chart("People registering for Foster & Adoption events", "distinct people per year, cancellations excluded",
+        `SELECT substr(s.pco_created_at,1,4) AS "Year",
+                COUNT(DISTINCT CASE WHEN a.canceled = 0 THEN a.person_id END) AS "People",
+                COUNT(DISTINCT s.pco_id) AS "Events"
+           FROM pco_registration_signups s
+           LEFT JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+          WHERE s.org_id = :orgId
+            AND (lower(s.name) LIKE '%foster%' OR lower(s.name) LIKE '%adoption%')
+          GROUP BY 1 ORDER BY 1`, "combo"),
+      table("Every Foster & Adoption event", "who registered, most recent first",
+        `SELECT substr(s.pco_created_at,1,4) AS "Year",
+                TRIM(s.name, char(9) || char(10) || char(13) || ' ') AS "Event",
+                COUNT(DISTINCT CASE WHEN a.canceled = 0 THEN a.person_id END) AS "Registered"
+           FROM pco_registration_signups s
+           LEFT JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+          WHERE s.org_id = :orgId
+            AND (lower(s.name) LIKE '%foster%' OR lower(s.name) LIKE '%adoption%')
+          GROUP BY 1, 2
+         HAVING COUNT(DISTINCT CASE WHEN a.canceled = 0 THEN a.person_id END) > 0
+          ORDER BY 1 DESC, 3 DESC`, 12),
     ],
     gaps: measuredNote(
-      "who is connected to the ministry through PCO groups — volunteers, care communities and partner organisations.",
-      "Not measured: placements supported, children served, or family outcomes. Those live with the agencies, not in PCO.",
+      "who is connected through PCO groups, and who registered for the ministry's events.",
+      "**Where these numbers come from**, since it is not obvious: Faith Church keeps three PCO group types prefixed \u201cFoster Adopt\u201d, and each figure above is a straight count of one of them. **Care communities** is the number of active groups of type *Foster Adopt Care Communities* (3). **Partner organisations** is the same count for *Foster Adopt Organizations* (20) — each agency or partner is filed as a group, which is why they can be counted at all. **Volunteers** is the distinct people in *Foster Adopt Volunteers*. Archived groups are excluded throughout: a care community that has wound up is not still wrapped around a family. Event attendance is separate — those are PCO Registrations signups, the same product the Discover courses use, so they show who came to look rather than who committed. Not measured: placements supported, children served, or family outcomes. Those live with the agencies, not in PCO.",
     ),
   },
 
