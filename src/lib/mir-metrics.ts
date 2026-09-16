@@ -168,6 +168,43 @@ const BOOKED_LAST_YEAR = `
   ${easternDate("b.starts_at")} >= date('now','-365 day')
   AND ${easternDate("b.starts_at")} <= date('now')`;
 
+/** How much notice the building got: days between an event being created in
+ *  PCO and the first occurrence that FOLLOWS its creation.
+ *
+ *  Two traps, both hit and corrected before this shipped.
+ *
+ *  1. NOT the event's first instance. For a recurring series the first
+ *     occurrence is often years before the request was filed, which computes as
+ *     a negative or absurd notice — measured naively, 3,460 requests in 2018
+ *     read as "filed after the event". The instance must be the nearest one on
+ *     or after creation.
+ *  2. NOT pre-2018 events. Our calendar sync floor is 2018-01-01, so 149 events
+ *     created in 2016-17 have their earliest SYNCED occurrence in Q1 2018 and
+ *     compute as "booked 500 days ahead". That is our sync window, not the
+ *     church's planning. They are excluded, which is why the series starts in
+ *     2018 rather than at the floor. */
+const EVENT_NOTICE = `
+  SELECT e.pco_id AS event_id,
+         e.pco_created_at AS created_at,
+         substr(e.pco_created_at, 1, 4) AS created_year,
+         julianday(MIN(i.starts_at)) - julianday(e.pco_created_at) AS notice_days
+    FROM pco_calendar_events e
+    JOIN pco_calendar_event_instances i
+      ON i.event_id = e.pco_id AND i.org_id = :orgId
+     AND i.starts_at >= e.pco_created_at
+   WHERE e.org_id = :orgId AND e.pco_created_at >= '2018-01-01'
+   GROUP BY 1, 2, 3`;
+
+/** Instant Access — the all-church email. 631 campaigns since 2013, and the
+ *  only Constant Contact campaign the Communications reports name by title.
+ *  Drafts and scheduled sends are excluded: current_status 'Done' means it
+ *  actually went out. */
+const INSTANT_ACCESS = `
+  cc.org_id = :orgId
+  AND lower(cc.name) LIKE '%instant access%'
+  AND cc.current_status = 'Done'
+  AND cc.last_sent_date IS NOT NULL`;
+
 /** The eldership, from the PCO reference list. */
 const ELDERS = `
   SELECT m.person_id
@@ -1577,6 +1614,56 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     ),
   },
 
+  // Two of this report's sixteen Outputs have a source; the other fourteen
+  // count things no system records. Both measured ones are named in the
+  // published Output with a target, so they read as scorecard lines rather
+  // than as numbers we invented: "4.5 Instant Access campaigns sent/mo" and
+  // "10 registrations/mo".
+  "mir-communications-content-creation": {
+    metrics: [
+      stat("Instant Access sent", "campaigns per month, last 12 months (published target: 4.5)",
+        `SELECT ROUND(COUNT(*) / 12.0, 1) FROM cc_campaigns cc
+          WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`, { color: "highlight" }),
+      stat("Registrations built", "signups created per month, last 12 months (published target: 10)",
+        `SELECT ROUND(COUNT(*) / 12.0, 1) FROM pco_registration_signups
+          WHERE org_id = :orgId AND pco_created_at >= datetime('now','-365 day')`),
+      stat("Emails delivered by Instant Access", "total sends, last 12 months",
+        `SELECT SUM(cc.stat_sends) FROM cc_campaigns cc
+          WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`),
+      chart("Instant Access campaigns by month", "how the send rhythm actually runs",
+        `SELECT substr(cc.last_sent_date,1,7) AS "Month", COUNT(*) AS "Campaigns"
+           FROM cc_campaigns cc
+          WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= datetime('now','-730 day')
+          GROUP BY 1 ORDER BY 1`, "bar"),
+      chart("Registrations built by month", "new signups created in PCO Registrations",
+        `SELECT substr(pco_created_at,1,7) AS "Month", COUNT(*) AS "Registrations"
+           FROM pco_registration_signups
+          WHERE org_id = :orgId AND pco_created_at >= datetime('now','-730 day')
+          GROUP BY 1 ORDER BY 1`, "bar"),
+      table("Every registration built", "most recent first, with who signed up",
+        `SELECT substr(s.pco_created_at,1,10) AS "Created",
+                TRIM(s.name, char(9) || char(10) || char(13) || ' ') AS "Registration",
+                COUNT(DISTINCT CASE WHEN a.canceled = 0 THEN a.person_id END) AS "Registered"
+           FROM pco_registration_signups s
+           LEFT JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+          WHERE s.org_id = :orgId AND s.pco_created_at >= datetime('now','-730 day')
+          GROUP BY 1, 2 ORDER BY 1 DESC LIMIT 40`),
+    ],
+    gaps: {
+      title: "What these numbers do and don't cover",
+      intro:
+        "Measured here: the two Outputs that leave a trace in a system we sync — Instant Access campaigns sent (Constant Contact) and registrations built (PCO Registrations). Both are shown against the target the report itself publishes.",
+      items: [
+        "**Social media posts** — no Instagram or Facebook connection exists yet. A post count is reachable if the Instagram Graph API is connected to the Faith Church page; nothing else about social is.",
+        "**Sermon series packages** — the 429 sermons we hold carry title, speaker, scripture and transcript, but no series. Grouping them into series packages would mean reading the sermons page on faithchurchpa.com, which is a new source and not yet wired up.",
+        "**Design and production volume** — sermon slides, Scripture slides, programs, event graphics, print orders, photos taken and edited, app and website updates, and typos found. These are hours of work with no system of record: nothing counts them, so nothing here can.",
+        "**Videos** — online ministry videos and additional videos per year are not tracked anywhere we sync.",
+      ],
+      footer:
+        "_Fourteen of this report's sixteen Outputs are design and production work that no system counts. That is not a sync gap to be closed by connecting another API — it would need somebody to log the work, which is a decision about process, not about software._",
+    },
+  },
+
   "mir-communications-engagement": {
     metrics: [
       stat("Campaigns sent", "last 12 months",
@@ -1591,6 +1678,39 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Click rate", "clicks ÷ sends, last 12 months",
         `SELECT ROUND(100.0 * SUM(stat_clicks) / NULLIF(SUM(stat_sends),0), 2) || '%'
            FROM cc_campaigns WHERE org_id = :orgId AND last_sent_date >= ${YEAR}`),
+      // Instant Access broken out on its own, because that is what the
+      // published Outputs name: "47% opens on Instant Access per email" and
+      // "10% link clicks in Instant Access per email". The all-campaign rates
+      // above mix in ministry-specific sends with very different audiences.
+      stat("Instant Access open rate", "opens ÷ sends, last 12 months (published target: 47%)",
+        `SELECT ROUND(100.0 * SUM(cc.stat_opens) / NULLIF(SUM(cc.stat_sends),0), 1) || '%'
+           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`,
+        { color: "highlight" }),
+      stat("Instant Access click rate", "clicks ÷ sends, last 12 months (published target: 10%)",
+        `SELECT ROUND(100.0 * SUM(cc.stat_clicks) / NULLIF(SUM(cc.stat_sends),0), 2) || '%'
+           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`),
+      stat("Clicks per opener", "of those who opened it, the share who clicked",
+        `SELECT ROUND(100.0 * SUM(cc.stat_clicks) / NULLIF(SUM(cc.stat_opens),0), 1) || '%'
+           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`),
+      stat("Instant Access subscribers", "on the All-Church - Instant Access list",
+        `SELECT membership_count FROM cc_lists
+          WHERE org_id = :orgId AND name = 'All-Church - Instant Access'`),
+      chart("Instant Access open rate by year", "the long view, back to 2013",
+        `SELECT substr(cc.last_sent_date,1,4) AS "Year",
+                ROUND(100.0 * SUM(cc.stat_opens) / NULLIF(SUM(cc.stat_sends),0), 1) AS "Open %",
+                ROUND(100.0 * SUM(cc.stat_clicks) / NULLIF(SUM(cc.stat_sends),0), 2) AS "Click %"
+           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS}
+          GROUP BY 1 ORDER BY 1`, "line"),
+      chart("Subscribes and unsubscribes by month", "across every Constant Contact list",
+        `SELECT m AS "Month",
+                SUM(joined) AS "Subscribed", SUM(left_list) AS "Unsubscribed"
+           FROM (
+             SELECT substr(opt_in_date,1,7) AS m, 1 AS joined, 0 AS left_list
+               FROM cc_contacts WHERE org_id = :orgId AND opt_in_date >= datetime('now','-730 day')
+             UNION ALL
+             SELECT substr(opt_out_date,1,7), 0, 1
+               FROM cc_contacts WHERE org_id = :orgId AND opt_out_date >= datetime('now','-730 day')
+           ) GROUP BY 1 ORDER BY 1`, "line"),
       chart("Email reach by month", "sends and opens",
         `SELECT substr(last_sent_date,1,7) AS "Month",
                 SUM(stat_sends) AS "Sends", SUM(stat_opens) AS "Opens"
@@ -1604,10 +1724,21 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE org_id = :orgId AND last_sent_date IS NOT NULL
           ORDER BY last_sent_date DESC LIMIT 15`),
     ],
-    gaps: measuredNote(
-      "email reach and engagement from Constant Contact — sends, opens, clicks and unsubscribes.",
-      "Email is only one channel. Social reach, app engagement, website traffic and print are not synced, so the published Outputs covering those stay unmeasured.",
-    ),
+    gaps: {
+      title: "What these numbers do and don't cover",
+      intro:
+        "Measured here: everything the report asks about EMAIL — Instant Access open and click rates against their published targets, the subscriber list, and subscribes against unsubscribes. Thirteen years of it, back to 2013.",
+      items: [
+        "**Social media** — views, interactions, shares and DMs per month. No Instagram or Facebook connection exists yet; the Instagram Graph API would reach views, reach, likes, comments and shares for the Faith Church page, and is the single biggest gap on this report.",
+        "**YouTube subscribers** — no connection. Reachable through the YouTube Data API.",
+        "**App downloads and in-app sermon views** — Subsplash holds these, and its API is not connected yet.",
+        "**Website traffic** — visits to Who We Are, Visit Us, Sermons, Resources and Next Steps. Needs analytics from faithchurchpa.com; nothing we sync sees them.",
+        "**QR scans and the Questions inbox** — no source.",
+        "_One caveat on the unsubscribe line: August 2026 shows 324 opt-outs against a normal 9-50. That is a list cleanup, not a month in which the church lost 324 readers._",
+      ],
+      footer:
+        "_Email is the one channel with a live connection, and it is the one channel this report measures. Every other Output here waits on an API that has not been wired up._",
+    },
   },
 
   "mir-human-resources": {
@@ -2238,6 +2369,32 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Setup shifts filled", "chair and facilities assignments, last 12 months",
         `SELECT COUNT(*) FROM (${servingSlots("lower(st.name) LIKE '%chair%' OR lower(st.name) LIKE '%facilit%'")})
           WHERE sort_date >= ${YEAR}`),
+      // LEAD TIME. The thing facilities actually complains about is not how
+      // many events there are but how little warning they get. PCO has no
+      // approval timestamp — a request carries only approval_sent,
+      // approval_status, created_at and updated_at, and updated_at is bumped
+      // by any later edit (mean 22 days after creation, max 3.5 years) — so
+      // submission-to-approval DURATION cannot be measured. Notice can.
+      stat("Median notice", "days between an event being booked and it happening",
+        `SELECT CAST(ROUND(notice_days) AS INT) FROM (${EVENT_NOTICE})
+          WHERE created_at >= datetime('now','-365 day')
+          ORDER BY notice_days
+          LIMIT 1 OFFSET (SELECT (COUNT(*) - 1) / 2 FROM (${EVENT_NOTICE})
+                           WHERE created_at >= datetime('now','-365 day'))`),
+      stat("Booked inside a week", "share given less than 7 days' notice",
+        `SELECT ROUND(100.0 * SUM(CASE WHEN notice_days < 7 THEN 1 ELSE 0 END)
+                    / NULLIF(COUNT(*), 0), 1) || '%'
+           FROM (${EVENT_NOTICE}) WHERE created_at >= datetime('now','-365 day')`),
+      // Pending requests for events that HAVE NOT HAPPENED YET. The raw
+      // pending count is 252, but 104 of those are for events already past —
+      // nobody is ever going to approve them, and counting them as a backlog
+      // overstates the real one by 70%.
+      stat("Awaiting approval", "pending requests for events still to come",
+        `SELECT COUNT(*) FROM pco_calendar_resource_requests rq
+          WHERE rq.org_id = :orgId AND rq.approval_status = 'P'
+            AND EXISTS (SELECT 1 FROM pco_calendar_event_instances i
+                         WHERE i.org_id = :orgId AND i.event_id = rq.event_id
+                           AND date(i.starts_at) >= date('now'))`),
       chart("Events served by year", "every occurrence, and the share needing a setup",
         `SELECT substr(o.day,1,4) AS "Year",
                 COUNT(*) AS "Events served",
@@ -2278,6 +2435,30 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
              ON u.resource_id = rs.pco_id
           WHERE rs.org_id = :orgId AND ${BOOKABLE_SPACES}
           ORDER BY 3 DESC`),
+      table("How much notice the building gets", "by the year the event was booked",
+        `SELECT created_year AS "Booked in",
+                COUNT(*) AS "Events",
+                CAST(ROUND(AVG(notice_days)) AS INT) AS "Average notice (days)",
+                ROUND(100.0 * SUM(CASE WHEN notice_days < 7 THEN 1 ELSE 0 END)
+                            / NULLIF(COUNT(*), 0), 1) AS "% inside a week"
+           FROM (${EVENT_NOTICE})
+          GROUP BY 1 ORDER BY 1`),
+      table("Waiting on approval", "unapproved requests for events still to come, soonest first",
+        `SELECT (SELECT MIN(date(i.starts_at)) FROM pco_calendar_event_instances i
+                  WHERE i.org_id = :orgId AND i.event_id = rq.event_id
+                    AND date(i.starts_at) >= date('now')) AS "Event date",
+                TRIM(COALESCE(e.name, '(event deleted)')) AS "Event",
+                COALESCE(rs.name, '(resource deleted)') AS "Resource",
+                substr(rq.pco_created_at, 1, 10) AS "Requested",
+                CAST(julianday('now') - julianday(rq.pco_created_at) AS INT) AS "Days waiting"
+           FROM pco_calendar_resource_requests rq
+           LEFT JOIN pco_calendar_events e ON e.pco_id = rq.event_id AND e.org_id = :orgId
+           LEFT JOIN pco_calendar_resources rs ON rs.pco_id = rq.resource_id AND rs.org_id = :orgId
+          WHERE rq.org_id = :orgId AND rq.approval_status = 'P'
+            AND EXISTS (SELECT 1 FROM pco_calendar_event_instances i
+                         WHERE i.org_id = :orgId AND i.event_id = rq.event_id
+                           AND date(i.starts_at) >= date('now'))
+          ORDER BY 1 LIMIT 40`),
       table("Staff served", "whose events the building carried, last 12 months",
         `SELECT COALESCE(p.first_name || ' ' || p.last_name, '(not in PCO People)') AS "Requested by",
                 COUNT(DISTINCT o.event_id) AS "Events",
@@ -2297,8 +2478,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           GROUP BY 1 ORDER BY 2 DESC`),
     ],
     gaps: measuredNote(
-      "the events the building served, which of them needed a setup, the staff whose requests it answered, how hard each room is worked, and the volunteer roster behind it.",
-      "STAFF SERVED IS UNDER-COUNTED THE FURTHER BACK YOU LOOK, and the rise is record-keeping, not growth: 86% of 2018 occurrences have no named requester on the event, against 16% in 2025. Read the trend from 2023 on. The count is also of people, not requests — somebody who booked one room once counts the same as somebody who booked forty. UTILISATION WEIGHTS EVERY SPACE EQUALLY: a 400-seat auditorium and a three-person office each count as one room out of 54, so the building-wide figure is a room average, not a floor-area one. Weighting it by square footage needs the floor plan — the one thing a blueprint would add. It also measures BOOKED, not occupied: a room held under a blackout reservation counts as in use, which is right for facilities and wrong for counting seats. Not measured: callbacks, complaints, work orders, maintenance cost, vendor management or capital condition — none of that is in PCO, and the published Outputs that ask for them stay unmeasured.",
+      "the events the building served, which of them needed a setup, the staff whose requests it answered, how much notice the building gets, what is still waiting on approval, how hard each room is worked, and the volunteer roster behind it.",
+      "STAFF SERVED IS UNDER-COUNTED THE FURTHER BACK YOU LOOK, and the rise is record-keeping, not growth: 86% of 2018 occurrences have no named requester on the event, against 16% in 2025. Read the trend from 2023 on. The count is also of people, not requests — somebody who booked one room once counts the same as somebody who booked forty. UTILISATION WEIGHTS EVERY SPACE EQUALLY: a 400-seat auditorium and a three-person office each count as one room out of 54, so the building-wide figure is a room average, not a floor-area one. Weighting it by square footage needs the floor plan — the one thing a blueprint would add. It also measures BOOKED, not occupied: a room held under a blackout reservation counts as in use, which is right for facilities and wrong for counting seats. TIME-TO-APPROVAL IS NOT MEASURABLE: PCO records a request's status but never stamps when it changed, and the only other timestamp — updated_at — moves on any later edit (a mean of 22 days after creation, and as much as three and a half years), so it cannot stand in for an approval time. What is shown instead is the pending backlog and how long each request has been sitting. That backlog counts only requests for events STILL TO COME: of 252 pending requests, 104 are attached to events that already happened and will never now be approved, so the live figure is 148. Notice is measured from the event's creation to the first occurrence that follows it, and excludes events created before 2018 because our calendar sync only reaches back that far — their earliest synced occurrence is not their real one. Not measured: callbacks, complaints, work orders, maintenance cost, vendor management or capital condition — none of that is in PCO, and the published Outputs that ask for them stay unmeasured.",
     ),
   },
 
