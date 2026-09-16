@@ -224,6 +224,17 @@ const SUNDAY_SERIES = `
    WHERE pl.org_id = :orgId AND st.name LIKE 'LIVE%'
      AND pl.sort_date <= datetime('now')`;
 
+/** People who signed up to volunteer at the Christmas Tree Lighting.
+ *  Only the 2025 signup carries attendees — the 2019, 2021, 2022, 2023 and
+ *  2024 signups all exist with zero, so there is no year-over-year series to
+ *  draw and this deliberately does not try. */
+const TREE_LIGHTING_VOLUNTEERS = `
+  SELECT DISTINCT a.person_id
+    FROM pco_registration_attendees a
+    JOIN pco_registration_signups s ON s.pco_id = a.signup_id AND s.org_id = :orgId
+   WHERE a.org_id = :orgId AND a.canceled = 0
+     AND lower(s.name) LIKE '%tree lighting%' AND lower(s.name) LIKE '%volunteer%'`;
+
 /** The eldership, from the PCO reference list. */
 const ELDERS = `
   SELECT m.person_id
@@ -1658,6 +1669,81 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
   // published Output with a target, so they read as scorecard lines rather
   // than as numbers we invented: "4.5 Instant Access campaigns sent/mo" and
   // "10 registrations/mo".
+  // PAUSED MINISTRY. The Christmas Tree Lighting is not currently running;
+  // December 2025 was the last one. Everything here is history, and the page
+  // says so rather than presenting a dormant ministry in the present tense.
+  "mir-christmas-tree-lighting": {
+    metrics: [
+      stat("Volunteers signed up", "for the December 2025 tree lighting",
+        `SELECT COUNT(*) FROM (${TREE_LIGHTING_VOLUNTEERS})`, { color: "highlight" }),
+      stat("Checked in on the night", "volunteers who actually scanned in",
+        `SELECT COUNT(DISTINCT c.person_id) FROM pco_check_ins c
+           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+          WHERE c.org_id = :orgId AND lower(e.name) LIKE '%tree lighting%'
+            AND c.person_id IS NOT NULL AND c.person_id <> ''`),
+      stat("Now serving on a team", "tree-lighting volunteers on an active team today",
+        `SELECT COUNT(*) FROM (${TREE_LIGHTING_VOLUNTEERS}) v
+          WHERE EXISTS (SELECT 1 FROM pco_team_memberships tm
+                         WHERE tm.org_id = :orgId AND tm.person_id = v.person_id
+                           AND tm.archived_at IS NULL)`),
+      stat("Joined a team afterwards", "first joined that team after signing up to volunteer",
+        `SELECT COUNT(*) FROM (${TREE_LIGHTING_VOLUNTEERS}) v
+          WHERE EXISTS (SELECT 1 FROM pco_team_memberships tm
+                         WHERE tm.org_id = :orgId AND tm.person_id = v.person_id
+                           AND tm.archived_at IS NULL
+                           AND tm.pco_created_at >= '2025-09-14')`),
+      table("Where volunteers worked", "check-ins by assignment on the night",
+        // Not REPLACE() — the read-only screen rejects that word (it is
+        // guarding against REPLACE INTO), so the 'Areas: ' prefix comes off
+        // with substr instead.
+        `SELECT CASE WHEN l.name LIKE 'Areas: %' THEN substr(l.name, 8)
+                     ELSE COALESCE(l.name, '(no assignment recorded)') END AS "Assignment",
+                COUNT(*) AS "Checked in"
+           FROM pco_check_ins c
+           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+          WHERE c.org_id = :orgId AND lower(e.name) LIKE '%tree lighting%'
+          GROUP BY 1 ORDER BY 2 DESC`),
+      // The Output asks for "# of new attendees at Faith Church". The weekly
+      // sheet counts HEADS, not identities, so it cannot say who was new. What
+      // it can show is whether the Sundays after the event ran above the
+      // Sundays before, which is the nearest honest thing.
+      table("Sunday attendance around the tree lighting", "total on campus \u2014 heads, not new people",
+        `WITH ev AS (
+           SELECT substr(d, 1, 4) AS yr, MIN(d) AS event_day FROM (
+             SELECT ${easternDate("i.starts_at")} AS d
+               FROM pco_calendar_event_instances i
+               JOIN pco_calendar_events e ON e.pco_id = i.event_id AND e.org_id = :orgId
+              WHERE i.org_id = :orgId AND TRIM(e.name) = 'Christmas Tree Lighting'
+                AND substr(${easternDate("i.starts_at")}, 6, 2) IN ('11', '12')
+           ) GROUP BY 1
+         )
+         SELECT ev.yr AS "Year", ev.event_day AS "Tree lighting",
+                aw.week_date AS "Sunday",
+                aw.in_person_total AS "On campus",
+                CAST(julianday(aw.week_date) - julianday(ev.event_day) AS INT) AS "Days after"
+           FROM ev
+           JOIN attendance_weekly aw ON aw.org_id = :orgId
+            AND aw.week_date BETWEEN date(ev.event_day, '-21 day') AND date(ev.event_day, '+42 day')
+          WHERE aw.in_person_total IS NOT NULL
+          ORDER BY 1 DESC, 3`),
+    ],
+    gaps: {
+      title: "What these numbers do and don't cover",
+      intro:
+        "THIS MINISTRY IS NOT CURRENTLY RUNNING \u2014 December 2025 was the last tree lighting, so every figure here is history. Measured: the volunteer roster, who turned up, what they worked, and whether volunteering led anywhere.",
+      items: [
+        "**Nobody counted the crowd.** There is no ticket, no check-in and no gate count for guests \u2014 only volunteers check in \u2014 so \u201c# of people attending\u201d has no source at all. The 100 who checked in are the people WORKING the event, and must never be quoted as attendance.",
+        "**Cookies cannot be counted, only planned.** The signup does carry a \u201cCookie Bakers (4 dozen per sign up)\u201d option with room for 201 bakers, which is where an estimate would come from \u2014 but PCO's API does not expose which option an attendee chose, and bakers never check in, so the number who actually signed up to bake is not readable. 201 \u00d7 4 dozen is the ceiling somebody planned for, not a count of cookies, and publishing it as one would be an invention.",
+        "**Volunteer transition is a floor, not a rate.** 98 of the 315 are on an active team today, but 68 of them were already serving before the signup, so the two figures overlap and cannot be subtracted from each other. \u201cJoined a team afterwards\u201d counts memberships created after the signup opened, which is the closest thing to a real transition.",
+        "**New attendees are not identifiable.** The attendance sheet is a headcount, so it cannot distinguish a first-time guest from a regular. For what it is worth, new PCO records in December 2025 (163) and January 2026 (184) sit right on the prior year's figures (169 and 178), so there is no detectable bump to attribute to the event either way.",
+        "**Not recorded anywhere**: coffee and hot chocolate volumes, food truck usage, activity usage, peak time frame, volunteer and attendee feedback, the vendor survey, and social media hashtag usage.",
+      ],
+      footer:
+        "_Two Sundays in this window are single-service or weather-affected days (14 Dec 2025 and 18 Jan 2026 both read under 1,000 against a normal 2,400-3,000). Read the table around them rather than through them._",
+    },
+  },
+
   "mir-communications-content-creation": {
     metrics: [
       stat("Instant Access sent", "campaigns per month, last 12 months (published target: 4.5)",
