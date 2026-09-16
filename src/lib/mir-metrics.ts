@@ -235,6 +235,43 @@ const TREE_LIGHTING_VOLUNTEERS = `
    WHERE a.org_id = :orgId AND a.canceled = 0
      AND lower(s.name) LIKE '%tree lighting%' AND lower(s.name) LIKE '%volunteer%'`;
 
+/** Baptisms of children, by AGE AT BAPTISM rather than age today.
+ *  is_minor is a flag about who someone is now, so using it would quietly move
+ *  a child baptised in 2019 into the adult column the year they turn 18 and
+ *  rewrite history every birthday. Age at baptism is the year on the record
+ *  minus the birth year, which needs birth_year: 881 of the 1,093 baptism dates
+ *  have one, so this is a FLOOR and the note says so. */
+const CHILD_BAPTISMS = `
+  SELECT f.person_id, f.value_date,
+         substr(f.value_date, 1, 4) AS year,
+         CAST(substr(f.value_date, 1, 4) AS INTEGER) - p.birth_year AS age_at_baptism
+    FROM pco_person_fields f
+    JOIN pco_people p ON p.pco_id = f.person_id AND p.org_id = :orgId
+   WHERE f.org_id = :orgId AND f.field_name = 'Baptism'
+     AND f.value_date IS NOT NULL AND p.birth_year IS NOT NULL`;
+
+/** Family Dedication registrations. TEST signups are excluded by name — there
+ *  is one, "TEST Family Dedication - Spring 2022", and it has no attendees. */
+const FAMILY_DEDICATIONS = `
+  SELECT s.pco_id, TRIM(s.name) AS name, substr(s.pco_created_at, 1, 10) AS created,
+         substr(s.pco_created_at, 1, 4) AS year, a.person_id
+    FROM pco_registration_signups s
+    JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+   WHERE s.org_id = :orgId AND a.canceled = 0
+     AND lower(s.name) LIKE '%family dedication%'
+     AND s.name NOT LIKE 'TEST%'`;
+
+/** How many times each child checked in to a Faith Kids event in the trailing
+ *  year — the basis for repeat attendance and for "repeat visitors". */
+const KID_VISIT_COUNTS = `
+  SELECT c.person_id, COUNT(*) AS visits
+    FROM pco_check_ins c
+    JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+   WHERE c.org_id = :orgId AND lower(e.name) LIKE '%kids%'
+     AND c.person_id IS NOT NULL AND c.person_id <> ''
+     AND c.pco_created_at >= datetime('now','-365 day')
+   GROUP BY c.person_id`;
+
 /** The eldership, from the PCO reference list. */
 const ELDERS = `
   SELECT m.person_id
@@ -1029,7 +1066,25 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT CAST(ROUND(AVG(kids_total)) AS INT) FROM attendance_weekly
           WHERE org_id = :orgId AND kids_total IS NOT NULL
             AND week_date >= date('now','-365 day')`),
-      stat("Kids ministry volunteers", "active members of a Faith Kids team",
+      stat("Children baptised", "aged under 18 at baptism, last 12 months",
+        `SELECT COUNT(*) FROM (${CHILD_BAPTISMS})
+          WHERE age_at_baptism < 18 AND value_date >= date('now','-365 day')`),
+      stat("Came back", "share of children who checked in more than once",
+        `SELECT ROUND(100.0 * SUM(CASE WHEN visits > 1 THEN 1 ELSE 0 END)
+                    / NULLIF(COUNT(*), 0), 1) || '%'
+           FROM (${KID_VISIT_COUNTS})`),
+      stat("Families reached", "households with a child who checked in, last 12 months",
+        `SELECT COUNT(DISTINCT hm.household_id)
+           FROM (${KID_VISIT_COUNTS}) k
+           JOIN pco_household_memberships hm ON hm.person_id = k.person_id AND hm.org_id = :orgId`),
+      stat("Family dedications", "people registered, last 12 months",
+        `SELECT COUNT(DISTINCT person_id) FROM (${FAMILY_DEDICATIONS})
+          WHERE created >= date('now','-365 day')`),
+      // The FK team rosters still exist, but they are a roster and not a
+      // record of serving: only 9 people were scheduled on a Faith Kids plan
+      // in the last 12 months and nothing at all since 2026-06-07. Labelled as
+      // a roster so it is not read as an active volunteer count.
+      stat("On a Faith Kids team roster", "membership only — see the note on serving",
         `SELECT COUNT(DISTINCT m.person_id)
            FROM pco_team_memberships m
            JOIN pco_teams t ON t.pco_id = m.team_id AND t.org_id = :orgId
@@ -1041,6 +1096,34 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE org_id = :orgId AND kids_total IS NOT NULL
             AND week_date >= date('now','-730 day')
           ORDER BY week_date`, "line"),
+      chart("How often children came", "visits per child, last 12 months",
+        `SELECT CASE WHEN visits = 1 THEN '1 visit'
+                     WHEN visits <= 3 THEN '2-3 visits'
+                     WHEN visits <= 9 THEN '4-9 visits'
+                     WHEN visits <= 25 THEN '10-25 visits'
+                     ELSE '26+ visits' END AS "Visits",
+                COUNT(*) AS "Children"
+           FROM (${KID_VISIT_COUNTS})
+          GROUP BY 1 ORDER BY MIN(visits)`, "bar", { colorByCategory: true }),
+      chart("Children baptised by year", "age at baptism under 18",
+        `SELECT year AS "Year", COUNT(*) AS "Children baptised"
+           FROM (${CHILD_BAPTISMS})
+          WHERE age_at_baptism < 18 AND year >= '2016'
+          GROUP BY 1 ORDER BY 1`, "bar"),
+      chart("Family dedications by year", "people registered",
+        `SELECT year AS "Year", COUNT(DISTINCT person_id) AS "Registered"
+           FROM (${FAMILY_DEDICATIONS})
+          GROUP BY 1 ORDER BY 1`, "bar"),
+      table("Faith Kids events", "registrations beyond Sunday, most recent first",
+        `SELECT substr(s.pco_created_at,1,10) AS "Created",
+                TRIM(s.name, char(9) || char(10) || char(13) || ' ') AS "Event",
+                COUNT(DISTINCT CASE WHEN a.canceled = 0 THEN a.person_id END) AS "Registered"
+           FROM pco_registration_signups s
+           LEFT JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
+          WHERE s.org_id = :orgId AND s.name NOT LIKE 'TEST%'
+            AND (lower(s.name) LIKE '%faith kids%' OR lower(s.name) LIKE '%family dedication%'
+                 OR lower(s.name) LIKE '%kids%')
+          GROUP BY 1, 2 ORDER BY 1 DESC LIMIT 30`),
       table("Where kids check in", "check-ins by event, last 12 months",
         `SELECT event_name AS "Event",
                 COUNT(DISTINCT person_id) AS "Children",
@@ -1049,10 +1132,21 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE pco_created_at >= ${YEAR}
           GROUP BY 1 ORDER BY 3 DESC`),
     ],
-    gaps: measuredNote(
-      "check-in volume and distinct children reached, plus the weekly attendance record and the volunteer roster.",
-      "Not measured: safety and ratio compliance, curriculum completion, parent feedback, or anything about a child's spiritual growth — none of it is recorded in a system we sync.",
-    ),
+    gaps: {
+      title: "What these numbers do and don't cover",
+      intro:
+        "Measured here: how many children come and how often, the families behind them, baptisms of children, and the Faith Kids events and dedications people register for.",
+      items: [
+        "**2024 HAS NO BAPTISMS ON RECORD AT ALL.** The Baptism field runs 111 in 2023, nothing whatever in 2024, then 88 in 2025 and 97 so far in 2026. A year of zero between two years of roughly a hundred is a recording gap, not a year in which nobody was baptised. The by-year chart shows that hole; do not read it as ministry.",
+        "**Baptism counts for children are a floor.** Age at baptism needs a birth year, and 881 of the 1,093 baptism dates have one — the remaining 212 cannot be aged, so a child among them is not counted here.",
+        "**Serving is not being recorded.** The FK team rosters still exist, and that is what the roster figure counts. But only 9 people were scheduled on a Faith Kids plan in the entire last 12 months, and none at all since 2026-06-07. New volunteers and leader retention — both published Outputs — cannot be measured until serving is logged in PCO again.",
+        "**Graduates returning to serve** cannot be traced for the same reason: with serving unrecorded, there is nothing to link a fifth-grader to a later serving role.",
+        "**“New” families means new to us.** A household counts as new when a child’s first-ever check-in falls inside the window, which is bounded by how far our check-in history reaches — a family who last came before that looks new when they return.",
+        "**No source at all**: kids asking for Bibles, God Time papers returned, what children remember from a lesson, safety and ratio compliance, curriculum completion, and parent feedback.",
+      ],
+      footer:
+        "_Repeat attendance is the strongest signal on this page: of 1,436 children who checked in over the last year, 351 came exactly once and 567 came ten times or more._",
+    },
   },
 
   "mir-kids-vbx": {
@@ -1477,7 +1571,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       intro:
         "These Outputs are in the published report and have no data behind them. One of them is a process gap worth fixing rather than a limit of the system:",
       items: [
-        "- **Prayer cards are not recorded anywhere.** PCO holds exactly three forms — Network Prayer Request, Serve Form and Membership Application — and none of them is the prayer card handed in at PrayerWorks. The ministry lead's own read is that those requests go out by email instead, which means the count of people who came to PrayerWorks for prayer, the requests they brought, and anything that followed all leave no trace. **This is the single change that would make Outputs 3, 4, 5 and 6 answerable**: put the prayer card into a PCO form.",
+        "- **Prayer cards ARE recorded — as PCO Notes — and we cannot read them yet.** An earlier version of this note said the cards went nowhere. That was wrong: the ministry lead enters them as notes on the person’s record, not as a form. So the data exists and the gap is access, not process. What our PCO token can currently see: 2,467 notes spanning 27 Nov 2017 to 6 Sep 2026, sitting in two note categories it is NOT permitted to resolve by name — so we cannot yet confirm which category holds the prayer cards, or separate them from pastoral notes of every other kind. **The next step is a person, not a feature**: get the PCO permission that exposes note categories, confirm which one the cards live in, then sync only that one.",
+        "- **When that sync is built it should store the fact, not the prayer.** A prayer card is about the most sensitive thing in the system. What these Outputs need is a count, a date and a link to the person — not the text of what somebody asked to be prayed for. The same rule the person-field sync already follows (an explicit allowlist, see PERSON_FIELD_ALLOWLIST) should apply here, and the decision about note bodies should be made deliberately rather than by default.",
         "- **# of testimonies of answered prayers** — nothing records an outcome against a request, so a prayer that was answered looks identical to one that was not.",
         "- **# of Next Steps taken as a result of a visit to Prayer Works** — needs a visit to be recorded first. See above.",
         "- **% of adult attendees coming to Prayer Works for prayer** — the numerator does not exist. Sunday attendance is a headcount, so even a visit count could not be turned into a share of attendees without knowing who was in the building.",
