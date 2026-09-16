@@ -205,6 +205,25 @@ const INSTANT_ACCESS = `
   AND cc.current_status = 'Done'
   AND cc.last_sent_date IS NOT NULL`;
 
+/** Sunday LIVE plans with the series they belong to.
+ *
+ *  series_title and the series relationship come off the PCO Services plan and
+ *  are populated back to 2013. COVERAGE IS NOT CONSTANT and no chart built on
+ *  this may pretend otherwise: LIVE plans run a complete ~52 a year since 2011,
+ *  but the share carrying a series runs 43/52 in 2014, 0/51 in 2019, 0/53 in
+ *  2021, then 47/51 in 2024 and 49/52 in 2025. Faith Church did not stop
+ *  preaching in series in 2019 — somebody stopped tagging the plan. Anything
+ *  per-year therefore shows the tagged count NEXT TO the Sundays, so a zero
+ *  reads as "not recorded" rather than "did not happen". */
+const SUNDAY_SERIES = `
+  SELECT pl.pco_id, pl.series_id, TRIM(pl.series_title) AS series_title,
+         pl.title, substr(pl.sort_date, 1, 10) AS day,
+         substr(pl.sort_date, 1, 4) AS year
+    FROM pco_plans pl
+    JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
+   WHERE pl.org_id = :orgId AND st.name LIKE 'LIVE%'
+     AND pl.sort_date <= datetime('now')`;
+
 /** The eldership, from the PCO reference list. */
 const ELDERS = `
   SELECT m.person_id
@@ -1469,6 +1488,9 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM attendance_weekly
           WHERE org_id = :orgId AND (online_live IS NOT NULL OR online_on_demand IS NOT NULL)
             AND week_date >= date('now','-365 day')`),
+      stat("Series in the last year", "distinct sermon series taught on a Sunday",
+        `SELECT COUNT(DISTINCT series_id) FROM (${SUNDAY_SERIES})
+          WHERE series_id IS NOT NULL AND day >= date('now','-365 day')`),
       stat("Baptisms in the last year", "from the Baptism date on each person's record",
         `SELECT COUNT(*) FROM pco_person_fields
           WHERE org_id = :orgId AND field_name = 'Baptism'
@@ -1548,6 +1570,23 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM attendance_weekly
           WHERE org_id = :orgId AND substr(week_date,1,4) >= '2021'
           GROUP BY 1 ORDER BY 1`),
+      // What was actually taught, series by series, with who carried it. The
+      // speaker comes from the sermon archive joined on the date it was
+      // preached — 391 of our 429 sermons sit on a Sunday whose plan names a
+      // series. Series without a tagged plan simply do not appear; see the
+      // coverage note.
+      table("Series preached", "most recent first, with the weeks and who taught them",
+        `SELECT p.series_title AS "Series",
+                COUNT(DISTINCT p.day) AS "Sundays",
+                MIN(p.day) AS "From",
+                MAX(p.day) AS "To",
+                COALESCE(GROUP_CONCAT(DISTINCT sm.speaker), '(not in the sermon archive)') AS "Taught by"
+           FROM (${SUNDAY_SERIES}) p
+           LEFT JOIN sermons sm ON sm.org_id = :orgId AND sm.preached_on = p.day
+          WHERE p.series_id IS NOT NULL
+          GROUP BY p.series_id, p.series_title
+          ORDER BY MAX(p.day) DESC LIMIT 25`),
+
       table("Who preaches", "sermons by speaker",
         `SELECT speaker AS "Speaker", COUNT(*) AS "Sermons",
                 MAX(substr(preached_on,1,10)) AS "Most recent"
@@ -1627,6 +1666,9 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Registrations built", "signups created per month, last 12 months (published target: 10)",
         `SELECT ROUND(COUNT(*) / 12.0, 1) FROM pco_registration_signups
           WHERE org_id = :orgId AND pco_created_at >= datetime('now','-365 day')`),
+      stat("Sermon series", "distinct series preached, last 12 months (published target: 8/yr)",
+        `SELECT COUNT(DISTINCT series_id) FROM (${SUNDAY_SERIES})
+          WHERE series_id IS NOT NULL AND day >= date('now','-365 day')`),
       stat("Emails delivered by Instant Access", "total sends, last 12 months",
         `SELECT SUM(cc.stat_sends) FROM cc_campaigns cc
           WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`),
@@ -1640,6 +1682,16 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM pco_registration_signups
           WHERE org_id = :orgId AND pco_created_at >= datetime('now','-730 day')
           GROUP BY 1 ORDER BY 1`, "bar"),
+      // Sundays sits beside Series deliberately. Read the two columns
+      // together: 2019 shows 0 series across 51 Sundays, which is a tagging
+      // gap, not a year without series.
+      table("Sermon series by year", "with the Sundays behind them, so a gap in tagging is visible",
+        `SELECT year AS "Year",
+                COUNT(*) AS "Sundays",
+                SUM(CASE WHEN series_id IS NOT NULL THEN 1 ELSE 0 END) AS "Tagged with a series",
+                COUNT(DISTINCT series_id) AS "Series"
+           FROM (${SUNDAY_SERIES})
+          GROUP BY 1 ORDER BY 1 DESC`),
       table("Every registration built", "most recent first, with who signed up",
         `SELECT substr(s.pco_created_at,1,10) AS "Created",
                 TRIM(s.name, char(9) || char(10) || char(13) || ' ') AS "Registration",
@@ -1655,7 +1707,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         "Measured here: the two Outputs that leave a trace in a system we sync — Instant Access campaigns sent (Constant Contact) and registrations built (PCO Registrations). Both are shown against the target the report itself publishes.",
       items: [
         "**Social media posts** — no Instagram or Facebook connection exists yet. A post count is reachable if the Instagram Graph API is connected to the Faith Church page; nothing else about social is.",
-        "**Sermon series packages** — the 429 sermons we hold carry title, speaker, scripture and transcript, but no series. Grouping them into series packages would mean reading the sermons page on faithchurchpa.com, which is a new source and not yet wired up.",
+        "**Sermon series are now measured, but only recently.** They came from PCO Services, not the website — every Sunday plan carries the series it belongs to. Tagging is the catch: 2019 and 2021 have no tagged plan at all, and 2020, 2022 and 2023 are patchy, so only 2024 onward (and 2014-2017) can be read as a real series count.",
         "**Design and production volume** — sermon slides, Scripture slides, programs, event graphics, print orders, photos taken and edited, app and website updates, and typos found. These are hours of work with no system of record: nothing counts them, so nothing here can.",
         "**Videos** — online ministry videos and additional videos per year are not tracked anywhere we sync.",
       ],

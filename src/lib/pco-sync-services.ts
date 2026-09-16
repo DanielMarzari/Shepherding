@@ -264,6 +264,14 @@ export async function syncServicesAll(
             pcoId: p.id,
             serviceTypeId: stId,
             title: (a.title as string | undefined) ?? null,
+            // The sermon series. series_title is denormalised onto the plan by
+            // PCO; the relationship gives the stable id, so a renamed series
+            // still groups correctly.
+            seriesTitle: (a.series_title as string | undefined) ?? null,
+            seriesId: (() => {
+              const rel = p.relationships?.series?.data;
+              return !rel || Array.isArray(rel) ? null : rel.id;
+            })(),
             sortDate,
             pcoCreatedAt: (a.created_at as string | undefined) ?? null,
             pcoUpdatedAt: newUpdatedAt,
@@ -568,6 +576,8 @@ function upsertPlan(
     pcoId: string;
     serviceTypeId: string | null;
     title: string | null;
+    seriesTitle: string | null;
+    seriesId: string | null;
     sortDate: string | null;
     pcoCreatedAt: string | null;
     pcoUpdatedAt: string | null;
@@ -576,11 +586,14 @@ function upsertPlan(
   getDb()
     .prepare(
       `INSERT INTO pco_plans
-        (org_id, pco_id, service_type_id, title, sort_date, pco_created_at, pco_updated_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        (org_id, pco_id, service_type_id, title, series_title, series_id,
+         sort_date, pco_created_at, pco_updated_at, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id, pco_id) DO UPDATE SET
          service_type_id = excluded.service_type_id,
          title = excluded.title,
+         series_title = excluded.series_title,
+         series_id = excluded.series_id,
          sort_date = excluded.sort_date,
          pco_created_at = excluded.pco_created_at,
          pco_updated_at = excluded.pco_updated_at,
@@ -591,6 +604,8 @@ function upsertPlan(
       p.pcoId,
       p.serviceTypeId,
       p.title,
+      p.seriesTitle,
+      p.seriesId,
       p.sortDate,
       p.pcoCreatedAt,
       p.pcoUpdatedAt,
