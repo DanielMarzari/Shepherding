@@ -33,6 +33,32 @@ const ENGAGED_ADULTS = `
    WHERE p.org_id = :orgId AND p.is_minor = 0
      AND pa.classification IN ('shepherded','active','present')`;
 
+/** The America/New_York calendar date of a UTC timestamp.
+ *
+ *  A fixed -5 hours was wrong and shipped that way for a day. It is right for
+ *  EST and right for every evening event — a 7pm service is already tomorrow in
+ *  UTC, and -5 lands it back on its own day — but it is an hour short during
+ *  EDT, and everything PCO stores at LOCAL MIDNIGHT falls in exactly that hour.
+ *  An all-day event on 18 Aug 2026 is stored as 04:00Z; minus five hours is
+ *  23:00 on the 17th, so "Annual Audit" rendered a day early. Measured on
+ *  production: 197 of 368 all-day instances were mis-dated, plus 740 more that
+ *  start at 04:00Z and run 20+ hours — de-facto all-day events PCO did not flag
+ *  (three days of "Annual Audit", five of "Easter tech setup").
+ *
+ *  Switching to a flat -4 would just move the error to EST, so this does the
+ *  actual rule: EDT runs from the second Sunday of March to the first Sunday of
+ *  November. SQLite's 'weekday 0' advances to the next Sunday, so the first
+ *  Sunday on or after Mar 8 IS the second Sunday of March. The hour either side
+ *  of the 2am changeover is still nominal; no church event starts there.
+ *
+ *  Verified against both boundaries: 2025-03-08T04:00Z -> 03-07 (still EST) and
+ *  2025-03-10T04:00Z -> 03-10 (EDT), 11pm EST -> the right day, all-day EDT and
+ *  EST -> the right day. */
+const easternDate = (col: string) => `CASE
+      WHEN date(${col}) >= date(strftime('%Y', ${col}) || '-03-08', 'weekday 0')
+       AND date(${col}) <  date(strftime('%Y', ${col}) || '-11-01', 'weekday 0')
+      THEN date(${col}, '-4 hours') ELSE date(${col}, '-5 hours') END`;
+
 /** Every occurrence on the church calendar — the unit of "an event the
  *  building served". A PCO Calendar *Event* carries no date at all; the dated
  *  thing is an *EventInstance*, so a weekly rehearsal is one event and about
@@ -48,13 +74,10 @@ const ENGAGED_ADULTS = `
  *  brittle kind that silently drops a whole ministry the day somebody renames a
  *  camp, and it would move no number on this page.
  *
- *  `day` is the LOCAL date. starts_at is UTC, and a 7pm service is already
- *  tomorrow in UTC, which would push evening events into the next month at
- *  every month boundary. -5 hours lands every evening event on the right local
- *  day in both EST and EDT. */
+ *  `day` is the LOCAL date — see easternDate. */
 const CALENDAR_OCCURRENCES = `
   SELECT i.pco_id, i.event_id, i.name, i.starts_at, i.ends_at,
-         date(i.starts_at, '-5 hours') AS day, e.owner_id
+         ${easternDate("i.starts_at")} AS day, e.owner_id
     FROM pco_calendar_event_instances i
     JOIN pco_calendar_events e ON e.pco_id = i.event_id AND e.org_id = :orgId
    WHERE i.org_id = :orgId AND i.starts_at IS NOT NULL`;
@@ -76,17 +99,23 @@ const SETUP_EVENTS = `
  *  twelve of them are not spaces: four parking lots, six groups of exterior
  *  doors (booking "Doors - East" means unlock them for this event), an
  *  "Online" room and an audio system. Counting those in a building-utilisation
- *  figure would be wrong, so they come out — and the exclusion is written
- *  here, in the open, rather than buried in each query.
+ *  figure would be wrong, so they come out.
  *
- *  This list is a candidate for the report_sources pools in
- *  docs/report-sources-plan.md: a `facilities.spaces` pool would hold PCO ids
- *  and survive a rename, where these name patterns will not. */
-const BOOKABLE_SPACES = `
-  rs.kind = 'Room'
-  AND rs.name NOT LIKE 'Doors -%'
-  AND rs.name NOT LIKE '%Parking Lot'
-  AND rs.name NOT IN ('Online', '221 Audio System')`;
+ *  The exclusion reads PCO's OWN taxonomy — path_name, the wing each room is
+ *  filed under — instead of matching room names. Facilities maintains it, it
+ *  survives a room being renamed, and a new parking lot or door group lands in
+ *  the right bucket without anyone editing this file. It also gives utilisation
+ *  a per-wing breakdown for free. TRIM because 'Doors ' is stored with a
+ *  trailing space, which is precisely the kind of thing a name match gets wrong.
+ *
+ *  One name still has to be excluded by hand: '221 Audio System' is filed under
+ *  Adults with the real rooms. Verified equal to the four name patterns it
+ *  replaces — the same 54 spaces, no additions, no drops. */
+const bookableSpaces = (a = "rs") => `
+  ${a}.kind = 'Room'
+  AND TRIM(COALESCE(${a}.path_name, '')) NOT IN ('Doors', 'Off Site', 'Outdoors')
+  AND ${a}.name <> '221 Audio System'`;
+const BOOKABLE_SPACES = bookableSpaces();
 
 /** Hours a space was genuinely occupied, which is NOT the sum of its bookings.
  *
@@ -134,11 +163,10 @@ const ROOM_HOURS = (where: string) => `
                  (julianday(date(e)) - julianday(date(s)) + 1) * 15.0)) AS hours
     FROM islands GROUP BY resource_id`;
 
-/** Bookings inside the trailing year, by LOCAL date — see
- *  CALENDAR_OCCURRENCES for why -5 hours. */
+/** Bookings inside the trailing year, by LOCAL date — see easternDate. */
 const BOOKED_LAST_YEAR = `
-  date(b.starts_at,'-5 hours') >= date('now','-365 day')
-  AND date(b.starts_at,'-5 hours') <= date('now')`;
+  ${easternDate("b.starts_at")} >= date('now','-365 day')
+  AND ${easternDate("b.starts_at")} <= date('now')`;
 
 /** The eldership, from the PCO reference list. */
 const ELDERS = `
@@ -1753,7 +1781,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM pco_registration_signups s
            LEFT JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
           WHERE s.org_id = :orgId
-            AND (lower(s.name) LIKE '%foster%' OR lower(s.name) LIKE '%adoption%')
+            AND (lower(s.name) LIKE '%foster%' OR lower(s.name) LIKE '%adoption%'
+                 OR lower(s.name) LIKE '%tbri%')
           GROUP BY 1 ORDER BY 1`, "combo"),
       table("Every Foster & Adoption event", "who registered, most recent first",
         `SELECT substr(s.pco_created_at,1,4) AS "Year",
@@ -1762,7 +1791,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM pco_registration_signups s
            LEFT JOIN pco_registration_attendees a ON a.signup_id = s.pco_id AND a.org_id = :orgId
           WHERE s.org_id = :orgId
-            AND (lower(s.name) LIKE '%foster%' OR lower(s.name) LIKE '%adoption%')
+            AND (lower(s.name) LIKE '%foster%' OR lower(s.name) LIKE '%adoption%'
+                 OR lower(s.name) LIKE '%tbri%')
           GROUP BY 1, 2
          HAVING COUNT(DISTINCT CASE WHEN a.canceled = 0 THEN a.person_id END) > 0
           ORDER BY 1 DESC, 3 DESC`, 12),
@@ -2229,6 +2259,16 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM (${ROOM_HOURS(`${BOOKABLE_SPACES} AND ${BOOKED_LAST_YEAR}`)}) u
            JOIN pco_calendar_resources rs ON rs.pco_id = u.resource_id AND rs.org_id = :orgId
           ORDER BY 2 DESC LIMIT 15`, "bar"),
+      chart("Utilisation by wing", "which parts of the building carry the load, last 12 months",
+        `SELECT TRIM(rs.path_name) AS "Wing",
+                ROUND(100.0 * SUM(u.hours)
+                      / NULLIF(5475.0 * (SELECT COUNT(*) FROM pco_calendar_resources r2
+                                          WHERE r2.org_id = :orgId AND ${bookableSpaces("r2")}
+                                            AND TRIM(COALESCE(r2.path_name,'')) = TRIM(rs.path_name)), 0), 1)
+                  AS "% of the week"
+           FROM (${ROOM_HOURS(`${BOOKABLE_SPACES} AND ${BOOKED_LAST_YEAR}`)}) u
+           JOIN pco_calendar_resources rs ON rs.pco_id = u.resource_id AND rs.org_id = :orgId
+          GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
       table("Every space", "hours held and share of the bookable week, last 12 months",
         `SELECT rs.name AS "Space",
                 CAST(ROUND(COALESCE(u.hours, 0)) AS INT) AS "Hours held",
