@@ -1,7 +1,8 @@
 import "server-only";
+import { shrinkReadOnlyMemory } from "./builder";
 import { refreshDashboardSnapshots } from "./dashboard-refresh";
 import { decryptJson, encryptJson, hmac } from "./encryption";
-import { getDb } from "./db";
+import { getDb, shrinkDbMemory } from "./db";
 import { normPhone } from "./phone";
 import {
   getAdultCheckinEvents,
@@ -410,13 +411,25 @@ export async function runSync(
     }
     details.durationMs = Date.now() - startedMs;
     finishSyncRun(runId, "ok", changes, warning, details);
+    releaseSyncMemory();
     return { ok: true, changes, details, warning };
   } catch (e) {
     details.durationMs = Date.now() - startedMs;
     const msg = e instanceof Error ? e.message : "Unknown error";
     finishSyncRun(runId, "error", 0, msg, details);
+    releaseSyncMemory();
     return { ok: false, changes: 0, details, error: msg };
   }
+}
+
+/** A sync is where this process's memory peaks — it is the one operation that
+ *  touches every table. SQLite holds its page cache at the high-water mark for
+ *  the life of the process, which on this host is the difference between
+ *  running and being restarted by pm2, so hand it back explicitly. Runs on the
+ *  failure path too: a sync that died halfway still filled the cache. */
+function releaseSyncMemory() {
+  shrinkDbMemory();
+  shrinkReadOnlyMemory();
 }
 
 // ─── People ────────────────────────────────────────────────────────────

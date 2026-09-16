@@ -15,12 +15,24 @@ function roDb(): Database.Database {
   const file = getDb().name; // ensures the main DB + migrations are initialized
   const db = new Database(file, { readonly: true });
   db.pragma("busy_timeout = 5000");
-  // Speed-only: this connection serves every builder block query serially, so
-  // a large page cache + mmap keeps the hot pages resident across blocks.
-  db.pragma("cache_size = -65536"); // 64 MB
-  db.pragma("mmap_size = 268435456"); // 256 MB
+  // This connection serves every builder block query serially. It used to ask
+  // for the same 64 MB cache and 256 MB mmap window as the main connection,
+  // which meant the process was configured for up to 128 MB of page cache
+  // inside a 150 MB RSS cap. See the note in db.ts for the measurements.
+  db.pragma("cache_size = -8192"); // 8 MB
+  db.pragma("mmap_size = 0");
+  db.pragma("soft_heap_limit = 16777216"); // 16 MB
   _ro = db;
   return db;
+}
+
+/** Return the read-only connection's page cache to the OS. See shrinkDbMemory. */
+export function shrinkReadOnlyMemory() {
+  try {
+    _ro?.pragma("shrink_memory");
+  } catch {
+    // Best effort.
+  }
 }
 
 const FORBIDDEN =
