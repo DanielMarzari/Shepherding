@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
 import { deletePushpayCreds, savePushpayCreds } from "@/lib/pushpay";
-import { importPushpay, assignDonor, clearDonorMatch, rematchDonors } from "@/lib/pushpay-import";
+import { importPushpay, importPushpayTransactions, isTransactionsExport, assignDonor, clearDonorMatch, rematchDonors } from "@/lib/pushpay-import";
 
 export interface SaveState {
   status: "idle" | "saved" | "error";
@@ -33,6 +33,26 @@ export async function importPushpayCsvAction(
   }
   try {
     const text = await file.text();
+    // Two different PushPay exports land on this one button. All Donors is a
+    // summary, one row per donor; Transactions is one row per gift. They are
+    // told apart by their header rather than by asking, because an operator
+    // should not have to know which upload slot to use.
+    if (isTransactionsExport(text)) {
+      const t = importPushpayTransactions(s.orgId, file.name, text);
+      revalidatePath("/pushpay");
+      revalidatePath("/audit");
+      revalidatePath("/lanes/give");
+      const span = t.firstDate && t.lastDate ? ` covering ${t.firstDate} to ${t.lastDate}` : "";
+      return {
+        status: "ok",
+        message:
+          `Imported ${t.total.toLocaleString()} gifts${span} — ` +
+          `${t.byYourId.toLocaleString()} matched by PCO id, ` +
+          `${t.byDonorMatch.toLocaleString()} by name, ` +
+          `${t.unmatched.toLocaleString()} unmatched. Gifts are added to the history, not replaced.`,
+        result: { fileName: file.name, total: t.total, matched: t.byYourId + t.byDonorMatch, ambiguous: 0, unmatched: t.unmatched },
+      };
+    }
     const r = importPushpay(s.orgId, file.name, text);
     revalidatePath("/pushpay");
     revalidatePath("/audit");

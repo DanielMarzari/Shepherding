@@ -328,6 +328,143 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
   return run();
 }
 
+export interface TransactionImportResult {
+  total: number;
+  inserted: number;
+  byYourId: number;
+  byDonorMatch: number;
+  unmatched: number;
+  firstDate: string | null;
+  lastDate: string | null;
+}
+
+/** Does this CSV look like the Transactions export rather than All Donors? */
+export function isTransactionsExport(csvText: string): boolean {
+  const first = csvText.slice(0, 4096).split(/\r?\n/)[0]?.toLowerCase() ?? "";
+  return first.includes("transaction id") && first.includes("received on");
+}
+
+/** Import the PushPay Transactions export — one row per gift.
+ *
+ *  Person resolution, in order:
+ *    1. "Your ID" is the church's own id on the payer record, and it IS the PCO
+ *       person id: 1,113 of 1,140 distinct values in the September 2026 export
+ *       resolve against pco_people. That is a direct link and beats name
+ *       matching, so it is tried first.
+ *    2. Otherwise fall back to the same name/email matching the donor import
+ *       uses, which also inherits any manual assignment already made there.
+ *
+ *  Upsert rather than replace: the export is a window (the sample covers
+ *  January to September 2026), so re-importing a later window must add to the
+ *  history rather than delete everything outside it. Transaction ID is stable,
+ *  so a gift seen twice updates in place. */
+export function importPushpayTransactions(
+  orgId: number,
+  fileName: string,
+  csvText: string,
+): TransactionImportResult {
+  const rows = parseCsv(csvText).filter((r) => r.some((c) => c.trim()));
+  if (rows.length < 2) {
+    return { total: 0, inserted: 0, byYourId: 0, byDonorMatch: 0, unmatched: 0, firstDate: null, lastDate: null };
+  }
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const col = (...names: string[]) => {
+    for (const n of names) { const i = header.indexOf(n); if (i >= 0) return i; }
+    return -1;
+  };
+  const iTx = col("transaction id"), iDate = col("received on"), iStatus = col("status"),
+    iSource = col("source"), iPayer = col("payer id"), iYour = col("your id"),
+    iFundName = col("fund name"), iFundCode = col("fund code"),
+    iF = col("first name"), iL = col("last name"), iE = col("email"), iP = col("mobile number", "phone number");
+  if (iTx < 0 || iDate < 0) throw new Error("CSV is missing Transaction ID / Received On columns.");
+
+  const db = getDb();
+  const ix = buildMatchIndexes(orgId);
+  const knownPerson = new Set(
+    (db.prepare(`SELECT pco_id FROM pco_people WHERE org_id = ?`).all(orgId) as Array<{ pco_id: string }>)
+      .map((r) => r.pco_id),
+  );
+  // Payer -> person decided once per payer, not once per gift: a donor with 40
+  // gifts should cost one matching decision, and every one of their rows must
+  // land on the same person.
+  const payerCache = new Map<string, { personId: string | null; how: string }>();
+
+  const out: TransactionImportResult = {
+    total: 0, inserted: 0, byYourId: 0, byDonorMatch: 0, unmatched: 0, firstDate: null, lastDate: null,
+  };
+  const parsed: Array<{
+    txId: string; date: string; status: string | null; source: string | null;
+    payer: string | null; personId: string | null; how: string;
+    fundName: string | null; fundCode: string | null;
+  }> = [];
+
+  for (const r of rows.slice(1)) {
+    const txId = (r[iTx] ?? "").trim();
+    const date = parseDate(r[iDate] ?? "");
+    if (!txId || !date) continue;
+    out.total++;
+    if (!out.firstDate || date < out.firstDate) out.firstDate = date;
+    if (!out.lastDate || date > out.lastDate) out.lastDate = date;
+
+    const payer = (r[iPayer] ?? "").trim() || null;
+    const yourId = iYour >= 0 ? (r[iYour] ?? "").trim() : "";
+    const cacheKey = payer ?? `tx:${txId}`;
+    let decided = payerCache.get(cacheKey);
+    if (!decided) {
+      if (yourId && knownPerson.has(yourId)) {
+        decided = { personId: yourId, how: "your_id" };
+      } else {
+        const first = iF >= 0 ? (r[iF] ?? "").trim() : "";
+        const last = iL >= 0 ? (r[iL] ?? "").trim() : "";
+        const email = iE >= 0 ? (r[iE] ?? "").trim() : "";
+        const phone = iP >= 0 ? (r[iP] ?? "").trim() : "";
+        const eh = email ? hmac(email.toLowerCase()) : null;
+        const np = normPhone(phone);
+        const dec = first || last ? decideMatch(first, last, eh, np ? hmac(np) : null, ix) : { personId: null, status: "unmatched" as const, candidates: null };
+        decided = { personId: dec.personId, how: dec.personId ? "donor_match" : "unmatched" };
+      }
+      payerCache.set(cacheKey, decided);
+    }
+    if (decided.how === "your_id") out.byYourId++;
+    else if (decided.how === "donor_match") out.byDonorMatch++;
+    else out.unmatched++;
+
+    parsed.push({
+      txId, date,
+      status: (r[iStatus] ?? "").trim() || null,
+      source: (r[iSource] ?? "").trim() || null,
+      payer,
+      personId: decided.personId,
+      how: decided.how,
+      fundName: iFundName >= 0 ? (r[iFundName] ?? "").trim() || null : null,
+      fundCode: iFundCode >= 0 ? (r[iFundCode] ?? "").trim() || null : null,
+    });
+  }
+
+  const run = db.transaction(() => {
+    const ins = db.prepare(`INSERT INTO pushpay_transactions
+      (org_id, transaction_id, received_on, status, source, payer_id, person_id, match_source, fund_name, fund_code, imported_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(org_id, transaction_id) DO UPDATE SET
+        received_on = excluded.received_on, status = excluded.status, source = excluded.source,
+        payer_id = excluded.payer_id, person_id = excluded.person_id,
+        match_source = excluded.match_source, fund_name = excluded.fund_name,
+        fund_code = excluded.fund_code, imported_at = excluded.imported_at`);
+    for (const p of parsed) {
+      const res = ins.run(orgId, p.txId, p.date, p.status, p.source, p.payer, p.personId, p.how, p.fundName, p.fundCode);
+      if (res.changes) out.inserted++;
+    }
+    db.prepare(`INSERT INTO pushpay_import (org_id, file_name, total, matched, ambiguous, unmatched, kind, imported_at)
+      VALUES (?,?,?,?,?,?, 'transactions', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(org_id) DO UPDATE SET file_name=excluded.file_name, total=excluded.total,
+        matched=excluded.matched, ambiguous=excluded.ambiguous, unmatched=excluded.unmatched,
+        kind=excluded.kind, imported_at=excluded.imported_at`)
+      .run(orgId, fileName, out.total, out.byYourId + out.byDonorMatch, 0, out.unmatched);
+  });
+  run();
+  return out;
+}
+
 export interface RematchResult extends PushpayImportResult { changed: number }
 
 /** Re-run matching on the already-imported donors (no re-upload) with the

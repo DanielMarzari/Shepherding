@@ -272,6 +272,30 @@ const KID_VISIT_COUNTS = `
      AND c.pco_created_at >= datetime('now','-365 day')
    GROUP BY c.person_id`;
 
+/** Individual gifts from the PushPay Transactions export.
+ *
+ *  Only Status = 'Success'. The export also carries a handful of 'Processing'
+ *  rows (123 of 16,574 in the September 2026 file) which have not settled and
+ *  would be counted twice if they later succeed under the same id.
+ *
+ *  METHOD. PushPay's Source is the channel the gift arrived through. 'Batch
+ *  Entry' is a gift keyed in by hand afterwards, which is how a cheque or cash
+ *  in the plate is recorded; everything else — Recurring, Web, Mobile, Text
+ *  Giving, Kiosk — arrived digitally. A Kiosk gift happens on campus but is
+ *  still an electronic transaction, so it counts as online.
+ *
+ *  THE WINDOW IS NOT A YEAR. The export loaded covers 1 Jan to 16 Sep 2026, so
+ *  nothing here may be phrased as "last 12 months" and no year-over-year
+ *  comparison is possible yet. Every block below is scoped to whatever the
+ *  table actually holds rather than to a rolling window that would silently
+ *  read as complete. */
+const GIFTS = `
+  SELECT t.transaction_id, t.received_on, t.source, t.person_id, t.fund_name,
+         substr(t.received_on, 1, 7) AS month,
+         CASE WHEN t.source = 'Batch Entry' THEN 'Check or cash' ELSE 'Online' END AS method
+    FROM pushpay_transactions t
+   WHERE t.org_id = :orgId AND t.status = 'Success'`;
+
 /** The eldership, from the PCO reference list. */
 const ELDERS = `
   SELECT m.person_id
@@ -2031,6 +2055,40 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            JOIN pco_household_memberships hm
              ON hm.person_id = d.person_id AND hm.org_id = :orgId
           WHERE d.org_id = :orgId AND d.person_id IS NOT NULL`),
+      // Everything below comes from the TRANSACTIONS export — one row per
+      // gift — rather than the donor summary above. It is what makes
+      // frequency, method over time and recurring share answerable at all.
+      stat("Gifts recorded", "successful gifts in the loaded window",
+        `SELECT COUNT(*) FROM (${GIFTS})`),
+      stat("Given by recurring schedule", "share of gifts that arrived automatically",
+        `SELECT ROUND(100.0 * SUM(CASE WHEN source = 'Recurring' THEN 1 ELSE 0 END)
+                    / NULLIF(COUNT(*), 0), 1) || '%' FROM (${GIFTS})`),
+      stat("People who gave", "distinct people behind those gifts",
+        `SELECT COUNT(DISTINCT person_id) FROM (${GIFTS}) WHERE person_id IS NOT NULL`),
+      chart("Online against check or cash", "gifts per month, by how they arrived",
+        `SELECT month AS "Month",
+                SUM(CASE WHEN method = 'Online' THEN 1 ELSE 0 END) AS "Online",
+                SUM(CASE WHEN method = 'Check or cash' THEN 1 ELSE 0 END) AS "Check or cash"
+           FROM (${GIFTS}) GROUP BY 1 ORDER BY 1`, "line"),
+      chart("How gifts arrive", "every successful gift by channel",
+        `SELECT source AS "Channel", COUNT(*) AS "Gifts"
+           FROM (${GIFTS}) WHERE source IS NOT NULL
+          GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
+      chart("How often people give", "gifts per person across the window",
+        `SELECT CASE WHEN gifts = 1 THEN '1 gift'
+                     WHEN gifts <= 5 THEN '2-5'
+                     WHEN gifts <= 12 THEN '6-12'
+                     WHEN gifts <= 26 THEN '13-26'
+                     ELSE '27+' END AS "Gifts given",
+                COUNT(*) AS "People"
+           FROM (SELECT person_id, COUNT(*) AS gifts FROM (${GIFTS})
+                  WHERE person_id IS NOT NULL GROUP BY person_id)
+          GROUP BY 1 ORDER BY MIN(gifts)`, "bar", { colorByCategory: true }),
+      table("Where gifts are designated", "by fund",
+        `SELECT COALESCE(fund_name, '(no fund)') AS "Fund",
+                COUNT(*) AS "Gifts",
+                COUNT(DISTINCT person_id) AS "People"
+           FROM (${GIFTS}) GROUP BY 1 ORDER BY 2 DESC`),
       chart("Donors by stage", "how PushPay classifies each donor",
         `SELECT COALESCE(donor_stage,'(unclassified)') AS "Stage", COUNT(*) AS "Donors"
            FROM pushpay_donors WHERE org_id = :orgId
@@ -2060,10 +2118,20 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            FROM pushpay_donors WHERE org_id = :orgId
           GROUP BY 1 ORDER BY 2 DESC`, "bar"),
     ],
-    gaps: measuredNote(
-      "donor counts, recency and stage from the PushPay export, plus how people give.",
-      "Amounts are deliberately absent: the import carries donor stage and last-gift date, not gift values, so nothing here is a financial total. Budget performance, expense ratios and designated-fund balances live in the accounting system, which is not synced.",
-    ),
+    gaps: {
+      title: "What these numbers do and don't cover",
+      intro:
+        "Measured here: who gives and how they are classified (from the donor export), and — new — every individual gift, so frequency, channel over time and recurring share can be answered rather than estimated.",
+      items: [
+        "**NO AMOUNTS, BY DESIGN AND BY DATA.** The Transactions export carries no dollar figure at all, which matches the instruction that these reports show giving without money. Nothing on this page is a financial total, and no total could be derived from it.",
+        "**The gift-level window is 1 Jan to 16 Sep 2026** — not a year, and not the whole history. The donor-level blocks above it (stage, recency, households) still cover all time. Nothing here can be compared year over year until an export covering earlier years is loaded.",
+        "**82% of gifts are linked to a person.** 13,626 of 16,574 resolve to a PCO record through the “Your ID” field, which carries the PCO person id. The remaining 2,948 belong to payers with no id on their PushPay record; uploading the full export through Settings → PushPay name-matches many of those, since that path also reads the name and email columns.",
+        "**“Check or cash” means keyed in afterwards.** It is PushPay’s Batch Entry channel, which is how plate giving is recorded. A Kiosk gift happens on campus but is an electronic transaction and counts as online.",
+        "**Budget performance, expense ratios and designated-fund balances** live in the accounting system, which is not synced.",
+      ],
+      footer:
+        "_Of the 1,113 people this window can put a name to, 186 gave exactly once and 176 gave 27 times or more — a spread the donor-summary import could not see at all. Counting every payer including the unlinked, it is 421 giving once against 194 giving 27+._",
+    },
   },
 
   "mir-next-steps": {
