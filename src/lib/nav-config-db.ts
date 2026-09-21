@@ -46,6 +46,9 @@ const SECTION_TO_GROUP: Record<string, string> = {
  *  somebody actually wants one of these gone. */
 const MANAGED_PAGES: Record<string, string> = {
   spotify: "settings-integration",
+  // Where PushPay's and Subsplash's credential slots moved when their own
+  // pages stopped holding credentials (migration 0092).
+  credentials: "settings-integration",
 };
 
 const MANAGED_GROUPS: Record<string, { label: string; icon?: string; mode: "top" | "drill" }> = {

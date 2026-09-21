@@ -2,14 +2,18 @@ import "server-only";
 import { getDb } from "./db";
 import { decrypt, encrypt, last4 } from "./encryption";
 
-/** Integrations that would fill a published Ministry Impact Report Output but
- *  have no connection yet.
+/** Connections with no sync yet, and the credentials each one would need.
  *
  *  This is deliberately a list of WHAT IS MISSING, not a settings screen for
- *  things that work. PCO, PushPay, Constant Contact, Subsplash and Spotify have
- *  their own pages. Everything here is blocked on a credential nobody has yet,
- *  and each entry records which Outputs it would unblock so the cost of not
- *  having it is visible. */
+ *  things that work. Credentials come in two tiers (see migration 0092): a
+ *  provider gets its own page and typed table once its sync works, as PCO,
+ *  Constant Contact and Spotify have. Until then its credentials are stored
+ *  here, in integration_credentials, one row per field. PushPay has no entry:
+ *  its CSV exports already bring in the giving data and no published Output
+ *  waits on its API, so a form here would collect secrets nothing reads.
+ *  Whoever builds a PushPay API sync adds it then. Each entry records which
+ *  published Ministry Impact Report Outputs it would unblock, so the cost of
+ *  not having it is visible. */
 
 export interface IntegrationField {
   key: string;
@@ -107,6 +111,26 @@ export const INTEGRATIONS: IntegrationDef[] = [
     fields: [
       { key: "access_token", label: "Long-lived access token", help: "From the Meta app, exchanged for a 60-day token.", multiline: true },
       { key: "ig_user_id", label: "Instagram user ID", help: "The numeric id of the connected professional account." },
+    ],
+  },
+  {
+    // Had its own page and table (0059) until 0092, storing credentials that
+    // nothing read. There is still no sync and no Subsplash data here at all.
+    provider: "subsplash",
+    name: "Subsplash",
+    what: "In-app sermon views from the Faith Church app and, if Subsplash's API reports them per person, app activity as engagement signals.",
+    where: [
+      "Ask Subsplash what API access the church's account includes before anyone builds against it.",
+      "The questions that decide whether this is worth doing: does it report in-app sermon views, and per person or only as totals?",
+      "Whatever they issue goes below: an API key or access token, plus a client secret and app ID only if their access uses them.",
+    ],
+    blocker:
+      "Nobody has confirmed that the church's Subsplash account includes API access, or what it would report.",
+    outputs: ["555 sermon views-app/mo (Communications – Engagement)"],
+    fields: [
+      { key: "api_key", label: "API key or access token", help: "Issued by Subsplash for the church's account." },
+      { key: "client_secret", label: "Client secret", help: "Only if their access uses one.", optional: true },
+      { key: "app_id", label: "App ID", help: "The Subsplash identifier for the Faith Church app, if they ask for it.", optional: true },
     ],
   },
 ];

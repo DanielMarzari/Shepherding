@@ -2,14 +2,11 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { getStoredPushpayCreds } from "@/lib/pushpay";
 import { getPushpayImport } from "@/lib/pushpay-import";
-import { PushpayCredentialsCard } from "./credentials-card";
 import { PushpayImportForm } from "./import-form";
 
 export default async function PushpayPage() {
   const session = await requireOrg();
-  const creds = getStoredPushpayCreds(session.orgId);
   const isAdmin = session.role === "admin";
   const last = getPushpayImport(session.orgId);
 
@@ -133,24 +130,14 @@ export default async function PushpayPage() {
           </ul>
         </Card>
 
-        {/* Optional API credentials — kept, but secondary */}
-        <details className="group">
-          <summary className="text-xs text-subtle cursor-pointer hover:text-muted select-none">
-            Advanced: store PushPay API credentials (not required for CSV import)
-          </summary>
-          <div className="mt-3">
-            <PushpayCredentialsCard
-              initial={{
-                hasCreds: creds.hasCreds,
-                clientIdLast4: creds.clientIdLast4,
-                clientSecretLast4: creds.clientSecretLast4,
-                orgKeyLast4: creds.orgKeyLast4,
-                updatedAt: creds.updatedAt,
-              }}
-              isAdmin={isAdmin}
-            />
-          </div>
-        </details>
+        <p className="text-xs text-subtle">
+          PushPay is connected by these CSV exports, not by its API. If an API
+          connection is ever built, its credentials go on the{" "}
+          <Link href="/settings/integrations" className="text-accent hover:underline">
+            Credentials page
+          </Link>
+          .
+        </p>
       </div>
     </AppShell>
   );

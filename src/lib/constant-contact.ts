@@ -4,10 +4,12 @@ import { getDb } from "./db";
 import { decrypt, encrypt, last4 } from "./encryption";
 import { nextScheduledRun } from "./pco-schedule";
 
-// Constant Contact credential storage. Mirrors the PCO / PushPay pattern:
-// secrets are AES-256-GCM encrypted at rest (same ENCRYPTION_KEY), with a
-// last-4 fingerprint kept for display. No Constant Contact API calls happen
-// yet — this is just secure capture so the email sync can be wired up later.
+// Constant Contact credential storage, in its own typed table
+// (constant_contact_credentials) because the OAuth sync below reads it and
+// rotates the refresh token. Providers without a working sync store their
+// credentials in integration_credentials instead; see 0092 for the rule.
+// Secrets are AES-256-GCM encrypted at rest (same ENCRYPTION_KEY), with a
+// last-4 fingerprint kept for display.
 
 export interface StoredConstantContactCreds {
   /** An API key is stored (enough to start the OAuth Connect flow). */
@@ -28,7 +30,7 @@ export function getStoredConstantContactCreds(orgId: number): StoredConstantCont
     .prepare(
       `SELECT api_key_last4, app_secret_last4, refresh_token_last4,
               organization_name, verified_at, updated_at
-         FROM constantcontact_credentials WHERE org_id = ?`,
+         FROM constant_contact_credentials WHERE org_id = ?`,
     )
     .get(orgId) as
     | {
@@ -74,7 +76,7 @@ export function getDecryptedConstantContactCreds(orgId: number): {
   const row = getDb()
     .prepare(
       `SELECT api_key_enc, app_secret_enc, refresh_token_enc
-         FROM constantcontact_credentials WHERE org_id = ?`,
+         FROM constant_contact_credentials WHERE org_id = ?`,
     )
     .get(orgId) as
     | {
@@ -100,16 +102,16 @@ export function saveConstantContactCreds(
 ) {
   const db = getDb();
   const now = `strftime('%Y-%m-%dT%H:%M:%fZ','now')`;
-  const exists = db.prepare("SELECT 1 FROM constantcontact_credentials WHERE org_id = ?").get(orgId);
+  const exists = db.prepare("SELECT 1 FROM constant_contact_credentials WHERE org_id = ?").get(orgId);
   if (exists) {
     db.prepare(
-      `UPDATE constantcontact_credentials
+      `UPDATE constant_contact_credentials
           SET api_key_enc = ?, api_key_last4 = ?, app_secret_enc = ?, app_secret_last4 = ?, updated_at = ${now}
         WHERE org_id = ?`,
     ).run(encrypt(apiKey), last4(apiKey), appSecret ? encrypt(appSecret) : null, appSecret ? last4(appSecret) : null, orgId);
   } else {
     db.prepare(
-      `INSERT INTO constantcontact_credentials
+      `INSERT INTO constant_contact_credentials
          (org_id, api_key_enc, api_key_last4, app_secret_enc, app_secret_last4, updated_at)
        VALUES (?, ?, ?, ?, ?, ${now})`,
     ).run(orgId, encrypt(apiKey), last4(apiKey), appSecret ? encrypt(appSecret) : null, appSecret ? last4(appSecret) : null);
@@ -121,7 +123,7 @@ export function saveConstantContactCreds(
 export function saveConstantContactRefreshToken(orgId: number, refreshToken: string): void {
   getDb()
     .prepare(
-      `UPDATE constantcontact_credentials
+      `UPDATE constant_contact_credentials
           SET refresh_token_enc = ?, refresh_token_last4 = ?,
               verified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -313,5 +315,5 @@ export function isCcSyncDue(orgId: number, settings: CcSyncSettings): boolean {
 }
 
 export function deleteConstantContactCreds(orgId: number) {
-  getDb().prepare("DELETE FROM constantcontact_credentials WHERE org_id = ?").run(orgId);
+  getDb().prepare("DELETE FROM constant_contact_credentials WHERE org_id = ?").run(orgId);
 }
