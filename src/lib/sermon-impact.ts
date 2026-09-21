@@ -108,8 +108,8 @@ export function getWeeklyMetrics(orgId: number): Record<MetricKey, MetricSeries>
       orgId,
     ),
     checkins: weeklyCount(
-      `SELECT ${WK("event_time_at")} wk, COUNT(*) c FROM pco_check_ins
-        WHERE org_id=? AND event_time_at IS NOT NULL AND event_time_at<>'' GROUP BY wk`,
+      `SELECT ${WK("event_time_starts_at")} wk, COUNT(*) c FROM pco_check_ins
+        WHERE org_id=? AND event_time_starts_at IS NOT NULL AND event_time_starts_at<>'' GROUP BY wk`,
       orgId,
     ),
     form_subs: weeklyCount(
@@ -120,8 +120,8 @@ export function getWeeklyMetrics(orgId: number): Record<MetricKey, MetricSeries>
     // First-ever check-in per person = new attenders showing up that week.
     new_attenders: weeklyCount(
       `WITH f AS (
-         SELECT person_id, MIN(event_time_at) fa FROM pco_check_ins
-          WHERE org_id=? AND person_id IS NOT NULL AND event_time_at IS NOT NULL AND event_time_at<>''
+         SELECT person_id, MIN(event_time_starts_at) fa FROM pco_check_ins
+          WHERE org_id=? AND person_id IS NOT NULL AND event_time_starts_at IS NOT NULL AND event_time_starts_at<>''
           GROUP BY person_id)
        SELECT ${WK("fa")} wk, COUNT(*) c FROM f GROUP BY wk`,
       orgId,

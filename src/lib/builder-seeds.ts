@@ -833,28 +833,28 @@ const attendanceSeed: SeedPage = {
   slug: "attendance",
   title: "Attendance",
   description: "Weekly worship attendance from the imported rollups — in-person vs online, the congregation mix, and by room. Weather / forecast / preacher analytics stay on the original page.",
-  revision: 1,
+  revision: 2,
   blocks: [
     { kind: "stat", config: { title: "In-person · 12mo avg", span: 3, sub: "weekly total",
       sql: `SELECT ROUND(AVG(in_person_total)) FROM attendance_weekly
-             WHERE org_id=:orgId AND in_person_total IS NOT NULL AND week_date >= date('now','-12 months')` } },
+             WHERE org_id=:orgId AND in_person_total IS NOT NULL AND sunday_on >= date('now','-12 months')` } },
     { kind: "stat", config: { title: "Peak week", span: 3, color: "success", sub: "highest in-person week, 12mo",
       sql: `SELECT MAX(in_person_total) FROM attendance_weekly
-             WHERE org_id=:orgId AND week_date >= date('now','-12 months')` } },
+             WHERE org_id=:orgId AND sunday_on >= date('now','-12 months')` } },
     { kind: "stat", config: { title: "Online live · 12mo avg", span: 3, color: "low", sub: "weekly livestream",
       sql: `SELECT ROUND(AVG(online_live)) FROM attendance_weekly
-             WHERE org_id=:orgId AND online_live IS NOT NULL AND week_date >= date('now','-12 months')` } },
+             WHERE org_id=:orgId AND online_live IS NOT NULL AND sunday_on >= date('now','-12 months')` } },
     { kind: "stat", config: { title: "Weeks on file", span: 3, color: "low", sub: "imported rollups",
       sql: `SELECT COUNT(*) FROM attendance_weekly WHERE org_id=:orgId` } },
     { kind: "chart", config: { title: "Attendance over time", chartType: "line", span: 12,
-      sql: `SELECT week_date AS "Week", in_person_total AS "In person", online_live AS "Online live"
-              FROM attendance_weekly WHERE org_id=:orgId AND week_date >= date('now','-24 months') ORDER BY week_date` } },
+      sql: `SELECT sunday_on AS "Week", in_person_total AS "In person", online_live AS "Online live"
+              FROM attendance_weekly WHERE org_id=:orgId AND sunday_on >= date('now','-24 months') ORDER BY sunday_on` } },
     { kind: "chart", config: { title: "Congregation mix", chartType: "line", span: 6,
-      sql: `SELECT week_date AS "Week", adult_total AS "Adults", student_total AS "Students", kids_total AS "Kids"
-              FROM attendance_weekly WHERE org_id=:orgId AND week_date >= date('now','-24 months') ORDER BY week_date` } },
+      sql: `SELECT sunday_on AS "Week", adult_total AS "Adults", student_total AS "Students", kids_total AS "Kids"
+              FROM attendance_weekly WHERE org_id=:orgId AND sunday_on >= date('now','-24 months') ORDER BY sunday_on` } },
     { kind: "chart", config: { title: "By room · last 3 months", chartType: "bar", colorByCategory: true, span: 6,
       sql: `SELECT room AS "Room", SUM(count) AS "Attendance"
-              FROM attendance_service WHERE org_id=:orgId AND week_date >= date('now','-3 months')
+              FROM attendance_service WHERE org_id=:orgId AND sunday_on >= date('now','-3 months')
              GROUP BY room ORDER BY 2 DESC` } },
   ],
 };
@@ -898,7 +898,7 @@ const emailDashboardSeed: SeedPage = {
   slug: "email-dashboard",
   title: "Email dashboard",
   description: "Constant Contact at a glance — audience size, send performance over time, and per-campaign open / click / bounce rates. From the synced data.",
-  revision: 1,
+  revision: 2,
   blocks: [
     { kind: "stat", config: { title: "Contacts", span: 3, sub: "in Constant Contact",
       sql: `SELECT COUNT(*) FROM cc_contacts WHERE org_id=:orgId` } },
@@ -909,10 +909,10 @@ const emailDashboardSeed: SeedPage = {
     { kind: "stat", config: { title: "Avg click %", span: 3, color: "warning", sub: "clicks ÷ sends",
       sql: `SELECT ROUND(100.0*SUM(stat_clicks)/NULLIF(SUM(stat_sends),0),1) FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
     { kind: "chart", config: { title: "Open / Click % over time", chartType: "line", span: 8,
-      sql: `SELECT substr(last_sent_date,1,7) AS "Month",
+      sql: `SELECT substr(last_sent_at,1,7) AS "Month",
               ROUND(100.0*SUM(stat_opens)/NULLIF(SUM(stat_sends),0),1) AS "Open %",
               ROUND(100.0*SUM(stat_clicks)/NULLIF(SUM(stat_sends),0),1) AS "Click %"
-              FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0 AND last_sent_date IS NOT NULL
+              FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0 AND last_sent_at IS NOT NULL
              GROUP BY 1 ORDER BY 1` } },
     { kind: "chart", config: { title: "New contacts by month", chartType: "bar", span: 4,
       sql: `SELECT substr(created_at,1,7) AS "Month", COUNT(*) AS "New"
@@ -922,13 +922,13 @@ const emailDashboardSeed: SeedPage = {
       columnColors: { Status: "low", Sent: "low" },
       columnThresholds: { "Open %": { base: 35, band: 10 }, "Click %": { base: 5, band: 3 }, "Bounce %": { base: 2, band: 1, invert: true } },
       sub: "most recent first · open/click green above target, bounce red when high",
-      sql: `SELECT name AS "Campaign", current_status AS "Status", substr(last_sent_date,1,10) AS "Sent",
+      sql: `SELECT name AS "Campaign", current_status AS "Status", substr(last_sent_at,1,10) AS "Sent",
                    stat_sends AS "Sends",
                    ROUND(100.0*stat_opens/NULLIF(stat_sends,0),1) AS "Open %",
                    ROUND(100.0*stat_clicks/NULLIF(stat_sends,0),1) AS "Click %",
                    ROUND(100.0*stat_bounces/NULLIF(stat_sends,0),1) AS "Bounce %"
               FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0
-             ORDER BY last_sent_date DESC LIMIT 100` } },
+             ORDER BY last_sent_at DESC LIMIT 100` } },
   ],
 };
 
@@ -982,7 +982,7 @@ const givingSeed: SeedPage = {
   title: "Giving statistics",
   description:
     "Giving from the imported PushPay donor export — who gives, membership vs. giving coverage, donor stages, funds, channels, where givers live, recency, and new givers over time. Import or refresh on the PushPay page.",
-  revision: 2,
+  revision: 3,
   moreSection: "Reports & insights",
   blocks: [
     { kind: "stat", config: { title: "Givers", span: 2, sub: "people who have given", sql: GIVERS } },
@@ -1041,23 +1041,23 @@ const givingSeed: SeedPage = {
     { kind: "divider", config: { title: "Recency", span: 12 } },
     { kind: "chart", config: { title: "Most recent gift by month", chartType: "line", span: 12,
       sub: "the export carries each donor's last gift only — this is when people most recently gave",
-      sql: `SELECT substr(last_gift_date,1,7) AS "Month", COUNT(*) AS "Donors"
-              FROM pushpay_donors WHERE org_id=:orgId AND last_gift_date IS NOT NULL AND length(last_gift_date)>=7
+      sql: `SELECT substr(last_gift_on,1,7) AS "Month", COUNT(*) AS "Donors"
+              FROM pushpay_donors WHERE org_id=:orgId AND last_gift_on IS NOT NULL AND length(last_gift_on)>=7
              GROUP BY 1 ORDER BY 1` } },
 
     { kind: "divider", config: { title: "New givers over time", span: 12 } },
     { kind: "text", config: { span: 12, text: "Each person counted by the month/year of their FIRST gift. This needs a \"First Gift - Date\" column in the PushPay export — the standard All Donors export only carries the last gift date, so until you drop an export that includes first-gift dates, these two charts stay empty. Import it on the PushPay page and they fill in automatically." } },
     { kind: "stat", config: { title: "New givers tracked", span: 3, sub: "with a first-gift date",
-      sql: `SELECT COUNT(*) FROM pushpay_donors WHERE org_id=:orgId AND first_gift_date IS NOT NULL` } },
+      sql: `SELECT COUNT(*) FROM pushpay_donors WHERE org_id=:orgId AND first_gift_on IS NOT NULL` } },
     { kind: "chart", config: { title: "New givers by year", chartType: "bar", colorByCategory: true, span: 9,
       sub: "count of people whose first gift landed in each year (since 2017)",
-      sql: `SELECT substr(first_gift_date,1,4) AS "Year", COUNT(*) AS "New givers"
-              FROM pushpay_donors WHERE org_id=:orgId AND first_gift_date IS NOT NULL AND first_gift_date >= '2017'
+      sql: `SELECT substr(first_gift_on,1,4) AS "Year", COUNT(*) AS "New givers"
+              FROM pushpay_donors WHERE org_id=:orgId AND first_gift_on IS NOT NULL AND first_gift_on >= '2017'
              GROUP BY 1 ORDER BY 1` } },
     { kind: "chart", config: { title: "New givers by month", chartType: "line", span: 12,
       sub: "first-time givers per month since 2017",
-      sql: `SELECT substr(first_gift_date,1,7) AS "Month", COUNT(*) AS "New givers"
-              FROM pushpay_donors WHERE org_id=:orgId AND first_gift_date IS NOT NULL AND first_gift_date >= '2017'
+      sql: `SELECT substr(first_gift_on,1,7) AS "Month", COUNT(*) AS "New givers"
+              FROM pushpay_donors WHERE org_id=:orgId AND first_gift_on IS NOT NULL AND first_gift_on >= '2017'
              GROUP BY 1 ORDER BY 1` } },
 
     { kind: "divider", config: { title: "Donors", span: 12 } },

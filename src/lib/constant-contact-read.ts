@@ -72,12 +72,12 @@ export interface CampaignPerf {
 
 export function getCampaignPerformance(orgId: number, limit = 50): CampaignPerf[] {
   const rows = getDb().prepare(
-    `SELECT name, current_status AS status, last_sent_date AS updatedAt,
+    `SELECT name, current_status AS status, last_sent_at AS updatedAt,
             COALESCE(stat_sends, 0) AS sends, stat_opens AS uopens, stat_clicks AS uclicks,
             stat_bounces AS bounces, stat_optouts AS optouts
        FROM cc_campaigns
       WHERE org_id = ? AND stat_sends IS NOT NULL
-      ORDER BY last_sent_date DESC LIMIT ?`,
+      ORDER BY last_sent_at DESC LIMIT ?`,
   ).all(orgId, limit) as Array<{ name: string | null; status: string | null; updatedAt: string | null; sends: number; uopens: number | null; uclicks: number | null; bounces: number | null; optouts: number | null }>;
   const rate = (num: number | null, den: number) => (den > 0 && num != null ? num / den : null);
   return rows.map((r) => ({
@@ -142,8 +142,8 @@ export function getCtor(orgId: number): { openers: number; clickers: number; cto
 /** Open % and click % by month of send. */
 export function getRateOverTime(orgId: number): Series {
   const rows = getDb().prepare(
-    `SELECT substr(last_sent_date,1,7) AS m, SUM(stat_sends) AS sends, SUM(stat_opens) AS opens, SUM(stat_clicks) AS clicks
-       FROM cc_campaigns WHERE org_id = ? AND stat_sends > 0 AND last_sent_date IS NOT NULL
+    `SELECT substr(last_sent_at,1,7) AS m, SUM(stat_sends) AS sends, SUM(stat_opens) AS opens, SUM(stat_clicks) AS clicks
+       FROM cc_campaigns WHERE org_id = ? AND stat_sends > 0 AND last_sent_at IS NOT NULL
       GROUP BY m ORDER BY m DESC LIMIT 24`,
   ).all(orgId) as Array<{ m: string; sends: number; opens: number; clicks: number }>;
   return {
@@ -173,8 +173,8 @@ export function getOpensByDow(orgId: number): Slice[] {
 /** Bounces and opt-outs by month. */
 export function getBounceOptoutOverTime(orgId: number): Series {
   const rows = getDb().prepare(
-    `SELECT substr(last_sent_date,1,7) AS m, SUM(stat_bounces) AS b, SUM(stat_optouts) AS o
-       FROM cc_campaigns WHERE org_id = ? AND stat_sends > 0 AND last_sent_date IS NOT NULL
+    `SELECT substr(last_sent_at,1,7) AS m, SUM(stat_bounces) AS b, SUM(stat_optouts) AS o
+       FROM cc_campaigns WHERE org_id = ? AND stat_sends > 0 AND last_sent_at IS NOT NULL
       GROUP BY m ORDER BY m DESC LIMIT 24`,
   ).all(orgId) as Array<{ m: string; b: number; o: number }>;
   return { columns: ["Month", "Bounces", "Opt-outs"], rows: rows.reverse().map((r) => [r.m, r.b ?? 0, r.o ?? 0]) };

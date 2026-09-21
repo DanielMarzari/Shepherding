@@ -102,11 +102,11 @@ async function syncContacts(orgId: number, budget: Budget, full: boolean): Promi
   const db = getDb();
   const resolvePerson = db.prepare("SELECT person_id FROM pco_person_emails WHERE org_id = ? AND email_hash = ? LIMIT 1");
   const up = db.prepare(
-    `INSERT INTO cc_contacts (org_id, contact_id, email_hash, person_id, permission_to_send, opt_in_source, opt_in_date, opt_out_date, create_source, created_at, updated_at, synced_at)
-     VALUES (@org, @id, @hash, @person, @perm, @optinSrc, @optinDate, @optoutDate, @createSrc, @created, @updated, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    `INSERT INTO cc_contacts (org_id, contact_id, email_hash, person_id, permission_to_send, opt_in_source, opted_in_at, opted_out_at, create_source, created_at, updated_at, synced_at)
+     VALUES (@org, @id, @hash, @person, @perm, @optinSrc, @optedInAt, @optedOutAt, @createSrc, @created, @updated, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, contact_id) DO UPDATE SET email_hash=excluded.email_hash, person_id=excluded.person_id,
-       permission_to_send=excluded.permission_to_send, opt_in_source=excluded.opt_in_source, opt_in_date=excluded.opt_in_date,
-       opt_out_date=excluded.opt_out_date, create_source=excluded.create_source, updated_at=excluded.updated_at, synced_at=excluded.synced_at`,
+       permission_to_send=excluded.permission_to_send, opt_in_source=excluded.opt_in_source, opted_in_at=excluded.opted_in_at,
+       opted_out_at=excluded.opted_out_at, create_source=excluded.create_source, updated_at=excluded.updated_at, synced_at=excluded.synced_at`,
   );
   const delLists = db.prepare("DELETE FROM cc_contact_lists WHERE org_id = ? AND contact_id = ?");
   const insList = db.prepare("INSERT OR IGNORE INTO cc_contact_lists (org_id, contact_id, list_id) VALUES (?, ?, ?)");
@@ -125,8 +125,8 @@ async function syncContacts(orgId: number, budget: Budget, full: boolean): Promi
       const ea = c.email_address ?? {};
       up.run({
         org: orgId, id: s(c.contact_id), hash, person,
-        perm: s(ea.permission_to_send), optinSrc: s(ea.opt_in_source), optinDate: s(ea.opt_in_date),
-        optoutDate: s(ea.opt_out_date), createSrc: s(c.create_source), created: s(c.created_at), updated: s(c.updated_at),
+        perm: s(ea.permission_to_send), optinSrc: s(ea.opt_in_source), optedInAt: s(ea.opt_in_date),
+        optedOutAt: s(ea.opt_out_date), createSrc: s(c.create_source), created: s(c.created_at), updated: s(c.updated_at),
       });
       const lists: any[] = Array.isArray(c.list_memberships) ? c.list_memberships : [];
       delLists.run(orgId, s(c.contact_id));
@@ -165,7 +165,7 @@ async function syncCampaignStats(orgId: number, budget: Budget): Promise<number>
     `UPDATE cc_campaigns SET
         stat_sends = @sends, stat_opens = @opens, stat_clicks = @clicks, stat_bounces = @bounces,
         stat_optouts = @optouts, stat_forwards = @fwd, stat_abuse = @abuse, stat_not_opened = @dno,
-        last_sent_date = COALESCE(@sent, last_sent_date), stats_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        last_sent_at = COALESCE(@lastSentAt, last_sent_at), stats_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE org_id = @org AND campaign_id = @id`,
   );
   let count = 0;
@@ -175,7 +175,7 @@ async function syncCampaignStats(orgId: number, budget: Budget): Promise<number>
       if (!id) continue;
       const u = r.unique_counts && typeof r.unique_counts === "object" ? r.unique_counts : {};
       const info = up.run({
-        org: orgId, id, sent: s(r.last_sent_date),
+        org: orgId, id, lastSentAt: s(r.last_sent_date),
         sends: n(u.sends), opens: n(u.opens), clicks: n(u.clicks), bounces: n(u.bounces),
         optouts: n(u.optouts), fwd: n(u.forwards), abuse: n(u.abuse), dno: n(u.not_opened),
       });
@@ -195,14 +195,14 @@ async function syncCampaignActivity(orgId: number, budget: Budget, full: boolean
   const window = new Date(Date.now() - LOOKBACK_MS * 4).toISOString(); // ~12 months of sent campaigns
   const candidates = db.prepare(
     `SELECT campaign_id FROM cc_campaigns
-      WHERE org_id = ? AND last_sent_date IS NOT NULL AND last_sent_date > ?
-        AND (activity_synced_at IS NULL ${full ? "OR 1 = 1" : "OR last_sent_date > activity_synced_at"})
-      ORDER BY last_sent_date DESC`,
+      WHERE org_id = ? AND last_sent_at IS NOT NULL AND last_sent_at > ?
+        AND (activity_synced_at IS NULL ${full ? "OR 1 = 1" : "OR last_sent_at > activity_synced_at"})
+      ORDER BY last_sent_at DESC`,
   ).all(orgId, window) as Array<{ campaign_id: string }>;
 
   const setActId = db.prepare("UPDATE cc_campaigns SET campaign_activity_id = ? WHERE org_id = ? AND campaign_id = ?");
   const insCampList = db.prepare("INSERT OR IGNORE INTO cc_campaign_lists (org_id, campaign_activity_id, list_id) VALUES (?,?,?)");
-  const insAct = db.prepare("INSERT OR IGNORE INTO cc_contact_activity (org_id, campaign_activity_id, contact_id, activity_type, activity_time, link_url) VALUES (?,?,?,?,?,?)");
+  const insAct = db.prepare("INSERT OR IGNORE INTO cc_contact_activity (org_id, campaign_activity_id, contact_id, activity_type, occurred_at, link_url) VALUES (?,?,?,?,?,?)");
   const markDone = db.prepare("UPDATE cc_campaigns SET activity_synced_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ? AND campaign_id = ?");
 
   let campaigns = 0, rowCount = 0, errors = 0;
@@ -225,6 +225,7 @@ async function syncCampaignActivity(orgId: number, budget: Budget, full: boolean
       for (const [path, type] of TRACK) {
         for await (const page of ccPages(orgId, `/v3/reports/email_reports/${actId}/tracking/${path}?limit=500`, budget)) {
           for (const a of firstArray(page)) {
+            // CC's activity_time (or its fallbacks) is stored as occurred_at.
             insAct.run(orgId, actId, s(a.contact_id), type, s(a.activity_time ?? a.created_time ?? a.tracking_activity_time), s(a.url ?? a.link_url) ?? "");
             rowCount++;
           }
@@ -252,7 +253,8 @@ function relinkContacts(orgId: number): number {
 
 // ── engagement rollups ───────────────────────────────────────────────
 // Schema and rationale: db/migrations/0091_constant_contact_engagement.sql,
-// whose populate step is this same SQL for every org at once — keep them in step.
+// whose populate step is this same SQL for every org at once — keep them in step
+// (its activity_time is occurred_at here: 0093 renamed the column).
 
 /** Rebuild the org's engagement rollups (cc_contact_engagement, cc_link_clicks,
  *  cc_engagement_snapshot) from cc_contact_activity, from scratch, in one
@@ -296,9 +298,9 @@ export function refreshCcEngagement(orgId: number): void {
                       SUM(CASE WHEN dow = 2 THEN n END) AS tue, SUM(CASE WHEN dow = 3 THEN n END) AS wed,
                       SUM(CASE WHEN dow = 4 THEN n END) AS thu, SUM(CASE WHEN dow = 5 THEN n END) AS fri,
                       SUM(CASE WHEN dow = 6 THEN n END) AS sat
-                 FROM (SELECT CAST(strftime('%w', activity_time) AS INTEGER) AS dow, COUNT(*) AS n
+                 FROM (SELECT CAST(strftime('%w', occurred_at) AS INTEGER) AS dow, COUNT(*) AS n
                          FROM cc_contact_activity
-                        WHERE org_id = @org AND activity_type = 'open' AND activity_time IS NOT NULL
+                        WHERE org_id = @org AND activity_type = 'open' AND occurred_at IS NOT NULL
                         GROUP BY dow)) d`,
     ).run({ org: orgId });
   })();

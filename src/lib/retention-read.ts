@@ -506,8 +506,8 @@ export async function refreshRetentionReturns(orgId: number): Promise<void> {
         SELECT person_id AS pid, substr(event_starts_at,1,7) AS ym
           FROM pco_event_attendances WHERE org_id=${orgId} AND attended=1 AND event_starts_at >= '${cutoff}'
         UNION
-        SELECT person_id AS pid, substr(event_time_at,1,7) AS ym
-          FROM pco_check_ins WHERE org_id=${orgId} AND person_id IS NOT NULL AND event_time_at >= '${cutoff}'
+        SELECT person_id AS pid, substr(event_time_starts_at,1,7) AS ym
+          FROM pco_check_ins WHERE org_id=${orgId} AND person_id IS NOT NULL AND event_time_starts_at >= '${cutoff}'
         UNION
         SELECT pp.person_id AS pid, substr(pl.sort_date,1,7) AS ym
           FROM pco_plan_people pp JOIN pco_plans pl ON pl.org_id=pp.org_id AND pl.pco_id=pp.plan_id
@@ -554,8 +554,8 @@ export async function refreshRetentionReturns(orgId: number): Promise<void> {
         SELECT person_id AS pid, substr(event_starts_at,1,7) AS ym
           FROM pco_event_attendances WHERE org_id=${orgId} AND attended=1 AND event_starts_at >= '${cutoff}'
         UNION ALL
-        SELECT person_id AS pid, substr(event_time_at,1,7) AS ym
-          FROM pco_check_ins WHERE org_id=${orgId} AND person_id IS NOT NULL AND event_time_at >= '${cutoff}'
+        SELECT person_id AS pid, substr(event_time_starts_at,1,7) AS ym
+          FROM pco_check_ins WHERE org_id=${orgId} AND person_id IS NOT NULL AND event_time_starts_at >= '${cutoff}'
         UNION ALL
         SELECT pp.person_id AS pid, substr(pl.sort_date,1,7) AS ym
           FROM pco_plan_people pp JOIN pco_plans pl ON pl.org_id=pp.org_id AND pl.pco_id=pp.plan_id

@@ -1339,7 +1339,7 @@ const PERSON_FIELD_ALLOWLIST = new Set(["Baptism"]);
 
 /** PCO returns a date field as the admin typed it — "06/29/2003" — which sorts
  *  and groups as nonsense. Normalize once, here, so every query downstream can
- *  just use substr(value_date,1,4). Returns null for anything unparseable
+ *  just use substr(value_on,1,4). Returns null for anything unparseable
  *  rather than guessing. */
 function toIsoDate(raw: string | null): string | null {
   const v = (raw ?? "").trim();
@@ -1379,12 +1379,12 @@ async function syncPersonFields(
   const db = getDb();
   const ins = db.prepare(
     `INSERT INTO pco_person_fields
-      (org_id, person_id, field_id, field_name, value, value_date, synced_at)
+      (org_id, person_id, field_id, field_name, value, value_on, synced_at)
      VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, person_id, field_id) DO UPDATE SET
        field_name = excluded.field_name,
        value = excluded.value,
-       value_date = excluded.value_date,
+       value_on = excluded.value_on,
        synced_at = excluded.synced_at`,
   );
 

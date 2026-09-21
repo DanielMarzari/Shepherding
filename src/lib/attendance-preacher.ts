@@ -32,7 +32,7 @@ function findLeadName(
 ): string | null {
   const counts = new Map<string, number>();
   for (const r of rows) {
-    const nm = preacherByDate.get(r.week_date);
+    const nm = preacherByDate.get(r.sunday_on);
     if (!nm || EXCLUDE_RE.test(nm) || !LEAD_RE.test(nm)) continue;
     counts.set(nm, (counts.get(nm) ?? 0) + 1);
   }
@@ -161,8 +161,8 @@ export function analyzePreachers(
   // cohort", "Guest"), or null when unknown / excluded (Brad).
   const leadName = findLeadName(rows, preacherByDate);
   const perWeek = rows.map((r) => {
-    const name = preacherByDate.get(r.week_date);
-    return name ? categorize(name, r.week_date, leadName) : null;
+    const name = preacherByDate.get(r.sunday_on);
+    return name ? categorize(name, r.sunday_on, leadName) : null;
   });
   const byName = new Map<string, number[]>();
   rows.forEach((r, i) => {

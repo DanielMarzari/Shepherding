@@ -310,7 +310,7 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
   const run = db.transaction(() => {
     db.prepare(`DELETE FROM pushpay_donors WHERE org_id = ?`).run(orgId);
     const ins = db.prepare(`INSERT INTO pushpay_donors
-      (org_id, donor_key, enc, name_hash, email_hash, donor_stage, giving_channel, last_gift_date, last_gift_fund, first_gift_date, person_id, match_status, candidate_ids)
+      (org_id, donor_key, enc, name_hash, email_hash, donor_stage, giving_channel, last_gift_on, last_gift_fund, first_gift_on, person_id, match_status, candidate_ids)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     for (const d of donors) ins.run(orgId, d.key, d.enc, d.nameHash, d.emailHash, d.stage, d.channel, d.date, d.fund, d.firstDate, d.personId, d.status, d.candidates ? JSON.stringify(d.candidates) : null);
     const counts: PushpayImportResult = {
@@ -570,9 +570,9 @@ function personNames(orgId: number, ids: string[]): Map<string, string> {
 /** Donors in a match state (for the audit reconciliation UI). */
 export function listDonorsByStatus(orgId: number, status: string, limit = 500): DonorRow[] {
   const rows = getDb().prepare(
-    `SELECT donor_key, enc, donor_stage, giving_channel, last_gift_date, last_gift_fund, match_status, person_id, candidate_ids
+    `SELECT donor_key, enc, donor_stage, giving_channel, last_gift_on, last_gift_fund, match_status, person_id, candidate_ids
        FROM pushpay_donors WHERE org_id = ? AND match_status = ? ORDER BY donor_key LIMIT ?`,
-  ).all(orgId, status, limit) as Array<{ donor_key: string; enc: string; donor_stage: string | null; giving_channel: string | null; last_gift_date: string | null; last_gift_fund: string | null; match_status: string; person_id: string | null; candidate_ids: string | null }>;
+  ).all(orgId, status, limit) as Array<{ donor_key: string; enc: string; donor_stage: string | null; giving_channel: string | null; last_gift_on: string | null; last_gift_fund: string | null; match_status: string; person_id: string | null; candidate_ids: string | null }>;
   const wanted = Array.from(new Set([
     ...rows.flatMap((r) => (r.candidate_ids ? (JSON.parse(r.candidate_ids) as string[]) : [])),
     ...rows.map((r) => r.person_id).filter((x): x is string => !!x),
@@ -591,7 +591,7 @@ export function listDonorsByStatus(orgId: number, status: string, limit = 500): 
       sharesPhone: !!dph && (ctx.phones.get(id)?.has(dph) ?? false),
       active: ctx.active.has(id),
     }));
-    return { donorKey: r.donor_key, ...n, stage: r.donor_stage, channel: r.giving_channel, lastGiftDate: r.last_gift_date, fund: r.last_gift_fund, status: r.match_status, personId: r.person_id, assignedName: r.person_id ? names.get(r.person_id) ?? `#${r.person_id}` : null, candidates: cand };
+    return { donorKey: r.donor_key, ...n, stage: r.donor_stage, channel: r.giving_channel, lastGiftDate: r.last_gift_on, fund: r.last_gift_fund, status: r.match_status, personId: r.person_id, assignedName: r.person_id ? names.get(r.person_id) ?? `#${r.person_id}` : null, candidates: cand };
   });
 }
 
@@ -605,9 +605,9 @@ export function listMatchedDonors(orgId: number, opts: { stage?: string; limit?:
   if (opts.stage) { where += ` AND d.donor_stage = ?`; args.push(opts.stage); }
   args.push(opts.limit ?? 1000);
   const rows = getDb().prepare(
-    `SELECT d.person_id AS pco, d.donor_stage AS stage, d.last_gift_fund AS fund, d.giving_channel AS channel, d.last_gift_date AS lg, p.first_name AS fn, p.last_name AS ln, p.enc_pii AS enc
+    `SELECT d.person_id AS pco, d.donor_stage AS stage, d.last_gift_fund AS fund, d.giving_channel AS channel, d.last_gift_on AS lg, p.first_name AS fn, p.last_name AS ln, p.enc_pii AS enc
        FROM pushpay_donors d JOIN pco_people p ON p.org_id = d.org_id AND p.pco_id = d.person_id
-       ${where} ORDER BY d.last_gift_date DESC LIMIT ?`,
+       ${where} ORDER BY d.last_gift_on DESC LIMIT ?`,
   ).all(...args) as Array<{ pco: string; stage: string | null; fund: string | null; channel: string | null; lg: string | null; fn: string | null; ln: string | null; enc: string | null }>;
   return rows.map((r) => ({
     pcoId: r.pco, name: personLabel(r.fn, r.ln, r.enc, r.pco), stage: r.stage, fund: r.fund, channel: r.channel, lastGiftDate: r.lg,

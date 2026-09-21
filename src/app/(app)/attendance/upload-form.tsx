@@ -9,7 +9,7 @@ import {
 const INITIAL: ImportXlsxState = { status: "idle" };
 
 /** Multi-file XLSX upload. Re-importing the same file is fine — the
- *  parser UPSERTs by (org, week_date), so corrections overwrite. */
+ *  parser UPSERTs by (org, sunday_on), so corrections overwrite. */
 export function AttendanceUploadForm() {
   const [state, action, pending] = useActionState(
     importAttendanceXlsxAction,

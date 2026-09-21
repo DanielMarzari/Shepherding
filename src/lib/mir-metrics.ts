@@ -229,7 +229,7 @@ const INSTANT_ACCESS = `
   cc.org_id = :orgId
   AND lower(cc.name) LIKE '%instant access%'
   AND cc.current_status = 'Done'
-  AND cc.last_sent_date IS NOT NULL`;
+  AND cc.last_sent_at IS NOT NULL`;
 
 /** Sunday LIVE plans with the series they belong to.
  *
@@ -268,13 +268,13 @@ const TREE_LIGHTING_VOLUNTEERS = `
  *  minus the birth year, which needs birth_year: 881 of the 1,093 baptism dates
  *  have one, so this is a FLOOR and the note says so. */
 const CHILD_BAPTISMS = `
-  SELECT f.person_id, f.value_date,
-         substr(f.value_date, 1, 4) AS year,
-         CAST(substr(f.value_date, 1, 4) AS INTEGER) - p.birth_year AS age_at_baptism
+  SELECT f.person_id, f.value_on,
+         substr(f.value_on, 1, 4) AS year,
+         CAST(substr(f.value_on, 1, 4) AS INTEGER) - p.birth_year AS age_at_baptism
     FROM pco_person_fields f
     JOIN pco_people p ON p.pco_id = f.person_id AND p.org_id = :orgId
    WHERE f.org_id = :orgId AND f.field_name = 'Baptism'
-     AND f.value_date IS NOT NULL AND p.birth_year IS NOT NULL`;
+     AND f.value_on IS NOT NULL AND p.birth_year IS NOT NULL`;
 
 /** Family Dedication registrations. TEST signups are excluded by name — there
  *  is one, "TEST Family Dedication - Spring 2022", and it has no attendees. */
@@ -576,7 +576,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       // Discover courses are PCO Registrations signups.
       stat("Baptisms recorded", "people with a baptism date on file",
         `SELECT COUNT(*) FROM pco_person_fields
-          WHERE org_id = :orgId AND field_name = 'Baptism' AND value_date IS NOT NULL`,
+          WHERE org_id = :orgId AND field_name = 'Baptism' AND value_on IS NOT NULL`,
         { color: "highlight" }),
       stat("Attended a Discover course", "distinct people, every course and year",
         `SELECT COUNT(DISTINCT person_id) FROM (${DISCOVER_COURSES})`),
@@ -597,8 +597,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
          SELECT CAST(yrs.y AS TEXT) AS "Year",
                 COALESCE((SELECT COUNT(*) FROM pco_person_fields f
                            WHERE f.org_id = :orgId AND f.field_name = 'Baptism'
-                             AND f.value_date IS NOT NULL
-                             AND CAST(substr(f.value_date,1,4) AS INTEGER) = yrs.y), 0) AS "Baptisms"
+                             AND f.value_on IS NOT NULL
+                             AND CAST(substr(f.value_on,1,4) AS INTEGER) = yrs.y), 0) AS "Baptisms"
            FROM yrs ORDER BY yrs.y`, "bar"),
       chart("Discover course attendance", "distinct people per course, all runs combined",
         `SELECT course AS "Course", COUNT(DISTINCT person_id) AS "People"
@@ -1043,8 +1043,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
             FROM attendance_weekly aw
            WHERE aw.org_id = :orgId
              AND aw.in_person_total IS NOT NULL
-             AND aw.week_date >= date('now', '-365 day')
-             AND aw.week_date <= date('now')
+             AND aw.sunday_on >= date('now', '-365 day')
+             AND aw.sunday_on <= date('now')
              AND (aw.exception_reason IS NULL OR (
                       lower(aw.exception_reason) NOT LIKE '%snow%'
                   AND lower(aw.exception_reason) NOT LIKE '%sleet%'
@@ -1115,10 +1115,10 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Average kids per Sunday", "from the weekly attendance record",
         `SELECT CAST(ROUND(AVG(kids_total)) AS INT) FROM attendance_weekly
           WHERE org_id = :orgId AND kids_total IS NOT NULL
-            AND week_date >= date('now','-365 day')`),
+            AND sunday_on >= date('now','-365 day')`),
       stat("Children baptised", "aged under 18 at baptism, last 12 months",
         `SELECT COUNT(*) FROM (${CHILD_BAPTISMS})
-          WHERE age_at_baptism < 18 AND value_date >= date('now','-365 day')`),
+          WHERE age_at_baptism < 18 AND value_on >= date('now','-365 day')`),
       stat("Came back", "share of children who checked in more than once",
         `SELECT ROUND(100.0 * SUM(CASE WHEN visits > 1 THEN 1 ELSE 0 END)
                     / NULLIF(COUNT(*), 0), 1) || '%'
@@ -1141,11 +1141,11 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE m.org_id = :orgId AND m.archived_at IS NULL AND m.person_id != ''
             AND (t.name LIKE 'FK %' OR lower(t.name) LIKE '%kids%')`),
       chart("Kids attendance by week", "children counted in the weekly attendance record",
-        `SELECT week_date AS "Week", kids_total AS "Kids"
+        `SELECT sunday_on AS "Week", kids_total AS "Kids"
            FROM attendance_weekly
           WHERE org_id = :orgId AND kids_total IS NOT NULL
-            AND week_date >= date('now','-730 day')
-          ORDER BY week_date`, "line"),
+            AND sunday_on >= date('now','-730 day')
+          ORDER BY sunday_on`, "line"),
       chart("How often children came", "visits per child, last 12 months",
         `SELECT CASE WHEN visits = 1 THEN '1 visit'
                      WHEN visits <= 3 THEN '2-3 visits'
@@ -1214,7 +1214,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
-       AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+       AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
             AND (l.name NOT LIKE '%Moms%Class%' OR l.name IS NULL)
             -- The latest VBX EVENT, resolved from the four-row events table.
             -- Deriving the year by scanning 275k check-ins instead cost 6.4s a block.
@@ -1230,7 +1230,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
-       AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+       AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
             AND l.name LIKE '%Moms%Class%'
             -- The latest VBX EVENT, resolved from the four-row events table.
             -- Deriving the year by scanning 275k check-ins instead cost 6.4s a block.
@@ -1244,7 +1244,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
-       AND c.event_time_at IS NOT NULL AND c.event_time_at <> '' AND c.location_id IS NOT NULL
+       AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> '' AND c.location_id IS NOT NULL
             -- The latest VBX EVENT, resolved from the four-row events table.
             -- Deriving the year by scanning 275k check-ins instead cost 6.4s a block.
             AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
@@ -1267,7 +1267,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       // value axis puts the mums line flat on the axis, unreadable. Stacked
       // keeps both in the same unit — people — and the bar height is the week.
       chart("VBX attendance by year", "everyone who came, split by the room they were in",
-        `SELECT substr(c.event_time_at,1,4) AS "VBX",
+        `SELECT substr(c.event_time_starts_at,1,4) AS "VBX",
                 COUNT(DISTINCT CASE WHEN l.name NOT LIKE '%Moms%Class%' OR l.name IS NULL
                                     THEN c.person_id END) AS "Children",
                 COUNT(DISTINCT CASE WHEN l.name LIKE '%Moms%Class%' THEN c.person_id END) AS "Mums"
@@ -1276,10 +1276,10 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
-       AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+       AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
           GROUP BY 1 ORDER BY 1`, "stacked-bar"),
       chart("The Moms' Class", "its own chart, because 7 to 22 mums vanish beside 500 children",
-        `SELECT substr(c.event_time_at,1,4) AS "VBX",
+        `SELECT substr(c.event_time_starts_at,1,4) AS "VBX",
                 COUNT(DISTINCT c.person_id) AS "Mums",
                 COUNT(*) AS "Check-ins"
            FROM pco_check_ins c
@@ -1287,16 +1287,16 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
-       AND c.event_time_at IS NOT NULL AND c.event_time_at <> '' AND l.name LIKE '%Moms%Class%'
+       AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> '' AND l.name LIKE '%Moms%Class%'
           GROUP BY 1 ORDER BY 1`, "combo"),
       chart("Attendance through the week", "distinct people each day, the three weeks overlaid",
         `WITH days AS (
-           SELECT substr(c.event_time_at,1,4) AS yr, substr(c.event_time_at,1,10) AS d, c.person_id
+           SELECT substr(c.event_time_starts_at,1,4) AS yr, substr(c.event_time_starts_at,1,10) AS d, c.person_id
              FROM pco_check_ins c
              JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
             WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
-       AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+       AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
          ),
          ranked AS (
            SELECT yr, DENSE_RANK() OVER (PARTITION BY yr ORDER BY d) AS day_no, person_id FROM days
@@ -1324,12 +1324,12 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                          'No selection recorded') AS "Selection",
                 COUNT(DISTINCT c.person_id) AS "People",
                 COUNT(*) AS "Check-ins",
-                COUNT(DISTINCT substr(c.event_time_at,1,10)) AS "Days running"
+                COUNT(DISTINCT substr(c.event_time_starts_at,1,10)) AS "Days running"
            FROM pco_check_ins c
            JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
            LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
-            AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+            AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
             AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
                                WHERE e2.org_id = :orgId AND e2.name LIKE 'VBX%'
                                  AND e2.name <> 'VBX Middle School'
@@ -1368,13 +1368,13 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Average students per week", "from the weekly attendance record",
         `SELECT CAST(ROUND(AVG(student_total)) AS INT) FROM attendance_weekly
           WHERE org_id = :orgId AND student_total IS NOT NULL
-            AND week_date >= date('now','-365 day')`),
+            AND sunday_on >= date('now','-365 day')`),
       chart("Student attendance by week", "students counted in the weekly attendance record",
-        `SELECT week_date AS "Week", student_total AS "Students"
+        `SELECT sunday_on AS "Week", student_total AS "Students"
            FROM attendance_weekly
           WHERE org_id = :orgId AND student_total IS NOT NULL
-            AND week_date >= date('now','-730 day')
-          ORDER BY week_date`, "line"),
+            AND sunday_on >= date('now','-730 day')
+          ORDER BY sunday_on`, "line"),
       table("Where high-school students check in", "last 12 months",
         `SELECT event_name AS "Event",
                 COUNT(DISTINCT person_id) AS "Students",
@@ -1406,7 +1406,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Average students per week", "all students, from the weekly attendance record",
         `SELECT CAST(ROUND(AVG(student_total)) AS INT) FROM attendance_weekly
           WHERE org_id = :orgId AND student_total IS NOT NULL
-            AND week_date >= date('now','-365 day')`),
+            AND sunday_on >= date('now','-365 day')`),
       chart("Middle-school check-ins by month", "last two years",
         `SELECT substr(pco_created_at,1,7) AS "Month", COUNT(*) AS "Check-ins"
            FROM (${checkIns("e.name IN ('Wednesday PM Students','Sunday PM Students')")})
@@ -1638,37 +1638,37 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Average Sunday on campus", "in the room, last 12 months",
         `SELECT CAST(ROUND(AVG(in_person_total)) AS INT) FROM attendance_weekly
           WHERE org_id = :orgId AND in_person_total IS NOT NULL
-            AND week_date >= date('now','-365 day')`, { color: "highlight" }),
+            AND sunday_on >= date('now','-365 day')`, { color: "highlight" }),
       stat("Average Sunday online", "live plus on demand, last 12 months",
         `SELECT CAST(ROUND(AVG(COALESCE(online_live,0) + COALESCE(online_on_demand,0))) AS INT)
            FROM attendance_weekly
           WHERE org_id = :orgId AND (online_live IS NOT NULL OR online_on_demand IS NOT NULL)
-            AND week_date >= date('now','-365 day')`),
+            AND sunday_on >= date('now','-365 day')`),
       stat("Series in the last year", "distinct sermon series taught on a Sunday",
         `SELECT COUNT(DISTINCT series_id) FROM (${SUNDAY_SERIES})
           WHERE series_id IS NOT NULL AND day >= date('now','-365 day')`),
       stat("Baptisms in the last year", "from the Baptism date on each person's record",
         `SELECT COUNT(*) FROM pco_person_fields
           WHERE org_id = :orgId AND field_name = 'Baptism'
-            AND value_date IS NOT NULL AND value_date >= date('now','-365 day')`),
+            AND value_on IS NOT NULL AND value_on >= date('now','-365 day')`),
       stat("People giving", "gave at least once in the last 12 months",
         `SELECT COUNT(DISTINCT person_id) FROM pushpay_donors
           WHERE org_id = :orgId AND person_id IS NOT NULL
-            AND last_gift_date IS NOT NULL AND last_gift_date >= date('now','-365 day')`),
+            AND last_gift_on IS NOT NULL AND last_gift_on >= date('now','-365 day')`),
       chart("Sunday attendance", "on campus, live online, and on demand — every Sunday on the sheet",
-        `SELECT week_date AS "Week",
+        `SELECT sunday_on AS "Week",
                 in_person_total AS "On campus",
                 online_live AS "Online live",
                 online_on_demand AS "On demand"
            FROM attendance_weekly
-          WHERE org_id = :orgId AND week_date >= date('now','-730 day')
-          ORDER BY week_date`, "line", { span: 12 }),
+          WHERE org_id = :orgId AND sunday_on >= date('now','-730 day')
+          ORDER BY sunday_on`, "line", { span: 12 }),
       chart("On campus and online, year by year", "average Sunday — the room has grown while online has settled",
-        `SELECT substr(week_date,1,4) AS "Year",
+        `SELECT substr(sunday_on,1,4) AS "Year",
                 CAST(ROUND(AVG(in_person_total)) AS INT) AS "On campus",
                 CAST(ROUND(AVG(COALESCE(online_live,0) + COALESCE(online_on_demand,0))) AS INT) AS "Online"
            FROM attendance_weekly
-          WHERE org_id = :orgId AND substr(week_date,1,4) >= '2021'
+          WHERE org_id = :orgId AND substr(sunday_on,1,4) >= '2021'
           GROUP BY 1 ORDER BY 1`, "bar"),
       chart("Sermons by year", "how much teaching we have captured",
         `SELECT substr(preached_on,1,4) AS "Year", COUNT(*) AS "Sermons"
@@ -1707,24 +1707,24 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
          UNION ALL SELECT 'Giving (last 12 months)',
                 (SELECT COUNT(DISTINCT person_id) FROM pushpay_donors
                   WHERE org_id = :orgId AND person_id IS NOT NULL
-                    AND last_gift_date IS NOT NULL AND last_gift_date >= date('now','-365 day'))
+                    AND last_gift_on IS NOT NULL AND last_gift_on >= date('now','-365 day'))
          UNION ALL SELECT 'A member',
                 (SELECT COUNT(*) FROM pco_people
                   WHERE org_id = :orgId AND membership_type = 'Member')
          UNION ALL SELECT 'Baptised (all on record)',
                 (SELECT COUNT(*) FROM pco_person_fields
-                  WHERE org_id = :orgId AND field_name = 'Baptism' AND value_date IS NOT NULL)
+                  WHERE org_id = :orgId AND field_name = 'Baptism' AND value_on IS NOT NULL)
          UNION ALL SELECT 'Small groups running',
                 (SELECT COUNT(*) FROM pco_groups g
                    JOIN pco_group_types gt ON gt.pco_id = g.group_type_id AND gt.org_id = :orgId
                   WHERE g.org_id = :orgId AND gt.name = 'Small Groups' AND g.archived_at IS NULL)`),
       table("Average Sunday, year by year", "with the number of Sundays each average rests on",
-        `SELECT substr(week_date,1,4) AS "Year",
+        `SELECT substr(sunday_on,1,4) AS "Year",
                 CAST(ROUND(AVG(in_person_total)) AS INT) AS "On campus",
                 CAST(ROUND(AVG(COALESCE(online_live,0) + COALESCE(online_on_demand,0))) AS INT) AS "Online",
                 COUNT(*) AS "Sundays counted"
            FROM attendance_weekly
-          WHERE org_id = :orgId AND substr(week_date,1,4) >= '2021'
+          WHERE org_id = :orgId AND substr(sunday_on,1,4) >= '2021'
           GROUP BY 1 ORDER BY 1`),
       // What was actually taught, series by series, with who carried it. The
       // speaker comes from the sermon archive joined on the date it was
@@ -1776,32 +1776,32 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Average live viewers", "per week, last 12 months",
         `SELECT CAST(ROUND(AVG(online_live)) AS INT) FROM attendance_weekly
           WHERE org_id = :orgId AND online_live IS NOT NULL
-            AND week_date >= date('now','-365 day')`, { color: "highlight" }),
+            AND sunday_on >= date('now','-365 day')`, { color: "highlight" }),
       stat("Average on-demand", "per week, last 12 months",
         `SELECT CAST(ROUND(AVG(online_on_demand)) AS INT) FROM attendance_weekly
           WHERE org_id = :orgId AND online_on_demand IS NOT NULL
-            AND week_date >= date('now','-365 day')`),
+            AND sunday_on >= date('now','-365 day')`),
       stat("Online share of reach", "online as a share of online + in person",
         `SELECT ROUND(100.0 * SUM(COALESCE(online_live,0) + COALESCE(online_on_demand,0))
                     / NULLIF(SUM(COALESCE(online_live,0) + COALESCE(online_on_demand,0)
                                  + COALESCE(in_person_total,0)), 0), 1) || '%'
            FROM attendance_weekly
-          WHERE org_id = :orgId AND week_date >= date('now','-365 day')`),
+          WHERE org_id = :orgId AND sunday_on >= date('now','-365 day')`),
       stat("Weeks on record", "weeks with an attendance figure",
         `SELECT COUNT(*) FROM attendance_weekly WHERE org_id = :orgId`),
       chart("Online vs in person", "weekly reach over the last two years",
-        `SELECT week_date AS "Week",
+        `SELECT sunday_on AS "Week",
                 in_person_total AS "In person",
                 online_live AS "Online live",
                 online_on_demand AS "On demand"
            FROM attendance_weekly
-          WHERE org_id = :orgId AND week_date >= date('now','-730 day')
-          ORDER BY week_date`, "line"),
+          WHERE org_id = :orgId AND sunday_on >= date('now','-730 day')
+          ORDER BY sunday_on`, "line"),
       table("Most recent weeks", "as recorded in the weekly attendance sheet",
-        `SELECT week_date AS "Week", in_person_total AS "In person",
+        `SELECT sunday_on AS "Week", in_person_total AS "In person",
                 online_live AS "Live", online_on_demand AS "On demand"
            FROM attendance_weekly
-          WHERE org_id = :orgId ORDER BY week_date DESC LIMIT 12`),
+          WHERE org_id = :orgId ORDER BY sunday_on DESC LIMIT 12`),
     ],
     gaps: measuredNote(
       "live and on-demand viewership from the weekly attendance sheet, and online's share of total reach.",
@@ -1864,12 +1864,12 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            ) GROUP BY 1
          )
          SELECT ev.yr AS "Year", ev.event_day AS "Tree lighting",
-                aw.week_date AS "Sunday",
+                aw.sunday_on AS "Sunday",
                 aw.in_person_total AS "On campus",
-                CAST(julianday(aw.week_date) - julianday(ev.event_day) AS INT) AS "Days after"
+                CAST(julianday(aw.sunday_on) - julianday(ev.event_day) AS INT) AS "Days after"
            FROM ev
            JOIN attendance_weekly aw ON aw.org_id = :orgId
-            AND aw.week_date BETWEEN date(ev.event_day, '-21 day') AND date(ev.event_day, '+42 day')
+            AND aw.sunday_on BETWEEN date(ev.event_day, '-21 day') AND date(ev.event_day, '+42 day')
           WHERE aw.in_person_total IS NOT NULL
           ORDER BY 1 DESC, 3`),
     ],
@@ -1893,7 +1893,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     metrics: [
       stat("Instant Access sent", "campaigns per month, last 12 months (published target: 4.5)",
         `SELECT ROUND(COUNT(*) / 12.0, 1) FROM cc_campaigns cc
-          WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`, { color: "highlight" }),
+          WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`, { color: "highlight" }),
       stat("Registrations built", "signups created per month, last 12 months (published target: 10)",
         `SELECT ROUND(COUNT(*) / 12.0, 1) FROM pco_registration_signups
           WHERE org_id = :orgId AND pco_created_at >= datetime('now','-365 day')`),
@@ -1902,11 +1902,11 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE series_id IS NOT NULL AND day >= date('now','-365 day')`),
       stat("Emails delivered by Instant Access", "total sends, last 12 months",
         `SELECT SUM(cc.stat_sends) FROM cc_campaigns cc
-          WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`),
+          WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`),
       chart("Instant Access campaigns by month", "how the send rhythm actually runs",
-        `SELECT substr(cc.last_sent_date,1,7) AS "Month", COUNT(*) AS "Campaigns"
+        `SELECT substr(cc.last_sent_at,1,7) AS "Month", COUNT(*) AS "Campaigns"
            FROM cc_campaigns cc
-          WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= datetime('now','-730 day')
+          WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= datetime('now','-730 day')
           GROUP BY 1 ORDER BY 1`, "bar"),
       chart("Registrations built by month", "new signups created in PCO Registrations",
         `SELECT substr(pco_created_at,1,7) AS "Month", COUNT(*) AS "Registrations"
@@ -1951,35 +1951,35 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     metrics: [
       stat("Campaigns sent", "last 12 months",
         `SELECT COUNT(*) FROM cc_campaigns
-          WHERE org_id = :orgId AND last_sent_date >= ${YEAR}`, { color: "highlight" }),
+          WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`, { color: "highlight" }),
       stat("Emails delivered", "total sends, last 12 months",
         `SELECT SUM(stat_sends) FROM cc_campaigns
-          WHERE org_id = :orgId AND last_sent_date >= ${YEAR}`),
+          WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`),
       stat("Open rate", "opens ÷ sends, last 12 months",
         `SELECT ROUND(100.0 * SUM(stat_opens) / NULLIF(SUM(stat_sends),0), 1) || '%'
-           FROM cc_campaigns WHERE org_id = :orgId AND last_sent_date >= ${YEAR}`),
+           FROM cc_campaigns WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`),
       stat("Click rate", "clicks ÷ sends, last 12 months",
         `SELECT ROUND(100.0 * SUM(stat_clicks) / NULLIF(SUM(stat_sends),0), 2) || '%'
-           FROM cc_campaigns WHERE org_id = :orgId AND last_sent_date >= ${YEAR}`),
+           FROM cc_campaigns WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`),
       // Instant Access broken out on its own, because that is what the
       // published Outputs name: "47% opens on Instant Access per email" and
       // "10% link clicks in Instant Access per email". The all-campaign rates
       // above mix in ministry-specific sends with very different audiences.
       stat("Instant Access open rate", "opens ÷ sends, last 12 months (published target: 47%)",
         `SELECT ROUND(100.0 * SUM(cc.stat_opens) / NULLIF(SUM(cc.stat_sends),0), 1) || '%'
-           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`,
+           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`,
         { color: "highlight" }),
       stat("Instant Access click rate", "clicks ÷ sends, last 12 months (published target: 10%)",
         `SELECT ROUND(100.0 * SUM(cc.stat_clicks) / NULLIF(SUM(cc.stat_sends),0), 2) || '%'
-           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`),
+           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`),
       stat("Clicks per opener", "of those who opened it, the share who clicked",
         `SELECT ROUND(100.0 * SUM(cc.stat_clicks) / NULLIF(SUM(cc.stat_opens),0), 1) || '%'
-           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_date >= ${YEAR}`),
+           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`),
       stat("Instant Access subscribers", "on the All-Church - Instant Access list",
         `SELECT membership_count FROM cc_lists
           WHERE org_id = :orgId AND name = 'All-Church - Instant Access'`),
       chart("Instant Access open rate by year", "the long view, back to 2013",
-        `SELECT substr(cc.last_sent_date,1,4) AS "Year",
+        `SELECT substr(cc.last_sent_at,1,4) AS "Year",
                 ROUND(100.0 * SUM(cc.stat_opens) / NULLIF(SUM(cc.stat_sends),0), 1) AS "Open %",
                 ROUND(100.0 * SUM(cc.stat_clicks) / NULLIF(SUM(cc.stat_sends),0), 2) AS "Click %"
            FROM cc_campaigns cc WHERE ${INSTANT_ACCESS}
@@ -1988,24 +1988,24 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT m AS "Month",
                 SUM(joined) AS "Subscribed", SUM(left_list) AS "Unsubscribed"
            FROM (
-             SELECT substr(opt_in_date,1,7) AS m, 1 AS joined, 0 AS left_list
-               FROM cc_contacts WHERE org_id = :orgId AND opt_in_date >= datetime('now','-730 day')
+             SELECT substr(opted_in_at,1,7) AS m, 1 AS joined, 0 AS left_list
+               FROM cc_contacts WHERE org_id = :orgId AND opted_in_at >= datetime('now','-730 day')
              UNION ALL
-             SELECT substr(opt_out_date,1,7), 0, 1
-               FROM cc_contacts WHERE org_id = :orgId AND opt_out_date >= datetime('now','-730 day')
+             SELECT substr(opted_out_at,1,7), 0, 1
+               FROM cc_contacts WHERE org_id = :orgId AND opted_out_at >= datetime('now','-730 day')
            ) GROUP BY 1 ORDER BY 1`, "line"),
       chart("Email reach by month", "sends and opens",
-        `SELECT substr(last_sent_date,1,7) AS "Month",
+        `SELECT substr(last_sent_at,1,7) AS "Month",
                 SUM(stat_sends) AS "Sends", SUM(stat_opens) AS "Opens"
            FROM cc_campaigns
-          WHERE org_id = :orgId AND last_sent_date >= datetime('now','-730 day')
+          WHERE org_id = :orgId AND last_sent_at >= datetime('now','-730 day')
           GROUP BY 1 ORDER BY 1`, "line"),
       table("Recent campaigns", "the last 15 sent, with their engagement",
-        `SELECT name AS "Campaign", substr(last_sent_date,1,10) AS "Sent",
+        `SELECT name AS "Campaign", substr(last_sent_at,1,10) AS "Sent",
                 stat_sends AS "Sends", stat_opens AS "Opens", stat_clicks AS "Clicks"
            FROM cc_campaigns
-          WHERE org_id = :orgId AND last_sent_date IS NOT NULL
-          ORDER BY last_sent_date DESC LIMIT 15`),
+          WHERE org_id = :orgId AND last_sent_at IS NOT NULL
+          ORDER BY last_sent_at DESC LIMIT 15`),
     ],
     gaps: {
       title: "What these numbers do and don't cover",
@@ -2071,7 +2071,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE org_id = :orgId AND person_id IS NOT NULL`, { color: "highlight" }),
       stat("Gave in the last year", "donors with a gift in the last 12 months",
         `SELECT COUNT(*) FROM pushpay_donors
-          WHERE org_id = :orgId AND last_gift_date >= date('now','-365 day')`),
+          WHERE org_id = :orgId AND last_gift_on >= date('now','-365 day')`),
       stat("Recurring donors", "donors PushPay classes as recurring",
         `SELECT COUNT(*) FROM pushpay_donors
           WHERE org_id = :orgId AND donor_stage = 'Recurring Donor'`),
@@ -2132,8 +2132,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                   ELSE COALESCE(giving_channel,'(unknown)') END AS "How they gave",
                 COUNT(*) AS "Donors"
            FROM pushpay_donors
-          WHERE org_id = :orgId AND last_gift_date IS NOT NULL
-            AND last_gift_date >= date('now','-365 day')
+          WHERE org_id = :orgId AND last_gift_on IS NOT NULL
+            AND last_gift_on >= date('now','-365 day')
           GROUP BY 1 ORDER BY 2 DESC`, "donut"),
       chart("How people give, all time", "every matched donor on record, by method",
         `SELECT CASE COALESCE(giving_channel,'(unknown)')
@@ -2470,12 +2470,12 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Average attendance in the Center", "per service, last 12 months",
         `SELECT CAST(ROUND(AVG(count)) AS INT) FROM attendance_service
           WHERE org_id = :orgId AND room = 'center'
-            AND week_date >= date('now','-365 day')`),
+            AND sunday_on >= date('now','-365 day')`),
       chart("Center attendance by service", "average headcount per service time",
         `SELECT service AS "Service", CAST(ROUND(AVG(count)) AS INT) AS "Average"
            FROM attendance_service
           WHERE org_id = :orgId AND room = 'center'
-            AND week_date >= date('now','-365 day')
+            AND sunday_on >= date('now','-365 day')
           GROUP BY 1 ORDER BY 1`, "bar", { colorByCategory: true }),
       chart("LIVE serving by month", "assignments filled",
         `SELECT substr(sort_date,1,7) AS "Month", COUNT(*) AS "Slots"
@@ -2497,7 +2497,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Average weekly attendance", "the Chapel at 9:30, last 12 months",
         `SELECT CAST(ROUND(AVG(count)) AS INT) FROM attendance_service
           WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'
-            AND week_date >= date('now','-365 day')`, { color: "highlight" }),
+            AND sunday_on >= date('now','-365 day')`, { color: "highlight" }),
       stat("Weeks on record", "Sundays counted in the Chapel at 9:30",
         `SELECT COUNT(*) FROM attendance_service
           WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'`),
@@ -2517,13 +2517,13 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE pl.org_id = :orgId AND st.name LIKE 'CLASSIC SERVICE%'
             AND pl.sort_date >= date('now','-365 day') AND pl.sort_date < ${TOMORROW}`),
       chart("Attendance by week", "headcount in the Chapel at 9:30, every Sunday on record",
-        `SELECT week_date AS "Week", count AS "Attendance"
+        `SELECT sunday_on AS "Week", count AS "Attendance"
            FROM attendance_service
           WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'
-          ORDER BY week_date`, "line", { span: 12 }),
+          ORDER BY sunday_on`, "line", { span: 12 }),
       chart("Average weekly attendance, year to year", "the bar is the average Sunday; the line is the change on the year before",
         `WITH y AS (
-           SELECT substr(week_date,1,4) AS yr, ROUND(AVG(count),1) AS avg_att
+           SELECT substr(sunday_on,1,4) AS yr, ROUND(AVG(count),1) AS avg_att
              FROM attendance_service
             WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'
             GROUP BY 1
@@ -2551,7 +2551,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           GROUP BY 1 ORDER BY 1`, "area"),
       table("Attendance year to year", "average Sunday in the Chapel at 9:30, and how many Sundays that average rests on",
         `WITH y AS (
-           SELECT substr(week_date,1,4) AS yr, ROUND(AVG(count),1) AS avg_att, COUNT(*) AS weeks
+           SELECT substr(sunday_on,1,4) AS yr, ROUND(AVG(count),1) AS avg_att, COUNT(*) AS weeks
              FROM attendance_service
             WHERE org_id = :orgId AND room = 'chapel' AND service = '9:30'
             GROUP BY 1
@@ -2650,7 +2650,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Average live viewers", "the online service this team delivers",
         `SELECT CAST(ROUND(AVG(online_live)) AS INT) FROM attendance_weekly
           WHERE org_id = :orgId AND online_live IS NOT NULL
-            AND week_date >= date('now','-365 day')`),
+            AND sunday_on >= date('now','-365 day')`),
       table("Production teams", "active membership",
         `SELECT t.name AS "Team", COUNT(DISTINCT m.person_id) AS "Members"
            FROM pco_teams t

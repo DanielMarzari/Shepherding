@@ -50,7 +50,7 @@ export function projectAttendance(rows: WeeklyAttendanceRow[]): { categories: Ca
       if (isExcludingReason(r.exception_reason)) continue;
       const v = r[cat.key];
       if (typeof v !== "number") continue;
-      const y = Number(r.week_date.slice(0, 4));
+      const y = Number(r.sunday_on.slice(0, 4));
       if (!byYear.has(y)) byYear.set(y, []);
       byYear.get(y)!.push(v);
     }

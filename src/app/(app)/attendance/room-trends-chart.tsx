@@ -23,8 +23,8 @@ const DAY = 86_400_000;
  *  Built from the weekly rows already loaded for the page. */
 export function RoomTrendsChart({ rows, markers }: { rows: WeeklyAttendanceRow[]; markers?: AttendanceMarker[] }) {
   const { weeks, series, available, trends } = useMemo(() => {
-    const sorted = [...rows].sort((a, b) => a.week_date.localeCompare(b.week_date));
-    const weeks = sorted.map((r) => r.week_date);
+    const sorted = [...rows].sort((a, b) => a.sunday_on.localeCompare(b.sunday_on));
+    const weeks = sorted.map((r) => r.sunday_on);
     const series: Record<RoomKey, Array<number | null>> = {} as Record<RoomKey, Array<number | null>>;
     for (const room of ROOMS) series[room.key] = sorted.map((r) => r[room.key]);
     const available = ROOMS.filter((room) => series[room.key].some((v) => v != null));
@@ -40,7 +40,7 @@ export function RoomTrendsChart({ rows, markers }: { rows: WeeklyAttendanceRow[]
       sorted.forEach((r) => {
         const v = r[room.key];
         if (v == null) return;
-        const t = new Date(r.week_date).valueOf();
+        const t = new Date(r.sunday_on).valueOf();
         if (t > recentCut) rec.push(v);
         else if (t > priorCut) pri.push(v);
       });

@@ -12,7 +12,7 @@ const STYLE: Record<ExceptionKind, { stroke: string; glyph: string; fill: string
 
 export function buildMarkerMap(markers: AttendanceMarker[] | undefined): Map<string, AttendanceMarker> {
   const m = new Map<string, AttendanceMarker>();
-  for (const x of markers ?? []) m.set(x.week_date, x); // last wins per week
+  for (const x of markers ?? []) m.set(x.sunday_on, x); // last wins per week
   return m;
 }
 

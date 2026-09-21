@@ -50,12 +50,12 @@ export default async function AttendancePage() {
   const noteMarkers: AttendanceMarker[] = history.rows.flatMap((r) => {
     const kind = classifyException(r.exception_reason);
     return kind && r.exception_reason
-      ? [{ week_date: r.week_date, reason: r.exception_reason, kind }]
+      ? [{ sunday_on: r.sunday_on, reason: r.exception_reason, kind }]
       : [];
   });
   const attendanceMarkers: AttendanceMarker[] = [
     ...noteMarkers,
-    ...holidayMarkersForWeeks(history.rows.map((r) => r.week_date)),
+    ...holidayMarkersForWeeks(history.rows.map((r) => r.sunday_on)),
   ];
   const projection = projectAttendance(history.rows);
   const importedFiles = listImportedAttendanceFiles(session.orgId);
@@ -66,11 +66,11 @@ export default async function AttendancePage() {
 
   // Weather overlay + seasonal-trend analysis (second chart).
   const weather = await loadWeatherForWeeks(
-    history.rows.map((r) => r.week_date),
+    history.rows.map((r) => r.sunday_on),
   );
   const seasonal = analyzeSeasonalTrends(history.rows, weather);
   const weatherCells = history.rows.map((r) => {
-    const w = weather.get(r.week_date);
+    const w = weather.get(r.sunday_on);
     return {
       tmaxF: w?.tmaxF ?? null,
       tminF: w?.tminF ?? null,
@@ -83,7 +83,7 @@ export default async function AttendancePage() {
   // Preacher overlay (LIVE service) — third chart.
   const preacherByWeek = getPreacherByWeek(
     session.orgId,
-    history.rows.map((r) => r.week_date),
+    history.rows.map((r) => r.sunday_on),
   );
   const preacher = analyzePreachers(history.rows, preacherByWeek);
   const preacherTrends = analyzePreacherTrends(history.rows, preacher.perWeek);

@@ -50,7 +50,7 @@ export function AttendanceWeatherChart({
 
   const idxByDate = useMemo(() => {
     const m = new Map<string, number>();
-    rows.forEach((r, i) => m.set(r.week_date, i));
+    rows.forEach((r, i) => m.set(r.sunday_on, i));
     return m;
   }, [rows]);
   function nearestIdx(date: string): number {
@@ -58,7 +58,7 @@ export function AttendanceWeatherChart({
     if (exact != null) return exact;
     let best = 0;
     for (let i = 0; i < rows.length; i++) {
-      if (rows[i].week_date <= date) best = i;
+      if (rows[i].sunday_on <= date) best = i;
       else break;
     }
     return best;
@@ -175,7 +175,7 @@ export function AttendanceWeatherChart({
   const yearTicks: Array<{ i: number; label: string }> = [];
   let lastYear: string | null = null;
   rows.forEach((r, i) => {
-    const y = r.week_date.slice(0, 4);
+    const y = r.sunday_on.slice(0, 4);
     if (y !== lastYear) {
       yearTicks.push({ i, label: y });
       lastYear = y;
@@ -345,7 +345,7 @@ export function AttendanceWeatherChart({
       <div className="min-h-[44px] mt-2">
         {hr ? (
           <div className="text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="font-medium">{formatWeekDate(hr.week_date)}</span>
+            <span className="font-medium">{formatWeekDate(hr.sunday_on)}</span>
             {hr.exception_reason && (
               <span
                 className={

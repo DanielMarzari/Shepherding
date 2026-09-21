@@ -81,7 +81,7 @@ export function PreacherChart({
   const yearTicks: Array<{ i: number; label: string }> = [];
   let lastYear: string | null = null;
   rows.forEach((r, i) => {
-    const y = r.week_date.slice(0, 4);
+    const y = r.sunday_on.slice(0, 4);
     if (y !== lastYear) {
       yearTicks.push({ i, label: y });
       lastYear = y;
@@ -187,7 +187,7 @@ export function PreacherChart({
       <div className="min-h-[44px] mt-2">
         {hr ? (
           <div className="text-xs flex flex-wrap items-center gap-x-3">
-            <span className="font-medium">{formatWeekDate(hr.week_date)}</span>
+            <span className="font-medium">{formatWeekDate(hr.sunday_on)}</span>
             {isExcludingReason(hr.exception_reason) ? (
               <span className="text-warn-soft-fg">Excluded: {hr.exception_reason}</span>
             ) : (

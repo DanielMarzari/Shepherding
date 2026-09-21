@@ -107,7 +107,7 @@ export function analyzeSeasonalTrends(
   const att = new Map<string, number>();
   for (const r of rows) {
     if (isExcludingReason(r.exception_reason)) continue;
-    if (r.in_person_total != null) att.set(r.week_date, r.in_person_total);
+    if (r.in_person_total != null) att.set(r.sunday_on, r.in_person_total);
   }
   const allVals = [...att.values()].sort((a, b) => a - b);
   const insights: SeasonalInsight[] = []; // non-weather → first chart

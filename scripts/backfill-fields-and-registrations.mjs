@@ -95,11 +95,11 @@ const defs = (await all("/people/v2/field_definitions?per_page=100")).filter(
   (d) => !d.attributes?.deleted_at && ALLOW.has(d.attributes?.name),
 );
 const insField = db.prepare(
-  `INSERT INTO pco_person_fields (org_id, person_id, field_id, field_name, value, value_date, synced_at)
+  `INSERT INTO pco_person_fields (org_id, person_id, field_id, field_name, value, value_on, synced_at)
    VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
    ON CONFLICT(org_id, person_id, field_id) DO UPDATE SET
      field_name=excluded.field_name, value=excluded.value,
-     value_date=excluded.value_date, synced_at=excluded.synced_at`,
+     value_on=excluded.value_on, synced_at=excluded.synced_at`,
 );
 for (const def of defs) {
   const rows = (await all(`/people/v2/field_data?where[field_definition_id]=${def.id}&per_page=100`))

@@ -39,9 +39,9 @@ export function ServiceTrendsChart({ rows, markers }: { rows: ServiceAttendanceR
     const svcSet = new Set<string>();
     const byKey = new Map<string, number>(); // `${week}|${svc}` -> count
     for (const r of roomRows) {
-      weekSet.add(r.week_date);
+      weekSet.add(r.sunday_on);
       svcSet.add(r.service);
-      byKey.set(`${r.week_date}|${r.service}`, r.count as number);
+      byKey.set(`${r.sunday_on}|${r.service}`, r.count as number);
     }
     const weeks = [...weekSet].sort();
     const services = [...svcSet].sort((a, b) => toMinutes(a) - toMinutes(b));

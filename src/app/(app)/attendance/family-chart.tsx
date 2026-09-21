@@ -83,7 +83,7 @@ export function FamilyChart({
   const yearTicks: Array<{ i: number; label: string }> = [];
   let lastYear: string | null = null;
   rows.forEach((r, i) => {
-    const y = r.week_date.slice(0, 4);
+    const y = r.sunday_on.slice(0, 4);
     if (y !== lastYear) {
       yearTicks.push({ i, label: y });
       lastYear = y;
@@ -190,7 +190,7 @@ export function FamilyChart({
       <div className="min-h-[44px] mt-2">
         {hr ? (
           <div className="text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="font-medium">{formatWeekDate(hr.week_date)}</span>
+            <span className="font-medium">{formatWeekDate(hr.sunday_on)}</span>
             {SERIES.filter((s) => enabled[s.key]).map((s) => (
               <span key={s.key} className="text-muted">
                 <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ background: s.color }} />

@@ -60,7 +60,7 @@ export function analyzeFamilyTrends(rows: WeeklyAttendanceRow[]): FamilyAnalysis
   let latest: string | null = null;
   for (const r of rows) {
     if (isExcludingReason(r.exception_reason)) continue;
-    const y = Number(r.week_date.slice(0, 4));
+    const y = Number(r.sunday_on.slice(0, 4));
     if (r.adult_total != null && r.kids_total != null) {
       adult.push(r.adult_total);
       kids.push(r.kids_total);
@@ -81,7 +81,7 @@ export function analyzeFamilyTrends(rows: WeeklyAttendanceRow[]): FamilyAnalysis
     if (r.kids_total != null && ip && ip > 0) {
       if (!shareByYear.has(y)) shareByYear.set(y, []);
       shareByYear.get(y)!.push((r.kids_total / ip) * 100);
-      if (!latest || r.week_date > latest) latest = r.week_date;
+      if (!latest || r.sunday_on > latest) latest = r.sunday_on;
     }
   }
 
@@ -99,7 +99,7 @@ export function analyzeFamilyTrends(rows: WeeklyAttendanceRow[]): FamilyAnalysis
     for (const r of rows) {
       if (isExcludingReason(r.exception_reason)) continue;
       const ip = r.in_person_total;
-      if (r.kids_total != null && ip && ip > 0 && r.week_date >= cutoff) {
+      if (r.kids_total != null && ip && ip > 0 && r.sunday_on >= cutoff) {
         lastYear.push((r.kids_total / ip) * 100);
       }
     }

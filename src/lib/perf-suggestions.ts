@@ -227,10 +227,10 @@ export const PERF_SUGGESTIONS: PerfSuggestion[] = [
     pages: ["Sermon impact", "Announcement impact", "Attendance"],
     whatsSlow:
       "Every weekly check-in rollup groups by a computed date expression over all 275k rows, so no existing index can drive it — SQLite scans the table and sorts. This is the single most expensive query in the app at ~1.5 s.",
-    location: "pco_check_ins (org_id, event_time_at, person_id, event_id)",
+    location: "pco_check_ins (org_id, event_time_starts_at, person_id, event_id)",
     bigOBefore: "full table scan + sort",
     bigOAfter: "index-ordered scan",
-    fix: "Add a covering index on pco_check_ins(org_id, event_time_at, person_id, event_id) so the weekly rollups and the first-check-in-per-person CTE can be served from the index without touching the table. Pure DB change — cannot alter any result, only costs disk and a little sync-time write.",
+    fix: "Add a covering index on pco_check_ins(org_id, event_time_starts_at, person_id, event_id) so the weekly rollups and the first-check-in-per-person CTE can be served from the index without touching the table. Pure DB change — cannot alter any result, only costs disk and a little sync-time write.",
     safety: "safe",
     how: "db-config",
     defaultStatus: "pending",

@@ -14,7 +14,7 @@ export interface AttendanceImportResult {
 
 /** Internal: one weekly row as we parse it before writing. */
 interface WeeklyRow {
-  week_date: string;
+  sunday_on: string;
   in_person_total: number | null;
   kids_total: number | null;
   student_total: number | null;
@@ -29,7 +29,7 @@ interface WeeklyRow {
 
 /** Internal: one per-service-time, per-room cell (long form). */
 interface ServiceRow {
-  week_date: string;
+  sunday_on: string;
   room: string; // 'center' | 'chapel' | 'kids' | 'student'
   service: string; // start time, e.g. '8:00', '9:30', '11:15'
   count: number;
@@ -200,7 +200,7 @@ export function parseAttendanceWorkbook(
     if (!d) continue;
     if (!byDate.has(d)) {
       byDate.set(d, {
-        week_date: d,
+        sunday_on: d,
         in_person_total: null,
         kids_total: null,
         student_total: null,
@@ -305,7 +305,7 @@ export function parseAttendanceWorkbook(
       const key = `${d}|${hit.room}|${hit.service}`;
       const e = svcAgg.get(key);
       if (e) e.count += v;
-      else svcAgg.set(key, { week_date: d, room: hit.room, service: hit.service, count: v });
+      else svcAgg.set(key, { sunday_on: d, room: hit.room, service: hit.service, count: v });
     }
   }
   const services = [...svcAgg.values()];
@@ -328,7 +328,7 @@ export function parseAttendanceWorkbook(
       w.exception_reason !== null;
     if (hasAny) out.push(w);
   }
-  out.sort((a, b) => a.week_date.localeCompare(b.week_date));
+  out.sort((a, b) => a.sunday_on.localeCompare(b.sunday_on));
   if (out.length === 0) {
     warnings.push(`${filename}: parsed 0 weekly rows`);
   }
@@ -346,12 +346,12 @@ export function importAttendanceFile(
   const db = getDb();
   const stmt = db.prepare(
     `INSERT INTO attendance_weekly
-       (org_id, week_date, in_person_total, kids_total, student_total,
+       (org_id, sunday_on, in_person_total, kids_total, student_total,
         adult_total, center_total, chapel_total, online_live, online_on_demand,
         abfs, exception_reason, source_file, imported_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-     ON CONFLICT(org_id, week_date) DO UPDATE SET
+     ON CONFLICT(org_id, sunday_on) DO UPDATE SET
        in_person_total = excluded.in_person_total,
        kids_total = excluded.kids_total,
        student_total = excluded.student_total,
@@ -368,19 +368,19 @@ export function importAttendanceFile(
   // Per-service rows: clear this file's existing service rows for the weeks
   // it covers, then insert fresh — so a re-import replaces cleanly.
   const svcDel = db.prepare(
-    `DELETE FROM attendance_service WHERE org_id = ? AND week_date = ?`,
+    `DELETE FROM attendance_service WHERE org_id = ? AND sunday_on = ?`,
   );
   const svcIns = db.prepare(
-    `INSERT INTO attendance_service (org_id, week_date, room, service, count, source_file)
+    `INSERT INTO attendance_service (org_id, sunday_on, room, service, count, source_file)
      VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(org_id, week_date, room, service) DO UPDATE SET
+     ON CONFLICT(org_id, sunday_on, room, service) DO UPDATE SET
        count = excluded.count, source_file = excluded.source_file`,
   );
   const tx = db.transaction((rs: WeeklyRow[], svc: ServiceRow[]) => {
     for (const r of rs) {
       stmt.run(
         orgId,
-        r.week_date,
+        r.sunday_on,
         r.in_person_total,
         r.kids_total,
         r.student_total,
@@ -394,14 +394,14 @@ export function importAttendanceFile(
         filename,
       );
     }
-    for (const d of new Set(svc.map((s) => s.week_date))) svcDel.run(orgId, d);
-    for (const s of svc) svcIns.run(orgId, s.week_date, s.room, s.service, s.count, filename);
+    for (const d of new Set(svc.map((s) => s.sunday_on))) svcDel.run(orgId, d);
+    for (const s of svc) svcIns.run(orgId, s.sunday_on, s.room, s.service, s.count, filename);
   });
   tx(rows, services);
   return {
     filename,
     imported: rows.length,
-    weeks: rows.map((r) => r.week_date),
+    weeks: rows.map((r) => r.sunday_on),
     warnings,
   };
 }

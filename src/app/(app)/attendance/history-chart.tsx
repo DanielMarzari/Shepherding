@@ -104,7 +104,7 @@ export function AttendanceHistoryChart({
   const yearTicks: Array<{ i: number; label: string }> = [];
   let lastYear: string | null = null;
   for (let i = 0; i < rows.length; i++) {
-    const y = rows[i].week_date.slice(0, 4);
+    const y = rows[i].sunday_on.slice(0, 4);
     if (y !== lastYear) {
       yearTicks.push({ i, label: y });
       lastYear = y;
@@ -270,7 +270,7 @@ export function AttendanceHistoryChart({
         {hoverIdx != null && rows[hoverIdx] ? (
           <div className="text-xs">
             <span className="font-medium">
-              {formatWeekDate(rows[hoverIdx].week_date)}
+              {formatWeekDate(rows[hoverIdx].sunday_on)}
             </span>
             {rows[hoverIdx].exception_reason && (
               <span

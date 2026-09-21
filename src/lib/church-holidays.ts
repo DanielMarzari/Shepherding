@@ -41,9 +41,9 @@ export function holidayMarkersForWeeks(weekDates: string[]): AttendanceMarker[] 
   };
   for (const y of years) {
     const e = snap(easterSunday(y), 3);
-    if (e) out.push({ week_date: e, reason: `Easter ${y}`, kind: "easter" });
+    if (e) out.push({ sunday_on: e, reason: `Easter ${y}`, kind: "easter" });
     const c = snap(new Date(Date.UTC(y, 11, 25)), 6);
-    if (c) out.push({ week_date: c, reason: `Christmas ${y}`, kind: "christmas" });
+    if (c) out.push({ sunday_on: c, reason: `Christmas ${y}`, kind: "christmas" });
   }
   return out;
 }

@@ -82,8 +82,8 @@ export const listGivingPeople = cache((orgId: number, limit = 50): GivingPersonR
            d.donor_stage   AS stage,
            d.last_gift_fund AS fund,
            d.giving_channel AS channel,
-           d.last_gift_date AS lastGiftDate,
-           ROW_NUMBER() OVER (PARTITION BY d.person_id ORDER BY d.last_gift_date DESC) AS rn,
+           d.last_gift_on AS lastGiftDate,
+           ROW_NUMBER() OVER (PARTITION BY d.person_id ORDER BY d.last_gift_on DESC) AS rn,
            COUNT(*)     OVER (PARTITION BY d.person_id) AS gifts
          FROM pushpay_donors d
          WHERE d.org_id = ? AND d.person_id IS NOT NULL

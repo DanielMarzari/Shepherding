@@ -276,14 +276,14 @@ function upsertCheckIn(
 ) {
   prepareCached(
     `INSERT INTO pco_check_ins
-      (org_id, pco_id, person_id, event_id, event_time_at, location_id,
+      (org_id, pco_id, person_id, event_id, event_time_starts_at, location_id,
        checked_in_by_id, checked_out_by_id, kind, checked_out_at,
        pco_created_at, synced_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, pco_id) DO UPDATE SET
        person_id = excluded.person_id,
        event_id = excluded.event_id,
-       event_time_at = excluded.event_time_at,
+       event_time_starts_at = excluded.event_time_starts_at,
        location_id = excluded.location_id,
        checked_in_by_id = excluded.checked_in_by_id,
        checked_out_by_id = excluded.checked_out_by_id,

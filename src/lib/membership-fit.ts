@@ -105,7 +105,7 @@ function loadSignalRows(orgId: number): RawSignalRow[] {
                  WHERE org_id = @orgId AND attended = 1 GROUP BY person_id),
          fm AS (SELECT person_id AS pid FROM pco_form_submissions
                  WHERE org_id = @orgId AND person_id IS NOT NULL GROUP BY person_id),
-         dn AS (SELECT person_id AS pid, MAX(last_gift_date) AS lastGift,
+         dn AS (SELECT person_id AS pid, MAX(last_gift_on) AS lastGift,
                        MIN(donor_stage) AS stage, MIN(giving_channel) AS chan
                   FROM pushpay_donors
                  WHERE org_id = @orgId AND person_id IS NOT NULL

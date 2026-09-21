@@ -105,11 +105,11 @@ function allCheckinWeeksByEvent(orgId: number): EventWeekRow[] {
   if (_checkinRowsCache && _checkinRowsCache.orgId === orgId) return _checkinRowsCache.rows;
   const rows = getDb()
     .prepare(
-      `SELECT date(c.event_time_at, '-' || strftime('%w', c.event_time_at) || ' days') wk,
+      `SELECT date(c.event_time_starts_at, '-' || strftime('%w', c.event_time_starts_at) || ' days') wk,
               e.name AS name, COUNT(*) c
          FROM pco_check_ins c
          JOIN pco_checkin_events e ON e.org_id = c.org_id AND e.pco_id = c.event_id
-        WHERE c.org_id = ? AND c.event_time_at IS NOT NULL AND c.event_time_at <> ''
+        WHERE c.org_id = ? AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
         GROUP BY wk, e.pco_id`,
     )
     .all(orgId) as Array<{ wk: string | null; name: string | null; c: number }>;

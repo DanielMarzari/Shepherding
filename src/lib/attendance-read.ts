@@ -3,7 +3,7 @@ import { getDb } from "./db";
 import { isExcludingReason } from "./attendance-exclusion";
 
 export interface WeeklyAttendanceRow {
-  week_date: string;
+  sunday_on: string;
   in_person_total: number | null;
   kids_total: number | null;
   student_total: number | null;
@@ -48,18 +48,18 @@ export function listImportedAttendanceFiles(
     .prepare(
       `SELECT source_file AS sourceFile,
               COUNT(*) AS weeks,
-              MIN(week_date) AS earliest,
-              MAX(week_date) AS latest
+              MIN(sunday_on) AS earliest,
+              MAX(sunday_on) AS latest
          FROM attendance_weekly
         WHERE org_id = ? AND source_file IS NOT NULL
         GROUP BY source_file
-        ORDER BY MAX(week_date) DESC`,
+        ORDER BY MAX(sunday_on) DESC`,
     )
     .all(orgId) as ImportedAttendanceFile[];
 }
 
 export interface ServiceAttendanceRow {
-  week_date: string;
+  sunday_on: string;
   room: string; // 'center' | 'chapel' | 'kids' | 'student'
   service: string; // start time, e.g. '8:00'
   count: number | null;
@@ -69,10 +69,10 @@ export interface ServiceAttendanceRow {
 export function getServiceAttendance(orgId: number): ServiceAttendanceRow[] {
   return getDb()
     .prepare(
-      `SELECT week_date, room, service, count
+      `SELECT sunday_on, room, service, count
          FROM attendance_service
         WHERE org_id = ?
-        ORDER BY week_date ASC, room ASC, service ASC`,
+        ORDER BY sunday_on ASC, room ASC, service ASC`,
     )
     .all(orgId) as ServiceAttendanceRow[];
 }
@@ -81,17 +81,17 @@ export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT week_date, in_person_total, kids_total, student_total,
+      `SELECT sunday_on, in_person_total, kids_total, student_total,
               adult_total, center_total, chapel_total, online_live,
               online_on_demand, abfs, exception_reason
          FROM attendance_weekly
         WHERE org_id = ?
-        ORDER BY week_date ASC`,
+        ORDER BY sunday_on ASC`,
     )
     .all(orgId) as WeeklyAttendanceRow[];
 
-  const earliest = rows[0]?.week_date ?? null;
-  const latest = rows[rows.length - 1]?.week_date ?? null;
+  const earliest = rows[0]?.sunday_on ?? null;
+  const latest = rows[rows.length - 1]?.sunday_on ?? null;
   const filesCount = (
     db
       .prepare(
@@ -119,7 +119,7 @@ export function getWeeklyAttendance(orgId: number): WeeklyAttendanceSummary {
       // Genuine exclusions (snow closures, cancellations) never count
       // toward any average; informational notes still count.
       if (isExcludingReason(r.exception_reason)) continue;
-      const t = new Date(r.week_date).valueOf();
+      const t = new Date(r.sunday_on).valueOf();
       if (r.in_person_total != null) {
         if (t > cutoffMs) recent.push(r.in_person_total);
         else if (t > prevCutoffMs) prior.push(r.in_person_total);
