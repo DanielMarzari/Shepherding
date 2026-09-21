@@ -250,6 +250,80 @@ function relinkContacts(orgId: number): number {
   ).run(orgId).changes;
 }
 
+// ── engagement rollups ───────────────────────────────────────────────
+// Schema and rationale: db/migrations/0091_constant_contact_engagement.sql,
+// whose populate step is this same SQL for every org at once — keep them in step.
+
+/** Rebuild the org's engagement rollups (cc_contact_engagement, cc_link_clicks,
+ *  cc_engagement_snapshot) from cc_contact_activity, from scratch, in one
+ *  transaction: readers see the old rollup or the new one, never half of each.
+ *  The watermark (the table-wide MAX(rowid)) is read inside the same
+ *  transaction, so every row at or below it was counted. */
+export function refreshCcEngagement(orgId: number): void {
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare("DELETE FROM cc_contact_engagement WHERE org_id = ?").run(orgId);
+    db.prepare("DELETE FROM cc_link_clicks WHERE org_id = ?").run(orgId);
+    db.prepare("DELETE FROM cc_engagement_snapshot WHERE org_id = ?").run(orgId);
+    // Walks the (org_id, contact_id, activity_type) index in order: no sort,
+    // and no table reads, since every column it needs is in the index.
+    db.prepare(
+      `INSERT INTO cc_contact_engagement (org_id, contact_id, opens, clicks, bounces, optouts)
+       SELECT org_id, contact_id,
+              SUM(activity_type = 'open'), SUM(activity_type = 'click'),
+              SUM(activity_type = 'bounce'), SUM(activity_type = 'optout')
+         FROM cc_contact_activity WHERE org_id = ?
+        GROUP BY contact_id`,
+    ).run(orgId);
+    db.prepare(
+      `INSERT INTO cc_link_clicks (org_id, link_url, clicks)
+       SELECT org_id, link_url, COUNT(*) FROM cc_contact_activity
+        WHERE org_id = ? AND activity_type = 'click' AND link_url <> ''
+        GROUP BY link_url`,
+    ).run(orgId);
+    // One row even when the org has no activity yet, so "built, and empty" is
+    // distinguishable from "never built".
+    db.prepare(
+      `INSERT INTO cc_engagement_snapshot
+         (org_id, activity_rows, activity_watermark_rowid,
+          opens_sun, opens_mon, opens_tue, opens_wed, opens_thu, opens_fri, opens_sat)
+       SELECT @org, t.n, (SELECT COALESCE(MAX(rowid), 0) FROM cc_contact_activity),
+              COALESCE(d.sun, 0), COALESCE(d.mon, 0), COALESCE(d.tue, 0), COALESCE(d.wed, 0),
+              COALESCE(d.thu, 0), COALESCE(d.fri, 0), COALESCE(d.sat, 0)
+         FROM (SELECT COUNT(*) AS n FROM cc_contact_activity WHERE org_id = @org) t
+         LEFT JOIN (
+               SELECT SUM(CASE WHEN dow = 0 THEN n END) AS sun, SUM(CASE WHEN dow = 1 THEN n END) AS mon,
+                      SUM(CASE WHEN dow = 2 THEN n END) AS tue, SUM(CASE WHEN dow = 3 THEN n END) AS wed,
+                      SUM(CASE WHEN dow = 4 THEN n END) AS thu, SUM(CASE WHEN dow = 5 THEN n END) AS fri,
+                      SUM(CASE WHEN dow = 6 THEN n END) AS sat
+                 FROM (SELECT CAST(strftime('%w', activity_time) AS INTEGER) AS dow, COUNT(*) AS n
+                         FROM cc_contact_activity
+                        WHERE org_id = @org AND activity_type = 'open' AND activity_time IS NOT NULL
+                        GROUP BY dow)) d`,
+    ).run({ org: orgId });
+  })();
+}
+
+/** True when cc_contact_activity has moved past the watermark the rollups were
+ *  built from, e.g. a sync that was killed before its own rebuild, or the old
+ *  code syncing during a deploy. The cron tick calls this every 15 minutes, so
+ *  it compares the table-wide MAX(rowid), which is one seek on the rowid
+ *  b-tree (0.003-0.007 ms, +0.2 MB RSS on the production copy). A per-org
+ *  COUNT(*) walked a 13 MB index instead: 7-8 ms warm, up to 229 ms cold,
+ *  +14-15 MB RSS. Table-wide means another org's sync also marks this org
+ *  stale. The cost is one unneeded rebuild. */
+export function isCcEngagementStale(orgId: number): boolean {
+  const db = getDb();
+  const built = db.prepare(
+    "SELECT activity_watermark_rowid AS w FROM cc_engagement_snapshot WHERE org_id = ?",
+  ).get(orgId) as { w: number } | undefined;
+  // Never built: stale only if the org has activity to count. One index seek.
+  if (!built) return db.prepare("SELECT 1 FROM cc_contact_activity WHERE org_id = ? LIMIT 1").get(orgId) !== undefined;
+  const live = db.prepare("SELECT COALESCE(MAX(rowid), 0) AS w FROM cc_contact_activity").get() as { w: number };
+  // !== rather than >: a lower max means rows were deleted, which is stale too.
+  return live.w !== built.w;
+}
+
 // ── orchestration ────────────────────────────────────────────────────
 export interface CcSyncResult {
   ok: boolean;
@@ -288,6 +362,16 @@ export async function runCcSync(orgId: number, trigger: "manual" | "auto" = "man
     db.prepare("UPDATE cc_sync_runs SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), status = 'error', requests = ?, details = ?, error = ? WHERE id = ?")
       .run(budget.count, JSON.stringify(details), error, runId);
     return { ok: false, requests: budget.count, capped: budget.capped, details, error };
+  } finally {
+    // Every attempt, not just a successful one: a failed or capped run can
+    // still have written activity rows, and a success-only rebuild is how
+    // another dashboard in this app sat 11 days stale. Never let it throw out
+    // of here — it would replace the sync's own result.
+    try {
+      refreshCcEngagement(orgId);
+    } catch (e) {
+      console.error("refreshCcEngagement failed", orgId, e);
+    }
   }
 }
 

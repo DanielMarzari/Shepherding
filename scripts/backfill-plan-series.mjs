@@ -103,7 +103,14 @@ console.log("\nSeries by year (plans that name one):");
 for (const r of db
   .prepare(
     `SELECT substr(sort_date,1,4) yr, COUNT(DISTINCT series_id) series, COUNT(*) plans
-       FROM pco_plans WHERE org_id = ? AND series_id IS NOT NULL AND sort_date <= datetime('now')
+       FROM pco_plans WHERE org_id = ? AND series_id IS NOT NULL
+        -- Up to and including today, by the Eastern calendar: sort_date holds the
+        -- local service time with a nominal Z, so `<= datetime('now')` dropped
+        -- every plan dated today. Same bound as TOMORROW in src/lib/mir-metrics.ts.
+        AND sort_date < date(CASE
+              WHEN date('now') >= date(strftime('%Y','now') || '-03-08', 'weekday 0')
+               AND date('now') <  date(strftime('%Y','now') || '-11-01', 'weekday 0')
+              THEN date('now', '-4 hours') ELSE date('now', '-5 hours') END, '+1 day')
       GROUP BY 1 ORDER BY 1`,
   )
   .all(orgId)) {

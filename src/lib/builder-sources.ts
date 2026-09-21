@@ -152,8 +152,13 @@ const SOURCES: Record<string, SourceFn> = {
             AND (p.membership_type IS NULL OR lower(p.membership_type) NOT LIKE '%system use%')
             AND ( (? = '' AND COALESCE(pa.classification,'inactive') != 'inactive')
                   OR COALESCE(pa.classification,'inactive') = ? )
+          -- Tier, then most engaged within it, then name: without the tail,
+          -- which people inside a tier made the 1,000 cut depended on the
+          -- query plan, so the list changed whenever statistics did.
           ORDER BY CASE COALESCE(pa.classification,'inactive')
-                     WHEN 'shepherded' THEN 0 WHEN 'active' THEN 1 WHEN 'present' THEN 2 ELSE 3 END
+                     WHEN 'shepherded' THEN 0 WHEN 'active' THEN 1 WHEN 'present' THEN 2 ELSE 3 END,
+                   COALESCE(pa.active_group_count, 0) + COALESCE(pa.active_team_count, 0) DESC,
+                   p.last_name COLLATE NOCASE, p.first_name COLLATE NOCASE, p.pco_id
           LIMIT 1000`,
       )
       .all(orgId, clsArg, clsArg) as Array<{ enc: string | null; cls: string; mt: string | null; gc: number; tc: number }>;

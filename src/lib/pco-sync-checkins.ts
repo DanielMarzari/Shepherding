@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb } from "./db";
+import { getDb, prepareCached } from "./db";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 
 /** PCO Check-Ins sync — events, locations, individual check-in records.
@@ -222,20 +222,18 @@ function upsertEvent(
     pcoUpdatedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_checkin_events
-        (org_id, pco_id, name, frequency, archived_at, pco_created_at, pco_updated_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         frequency = excluded.frequency,
-         archived_at = excluded.archived_at,
-         pco_created_at = excluded.pco_created_at,
-         pco_updated_at = excluded.pco_updated_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(orgId, e.pcoId, e.name, e.frequency, e.archivedAt, e.pcoCreatedAt, e.pcoUpdatedAt);
+  prepareCached(
+    `INSERT INTO pco_checkin_events
+      (org_id, pco_id, name, frequency, archived_at, pco_created_at, pco_updated_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       frequency = excluded.frequency,
+       archived_at = excluded.archived_at,
+       pco_created_at = excluded.pco_created_at,
+       pco_updated_at = excluded.pco_updated_at,
+       synced_at = excluded.synced_at`,
+  ).run(orgId, e.pcoId, e.name, e.frequency, e.archivedAt, e.pcoCreatedAt, e.pcoUpdatedAt);
 }
 
 function upsertLocation(
@@ -248,19 +246,17 @@ function upsertLocation(
     archivedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_checkin_locations
-        (org_id, pco_id, name, kind, parent_id, archived_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         kind = excluded.kind,
-         parent_id = excluded.parent_id,
-         archived_at = excluded.archived_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(orgId, l.pcoId, l.name, l.kind, l.parentId, l.archivedAt);
+  prepareCached(
+    `INSERT INTO pco_checkin_locations
+      (org_id, pco_id, name, kind, parent_id, archived_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       kind = excluded.kind,
+       parent_id = excluded.parent_id,
+       archived_at = excluded.archived_at,
+       synced_at = excluded.synced_at`,
+  ).run(orgId, l.pcoId, l.name, l.kind, l.parentId, l.archivedAt);
 }
 
 function upsertCheckIn(
@@ -278,48 +274,44 @@ function upsertCheckIn(
     pcoCreatedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_check_ins
-        (org_id, pco_id, person_id, event_id, event_time_at, location_id,
-         checked_in_by_id, checked_out_by_id, kind, checked_out_at,
-         pco_created_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         person_id = excluded.person_id,
-         event_id = excluded.event_id,
-         event_time_at = excluded.event_time_at,
-         location_id = excluded.location_id,
-         checked_in_by_id = excluded.checked_in_by_id,
-         checked_out_by_id = excluded.checked_out_by_id,
-         kind = excluded.kind,
-         checked_out_at = excluded.checked_out_at,
-         pco_created_at = excluded.pco_created_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      c.pcoId,
-      c.personId,
-      c.eventId,
-      c.eventTimeAt,
-      c.locationId,
-      c.checkedInById,
-      c.checkedOutById,
-      c.kind,
-      c.checkedOutAt,
-      c.pcoCreatedAt,
-    );
+  prepareCached(
+    `INSERT INTO pco_check_ins
+      (org_id, pco_id, person_id, event_id, event_time_at, location_id,
+       checked_in_by_id, checked_out_by_id, kind, checked_out_at,
+       pco_created_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       person_id = excluded.person_id,
+       event_id = excluded.event_id,
+       event_time_at = excluded.event_time_at,
+       location_id = excluded.location_id,
+       checked_in_by_id = excluded.checked_in_by_id,
+       checked_out_by_id = excluded.checked_out_by_id,
+       kind = excluded.kind,
+       checked_out_at = excluded.checked_out_at,
+       pco_created_at = excluded.pco_created_at,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    c.pcoId,
+    c.personId,
+    c.eventId,
+    c.eventTimeAt,
+    c.locationId,
+    c.checkedInById,
+    c.checkedOutById,
+    c.kind,
+    c.checkedOutAt,
+    c.pcoCreatedAt,
+  );
 }
 
 // ─── Cursor helpers ────────────────────────────────────────────────────
 
 function readStoredCursor(orgId: number, resource: string): string | null {
-  const row = getDb()
-    .prepare(
-      "SELECT last_updated_at FROM pco_sync_cursor WHERE org_id = ? AND resource = ?",
-    )
-    .get(orgId, resource) as { last_updated_at: string | null } | undefined;
+  const row = prepareCached(
+    "SELECT last_updated_at FROM pco_sync_cursor WHERE org_id = ? AND resource = ?",
+  ).get(orgId, resource) as { last_updated_at: string | null } | undefined;
   return row?.last_updated_at ?? null;
 }
 
@@ -337,13 +329,11 @@ function readCursor(
 
 function writeCursor(orgId: number, resource: string, updatedAt: string | null) {
   if (!updatedAt) return;
-  getDb()
-    .prepare(
-      `INSERT INTO pco_sync_cursor (org_id, resource, last_updated_at, last_synced_at)
-       VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, resource) DO UPDATE SET
-         last_updated_at = excluded.last_updated_at,
-         last_synced_at = excluded.last_synced_at`,
-    )
-    .run(orgId, resource, updatedAt);
+  prepareCached(
+    `INSERT INTO pco_sync_cursor (org_id, resource, last_updated_at, last_synced_at)
+     VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, resource) DO UPDATE SET
+       last_updated_at = excluded.last_updated_at,
+       last_synced_at = excluded.last_synced_at`,
+  ).run(orgId, resource, updatedAt);
 }

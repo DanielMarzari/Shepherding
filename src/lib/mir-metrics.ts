@@ -59,6 +59,32 @@ const easternDate = (col: string) => `CASE
        AND date(${col}) <  date(strftime('%Y', ${col}) || '-11-01', 'weekday 0')
       THEN date(${col}, '-4 hours') ELSE date(${col}, '-5 hours') END`;
 
+/** Tomorrow's LOCAL date, the upper bound on a plan date:
+ *  `pl.sort_date < ${TOMORROW}` keeps every plan up to and including today.
+ *
+ *  pco_plans.sort_date is a full timestamp holding the local service time with
+ *  a nominal Z: the 8 am LIVE service reads '…T08:00:00Z' in EDT and EST alike.
+ *  As text, `sort_date <= date('now')` is false for every plan dated today (the
+ *  date is a prefix and sorts first), and so is `sort_date <= datetime('now')`
+ *  ('T' sorts above datetime()'s space). On Sunday 2026-09-13 both dropped all
+ *  10 plans and the 152 people on them. "Before tomorrow" holds for any value
+ *  that starts with its date, whatever follows it.
+ *
+ *  Tomorrow by the Eastern calendar, not date('now','+1 day'): from 8 pm EDT
+ *  (7 pm EST) the UTC date is already tomorrow, and a UTC bound counted Sunday's
+ *  10 plans from Saturday evening. Measured with 'now' at Saturday 9:30 pm EDT:
+ *  11 plans since Sep 1 with this bound, 21 with the UTC one. Swept every 10
+ *  minutes over 2025-2027, this is wrong 2 hours a year (easternDate's nominal
+ *  hour at each DST change) and the UTC bound 4.35 hours a day.
+ *  substr(sort_date,1,10) <= … gives the same answers but takes the upper bound
+ *  out of the pco_plans_org_date range scan; "Volunteers by year" ran 2.5x slower.
+ *
+ *  Collapsed onto one line so migration 0090 can write the identical text into
+ *  stored builder SQL, where a newline is escaped once in a block's config and
+ *  twice in its Undo snapshot. Lower bounds (sort_date >= date/datetime(...))
+ *  are correct as written. */
+const TOMORROW = `date(${easternDate("'now'").replace(/\s+/g, " ")}, '+1 day')`;
+
 /** Every occurrence on the church calendar — the unit of "an event the
  *  building served". A PCO Calendar *Event* carries no date at all; the dated
  *  thing is an *EventInstance*, so a weekly rehearsal is one event and about
@@ -222,7 +248,7 @@ const SUNDAY_SERIES = `
     FROM pco_plans pl
     JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
    WHERE pl.org_id = :orgId AND st.name LIKE 'LIVE%'
-     AND pl.sort_date <= datetime('now')`;
+     AND pl.sort_date < ${TOMORROW}`;
 
 /** People who signed up to volunteer at the Christmas Tree Lighting.
  *  Only the 2025 signup carries attendees — the 2019, 2021, 2022, 2023 and
@@ -1422,7 +1448,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       chart("Guest Experience serving by month", "assignments filled",
         `SELECT substr(sort_date,1,7) AS "Month", COUNT(*) AS "Slots"
            FROM (${servingSlots("st.name LIKE 'Guest Experience%'")})
-          WHERE sort_date >= datetime('now','-730 day') AND sort_date <= datetime('now')
+          WHERE sort_date >= datetime('now','-730 day') AND sort_date < ${TOMORROW}
           GROUP BY 1 ORDER BY 1`, "area"),
       table("Guest Experience teams", "volunteers and slots by service type, last 12 months",
         `SELECT service_type AS "Service type",
@@ -1453,7 +1479,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
    WHERE pp.org_id = :orgId AND pp.person_id != ''
      AND st.name LIKE 'PRAYER WORKS%'
-     AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now'))`, { color: "highlight" }),
+     AND pl.sort_date >= date('now','-365 day') AND pl.sort_date < ${TOMORROW})`, { color: "highlight" }),
       stat("On the team roster", "tagged onto a PrayerWorks team right now",
         `SELECT COUNT(*) FROM (
   SELECT DISTINCT m.person_id
@@ -1470,7 +1496,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
    WHERE pp.org_id = :orgId AND pp.person_id != ''
      AND st.name LIKE 'PRAYER WORKS%'
-     AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now')) s
+     AND pl.sort_date >= date('now','-365 day') AND pl.sort_date < ${TOMORROW}) s
           WHERE s.person_id NOT IN (SELECT person_id FROM (
   SELECT DISTINCT m.person_id
     FROM pco_team_memberships m
@@ -1489,7 +1515,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
    WHERE pp.org_id = :orgId AND pp.person_id != ''
      AND st.name LIKE 'PRAYER WORKS%'
-     AND pl.sort_date <= date('now')
+     AND pl.sort_date < ${TOMORROW}
    GROUP BY pp.person_id)`),
       chart("Roster against who actually serves", "the two lists are not the same people",
         `WITH roster AS (
@@ -1505,7 +1531,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
    WHERE pp.org_id = :orgId AND pp.person_id != ''
      AND st.name LIKE 'PRAYER WORKS%'
-     AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now'))
+     AND pl.sort_date >= date('now','-365 day') AND pl.sort_date < ${TOMORROW})
          SELECT 'On the roster' AS "Group", (SELECT COUNT(*) FROM roster) AS "People"
          UNION ALL SELECT 'Served, last 12 months', (SELECT COUNT(*) FROM served)
          UNION ALL SELECT 'On the roster, did not serve',
@@ -1528,7 +1554,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
    WHERE pp.org_id = :orgId AND pp.person_id != ''
      AND st.name LIKE 'PRAYER WORKS%'
-     AND pl.sort_date <= date('now')
+     AND pl.sort_date < ${TOMORROW}
    GROUP BY pp.person_id)
           GROUP BY 1 ORDER BY 1`, "combo"),
       table("Every prayer partner, first served to last", "the span each partner has served, and whether they are still tagged on the team",
@@ -1542,7 +1568,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
    WHERE pp.org_id = :orgId AND pp.person_id != ''
      AND st.name LIKE 'PRAYER WORKS%'
-     AND pl.sort_date <= date('now')
+     AND pl.sort_date < ${TOMORROW}
    GROUP BY pp.person_id), roster AS (
   SELECT DISTINCT m.person_id
     FROM pco_team_memberships m
@@ -1576,7 +1602,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
    WHERE pp.org_id = :orgId AND pp.person_id != ''
      AND st.name LIKE 'PRAYER WORKS%'
-     AND pl.sort_date <= date('now')
+     AND pl.sort_date < ${TOMORROW}
    GROUP BY pp.person_id)
           GROUP BY 1 ORDER BY 1`),
       stat("Network prayer requests", "Network Prayer Request form, all time — a DIFFERENT intake to PrayerWorks",
@@ -2440,7 +2466,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COUNT(DISTINCT pl.pco_id) FROM pco_plans pl
            JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
           WHERE pl.org_id = :orgId AND st.name LIKE 'LIVE%'
-            AND pl.sort_date >= ${YEAR} AND pl.sort_date <= datetime('now')`),
+            AND pl.sort_date >= ${YEAR} AND pl.sort_date < ${TOMORROW}`),
       stat("Average attendance in the Center", "per service, last 12 months",
         `SELECT CAST(ROUND(AVG(count)) AS INT) FROM attendance_service
           WHERE org_id = :orgId AND room = 'center'
@@ -2454,7 +2480,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       chart("LIVE serving by month", "assignments filled",
         `SELECT substr(sort_date,1,7) AS "Month", COUNT(*) AS "Slots"
            FROM (${servingSlots("st.name LIKE 'LIVE%'")})
-          WHERE sort_date >= datetime('now','-730 day') AND sort_date <= datetime('now')
+          WHERE sort_date >= datetime('now','-730 day') AND sort_date < ${TOMORROW}
           GROUP BY 1 ORDER BY 1`, "area"),
     ],
     gaps: measuredNote(
@@ -2484,12 +2510,12 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE pp.org_id = :orgId AND pp.person_id IS NOT NULL AND pp.person_id != ''
             AND (st.name LIKE 'CLASSIC SERVICE%'
               OR (st.name = 'PRAYER WORKS' AND lower(t.name) LIKE '%chapel%'))
-            AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now')`),
+            AND pl.sort_date >= date('now','-365 day') AND pl.sort_date < ${TOMORROW}`),
       stat("Services planned", "Classic services in the last 12 months",
         `SELECT COUNT(DISTINCT pl.pco_id) FROM pco_plans pl
            JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
           WHERE pl.org_id = :orgId AND st.name LIKE 'CLASSIC SERVICE%'
-            AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now')`),
+            AND pl.sort_date >= date('now','-365 day') AND pl.sort_date < ${TOMORROW}`),
       chart("Attendance by week", "headcount in the Chapel at 9:30, every Sunday on record",
         `SELECT week_date AS "Week", count AS "Attendance"
            FROM attendance_service
@@ -2521,7 +2547,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE pp.org_id = :orgId AND pp.person_id IS NOT NULL AND pp.person_id != ''
             AND (st.name LIKE 'CLASSIC SERVICE%'
               OR (st.name = 'PRAYER WORKS' AND lower(t.name) LIKE '%chapel%'))
-            AND pl.sort_date <= date('now') AND substr(pl.sort_date,1,4) >= '2020'
+            AND pl.sort_date < ${TOMORROW} AND substr(pl.sort_date,1,4) >= '2020'
           GROUP BY 1 ORDER BY 1`, "area"),
       table("Attendance year to year", "average Sunday in the Chapel at 9:30, and how many Sundays that average rests on",
         `WITH y AS (
@@ -2545,7 +2571,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE pp.org_id = :orgId AND pp.person_id IS NOT NULL AND pp.person_id != ''
             AND (st.name LIKE 'CLASSIC SERVICE%'
               OR (st.name = 'PRAYER WORKS' AND lower(t.name) LIKE '%chapel%'))
-            AND pl.sort_date >= date('now','-365 day') AND pl.sort_date <= date('now')
+            AND pl.sort_date >= date('now','-365 day') AND pl.sort_date < ${TOMORROW}
           GROUP BY 1 ORDER BY 2 DESC`),
     ],
     gaps: {
@@ -2590,7 +2616,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COUNT(*) FROM pco_plan_items i
            JOIN pco_plans pl ON pl.pco_id = i.plan_id AND pl.org_id = :orgId
           WHERE i.org_id = :orgId AND pl.sort_date >= ${YEAR}
-            AND pl.sort_date <= datetime('now')`),
+            AND pl.sort_date < ${TOMORROW}`),
       table("Music and worship teams", "active membership",
         `SELECT t.name AS "Team", COUNT(DISTINCT m.person_id) AS "Members"
            FROM pco_teams t
@@ -2620,7 +2646,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COUNT(DISTINCT pl.pco_id) FROM pco_plans pl
            JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
           WHERE pl.org_id = :orgId AND (st.name LIKE 'LIVE%' OR st.name LIKE 'CLASSIC%')
-            AND pl.sort_date >= ${YEAR} AND pl.sort_date <= datetime('now')`),
+            AND pl.sort_date >= ${YEAR} AND pl.sort_date < ${TOMORROW}`),
       stat("Average live viewers", "the online service this team delivers",
         `SELECT CAST(ROUND(AVG(online_live)) AS INT) FROM attendance_weekly
           WHERE org_id = :orgId AND online_live IS NOT NULL
@@ -2716,7 +2742,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT rs.name AS "Space", ROUND(100.0 * u.hours / 5475.0, 1) AS "% of the week"
            FROM (${ROOM_HOURS(`${BOOKABLE_SPACES} AND ${BOOKED_LAST_YEAR}`)}) u
            JOIN pco_calendar_resources rs ON rs.pco_id = u.resource_id AND rs.org_id = :orgId
-          ORDER BY 2 DESC LIMIT 15`, "bar"),
+          ORDER BY 2 DESC, 1 LIMIT 15`, "bar"),
       chart("Utilisation by wing", "which parts of the building carry the load, last 12 months",
         `SELECT TRIM(rs.path_name) AS "Wing",
                 ROUND(100.0 * SUM(u.hours)
@@ -2735,7 +2761,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
            LEFT JOIN (${ROOM_HOURS(`${BOOKABLE_SPACES} AND ${BOOKED_LAST_YEAR}`)}) u
              ON u.resource_id = rs.pco_id
           WHERE rs.org_id = :orgId AND ${BOOKABLE_SPACES}
-          ORDER BY 3 DESC`),
+          ORDER BY 3 DESC, 1`),
       table("How much notice the building gets", "by the year the event was booked",
         `SELECT created_year AS "Booked in",
                 COUNT(*) AS "Events",
@@ -2759,7 +2785,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
             AND EXISTS (SELECT 1 FROM pco_calendar_event_instances i
                          WHERE i.org_id = :orgId AND i.event_id = rq.event_id
                            AND date(i.starts_at) >= date('now'))
-          ORDER BY 1 LIMIT 40`),
+          ORDER BY 1, 5 DESC, 2, 3, rq.pco_id LIMIT 40`),
       table("Staff served", "whose events the building carried, last 12 months",
         `SELECT COALESCE(p.first_name || ' ' || p.last_name, '(not in PCO People)') AS "Requested by",
                 COUNT(DISTINCT o.event_id) AS "Events",
@@ -2828,13 +2854,13 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
     metrics: [
       stat("Plans built", "across every service type, last 12 months",
         `SELECT COUNT(*) FROM pco_plans
-          WHERE org_id = :orgId AND sort_date >= ${YEAR} AND sort_date <= datetime('now')`,
+          WHERE org_id = :orgId AND sort_date >= ${YEAR} AND sort_date < ${TOMORROW}`,
         { color: "highlight" }),
       stat("Service types in use", "with a plan in the last 12 months",
         `SELECT COUNT(DISTINCT st.pco_id) FROM pco_plans pl
            JOIN pco_service_types st ON st.pco_id = pl.service_type_id AND st.org_id = :orgId
           WHERE pl.org_id = :orgId AND pl.sort_date >= ${YEAR}
-            AND pl.sort_date <= datetime('now')`),
+            AND pl.sort_date < ${TOMORROW}`),
       stat("People scheduled", "distinct volunteers across all plans, last 12 months",
         `SELECT COUNT(DISTINCT person_id) FROM (${servingSlots("1 = 1")})
           WHERE sort_date >= ${YEAR}`),
@@ -2844,7 +2870,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT substr(sort_date,1,7) AS "Month", COUNT(*) AS "Plans"
            FROM pco_plans
           WHERE org_id = :orgId AND sort_date >= datetime('now','-730 day')
-            AND sort_date <= datetime('now')
+            AND sort_date < ${TOMORROW}
           GROUP BY 1 ORDER BY 1`, "area"),
       table("Busiest service types", "plans and volunteers, last 12 months",
         `SELECT service_type AS "Service type",
@@ -2888,7 +2914,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                               WHERE pl.org_id = :orgId
                                 AND (st.name LIKE 'LIVE%' OR st.name LIKE 'CLASSIC%')
                                 AND pl.sort_date >= '2024-01-01'
-                                AND pl.sort_date <= datetime('now')), 0), 0) || '%'`),
+                                AND pl.sort_date < ${TOMORROW}), 0), 0) || '%'`),
       table("Every Sunday an original song was sung",
         "opened by the Sundays card above",
         `SELECT used_on AS "Sunday",

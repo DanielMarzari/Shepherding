@@ -1,8 +1,14 @@
 import "server-only";
 import { shrinkReadOnlyMemory } from "./builder";
-import { refreshDashboardSnapshots } from "./dashboard-refresh";
+import {
+  getRefreshRunStatus,
+  getSnapshotFreshness,
+  launchRefresh,
+  reapStaleRefreshRuns,
+  refreshDashboardSnapshots,
+} from "./dashboard-refresh";
 import { decryptJson, encryptJson, hmac } from "./encryption";
-import { getDb, shrinkDbMemory } from "./db";
+import { getDb, optimizeDb, prepareCached, shrinkDbMemory } from "./db";
 import { normPhone } from "./phone";
 import {
   getAdultCheckinEvents,
@@ -400,26 +406,117 @@ export async function runSync(
     // Refresh dashboard snapshots before marking the run as ok so the
     // next page render sees fresh totals. Wrapped defensively — a
     // failure here shouldn't undo the sync (data already landed).
-    try {
-      refreshDashboardSnapshots(orgId);
-    } catch (refreshErr) {
-      const msg =
-        refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
+    const refreshError = tryRefreshSnapshots(orgId, "sync");
+    if (refreshError) {
       warning =
         (warning ? warning + " · " : "") +
-        `dashboard refresh failed: ${msg}`;
+        `dashboard refresh failed: ${refreshError}`;
     }
     details.durationMs = Date.now() - startedMs;
     finishSyncRun(runId, "ok", changes, warning, details);
+    optimizeDb();
     releaseSyncMemory();
     return { ok: true, changes, details, warning };
   } catch (e) {
-    details.durationMs = Date.now() - startedMs;
     const msg = e instanceof Error ? e.message : "Unknown error";
-    finishSyncRun(runId, "error", 0, msg, details);
+    // Rebuild the snapshots anyway. Whatever landed before the failure is in
+    // the source tables, and every dashboard, map, intake form and graph reads
+    // the snapshots, not the source. On 2026-09-16 syncs had been dying for
+    // eleven days and production was serving eleven-day-old dashboards, with
+    // 111 active people missing from them, because this rebuild only ran on
+    // success. (A sync that is KILLED runs no JS at all; the cron tick's
+    // healStaleSnapshots covers that case.)
+    //
+    // Only when something landed, though. A failed sync is retried on every
+    // 15-minute tick (isSyncDue ignores error runs), and one that fails on its
+    // first request — revoked credentials, PCO down — would otherwise block
+    // the event loop for a full synchronous rebuild (2.2-4.1 s on a
+    // production copy) every time. A stage that finished counts in details;
+    // people upserted before a mid-people failure show in the watermark.
+    // "unknown" (no watermark recorded yet) rebuilds once, which records one.
+    const landed =
+      anyUpserted(details) || getSnapshotFreshness(orgId).state !== "fresh";
+    const refreshError = landed
+      ? tryRefreshSnapshots(orgId, "sync-error")
+      : null;
+    details.durationMs = Date.now() - startedMs;
+    finishSyncRun(
+      runId,
+      "error",
+      0,
+      refreshError ? `${msg} · dashboard refresh failed: ${refreshError}` : msg,
+      details,
+    );
+    optimizeDb();
     releaseSyncMemory();
     return { ok: false, changes: 0, details, error: msg };
   }
+}
+
+function anyUpserted(details: SyncDetails): boolean {
+  return Object.values(details).some(
+    (v) => typeof v === "object" && v !== null && v.upserted > 0,
+  );
+}
+
+/** Rebuild the dashboard snapshots after a sync attempt. Returns the error
+ *  message instead of throwing: a refresh failure must never turn into a sync
+ *  failure, since the synced rows are already committed. */
+function tryRefreshSnapshots(
+  orgId: number,
+  trigger: "sync" | "sync-error",
+): string | null {
+  try {
+    refreshDashboardSnapshots(orgId, trigger);
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** When this process started, in pco_sync_runs.started_at's format (both come
+ *  from the system clock). Derived from uptime rather than captured at module
+ *  load so every copy of this module Next bundles (route handler, server
+ *  action) agrees on it. */
+const PROCESS_STARTED_AT = new Date(
+  Date.now() - process.uptime() * 1000,
+).toISOString();
+
+/** The cron's backstop for a sync that died without running any JS — killed
+ *  by a deploy's pm2 restart or by the memory cap — so neither refresh path in
+ *  runSync ran. Rebuilds the snapshots when their source has moved on since
+ *  the last successful rebuild, unless a sync is still running (it will
+ *  rebuild them itself when it finishes).
+ *
+ *  "Still running" means started by THIS process. A killed sync's row stays
+ *  'running' until cleanupStaleSyncRuns reaps it 65 minutes on, and waiting
+ *  for that left the dashboards behind for over an hour after every kill. Only
+ *  runSync writes these rows and it runs in the app process, so a row started
+ *  before this process booted belongs to one that is gone. (If the app ever
+ *  ran as several pm2 instances, a sibling's sync started before this one
+ *  booted would be misread as dead. The cost is one extra rebuild on this
+ *  instance's own connection while it runs; that sync still rebuilds at its
+ *  end.) The row itself is left for cleanupStaleSyncRuns. Reaping it here
+ *  would also make the next sync due at once, and a sync that keeps getting
+ *  killed would then restart every 15 minutes instead of every 75.
+ *
+ *  Cheap enough for every 15-minute tick when there is nothing to do: an
+ *  UPDATE that matches no rows and two indexed single-row lookups, 0.02 ms
+ *  per call measured on a production copy. */
+export async function healStaleSnapshots(orgId: number): Promise<string> {
+  reapStaleRefreshRuns(orgId);
+  const freshness = getSnapshotFreshness(orgId);
+  if (freshness.state !== "stale") return freshness.state;
+  const active = findActiveSyncRun(orgId);
+  if (active && active.startedAt >= PROCESS_STARTED_AT) {
+    return `stale; sync ${active.id} still running`;
+  }
+  const orphan = active ? `sync ${active.id} died with a previous process; ` : "";
+  const { runId, joined, done } = launchRefresh(orgId, "self-heal");
+  await done;
+  const run = getRefreshRunStatus(runId);
+  const how = joined ? "joined in-flight refresh" : "rebuilt";
+  return `stale; ${orphan}${how} (refresh ${runId}: ${run?.status ?? "unknown"}${run?.error ? ` — ${run.error}` : ""})`;
 }
 
 /** A sync is where this process's memory peaks — it is the one operation that
@@ -586,12 +683,11 @@ function replacePersonEmails(
   personId: string,
   hashes: string[],
 ): void {
-  const db = getDb();
-  db.prepare(
+  prepareCached(
     `DELETE FROM pco_person_emails WHERE org_id = ? AND person_id = ?`,
   ).run(orgId, personId);
   if (hashes.length === 0) return;
-  const stmt = db.prepare(
+  const stmt = prepareCached(
     `INSERT OR IGNORE INTO pco_person_emails (org_id, person_id, email_hash)
      VALUES (?, ?, ?)`,
   );
@@ -605,12 +701,11 @@ function replacePersonPhones(
   personId: string,
   hashes: string[],
 ): void {
-  const db = getDb();
-  db.prepare(
+  prepareCached(
     `DELETE FROM pco_person_phones WHERE org_id = ? AND person_id = ?`,
   ).run(orgId, personId);
   if (hashes.length === 0) return;
-  const stmt = db.prepare(
+  const stmt = prepareCached(
     `INSERT OR IGNORE INTO pco_person_phones (org_id, person_id, phone_hash)
      VALUES (?, ?, ?)`,
   );
@@ -685,43 +780,41 @@ function upsertPerson(
     inactivatedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_people
-        (org_id, pco_id, enc_pii, first_name, last_name, nickname, given_name, gender, membership_type,
-         marital_status, status, pco_created_at, pco_updated_at, inactivated_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         enc_pii = excluded.enc_pii,
-         first_name = excluded.first_name,
-         last_name = excluded.last_name,
-         nickname = excluded.nickname,
-         given_name = excluded.given_name,
-         gender = excluded.gender,
-         membership_type = excluded.membership_type,
-         marital_status = excluded.marital_status,
-         status = excluded.status,
-         pco_created_at = excluded.pco_created_at,
-         pco_updated_at = excluded.pco_updated_at,
-         inactivated_at = excluded.inactivated_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      p.pcoId,
-      p.encPii,
-      p.firstName,
-      p.lastName,
-      p.nickname,
-      p.givenName,
-      p.gender,
-      p.membershipType,
-      p.maritalStatus,
-      p.status,
-      p.pcoCreatedAt,
-      p.pcoUpdatedAt,
-      p.inactivatedAt,
-    );
+  prepareCached(
+    `INSERT INTO pco_people
+      (org_id, pco_id, enc_pii, first_name, last_name, nickname, given_name, gender, membership_type,
+       marital_status, status, pco_created_at, pco_updated_at, inactivated_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       enc_pii = excluded.enc_pii,
+       first_name = excluded.first_name,
+       last_name = excluded.last_name,
+       nickname = excluded.nickname,
+       given_name = excluded.given_name,
+       gender = excluded.gender,
+       membership_type = excluded.membership_type,
+       marital_status = excluded.marital_status,
+       status = excluded.status,
+       pco_created_at = excluded.pco_created_at,
+       pco_updated_at = excluded.pco_updated_at,
+       inactivated_at = excluded.inactivated_at,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    p.pcoId,
+    p.encPii,
+    p.firstName,
+    p.lastName,
+    p.nickname,
+    p.givenName,
+    p.gender,
+    p.membershipType,
+    p.maritalStatus,
+    p.status,
+    p.pcoCreatedAt,
+    p.pcoUpdatedAt,
+    p.inactivatedAt,
+  );
 }
 
 /** One-time (idempotent) backfill of the plaintext name columns for people
@@ -853,17 +946,15 @@ function upsertForm(
     active: number;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_forms (org_id, pco_id, name, description, active, synced_at)
-       VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         description = excluded.description,
-         active = excluded.active,
-         synced_at = excluded.synced_at`,
-    )
-    .run(orgId, f.pcoId, f.name, f.description, f.active);
+  prepareCached(
+    `INSERT INTO pco_forms (org_id, pco_id, name, description, active, synced_at)
+     VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       description = excluded.description,
+       active = excluded.active,
+       synced_at = excluded.synced_at`,
+  ).run(orgId, f.pcoId, f.name, f.description, f.active);
 }
 
 function upsertFormField(
@@ -877,18 +968,16 @@ function upsertFormField(
     required: number;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_form_fields (org_id, form_id, pco_id, label, field_type, position, required, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, form_id, pco_id) DO UPDATE SET
-         label = excluded.label,
-         field_type = excluded.field_type,
-         position = excluded.position,
-         required = excluded.required,
-         synced_at = excluded.synced_at`,
-    )
-    .run(orgId, formId, f.pcoId, f.label, f.fieldType, f.position, f.required);
+  prepareCached(
+    `INSERT INTO pco_form_fields (org_id, form_id, pco_id, label, field_type, position, required, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, form_id, pco_id) DO UPDATE SET
+       label = excluded.label,
+       field_type = excluded.field_type,
+       position = excluded.position,
+       required = excluded.required,
+       synced_at = excluded.synced_at`,
+  ).run(orgId, formId, f.pcoId, f.label, f.fieldType, f.position, f.required);
 }
 
 function upsertFormSubmission(
@@ -903,53 +992,47 @@ function upsertFormSubmission(
     encData: string;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_form_submissions
-        (org_id, form_id, pco_id, person_id, verified, requires_verification, pco_created_at, enc_data, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, form_id, pco_id) DO UPDATE SET
-         person_id = excluded.person_id,
-         verified = excluded.verified,
-         requires_verification = excluded.requires_verification,
-         pco_created_at = excluded.pco_created_at,
-         enc_data = excluded.enc_data,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      formId,
-      s.pcoId,
-      s.personId,
-      s.verified,
-      s.requiresVerification,
-      s.pcoCreatedAt,
-      s.encData,
-    );
+  prepareCached(
+    `INSERT INTO pco_form_submissions
+      (org_id, form_id, pco_id, person_id, verified, requires_verification, pco_created_at, enc_data, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, form_id, pco_id) DO UPDATE SET
+       person_id = excluded.person_id,
+       verified = excluded.verified,
+       requires_verification = excluded.requires_verification,
+       pco_created_at = excluded.pco_created_at,
+       enc_data = excluded.enc_data,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    formId,
+    s.pcoId,
+    s.personId,
+    s.verified,
+    s.requiresVerification,
+    s.pcoCreatedAt,
+    s.encData,
+  );
 }
 
 // ─── Cursors ────────────────────────────────────────────────────────────
 
 function readCursor(orgId: number, resource: string): string | null {
-  const row = getDb()
-    .prepare(
-      "SELECT last_updated_at FROM pco_sync_cursor WHERE org_id = ? AND resource = ?",
-    )
-    .get(orgId, resource) as { last_updated_at: string | null } | undefined;
+  const row = prepareCached(
+    "SELECT last_updated_at FROM pco_sync_cursor WHERE org_id = ? AND resource = ?",
+  ).get(orgId, resource) as { last_updated_at: string | null } | undefined;
   return row?.last_updated_at ?? null;
 }
 
 function writeCursor(orgId: number, resource: string, updatedAt: string | null) {
   if (!updatedAt) return;
-  getDb()
-    .prepare(
-      `INSERT INTO pco_sync_cursor (org_id, resource, last_updated_at, last_synced_at)
-       VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, resource) DO UPDATE SET
-         last_updated_at = excluded.last_updated_at,
-         last_synced_at = excluded.last_synced_at`,
-    )
-    .run(orgId, resource, updatedAt);
+  prepareCached(
+    `INSERT INTO pco_sync_cursor (org_id, resource, last_updated_at, last_synced_at)
+     VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, resource) DO UPDATE SET
+       last_updated_at = excluded.last_updated_at,
+       last_synced_at = excluded.last_synced_at`,
+  ).run(orgId, resource, updatedAt);
 }
 
 /** Clear a resource's sync cursor so the next sync re-fetches EVERYTHING for

@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb } from "./db";
+import { getDb, prepareCached } from "./db";
 import { PCOClient, type PCOResource } from "./pco-client";
 
 /** PCO Groups data sync — group_types, groups, memberships, applications,
@@ -88,10 +88,10 @@ export async function syncGroupsAll(
   //    so dropped memberships actually disappear. Tracks who joined when.
   const replaceMemberships = getDb().transaction(
     (groupId: string, rows: ReturnType<typeof toMembershipRow>[]) => {
-      getDb()
-        .prepare("DELETE FROM pco_group_memberships WHERE org_id = ? AND group_id = ?")
-        .run(orgId, groupId);
-      const stmt = getDb().prepare(
+      prepareCached(
+        "DELETE FROM pco_group_memberships WHERE org_id = ? AND group_id = ?",
+      ).run(orgId, groupId);
+      const stmt = prepareCached(
         `INSERT INTO pco_group_memberships
           (org_id, pco_id, group_id, person_id, role, joined_at, archived_at, synced_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -255,27 +255,25 @@ function upsertEventAttendance(
     eventStartsAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_event_attendances
-        (org_id, event_id, person_id, group_id, attended, pco_created_at, event_starts_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, event_id, person_id) DO UPDATE SET
-         group_id = excluded.group_id,
-         attended = excluded.attended,
-         pco_created_at = excluded.pco_created_at,
-         event_starts_at = excluded.event_starts_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      a.eventId,
-      a.personId,
-      a.groupId,
-      a.attended,
-      a.pcoCreatedAt,
-      a.eventStartsAt,
-    );
+  prepareCached(
+    `INSERT INTO pco_event_attendances
+      (org_id, event_id, person_id, group_id, attended, pco_created_at, event_starts_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, event_id, person_id) DO UPDATE SET
+       group_id = excluded.group_id,
+       attended = excluded.attended,
+       pco_created_at = excluded.pco_created_at,
+       event_starts_at = excluded.event_starts_at,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    a.eventId,
+    a.personId,
+    a.groupId,
+    a.attended,
+    a.pcoCreatedAt,
+    a.eventStartsAt,
+  );
 }
 
 /** Recompute last_attended_at on every membership from attendance records. */
@@ -313,15 +311,13 @@ function toMembershipRow(groupId: string, m: PCOResource) {
 }
 
 function upsertGroupType(orgId: number, t: { pcoId: string; name: string | null }) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_group_types (org_id, pco_id, name, synced_at)
-       VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         synced_at = excluded.synced_at`,
-    )
-    .run(orgId, t.pcoId, t.name);
+  prepareCached(
+    `INSERT INTO pco_group_types (org_id, pco_id, name, synced_at)
+     VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       synced_at = excluded.synced_at`,
+  ).run(orgId, t.pcoId, t.name);
 }
 
 function upsertGroup(
@@ -335,28 +331,26 @@ function upsertGroup(
     archivedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_groups
-        (org_id, pco_id, name, schedule, group_type_id, pco_created_at, archived_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         schedule = excluded.schedule,
-         group_type_id = excluded.group_type_id,
-         pco_created_at = excluded.pco_created_at,
-         archived_at = excluded.archived_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      g.pcoId,
-      g.name,
-      g.schedule,
-      g.groupTypeId,
-      g.pcoCreatedAt,
-      g.archivedAt,
-    );
+  prepareCached(
+    `INSERT INTO pco_groups
+      (org_id, pco_id, name, schedule, group_type_id, pco_created_at, archived_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       schedule = excluded.schedule,
+       group_type_id = excluded.group_type_id,
+       pco_created_at = excluded.pco_created_at,
+       archived_at = excluded.archived_at,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    g.pcoId,
+    g.name,
+    g.schedule,
+    g.groupTypeId,
+    g.pcoCreatedAt,
+    g.archivedAt,
+  );
 }
 
 function upsertGroupApplication(
@@ -370,28 +364,26 @@ function upsertGroupApplication(
     hasMessage: number;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_group_applications
-        (org_id, pco_id, group_id, person_id, applied_at, status, has_message, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         group_id = excluded.group_id,
-         person_id = excluded.person_id,
-         applied_at = excluded.applied_at,
-         status = excluded.status,
-         has_message = excluded.has_message,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      ap.pcoId,
-      ap.groupId,
-      ap.personId,
-      ap.appliedAt,
-      ap.status,
-      ap.hasMessage,
-    );
+  prepareCached(
+    `INSERT INTO pco_group_applications
+      (org_id, pco_id, group_id, person_id, applied_at, status, has_message, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       group_id = excluded.group_id,
+       person_id = excluded.person_id,
+       applied_at = excluded.applied_at,
+       status = excluded.status,
+       has_message = excluded.has_message,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    ap.pcoId,
+    ap.groupId,
+    ap.personId,
+    ap.appliedAt,
+    ap.status,
+    ap.hasMessage,
+  );
 }
 
 function upsertGroupEvent(
@@ -408,45 +400,41 @@ function upsertGroupEvent(
     remindersSentAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_group_events
-        (org_id, pco_id, group_id, starts_at,
-         attendance_requests_enabled, automated_reminder_enabled,
-         canceled, canceled_at, reminders_sent, reminders_sent_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         group_id = excluded.group_id,
-         starts_at = excluded.starts_at,
-         attendance_requests_enabled = excluded.attendance_requests_enabled,
-         automated_reminder_enabled = excluded.automated_reminder_enabled,
-         canceled = excluded.canceled,
-         canceled_at = excluded.canceled_at,
-         reminders_sent = excluded.reminders_sent,
-         reminders_sent_at = excluded.reminders_sent_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      e.pcoId,
-      e.groupId,
-      e.startsAt,
-      e.attendanceRequestsEnabled,
-      e.automatedReminderEnabled,
-      e.canceled,
-      e.canceledAt,
-      e.remindersSent,
-      e.remindersSentAt,
-    );
+  prepareCached(
+    `INSERT INTO pco_group_events
+      (org_id, pco_id, group_id, starts_at,
+       attendance_requests_enabled, automated_reminder_enabled,
+       canceled, canceled_at, reminders_sent, reminders_sent_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       group_id = excluded.group_id,
+       starts_at = excluded.starts_at,
+       attendance_requests_enabled = excluded.attendance_requests_enabled,
+       automated_reminder_enabled = excluded.automated_reminder_enabled,
+       canceled = excluded.canceled,
+       canceled_at = excluded.canceled_at,
+       reminders_sent = excluded.reminders_sent,
+       reminders_sent_at = excluded.reminders_sent_at,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    e.pcoId,
+    e.groupId,
+    e.startsAt,
+    e.attendanceRequestsEnabled,
+    e.automatedReminderEnabled,
+    e.canceled,
+    e.canceledAt,
+    e.remindersSent,
+    e.remindersSentAt,
+  );
 }
 
 // Cursor logic mirrors lib/pco-sync.ts but kept local to avoid a circular import.
 function readStoredCursor(orgId: number, resource: string): string | null {
-  const row = getDb()
-    .prepare(
-      "SELECT last_updated_at FROM pco_sync_cursor WHERE org_id = ? AND resource = ?",
-    )
-    .get(orgId, resource) as { last_updated_at: string | null } | undefined;
+  const row = prepareCached(
+    "SELECT last_updated_at FROM pco_sync_cursor WHERE org_id = ? AND resource = ?",
+  ).get(orgId, resource) as { last_updated_at: string | null } | undefined;
   return row?.last_updated_at ?? null;
 }
 
@@ -460,13 +448,11 @@ function readCursor(orgId: number, resource: string, thresholdMonths: number): s
 
 function writeCursor(orgId: number, resource: string, updatedAt: string | null) {
   if (!updatedAt) return;
-  getDb()
-    .prepare(
-      `INSERT INTO pco_sync_cursor (org_id, resource, last_updated_at, last_synced_at)
-       VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, resource) DO UPDATE SET
-         last_updated_at = excluded.last_updated_at,
-         last_synced_at = excluded.last_synced_at`,
-    )
-    .run(orgId, resource, updatedAt);
+  prepareCached(
+    `INSERT INTO pco_sync_cursor (org_id, resource, last_updated_at, last_synced_at)
+     VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, resource) DO UPDATE SET
+       last_updated_at = excluded.last_updated_at,
+       last_synced_at = excluded.last_synced_at`,
+  ).run(orgId, resource, updatedAt);
 }

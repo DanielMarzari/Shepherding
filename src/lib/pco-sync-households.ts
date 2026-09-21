@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb } from "./db";
+import { getDb, prepareCached } from "./db";
 import { PCOClient, type PCOResource } from "./pco-client";
 
 /** PCO Households sync — households + per-person membership rows.
@@ -67,13 +67,11 @@ export async function syncHouseholdsAll(
       householdId: string,
       rows: Array<{ pcoId: string; personId: string; pending: number }>,
     ) => {
-      getDb()
-        .prepare(
-          `DELETE FROM pco_household_memberships
-            WHERE org_id = ? AND household_id = ?`,
-        )
-        .run(orgId, householdId);
-      const stmt = getDb().prepare(
+      prepareCached(
+        `DELETE FROM pco_household_memberships
+          WHERE org_id = ? AND household_id = ?`,
+      ).run(orgId, householdId);
+      const stmt = prepareCached(
         `INSERT INTO pco_household_memberships
           (org_id, pco_id, household_id, person_id, pending, synced_at)
          VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -114,12 +112,10 @@ export async function syncHouseholdsAll(
       replaceMemberships(householdId, rows);
       result.householdMemberships.upserted += rows.length;
     } else {
-      getDb()
-        .prepare(
-          `DELETE FROM pco_household_memberships
-            WHERE org_id = ? AND household_id = ?`,
-        )
-        .run(orgId, householdId);
+      prepareCached(
+        `DELETE FROM pco_household_memberships
+          WHERE org_id = ? AND household_id = ?`,
+      ).run(orgId, householdId);
     }
   }
 
@@ -173,27 +169,25 @@ function upsertHousehold(
     pcoUpdatedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_households
-        (org_id, pco_id, name, member_count, primary_contact_id,
-         pco_created_at, pco_updated_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         member_count = excluded.member_count,
-         primary_contact_id = excluded.primary_contact_id,
-         pco_created_at = excluded.pco_created_at,
-         pco_updated_at = excluded.pco_updated_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      h.pcoId,
-      h.name,
-      h.memberCount,
-      h.primaryContactId,
-      h.pcoCreatedAt,
-      h.pcoUpdatedAt,
-    );
+  prepareCached(
+    `INSERT INTO pco_households
+      (org_id, pco_id, name, member_count, primary_contact_id,
+       pco_created_at, pco_updated_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       member_count = excluded.member_count,
+       primary_contact_id = excluded.primary_contact_id,
+       pco_created_at = excluded.pco_created_at,
+       pco_updated_at = excluded.pco_updated_at,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    h.pcoId,
+    h.name,
+    h.memberCount,
+    h.primaryContactId,
+    h.pcoCreatedAt,
+    h.pcoUpdatedAt,
+  );
 }

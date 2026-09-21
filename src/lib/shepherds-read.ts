@@ -33,7 +33,8 @@ export function listShepherds(orgId: number): ShepherdSummary[] {
         WHERE m.org_id = ?
           AND m.archived_at IS NULL
           AND g.archived_at IS NULL
-          AND lower(coalesce(m.role, '')) LIKE '%leader%'`,
+          AND lower(coalesce(m.role, '')) LIKE '%leader%'
+        ORDER BY g.name COLLATE NOCASE, g.pco_id`,
     )
     .all(orgId) as Array<{ personId: string; id: string; name: string | null }>;
 
@@ -48,7 +49,8 @@ export function listShepherds(orgId: number): ShepherdSummary[] {
           AND m.is_team_leader = 1
           AND m.person_id != ''
           AND t.archived_at IS NULL
-          AND t.deleted_at IS NULL`,
+          AND t.deleted_at IS NULL
+        ORDER BY t.name COLLATE NOCASE, t.pco_id`,
     )
     .all(orgId) as Array<{ personId: string; id: string; name: string | null }>;
 

@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb } from "./db";
+import { getDb, prepareCached } from "./db";
 import { getExcludedMembershipTypes, getSyncSettings } from "./pco";
 import { populateShepherdedTempTable } from "./people-read";
 import { rebuildDuplicatePairs } from "./audit-read";
@@ -54,34 +54,47 @@ const REFRESH_PHASES: Array<{
 
 export const REFRESH_TOTAL_STEPS = REFRESH_PHASES.length;
 
+/** What started a refresh. Recorded on its dashboard_refresh_runs row. */
+export type RefreshTrigger =
+  | "manual" // the Refresh button
+  | "sync" // end of a successful sync
+  | "sync-error" // end of a failed sync — the rows that landed still count
+  | "self-heal"; // cron tick found the snapshots behind their source
+
 /** Rebuild every dashboard / lanes / home summary table for an org
- *  from scratch. Each phase commits independently so a progress
- *  callback between phases can write status that other DB readers
- *  can actually see (a single wrapping transaction would hide all
- *  progress writes until the very end).
+ *  from scratch, synchronously — the sync path's variant. Each phase
+ *  commits independently, and the recorded run's current_step says
+ *  which phase a crashed refresh died in.
  *
  *  This sacrifices cross-phase atomicity — a crash mid-refresh
- *  leaves the snapshot half-old half-new — in exchange for a
- *  usable progress bar. Acceptable because the data is derived;
- *  re-running fixes it. */
+ *  leaves the snapshot half-old half-new. Acceptable because the data
+ *  is derived; re-running fixes it, and the run row stays 'running'
+ *  (then reaped to 'error'), so the snapshots read as stale. */
 export function refreshDashboardSnapshots(
   orgId: number,
-  onProgress?: RefreshProgressCallback,
+  trigger: RefreshTrigger,
 ): void {
   const db = getDb();
-  const settings = getSyncSettings(orgId);
-  const activityMonths = settings.activityMonths;
-  const ctx = {
-    cutoffActivity: new Date(
-      Date.now() - activityMonths * MS_PER_MONTH,
-    ).toISOString(),
-    cutoff30: new Date(Date.now() - 30 * MS_PER_DAY).toISOString(),
-    activityMonths,
-  };
-  for (let i = 0; i < REFRESH_PHASES.length; i++) {
-    const phase = REFRESH_PHASES[i];
-    db.transaction(() => phase.run(orgId, ctx))();
-    onProgress?.(i + 1, REFRESH_PHASES.length, phase.label);
+  const runId = createRefreshRun(orgId, trigger);
+  try {
+    const settings = getSyncSettings(orgId);
+    const activityMonths = settings.activityMonths;
+    const ctx = {
+      cutoffActivity: new Date(
+        Date.now() - activityMonths * MS_PER_MONTH,
+      ).toISOString(),
+      cutoff30: new Date(Date.now() - 30 * MS_PER_DAY).toISOString(),
+      activityMonths,
+    };
+    for (let i = 0; i < REFRESH_PHASES.length; i++) {
+      const phase = REFRESH_PHASES[i];
+      db.transaction(() => phase.run(orgId, ctx))();
+      updateRefreshProgress(runId, i + 1, phase.label);
+    }
+    finishRefreshRun(runId, "ok", null);
+  } catch (e) {
+    finishRefreshRun(runId, "error", e instanceof Error ? e.message : String(e));
+    throw e;
   }
 }
 
@@ -132,6 +145,13 @@ export async function refreshDashboardSnapshotsAsync(
   onProgress?.(5, REFRESH_TOTAL_STEPS, REFRESH_PHASES[4].label);
   await yieldTick();
 
+  // The sixth phase. It was added to REFRESH_PHASES (the sync path) but not
+  // here, so the Refresh button never rebuilt duplicate pairs and every run it
+  // recorded stopped at step 5 of 6. ~0.5 s on a production copy.
+  rebuildDuplicatePairs(orgId);
+  onProgress?.(6, REFRESH_TOTAL_STEPS, REFRESH_PHASES[5].label);
+  await yieldTick();
+
   // Recompute the retention "Returns" table (heavy activity-gap scan). Kept
   // off live requests and the per-sync path; populated here on an on-demand /
   // background refresh and nightly by the cron. Never fatal to the refresh.
@@ -157,20 +177,101 @@ export interface RefreshRunStatus {
   elapsedMs: number;
 }
 
-/** Module-level promise set: keeps the in-flight refresh promise
- *  alive across server-action ticks so V8 doesn't GC it. The DB row
- *  is the source of truth for clients polling status. */
-const inFlightRefreshes = new Set<Promise<unknown>>();
+/** Module-level promise map, by run id: keeps the in-flight refresh
+ *  promise alive across server-action ticks so V8 doesn't GC it, and
+ *  lets a second caller wait on a run it joined. The DB row is the
+ *  source of truth for clients polling status. */
+const inFlightRefreshes = new Map<number, Promise<void>>();
 
-export function createRefreshRun(orgId: number): number {
-  const result = getDb()
-    .prepare(
-      `INSERT INTO dashboard_refresh_runs
-         (org_id, status, current_step, total_steps, step_label)
-       VALUES (?, 'running', 0, ?, ?)`,
-    )
-    .run(orgId, REFRESH_TOTAL_STEPS, "Starting…");
+/** Record the start of a refresh. EVERY refresh records one — the Refresh
+ *  button, the end of every sync (ok or failed), and the cron's self-heal —
+ *  because the latest 'ok' row is the only record of what the snapshots were
+ *  built from. Before this only the button wrote a row, so the newest one on
+ *  production was from 2026-06-02 while syncs had refreshed nightly since.
+ *
+ *  source_synced_through is MAX(pco_people.synced_at) read NOW, at the start,
+ *  in the same statement as the insert. Reading it at the end would claim
+ *  rows a concurrent sync wrote while the rebuild was running. */
+export function createRefreshRun(
+  orgId: number,
+  trigger: RefreshTrigger = "manual",
+): number {
+  const result = prepareCached(
+    `INSERT INTO dashboard_refresh_runs
+       (org_id, status, current_step, total_steps, step_label,
+        triggered_by, source_synced_through)
+     VALUES (?, 'running', 0, ?, ?, ?,
+             (SELECT MAX(synced_at) FROM pco_people WHERE org_id = ?))`,
+  ).run(orgId, REFRESH_TOTAL_STEPS, "Starting…", trigger, orgId);
   return Number(result.lastInsertRowid);
+}
+
+export type SnapshotFreshness = {
+  /** fresh: the latest ok refresh was built from the newest synced row.
+   *  stale: something was synced after it. unknown: no refresh recorded
+   *  its source yet (every run before 0089), so there is nothing to
+   *  compare — deliberately not "stale", and nothing is backfilled. */
+  state: "fresh" | "stale" | "unknown";
+  /** When the latest ok refresh finished. */
+  refreshedAt: string | null;
+  /** MAX(pco_people.synced_at) that refresh was built from. */
+  builtFrom: string | null;
+  /** MAX(pco_people.synced_at) now. */
+  newestSource: string | null;
+};
+
+/** Are the snapshot tables behind their source? Two single-row index
+ *  lookups — MAX(synced_at) walks pco_people_org_synced (0089) to its last
+ *  entry — so it is fine on every home render and every cron tick.
+ *  Measured on a production copy: 0.004 ms for the MAX with the index,
+ *  6.5 ms warm / 83 ms cold without it. */
+export function getSnapshotFreshness(orgId: number): SnapshotFreshness {
+  const newestSource =
+    (
+      prepareCached(
+        `SELECT MAX(synced_at) AS m FROM pco_people WHERE org_id = ?`,
+      ).get(orgId) as { m: string | null } | undefined
+    )?.m ?? null;
+  const last = prepareCached(
+    `SELECT finished_at, source_synced_through, triggered_by
+       FROM dashboard_refresh_runs
+      WHERE org_id = ? AND status = 'ok'
+      ORDER BY started_at DESC LIMIT 1`,
+  ).get(orgId) as
+    | {
+        finished_at: string | null;
+        source_synced_through: string | null;
+        triggered_by: string | null;
+      }
+    | undefined;
+  const refreshedAt = last?.finished_at ?? null;
+  const builtFrom = last?.source_synced_through ?? null;
+  // triggered_by is NULL only on rows written before 0089 (or by the old
+  // code still serving while 0089 ran): they never recorded their source.
+  // A NULL source on a newer row means pco_people was empty when it ran.
+  let state: SnapshotFreshness["state"];
+  if (!last || last.triggered_by == null) state = "unknown";
+  else if (newestSource == null) state = "fresh";
+  else state = builtFrom == null || newestSource > builtFrom ? "stale" : "fresh";
+  return { state, refreshedAt, builtFrom, newestSource };
+}
+
+/** How long the newest synced row must have sat unreflected before the home
+ *  page says so. The nightly sync writes people in its first minute and
+ *  rebuilds the snapshots at the end, ~18 minutes later (runs 153-157 on
+ *  production); without this margin the notice would flash every night. */
+const STALE_NOTICE_AFTER_MS = 30 * 60 * 1000;
+
+/** The home page's stale-snapshot notice, or null when there is nothing to
+ *  say. Same two lookups as getSnapshotFreshness. */
+export function getStaleSnapshotNotice(
+  orgId: number,
+  now: number = Date.now(),
+): { refreshedAt: string | null } | null {
+  const f = getSnapshotFreshness(orgId);
+  if (f.state !== "stale" || !f.newestSource) return null;
+  if (now - Date.parse(f.newestSource) <= STALE_NOTICE_AFTER_MS) return null;
+  return { refreshedAt: f.refreshedAt };
 }
 
 function updateRefreshProgress(
@@ -245,10 +346,10 @@ function finishRefreshRun(
 const STALE_RUN_MS = 5 * 60 * 1000;
 
 /** Mark any "running" row for this org as error if it's been silent
- *  longer than STALE_RUN_MS. Run before starting a new refresh so a
- *  previous crash doesn't leave the UI thinking something's still in
- *  flight forever. */
-function reapStaleRuns(orgId: number): void {
+ *  longer than STALE_RUN_MS. Run before starting a new refresh, and on
+ *  every cron tick, so a previous crash doesn't leave the UI thinking
+ *  something's still in flight forever. */
+export function reapStaleRefreshRuns(orgId: number): void {
   const cutoff = new Date(Date.now() - STALE_RUN_MS).toISOString();
   getDb()
     .prepare(
@@ -287,12 +388,31 @@ function findInFlightRun(orgId: number): number | null {
  *  Reuses an in-flight run id if one exists for the org so the UI
  *  doesn't end up polling a different runId than the work it
  *  actually triggered. */
-export function startRefreshInBackground(orgId: number): number {
-  reapStaleRuns(orgId);
-  const existing = findInFlightRun(orgId);
-  if (existing != null) return existing;
+export function startRefreshInBackground(
+  orgId: number,
+  trigger: RefreshTrigger = "manual",
+): number {
+  return launchRefresh(orgId, trigger).runId;
+}
 
-  const runId = createRefreshRun(orgId);
+/** startRefreshInBackground, plus a promise that settles when the run
+ *  does (it never rejects — the outcome is on the run row). For a caller
+ *  with nothing better to do than wait, i.e. the cron. `joined` means an
+ *  in-flight run was reused rather than a new one started. */
+export function launchRefresh(
+  orgId: number,
+  trigger: RefreshTrigger,
+): { runId: number; joined: boolean; done: Promise<void> } {
+  reapStaleRefreshRuns(orgId);
+  const existing = findInFlightRun(orgId);
+  if (existing != null) {
+    // Another process's run (or one this process lost track of) has no
+    // promise here; the caller reads its row instead.
+    const done = inFlightRefreshes.get(existing) ?? Promise.resolve();
+    return { runId: existing, joined: true, done };
+  }
+
+  const runId = createRefreshRun(orgId, trigger);
   const promise = new Promise<void>((resolve) => {
     setImmediate(async () => {
       try {
@@ -314,9 +434,9 @@ export function startRefreshInBackground(orgId: number): number {
       }
     });
   });
-  inFlightRefreshes.add(promise);
-  promise.finally(() => inFlightRefreshes.delete(promise));
-  return runId;
+  inFlightRefreshes.set(runId, promise);
+  promise.finally(() => inFlightRefreshes.delete(runId));
+  return { runId, joined: false, done: promise };
 }
 
 export function getRefreshRunStatus(runId: number): RefreshRunStatus | null {

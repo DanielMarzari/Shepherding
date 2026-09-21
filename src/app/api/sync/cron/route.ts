@@ -2,14 +2,14 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getSyncSettings } from "@/lib/pco";
 import { isSyncDue } from "@/lib/pco-schedule";
-import { cleanupStaleSyncRuns, runSync } from "@/lib/pco-sync";
+import { cleanupStaleSyncRuns, healStaleSnapshots, runSync } from "@/lib/pco-sync";
 import { startGeocodeRun } from "@/lib/geocode-runner";
 import { startDriveRun } from "@/lib/drive-runner";
 import { startMeshRun } from "@/lib/mesh-runner";
 import { refreshRetentionReturns } from "@/lib/retention-read";
 import { refreshGeoAssignments } from "@/lib/census-analysis";
 import { getCcSyncSettings, getStoredConstantContactCreds, isCcSyncDue } from "@/lib/constant-contact";
-import { runCcSync } from "@/lib/constant-contact-sync";
+import { isCcEngagementStale, refreshCcEngagement, runCcSync } from "@/lib/constant-contact-sync";
 
 /**
  * Cron-tickable endpoint. For each org with `auto-sync enabled`, we check
@@ -52,6 +52,8 @@ export async function GET(req: Request) {
     changes?: number;
     error?: string;
     warning?: string;
+    /** Snapshot freshness, and what the self-heal did about it. */
+    snapshots?: string;
   }> = [];
 
   for (const { id } of orgs) {
@@ -74,18 +76,53 @@ export async function GET(req: Request) {
       console.error("runCcSync failed", id, e);
     }
 
-    const settings = getSyncSettings(id);
-    if (!settings.enabled) {
-      results.push({ orgId: id, skipped: true, reason: "auto-sync disabled" });
-      continue;
+    // Backstop for a Constant Contact sync killed before its own rebuild ran
+    // (deploy restart, pm2 memory cap), or run by the old code during a
+    // deploy: rebuild the email-engagement rollups whenever cc_contact_activity
+    // has moved past their watermark. ~0.02 ms when fresh. Synchronous, and
+    // never allowed to break the tick.
+    try {
+      if (isCcEngagementStale(id)) refreshCcEngagement(id);
+    } catch (e) {
+      console.error("refreshCcEngagement failed", id, e);
     }
+
     // Clear any run left "running" by a process that died — a deploy restart
     // mid-sync is the usual cause. Has to happen before the due check, because
     // isSyncDue counts a running row as a completed sync at that timestamp and
-    // would otherwise skip every tick until the next scheduled window.
+    // would otherwise skip every tick until the next scheduled window. And
+    // before the snapshot self-heal below, which waits while a sync is
+    // running — so it runs for every org, auto-sync on or off: a MANUAL sync
+    // killed mid-run leaves the same stuck row and the same stale snapshots.
     cleanupStaleSyncRuns(id);
+
+    // Heal the snapshots now, BEFORE deciding whether to sync. The tick that
+    // reaps a killed sync is the tick that finds the next one due, and that
+    // one may be killed too, so a heal placed after runSync never runs. That
+    // was 2026-09-14..17 on production: sync runs 94-152, 59 in a row, each
+    // killed and reaped 75 minutes later by the tick that started the next.
+    // Replayed through this handler with the heal after runSync, five ticks
+    // wrote no refresh row; heal-first rebuilds on the reap tick at the
+    // latest (sooner after a restart; see healStaleSnapshots). ~0.02 ms when
+    // nothing is stale.
+    const snapshots = await healSnapshots(id);
+    const settings = getSyncSettings(id);
+    if (!settings.enabled) {
+      results.push({
+        orgId: id,
+        skipped: true,
+        reason: "auto-sync disabled",
+        snapshots,
+      });
+      continue;
+    }
     if (!isSyncDue(id, settings)) {
-      results.push({ orgId: id, skipped: true, reason: "not due yet" });
+      results.push({
+        orgId: id,
+        skipped: true,
+        reason: "not due yet",
+        snapshots,
+      });
       continue;
     }
     try {
@@ -96,6 +133,10 @@ export async function GET(req: Request) {
         changes: r.changes,
         warning: r.warning,
         error: r.error,
+        // runSync rebuilt the snapshots on its way out, ok or not, so the
+        // second check is normally "fresh". It is the backstop for a runSync
+        // that returned early or whose rebuild failed.
+        snapshots: `${snapshots}; after sync: ${await healSnapshots(id)}`,
       });
       // Hands-off top-up: geocode any newly-added addresses, then compute
       // driving distances for geocoded homes — both background, both
@@ -117,6 +158,7 @@ export async function GET(req: Request) {
         orgId: id,
         ok: false,
         error: e instanceof Error ? e.message : "unknown error",
+        snapshots: `${snapshots}; after sync: ${await healSnapshots(id)}`,
       });
     }
   }
@@ -127,6 +169,21 @@ export async function GET(req: Request) {
     failed: results.filter((r) => r.ok === false).length,
     results,
   });
+}
+
+/** Rebuild the dashboard snapshots if they have fallen behind their source —
+ *  the case runSync cannot cover, because a sync killed by a deploy or the
+ *  memory cap runs no JS on its way out. Runs on every tick, before any sync
+ *  starts; when nothing is stale it costs ~0.02 ms (see pco-sync). The
+ *  result string goes in the tick's JSON response. Never lets a failure break
+ *  the tick. */
+async function healSnapshots(orgId: number): Promise<string> {
+  try {
+    return await healStaleSnapshots(orgId);
+  } catch (e) {
+    console.error("healStaleSnapshots failed", orgId, e);
+    return `check failed: ${e instanceof Error ? e.message : String(e)}`;
+  }
 }
 
 function isAuthorized(req: Request): boolean {

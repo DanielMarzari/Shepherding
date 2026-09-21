@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb } from "./db";
+import { getDb, prepareCached } from "./db";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 
 /** Convention: only lists whose name starts with this prefix (case-
@@ -60,10 +60,10 @@ export async function syncListsAll(
   //    from a list disappear (lists can be recomputed any time).
   const replaceMemberships = getDb().transaction(
     (listId: string, personIds: string[]) => {
-      getDb()
-        .prepare("DELETE FROM pco_list_memberships WHERE org_id = ? AND list_id = ?")
-        .run(orgId, listId);
-      const stmt = getDb().prepare(
+      prepareCached(
+        "DELETE FROM pco_list_memberships WHERE org_id = ? AND list_id = ?",
+      ).run(orgId, listId);
+      const stmt = prepareCached(
         `INSERT INTO pco_list_memberships
           (org_id, list_id, person_id, synced_at)
          VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -97,11 +97,9 @@ export async function syncListsAll(
       replaceMemberships(list.pcoId, Array.from(ids));
       result.listMemberships.upserted += ids.size;
     } else {
-      getDb()
-        .prepare(
-          "DELETE FROM pco_list_memberships WHERE org_id = ? AND list_id = ?",
-        )
-        .run(orgId, list.pcoId);
+      prepareCached(
+        "DELETE FROM pco_list_memberships WHERE org_id = ? AND list_id = ?",
+      ).run(orgId, list.pcoId);
     }
   }
 
@@ -120,29 +118,27 @@ function upsertList(
     pcoUpdatedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_lists
-        (org_id, pco_id, name, description, total_people, refreshed_at,
-         pco_created_at, pco_updated_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         description = excluded.description,
-         total_people = excluded.total_people,
-         refreshed_at = excluded.refreshed_at,
-         pco_created_at = excluded.pco_created_at,
-         pco_updated_at = excluded.pco_updated_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      l.pcoId,
-      l.name,
-      l.description,
-      l.totalPeople,
-      l.refreshedAt,
-      l.pcoCreatedAt,
-      l.pcoUpdatedAt,
-    );
+  prepareCached(
+    `INSERT INTO pco_lists
+      (org_id, pco_id, name, description, total_people, refreshed_at,
+       pco_created_at, pco_updated_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       description = excluded.description,
+       total_people = excluded.total_people,
+       refreshed_at = excluded.refreshed_at,
+       pco_created_at = excluded.pco_created_at,
+       pco_updated_at = excluded.pco_updated_at,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    l.pcoId,
+    l.name,
+    l.description,
+    l.totalPeople,
+    l.refreshedAt,
+    l.pcoCreatedAt,
+    l.pcoUpdatedAt,
+  );
 }

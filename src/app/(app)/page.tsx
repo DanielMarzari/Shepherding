@@ -4,7 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { GalleryHub } from "@/components/GalleryHub";
 import { PieChart } from "@/components/charts";
 import { requireOrg } from "@/lib/auth";
-import { getOrgSnapshot } from "@/lib/dashboard-refresh";
+import { getOrgSnapshot, getStaleSnapshotNotice } from "@/lib/dashboard-refresh";
 import { buildHubSections } from "@/lib/hub-sections";
 import { getPinnedKeys } from "@/lib/nav-config-db";
 import { getSyncSettings } from "@/lib/pco";
@@ -17,10 +17,14 @@ import {
   getShepherdWorkload,
 } from "@/lib/dashboard-read";
 import { RefreshSnapshotsButton } from "./refresh-button";
+import { SnapshotStaleNotice } from "./snapshot-stale-notice";
 
 export default async function HomePage() {
   const session = await requireOrg();
   const snapshot = getOrgSnapshot(session.orgId);
+  // Two single-row index lookups (see getSnapshotFreshness) — cheap enough
+  // for every render of the busiest page.
+  const staleNotice = getStaleSnapshotNotice(session.orgId);
   const hubSections = buildHubSections(session.orgId);
   const pinned = getPinnedKeys(session.orgId, session.user.id);
   return (
@@ -59,6 +63,13 @@ export default async function HomePage() {
             </Link>
           </div>
         </div>
+
+        {staleNotice && (
+          <SnapshotStaleNotice
+            refreshedAt={staleNotice.refreshedAt}
+            isAdmin={session.role === "admin"}
+          />
+        )}
 
         <Suspense fallback={<TopStatsSkeleton />}>
           <TopStats orgId={session.orgId} />

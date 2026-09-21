@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb } from "./db";
+import { getDb, prepareCached } from "./db";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 
 /** PCO Services / Teams sync — service_types, teams, team_positions,
@@ -104,12 +104,10 @@ export async function syncServicesAll(
   //    Positions live under teams (NOT flat).
   const replaceMemberships = getDb().transaction(
     (teamId: string, rows: ReturnType<typeof toTeamMembershipRow>[]) => {
-      getDb()
-        .prepare(
-          "DELETE FROM pco_team_memberships WHERE org_id = ? AND team_id = ?",
-        )
-        .run(orgId, teamId);
-      const stmt = getDb().prepare(
+      prepareCached(
+        "DELETE FROM pco_team_memberships WHERE org_id = ? AND team_id = ?",
+      ).run(orgId, teamId);
+      const stmt = prepareCached(
         `INSERT INTO pco_team_memberships
           (org_id, pco_id, team_id, person_id, position_id, position_name,
            is_team_leader, archived_at, pco_created_at, synced_at)
@@ -217,11 +215,9 @@ export async function syncServicesAll(
       replaceMemberships(team.id, memberships);
       result.teamMemberships.upserted += memberships.length;
     } else {
-      getDb()
-        .prepare(
-          "DELETE FROM pco_team_memberships WHERE org_id = ? AND team_id = ?",
-        )
-        .run(orgId, team.id);
+      prepareCached(
+        "DELETE FROM pco_team_memberships WHERE org_id = ? AND team_id = ?",
+      ).run(orgId, team.id);
     }
   }
 
@@ -294,10 +290,10 @@ export async function syncServicesAll(
   // 5) Plan team_members — nested under (service_type, plan).
   const replacePlanPeople = getDb().transaction(
     (planId: string, rows: ReturnType<typeof toPlanPersonRow>[]) => {
-      getDb()
-        .prepare("DELETE FROM pco_plan_people WHERE org_id = ? AND plan_id = ?")
-        .run(orgId, planId);
-      const stmt = getDb().prepare(
+      prepareCached(
+        "DELETE FROM pco_plan_people WHERE org_id = ? AND plan_id = ?",
+      ).run(orgId, planId);
+      const stmt = prepareCached(
         `INSERT INTO pco_plan_people
           (org_id, pco_id, plan_id, person_id, team_id, team_position_name, status, pco_created_at, synced_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -425,10 +421,10 @@ function replacePlanItems(
   rows: ReturnType<typeof toPlanItemRow>[],
 ) {
   getDb().transaction(() => {
-    getDb()
-      .prepare("DELETE FROM pco_plan_items WHERE org_id = ? AND plan_id = ?")
-      .run(orgId, planId);
-    const stmt = getDb().prepare(
+    prepareCached(
+      "DELETE FROM pco_plan_items WHERE org_id = ? AND plan_id = ?",
+    ).run(orgId, planId);
+    const stmt = prepareCached(
       `INSERT INTO pco_plan_items
         (org_id, pco_id, plan_id, service_type_id, sequence, item_type, title, description, html_details, length, synced_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -501,19 +497,17 @@ function upsertServiceType(
     archivedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_service_types
-        (org_id, pco_id, name, pco_created_at, pco_updated_at, archived_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         pco_created_at = excluded.pco_created_at,
-         pco_updated_at = excluded.pco_updated_at,
-         archived_at = excluded.archived_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(orgId, s.pcoId, s.name, s.pcoCreatedAt, s.pcoUpdatedAt, s.archivedAt);
+  prepareCached(
+    `INSERT INTO pco_service_types
+      (org_id, pco_id, name, pco_created_at, pco_updated_at, archived_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       pco_created_at = excluded.pco_created_at,
+       pco_updated_at = excluded.pco_updated_at,
+       archived_at = excluded.archived_at,
+       synced_at = excluded.synced_at`,
+  ).run(orgId, s.pcoId, s.name, s.pcoCreatedAt, s.pcoUpdatedAt, s.archivedAt);
 }
 
 function upsertTeam(
@@ -528,46 +522,42 @@ function upsertTeam(
     deletedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_teams
-        (org_id, pco_id, name, service_type_id, pco_created_at, pco_updated_at, archived_at, deleted_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         service_type_id = excluded.service_type_id,
-         pco_created_at = excluded.pco_created_at,
-         pco_updated_at = excluded.pco_updated_at,
-         archived_at = excluded.archived_at,
-         deleted_at = excluded.deleted_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      t.pcoId,
-      t.name,
-      t.serviceTypeId,
-      t.pcoCreatedAt,
-      t.pcoUpdatedAt,
-      t.archivedAt,
-      t.deletedAt,
-    );
+  prepareCached(
+    `INSERT INTO pco_teams
+      (org_id, pco_id, name, service_type_id, pco_created_at, pco_updated_at, archived_at, deleted_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       service_type_id = excluded.service_type_id,
+       pco_created_at = excluded.pco_created_at,
+       pco_updated_at = excluded.pco_updated_at,
+       archived_at = excluded.archived_at,
+       deleted_at = excluded.deleted_at,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    t.pcoId,
+    t.name,
+    t.serviceTypeId,
+    t.pcoCreatedAt,
+    t.pcoUpdatedAt,
+    t.archivedAt,
+    t.deletedAt,
+  );
 }
 
 function upsertTeamPosition(
   orgId: number,
   p: { pcoId: string; teamId: string | null; name: string | null },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_team_positions (org_id, pco_id, team_id, name, synced_at)
-       VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         team_id = excluded.team_id,
-         name = excluded.name,
-         synced_at = excluded.synced_at`,
-    )
-    .run(orgId, p.pcoId, p.teamId, p.name);
+  prepareCached(
+    `INSERT INTO pco_team_positions (org_id, pco_id, team_id, name, synced_at)
+     VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       team_id = excluded.team_id,
+       name = excluded.name,
+       synced_at = excluded.synced_at`,
+  ).run(orgId, p.pcoId, p.teamId, p.name);
 }
 
 function upsertPlan(
@@ -583,33 +573,31 @@ function upsertPlan(
     pcoUpdatedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_plans
-        (org_id, pco_id, service_type_id, title, series_title, series_id,
-         sort_date, pco_created_at, pco_updated_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         service_type_id = excluded.service_type_id,
-         title = excluded.title,
-         series_title = excluded.series_title,
-         series_id = excluded.series_id,
-         sort_date = excluded.sort_date,
-         pco_created_at = excluded.pco_created_at,
-         pco_updated_at = excluded.pco_updated_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(
-      orgId,
-      p.pcoId,
-      p.serviceTypeId,
-      p.title,
-      p.seriesTitle,
-      p.seriesId,
-      p.sortDate,
-      p.pcoCreatedAt,
-      p.pcoUpdatedAt,
-    );
+  prepareCached(
+    `INSERT INTO pco_plans
+      (org_id, pco_id, service_type_id, title, series_title, series_id,
+       sort_date, pco_created_at, pco_updated_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       service_type_id = excluded.service_type_id,
+       title = excluded.title,
+       series_title = excluded.series_title,
+       series_id = excluded.series_id,
+       sort_date = excluded.sort_date,
+       pco_created_at = excluded.pco_created_at,
+       pco_updated_at = excluded.pco_updated_at,
+       synced_at = excluded.synced_at`,
+  ).run(
+    orgId,
+    p.pcoId,
+    p.serviceTypeId,
+    p.title,
+    p.seriesTitle,
+    p.seriesId,
+    p.sortDate,
+    p.pcoCreatedAt,
+    p.pcoUpdatedAt,
+  );
 }
 
 /** Recompute last_served_at per team membership from pco_plan_people +

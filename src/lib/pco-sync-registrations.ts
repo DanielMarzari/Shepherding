@@ -1,5 +1,5 @@
 import "server-only";
-import { getDb } from "./db";
+import { getDb, prepareCached } from "./db";
 import { PCOClient, type PCOResource } from "./pco-client";
 
 /** PCO Registrations sync — signups and their attendees.
@@ -104,20 +104,18 @@ function upsertSignup(
     pcoUpdatedAt: string | null;
   },
 ) {
-  getDb()
-    .prepare(
-      `INSERT INTO pco_registration_signups
-        (org_id, pco_id, name, archived, open, pco_created_at, pco_updated_at, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-       ON CONFLICT(org_id, pco_id) DO UPDATE SET
-         name = excluded.name,
-         archived = excluded.archived,
-         open = excluded.open,
-         pco_created_at = excluded.pco_created_at,
-         pco_updated_at = excluded.pco_updated_at,
-         synced_at = excluded.synced_at`,
-    )
-    .run(orgId, s.pcoId, s.name, s.archived, s.open, s.pcoCreatedAt, s.pcoUpdatedAt);
+  prepareCached(
+    `INSERT INTO pco_registration_signups
+      (org_id, pco_id, name, archived, open, pco_created_at, pco_updated_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       name = excluded.name,
+       archived = excluded.archived,
+       open = excluded.open,
+       pco_created_at = excluded.pco_created_at,
+       pco_updated_at = excluded.pco_updated_at,
+       synced_at = excluded.synced_at`,
+  ).run(orgId, s.pcoId, s.name, s.archived, s.open, s.pcoCreatedAt, s.pcoUpdatedAt);
 }
 
 interface AttendeeRow {
@@ -133,8 +131,8 @@ interface AttendeeRow {
  *  in PCO rather than flagged, so an upsert-only pass would keep them forever. */
 function replaceAttendees(orgId: number, signupId: string, rows: AttendeeRow[]) {
   const db = getDb();
-  const del = db.prepare(`DELETE FROM pco_registration_attendees WHERE org_id = ? AND signup_id = ?`);
-  const ins = db.prepare(
+  const del = prepareCached(`DELETE FROM pco_registration_attendees WHERE org_id = ? AND signup_id = ?`);
+  const ins = prepareCached(
     `INSERT INTO pco_registration_attendees
       (org_id, pco_id, signup_id, person_id, canceled, waitlisted, pco_created_at, synced_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
