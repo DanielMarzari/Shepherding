@@ -1,3 +1,5 @@
+**Database:** start with [db/SCHEMA.md](db/SCHEMA.md). It covers every table, whether losing it means re-running a sync or losing data for good, the naming rules, and how to change the schema safely.
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
