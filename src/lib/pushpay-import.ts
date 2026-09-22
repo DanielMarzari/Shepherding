@@ -194,30 +194,9 @@ function decideMatch(
   phh: string | null,
   ix: MatchIndexes,
 ): { personId: string | null; status: string; candidates: string[] | null } {
-  const ln = normNamePart(last);
-  const fn = normNamePart(first);
-  // An organization has no first name for the mandatory check to run on, so it
-  // gets its own key; a person still needs both fields.
-  const org = organizationKey(first, last);
-  if (!org && (!ln || !fn)) return { personId: null, status: "unmatched", candidates: null };
-
-  const ids = new Set<string>();
-  for (const c of ix.byLast.get(ln) ?? []) if (firstNameSimilar(fn, c.first)) ids.add(c.id);
-  // Same whole name, split differently across the first/last fields.
-  const fk = fullNameKey(first, last);
-  for (const id of ix.byFullName.get(fk) ?? []) ids.add(id);
-  // Organizations: "_" on the PCO side and "Z" on the PushPay side are sort
-  // placeholders, not given names, so the org name alone decides the match.
-  if (org) {
-    for (const id of ix.byOrg.get(org) ?? []) ids.add(id);
-  } else if (ids.size === 0 && looksLikeOrgName(fk)) {
-    // No placeholder to drop — an org whose name got split across both fields.
-    // Consulted only when nothing matched as a person, so a real person whose
-    // name happens to read like an org ("Grace Church") can never be dragged
-    // into a tie with an org record and turned ambiguous.
-    for (const id of ix.byOrg.get(fk) ?? []) ids.add(id);
-  }
-  const qualified = [...ids].map((id) => ({ id }));
+  const named = nameQualified(first, last, ix);
+  if (!named) return { personId: null, status: "unmatched", candidates: null };
+  const qualified = named.map((id) => ({ id }));
 
   if (qualified.length === 0) {
     // The name doesn't match anyone. Contact info alone is NOT enough — that's
@@ -270,10 +249,327 @@ function decideMatch(
   return { personId: null, status: "ambiguous", candidates: top };
 }
 
-/** Parse the CSV, match every donor to a person, and replace the stored set. */
-export function importPushpay(orgId: number, fileName: string, csvText: string): PushpayImportResult {
+/** The people a donor's name qualifies (decideMatch's mandatory name check):
+ *  the same last name with a similar first name, the same whole name split
+ *  differently, or for an organization the same org name. null when the name
+ *  can't qualify anyone at all. */
+function nameQualified(first: string, last: string, ix: MatchIndexes): string[] | null {
+  const ln = normNamePart(last);
+  const fn = normNamePart(first);
+  // An organization has no first name for the mandatory check to run on, so it
+  // gets its own key; a person still needs both fields.
+  const org = organizationKey(first, last);
+  if (!org && (!ln || !fn)) return null;
+
+  const ids = new Set<string>();
+  for (const c of ix.byLast.get(ln) ?? []) if (firstNameSimilar(fn, c.first)) ids.add(c.id);
+  // Same whole name, split differently across the first/last fields.
+  const fk = fullNameKey(first, last);
+  for (const id of ix.byFullName.get(fk) ?? []) ids.add(id);
+  // Organizations: "_" on the PCO side and "Z" on the PushPay side are sort
+  // placeholders, not given names, so the org name alone decides the match.
+  if (org) {
+    for (const id of ix.byOrg.get(org) ?? []) ids.add(id);
+  } else if (ids.size === 0 && looksLikeOrgName(fk)) {
+    // No placeholder to drop — an org whose name got split across both fields.
+    // Consulted only when nothing matched as a person, so a real person whose
+    // name happens to read like an org ("Grace Church") can never be dragged
+    // into a tie with an org record and turned ambiguous.
+    for (const id of ix.byOrg.get(fk) ?? []) ids.add(id);
+  }
+  return [...ids];
+}
+
+// ── Hand matches survive a new upload ───────────────────────────────────────
+//
+// A donor someone matched by hand (match_status = 'manual') is a decision the
+// automatic matcher could not make, so no later upload may quietly replace it:
+// not a re-upload of All Donors, and not the name matching of a Transactions
+// import. Both therefore have to recognise "the same PushPay donor" again, and
+// all either export offers for that is a name, an email and a phone. donor_key
+// is only the CSV row number, which shifts whenever PushPay adds or drops a
+// donor above you, and the All Donors export has no PushPay donor id.
+
+/** A donor's name as the export spells it: normName without dropping Jr, Sr,
+ *  II, III, IV or V. This compares one export row with another, and a father
+ *  and son who share a name and an inbox differ only by that suffix. */
+function exportName(first: string, last: string): string {
+  return `${first} ${last}`
+    .toLowerCase()
+    .replace(/[.,'`]/g, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Keyed hashes of a donor's name, email and phone, each null when the export
+ *  had nothing there (or, for `name`, when a stored row can't be decrypted). */
+interface DonorIdentity {
+  /** normName, suffixes dropped: rows whose names differ only by a suffix are
+   *  weighed together, so "John Smith" is a possible "John Smith Jr". Also
+   *  what pushpay_donors.name_hash stores. */
+  bucket: string | null;
+  /** exportName, suffix kept: two rows can only be the same donor when this is equal. */
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
+/** Hash a donor the one way both imports store and compare donors. */
+function donorIdentity(first: string, last: string, email: string, phone: string): DonorIdentity {
+  const nn = normName(first, last);
+  const xn = exportName(first, last);
+  const em = email.trim();
+  const np = normPhone(phone);
+  return {
+    bucket: nn ? hmac(nn) : null,
+    name: xn ? hmac(xn) : null,
+    email: em ? hmac(em.toLowerCase()) : null,
+    phone: np ? hmac(np) : null,
+  };
+}
+
+/** THE same-donor rule, used by both imports: are these two export rows the
+ *  same PushPay donor?
+ *
+ *  The name must be spelt the same (exportName: not a nickname, and not with
+ *  a different Jr / Sr), AND the email or the phone must be equal and present
+ *  on both. Households share inboxes and phones, so contact details never
+ *  make a match on their own. The name alone is enough only when neither row
+ *  has an email or a phone and the name is on exactly one row on each side
+ *  (`nameOnceEachSide`); any second row with that name, on either side, could
+ *  be the donor instead. planHandMatches adds what a single pair of rows
+ *  can't show: whether another row could be the donor too. */
+function sameDonor(a: DonorIdentity, b: DonorIdentity, nameOnceEachSide: boolean): boolean {
+  if (!a.name || a.name !== b.name) return false;
+  if (a.email && a.email === b.email) return true;
+  if (a.phone && a.phone === b.phone) return true;
+  return nameOnceEachSide && !a.email && !a.phone && !b.email && !b.phone;
+}
+
+/** A donor row already stored, as the identity it would be recognised by. */
+interface StoredDonor extends DonorIdentity { personId: string | null; manual: boolean }
+
+/** Every pushpay_donors row for the org. The hashes are recomputed from the
+ *  decrypted row, the same way a new upload hashes its rows. A row that can't
+ *  be decrypted keeps its stored name_hash and email_hash, but its name can't
+ *  be compared (name_hash drops the suffix), so it can't be recognised. */
+function readStoredDonors(orgId: number): StoredDonor[] {
+  const rows = getDb()
+    .prepare(`SELECT enc, name_hash, email_hash, person_id, match_status FROM pushpay_donors WHERE org_id = ?`)
+    .all(orgId) as Array<{ enc: string; name_hash: string | null; email_hash: string | null; person_id: string | null; match_status: string }>;
+  return rows.map((r) => {
+    const d = decryptJson<DonorPII>(r.enc);
+    const id: DonorIdentity = d
+      ? donorIdentity(d.firstName ?? "", d.lastName ?? "", d.email ?? "", d.phone ?? "")
+      : { bucket: r.name_hash, name: null, email: r.email_hash, phone: null };
+    return { ...id, personId: r.person_id, manual: r.match_status === "manual" };
+  });
+}
+
+/** Do this donor's own email and phone point at someone else with the name
+ *  more strongly than at `personId`? True when a person the name qualifies
+ *  (decideMatch's name check) has more of the two than `personId` has: the
+ *  husband's phone on a row that shares his wife's name and inbox. */
+function pointsElsewhere(first: string, last: string, id: DonorIdentity, personId: string, ix: MatchIndexes): boolean {
+  if (!id.email && !id.phone) return false;
+  const signals = (p: string) =>
+    (id.email && ix.emailsOf.get(p)?.has(id.email) ? 1 : 0) + (id.phone && ix.phonesOf.get(p)?.has(id.phone) ? 1 : 0);
+  const theirs = signals(personId);
+  return (nameQualified(first, last, ix) ?? []).some((p) => p !== personId && signals(p) > theirs);
+}
+
+type HandMatchOutcome =
+  /** Carry the hand match: this row is that donor and the person still exists. */
+  | { kind: "keep"; personId: string }
+  /** This row may be a hand-matched donor, but which one, or who they are now,
+   *  needs a person to say. `personIds` are the hand-picked people who still
+   *  exist, to offer as candidates. */
+  | { kind: "review"; personIds: string[] };
+
+interface HandMatchPlan {
+  /** Per incoming row: keep, review, or undefined (no hand match involved:
+   *  match it as usual). */
+  outcome: Array<HandMatchOutcome | undefined>;
+  /** The stored hand matches, by what became of them (they add up to all of
+   *  them). notFound: no incoming row can be that donor: none has the name,
+   *  suffix aside, or each one that has it is plainly another donor (the
+   *  donor left the export, or changed their name). */
+  kept: number;
+  toReview: number;
+  notFound: number;
+}
+
+/** Decide which incoming rows (a new All Donors upload, or a Transactions
+ *  file's payers) are donors someone matched by hand among `stored`.
+ *
+ *  Rows are weighed by name with the suffix dropped (`bucket`), and only a
+ *  bucket holding a hand match is looked at. sameDonor links an incoming row
+ *  to a stored row, and linked rows form groups. An incoming row and a stored
+ *  row are a PAIR when they link, have the same email and the same phone
+ *  (both missing counts as the same), and neither has another such row: that
+ *  row is that stored donor, whatever else is in the file.
+ *   - A row paired with a hand match keeps its person when every hand match
+ *     the row links to names that person and the person is still in
+ *     pco_people; otherwise it goes to review.
+ *   - A row paired with an automatically matched row is that donor, and is
+ *     matched as usual.
+ *   - Any other row that links to a hand match no pair accounts for could be
+ *     that donor with a changed email or phone. It keeps the person only when
+ *     the whole group is hand matches to one existing person and nothing else
+ *     could be the donor: the group has no more incoming rows than stored
+ *     ones, the bucket has no incoming row that links to nothing (it could be
+ *     the donor with a new email and phone), and the row's own email and phone
+ *     don't point at another person with the name more than at this one
+ *     (pointsElsewhere: a spouse on the family inbox with her own phone).
+ *     Otherwise it goes to review.
+ *  A hand match no incoming row could be puts every unlinked incoming row in
+ *  its bucket in review: the donor may still be there with a changed email
+ *  and phone or suffix, or be one of several rows the name alone can't tell
+ *  apart. With no such row, the hand match is counted as not found.
+ *
+ *  Review always wins over matching automatically again. A hand match exists
+ *  because the automatic matcher couldn't decide, or decided wrong, for this
+ *  donor; the case it gets confidently wrong is the household (two people with
+ *  one name on one inbox look like one person's duplicate records to it). */
+function planHandMatches(
+  incoming: DonorIdentity[],
+  stored: StoredDonor[],
+  check: {
+    personExists: (id: string) => boolean;
+    /** pointsElsewhere for incoming row `i`. */
+    pointsElsewhere: (i: number, personId: string) => boolean;
+  },
+): HandMatchPlan {
+  const plan: HandMatchPlan = { outcome: new Array(incoming.length).fill(undefined), kept: 0, toReview: 0, notFound: 0 };
+  const alive = (id: string | null): id is string => !!id && check.personExists(id);
+  const uniq = (ids: string[]) => [...new Set(ids)];
+
+  const byBucket = new Map<string, { inc: number[]; sto: number[] }>();
+  stored.forEach((s, i) => {
+    if (!s.bucket) { if (s.manual) plan.notFound++; return; }
+    (byBucket.get(s.bucket) ?? byBucket.set(s.bucket, { inc: [], sto: [] }).get(s.bucket)!).sto.push(i);
+  });
+  incoming.forEach((d, i) => { if (d.bucket) byBucket.get(d.bucket)?.inc.push(i); });
+
+  for (const { inc, sto } of byBucket.values()) {
+    if (!sto.some((s) => stored[s].manual)) continue;
+    const once = inc.length === 1 && sto.length === 1;
+    const incLinks = new Map<number, number[]>(inc.map((i) => [i, sto.filter((s) => sameDonor(incoming[i], stored[s], once))]));
+    const stoLinks = new Map<number, number[]>(sto.map((s) => [s, inc.filter((i) => incLinks.get(i)!.includes(s))]));
+    const unlinkedInc = inc.filter((i) => incLinks.get(i)!.length === 0);
+    const manualOf = (ss: number[]) => ss.filter((s) => stored[s].manual);
+    const peopleOf = (ss: number[]) => uniq(ss.map((s) => stored[s].personId).filter(alive));
+    const identical = (i: number, s: number) => incoming[i].email === stored[s].email && incoming[i].phone === stored[s].phone;
+
+    const pairOf = new Map<number, number>();
+    for (const i of inc) {
+      const twins = incLinks.get(i)!.filter((s) => identical(i, s));
+      if (twins.length === 1 && stoLinks.get(twins[0])!.filter((j) => identical(j, twins[0])).length === 1) pairOf.set(i, twins[0]);
+    }
+    const paired = new Set(pairOf.values());
+    /** Per hand match: the incoming rows that may be its donor. */
+    const mayBe = new Map<number, number[]>();
+
+    // Walk each linked group from its first incoming row.
+    const seen = new Set<number>();
+    for (const start of inc) {
+      if (seen.has(start) || incLinks.get(start)!.length === 0) continue;
+      const gInc: number[] = [];
+      const gSto = new Set<number>();
+      const queue = [start];
+      seen.add(start);
+      while (queue.length) {
+        const i = queue.shift()!;
+        gInc.push(i);
+        for (const s of incLinks.get(i)!) {
+          if (gSto.has(s)) continue;
+          gSto.add(s);
+          for (const j of stoLinks.get(s)!) if (!seen.has(j)) { seen.add(j); queue.push(j); }
+        }
+      }
+      const gManual = manualOf([...gSto]);
+      if (gManual.length === 0) continue;
+      const people = new Set(gManual.map((s) => stored[s].personId));
+      const only = gManual.length === gSto.size && people.size === 1 ? [...people][0] : null;
+      const doubt = gInc.length > gSto.size || unlinkedInc.length > 0;
+
+      for (const i of gInc) {
+        const linkedManual = manualOf(incLinks.get(i)!);
+        const s = pairOf.get(i);
+        let could: number[];
+        if (s !== undefined) {
+          if (!stored[s].manual) continue; // that automatically matched donor
+          could = [s];
+          const personId = stored[s].personId;
+          const agree = linkedManual.every((m) => stored[m].personId === personId);
+          plan.outcome[i] = agree && alive(personId)
+            ? { kind: "keep", personId }
+            : { kind: "review", personIds: peopleOf(linkedManual) };
+        } else {
+          could = linkedManual.filter((m) => !paired.has(m));
+          if (could.length === 0) continue; // every hand match it links to has its own row
+          plan.outcome[i] = alive(only) && !doubt && !check.pointsElsewhere(i, only)
+            ? { kind: "keep", personId: only }
+            : { kind: "review", personIds: peopleOf(could) };
+        }
+        for (const m of could) (mayBe.get(m) ?? mayBe.set(m, []).get(m)!).push(i);
+      }
+    }
+
+    // Count each hand match by what became of the rows that may be its donor.
+    const lost: number[] = [];
+    for (const m of manualOf(sto)) {
+      const rows = mayBe.get(m) ?? [];
+      if (rows.length === 0) lost.push(m);
+      else if (rows.every((i) => plan.outcome[i]?.kind === "keep")) plan.kept++;
+      else plan.toReview++;
+    }
+    if (lost.length === 0) continue;
+    if (unlinkedInc.length === 0) {
+      plan.notFound += lost.length;
+      continue;
+    }
+    for (const i of unlinkedInc) plan.outcome[i] = { kind: "review", personIds: peopleOf(lost) };
+    plan.toReview += lost.length;
+  }
+  return plan;
+}
+
+/** Every pco_id in the org: a hand match carries only to a person who is still here. */
+function knownPeople(orgId: number): Set<string> {
+  return new Set(
+    (getDb().prepare(`SELECT pco_id FROM pco_people WHERE org_id = ?`).all(orgId) as Array<{ pco_id: string }>)
+      .map((r) => r.pco_id),
+  );
+}
+
+/** What a new All Donors upload did with the hand matches of the one it replaced. */
+export interface HandMatchCarryResult {
+  /** Hand matches on the replaced upload. */
+  before: number;
+  /** Carried to the same donor in the new file. */
+  kept: number;
+  /** Their donor is in review again: which row is theirs, or who the donor is
+   *  now, needs a person to say (their pick is offered as a candidate). */
+  toReview: number;
+  /** No row in the new file can be that donor: none has their name, or each
+   *  one that has it is plainly another donor. They left the export, or
+   *  changed their name. */
+  notFound: number;
+}
+
+export interface DonorImportResult extends PushpayImportResult { handMatches: HandMatchCarryResult }
+
+/** Parse the CSV, match every donor to a person, and replace the stored set,
+ *  carrying over each hand match whose donor the new file plainly still has,
+ *  and putting the donor back in review when it can't be sure
+ *  (planHandMatches). */
+export function importPushpay(orgId: number, fileName: string, csvText: string): DonorImportResult {
   const rows = parseCsv(csvText).filter((r) => r.some((c) => c.trim()));
-  if (rows.length < 2) return { total: 0, matched: 0, ambiguous: 0, unmatched: 0 };
+  if (rows.length < 2) {
+    return { total: 0, matched: 0, ambiguous: 0, unmatched: 0, handMatches: { before: 0, kept: 0, toReview: 0, notFound: 0 } };
+  }
   const header = rows[0].map((h) => h.trim().toLowerCase());
   const col = (name: string) => header.indexOf(name);
   const iF = col("first name"), iL = col("last name"), iE = col("email"), iP = col("phone number"),
@@ -291,15 +587,12 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
   const donors = rows.slice(1).map((r, i) => {
     const first = (r[iF] ?? "").trim(), last = (r[iL] ?? "").trim();
     const email = (r[iE] ?? "").trim(), phone = (r[iP] ?? "").trim();
-    const nn = normName(first, last);
-    const eh = email ? hmac(email.toLowerCase()) : null;
-    const np = normPhone(phone);
-    const phh = np ? hmac(np) : null;
-    const dec = decideMatch(first, last, eh, phh, ix);
+    const identity = donorIdentity(first, last, email, phone);
+    const dec = decideMatch(first, last, identity.email, identity.phone, ix);
     return {
       key: String(i),
       enc: encryptJson({ firstName: first, lastName: last, email, phone } as DonorPII),
-      nameHash: nn ? hmac(nn) : null, emailHash: eh,
+      first, last, identity, nameHash: identity.bucket, emailHash: identity.email,
       stage: (r[iStage] ?? "").trim() || null, channel: (r[iChan] ?? "").trim() || null,
       date: parseDate(r[iDate] ?? ""), fund: (r[iFund] ?? "").trim() || null,
       firstDate: iFirst >= 0 ? parseDate(r[iFirst] ?? "") : null,
@@ -307,31 +600,64 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
     };
   });
 
+  // The rows being replaced are read inside the transaction, so a hand match
+  // made while the file was being matched is not lost between the read and the
+  // DELETE. IMMEDIATE takes the write lock before that read: a transaction that
+  // reads first and writes later cannot wait out another writer.
   const run = db.transaction(() => {
+    const people = knownPeople(orgId);
+    const plan = planHandMatches(donors.map((d) => d.identity), readStoredDonors(orgId), {
+      personExists: (id) => people.has(id),
+      pointsElsewhere: (i, personId) => pointsElsewhere(donors[i].first, donors[i].last, donors[i].identity, personId, ix),
+    });
+    plan.outcome.forEach((o, i) => {
+      const d = donors[i];
+      if (!o) return;
+      if (o.kind === "keep") {
+        // Candidates stay what matching found, so Unassign falls back to them.
+        d.personId = o.personId;
+        d.status = "manual";
+      } else {
+        // The hand-picked people first, then whoever matching would suggest.
+        d.candidates = [...new Set([...o.personIds, ...(d.personId ? [d.personId] : []), ...(d.candidates ?? [])])];
+        d.personId = null;
+        d.status = "ambiguous";
+      }
+    });
+    const handMatches: HandMatchCarryResult = {
+      before: plan.kept + plan.toReview + plan.notFound,
+      kept: plan.kept, toReview: plan.toReview, notFound: plan.notFound,
+    };
+
     db.prepare(`DELETE FROM pushpay_donors WHERE org_id = ?`).run(orgId);
     const ins = db.prepare(`INSERT INTO pushpay_donors
       (org_id, donor_key, enc, name_hash, email_hash, donor_stage, giving_channel, last_gift_on, last_gift_fund, first_gift_on, person_id, match_status, candidate_ids)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     for (const d of donors) ins.run(orgId, d.key, d.enc, d.nameHash, d.emailHash, d.stage, d.channel, d.date, d.fund, d.firstDate, d.personId, d.status, d.candidates ? JSON.stringify(d.candidates) : null);
+    // Matched counts the carried hand matches too, as rematchDonors does, so
+    // matched + ambiguous + unmatched is every donor.
     const counts: PushpayImportResult = {
       total: donors.length,
-      matched: donors.filter((d) => d.status === "matched").length,
+      matched: donors.filter((d) => d.status === "matched" || d.status === "manual").length,
       ambiguous: donors.filter((d) => d.status === "ambiguous").length,
       unmatched: donors.filter((d) => d.status === "unmatched").length,
     };
-    db.prepare(`INSERT INTO pushpay_import (org_id, file_name, total, matched, ambiguous, unmatched, imported_at)
-      VALUES (?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-      ON CONFLICT(org_id) DO UPDATE SET file_name=excluded.file_name, total=excluded.total, matched=excluded.matched, ambiguous=excluded.ambiguous, unmatched=excluded.unmatched, imported_at=excluded.imported_at`)
+    db.prepare(`INSERT INTO pushpay_import (org_id, file_name, total, matched, ambiguous, unmatched, kind, imported_at)
+      VALUES (?,?,?,?,?,?, 'donors', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      ON CONFLICT(org_id) DO UPDATE SET file_name=excluded.file_name, total=excluded.total, matched=excluded.matched, ambiguous=excluded.ambiguous, unmatched=excluded.unmatched, kind=excluded.kind, imported_at=excluded.imported_at`)
       .run(orgId, fileName, counts.total, counts.matched, counts.ambiguous, counts.unmatched);
-    return counts;
+    return { ...counts, handMatches };
   });
-  return run();
+  return run.immediate();
 }
 
 export interface TransactionImportResult {
   total: number;
   inserted: number;
   byYourId: number;
+  /** A payer with no usable Your ID who is a donor matched by hand on the All
+   *  Donors list (match_source 'donor_manual'). */
+  byDonorManual: number;
   byDonorMatch: number;
   unmatched: number;
   firstDate: string | null;
@@ -351,8 +677,18 @@ export function isTransactionsExport(csvText: string): boolean {
  *       person id: 1,113 of 1,140 distinct values in the September 2026 export
  *       resolve against pco_people. That is a direct link and beats name
  *       matching, so it is tried first.
- *    2. Otherwise fall back to the same name/email matching the donor import
- *       uses, which also inherits any manual assignment already made there.
+ *    2. Otherwise, a donor someone matched by hand on the All Donors list, when
+ *       the payer is that same donor by the rule a re-upload uses to carry
+ *       hand matches over (sameDonor / planHandMatches: the same name, Jr or
+ *       Sr included, plus the same email or phone, or the name alone when
+ *       neither has either and it is on one payer and one donor only), every
+ *       hand match they could be names the same person, that person is still
+ *       in pco_people, and nothing casts doubt on it: a payer whose email or
+ *       phone differ from the donor's needs no other payer with that name
+ *       who could be the donor instead, and no other person with that name
+ *       holding more of that email and phone. match_source 'donor_manual'.
+ *    3. Otherwise the same name/email/phone matching the donor import uses
+ *       (decideMatch): 'donor_match', or 'unmatched'.
  *
  *  Upsert rather than replace: the export is a window (the sample covers
  *  January to September 2026), so re-importing a later window must add to the
@@ -365,7 +701,7 @@ export function importPushpayTransactions(
 ): TransactionImportResult {
   const rows = parseCsv(csvText).filter((r) => r.some((c) => c.trim()));
   if (rows.length < 2) {
-    return { total: 0, inserted: 0, byYourId: 0, byDonorMatch: 0, unmatched: 0, firstDate: null, lastDate: null };
+    return { total: 0, inserted: 0, byYourId: 0, byDonorManual: 0, byDonorMatch: 0, unmatched: 0, firstDate: null, lastDate: null };
   }
   const header = rows[0].map((h) => h.trim().toLowerCase());
   const col = (...names: string[]) => {
@@ -380,22 +716,18 @@ export function importPushpayTransactions(
 
   const db = getDb();
   const ix = buildMatchIndexes(orgId);
-  const knownPerson = new Set(
-    (db.prepare(`SELECT pco_id FROM pco_people WHERE org_id = ?`).all(orgId) as Array<{ pco_id: string }>)
-      .map((r) => r.pco_id),
-  );
-  // Payer -> person decided once per payer, not once per gift: a donor with 40
-  // gifts should cost one matching decision, and every one of their rows must
-  // land on the same person.
-  const payerCache = new Map<string, { personId: string | null; how: string }>();
+  const knownPerson = knownPeople(orgId);
 
   const out: TransactionImportResult = {
-    total: 0, inserted: 0, byYourId: 0, byDonorMatch: 0, unmatched: 0, firstDate: null, lastDate: null,
+    total: 0, inserted: 0, byYourId: 0, byDonorManual: 0, byDonorMatch: 0, unmatched: 0, firstDate: null, lastDate: null,
   };
-  const parsed: Array<{
+  // Payer -> person decided once per payer, not once per gift: a donor with 40
+  // gifts should cost one matching decision, and every one of their rows must
+  // land on the same person. A payer is known by the details on their first gift.
+  const payers = new Map<string, { yourId: string; first: string; last: string; identity: DonorIdentity }>();
+  const gifts: Array<{
     txId: string; date: string; status: string | null; source: string | null;
-    payer: string | null; personId: string | null; how: string;
-    fundName: string | null; fundCode: string | null;
+    payer: string | null; payerKey: string; fundName: string | null; fundCode: string | null;
   }> = [];
 
   for (const r of rows.slice(1)) {
@@ -407,39 +739,67 @@ export function importPushpayTransactions(
     if (!out.lastDate || date > out.lastDate) out.lastDate = date;
 
     const payer = (r[iPayer] ?? "").trim() || null;
-    const yourId = iYour >= 0 ? (r[iYour] ?? "").trim() : "";
-    const cacheKey = payer ?? `tx:${txId}`;
-    let decided = payerCache.get(cacheKey);
-    if (!decided) {
-      if (yourId && knownPerson.has(yourId)) {
-        decided = { personId: yourId, how: "your_id" };
-      } else {
-        const first = iF >= 0 ? (r[iF] ?? "").trim() : "";
-        const last = iL >= 0 ? (r[iL] ?? "").trim() : "";
-        const email = iE >= 0 ? (r[iE] ?? "").trim() : "";
-        const phone = iP >= 0 ? (r[iP] ?? "").trim() : "";
-        const eh = email ? hmac(email.toLowerCase()) : null;
-        const np = normPhone(phone);
-        const dec = first || last ? decideMatch(first, last, eh, np ? hmac(np) : null, ix) : { personId: null, status: "unmatched" as const, candidates: null };
-        decided = { personId: dec.personId, how: dec.personId ? "donor_match" : "unmatched" };
-      }
-      payerCache.set(cacheKey, decided);
+    const payerKey = payer ?? `tx:${txId}`;
+    if (!payers.has(payerKey)) {
+      const first = iF >= 0 ? (r[iF] ?? "").trim() : "";
+      const last = iL >= 0 ? (r[iL] ?? "").trim() : "";
+      const email = iE >= 0 ? (r[iE] ?? "").trim() : "";
+      const phone = iP >= 0 ? (r[iP] ?? "").trim() : "";
+      payers.set(payerKey, {
+        yourId: iYour >= 0 ? (r[iYour] ?? "").trim() : "",
+        first, last, identity: donorIdentity(first, last, email, phone),
+      });
     }
-    if (decided.how === "your_id") out.byYourId++;
-    else if (decided.how === "donor_match") out.byDonorMatch++;
-    else out.unmatched++;
-
-    parsed.push({
+    gifts.push({
       txId, date,
       status: (r[iStatus] ?? "").trim() || null,
       source: (r[iSource] ?? "").trim() || null,
-      payer,
-      personId: decided.personId,
-      how: decided.how,
+      payer, payerKey,
       fundName: iFundName >= 0 ? (r[iFundName] ?? "").trim() || null : null,
       fundCode: iFundCode >= 0 ? (r[iFundCode] ?? "").trim() || null : null,
     });
   }
+
+  // Hand matches on the All Donors list, recognised by the rule a re-upload
+  // uses. Every payer takes part, including those Your ID resolves: such a
+  // payer may still be the hand-matched donor, and so keep another payer with
+  // that name from taking the match.
+  const payerKeys = [...payers.keys()];
+  const hand = planHandMatches(
+    payerKeys.map((k) => payers.get(k)!.identity),
+    readStoredDonors(orgId),
+    {
+      personExists: (id) => knownPerson.has(id),
+      pointsElsewhere: (i, personId) => {
+        const p = payers.get(payerKeys[i])!;
+        return pointsElsewhere(p.first, p.last, p.identity, personId, ix);
+      },
+    },
+  );
+  const decided = new Map<string, { personId: string | null; how: string }>();
+  payerKeys.forEach((k, i) => {
+    const p = payers.get(k)!;
+    const handMatch = hand.outcome[i];
+    if (p.yourId && knownPerson.has(p.yourId)) {
+      decided.set(k, { personId: p.yourId, how: "your_id" });
+    } else if (handMatch?.kind === "keep") {
+      decided.set(k, { personId: handMatch.personId, how: "donor_manual" });
+    } else {
+      const dec = p.first || p.last
+        ? decideMatch(p.first, p.last, p.identity.email, p.identity.phone, ix)
+        : { personId: null, status: "unmatched" as const, candidates: null };
+      decided.set(k, { personId: dec.personId, how: dec.personId ? "donor_match" : "unmatched" });
+    }
+  });
+
+  const parsed = gifts.map((g) => {
+    const d = decided.get(g.payerKey)!;
+    if (d.how === "your_id") out.byYourId++;
+    else if (d.how === "donor_manual") out.byDonorManual++;
+    else if (d.how === "donor_match") out.byDonorMatch++;
+    else out.unmatched++;
+    return { ...g, personId: d.personId, how: d.how };
+  });
 
   const run = db.transaction(() => {
     const ins = db.prepare(`INSERT INTO pushpay_transactions
@@ -459,7 +819,7 @@ export function importPushpayTransactions(
       ON CONFLICT(org_id) DO UPDATE SET file_name=excluded.file_name, total=excluded.total,
         matched=excluded.matched, ambiguous=excluded.ambiguous, unmatched=excluded.unmatched,
         kind=excluded.kind, imported_at=excluded.imported_at`)
-      .run(orgId, fileName, out.total, out.byYourId + out.byDonorMatch, 0, out.unmatched);
+      .run(orgId, fileName, out.total, out.byYourId + out.byDonorManual + out.byDonorMatch, 0, out.unmatched);
   });
   run();
   return out;

@@ -32,7 +32,9 @@ export default async function PushpayPage() {
               <span className="text-fg">Donors → All Donors</span> as CSV
               (First/Last name, Email, Donor Stage, Giving Channel, Last Gift).
               Drop the file below. Re-importing a fresh export replaces the
-              previous one and re-matches everyone.
+              previous one and re-matches everyone except donors matched by
+              hand: those stay matched when the new file still has them, and
+              go back to review when it can&apos;t tell which row is theirs.
             </p>
           </div>
 

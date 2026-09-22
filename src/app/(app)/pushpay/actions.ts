@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
-import { importPushpay, importPushpayTransactions, isTransactionsExport, assignDonor, clearDonorMatch, rematchDonors } from "@/lib/pushpay-import";
+import { importPushpay, importPushpayTransactions, isTransactionsExport, assignDonor, clearDonorMatch, rematchDonors, type HandMatchCarryResult } from "@/lib/pushpay-import";
 
 export interface ImportCsvState {
   status: "idle" | "ok" | "error";
@@ -42,9 +42,10 @@ export async function importPushpayCsvAction(
         message:
           `Imported ${t.total.toLocaleString()} gifts${span} — ` +
           `${t.byYourId.toLocaleString()} matched by PCO id, ` +
+          (t.byDonorManual ? `${t.byDonorManual.toLocaleString()} by a hand match on the donor list, ` : "") +
           `${t.byDonorMatch.toLocaleString()} by name, ` +
           `${t.unmatched.toLocaleString()} unmatched. Gifts are added to the history, not replaced.`,
-        result: { fileName: file.name, total: t.total, matched: t.byYourId + t.byDonorMatch, ambiguous: 0, unmatched: t.unmatched },
+        result: { fileName: file.name, total: t.total, matched: t.byYourId + t.byDonorManual + t.byDonorMatch, ambiguous: 0, unmatched: t.unmatched },
       };
     }
     const r = importPushpay(s.orgId, file.name, text);
@@ -54,8 +55,10 @@ export async function importPushpayCsvAction(
     revalidatePath("/lanes/give");
     return {
       status: "ok",
-      message: `Imported ${r.total.toLocaleString()} donors — ${r.matched.toLocaleString()} matched, ${r.ambiguous.toLocaleString()} to review, ${r.unmatched.toLocaleString()} unmatched.`,
-      result: { fileName: file.name, ...r },
+      message:
+        `Imported ${r.total.toLocaleString()} donors — ${r.matched.toLocaleString()} matched, ${r.ambiguous.toLocaleString()} to review, ${r.unmatched.toLocaleString()} unmatched.` +
+        handMatchSummary(r.handMatches),
+      result: { fileName: file.name, total: r.total, matched: r.matched, ambiguous: r.ambiguous, unmatched: r.unmatched },
     };
   } catch (err) {
     return {
@@ -63,6 +66,17 @@ export async function importPushpayCsvAction(
       message: err instanceof Error ? err.message : "Import failed. Check the file format.",
     };
   }
+}
+
+/** What became of the hand matches on the upload this one replaced, in plain
+ *  words. Nothing to say when there were none. */
+function handMatchSummary(h: HandMatchCarryResult): string {
+  if (h.before === 0) return "";
+  const n = (x: number, one: string, many: string) => `${x.toLocaleString()} ${x === 1 ? one : many}`;
+  const parts = [`${n(h.kept, "was", "were")} kept`];
+  if (h.toReview) parts.push(`${n(h.toReview, "is", "are")} back in Needs review, because the new file can't say for sure which row is theirs`);
+  if (h.notFound) parts.push(`${n(h.notFound, "has", "have")} no row in the new file (the donor left the export or changed their name)`);
+  return ` Of the ${n(h.before, "donor", "donors")} matched by hand, ${parts.join("; ")}.`;
 }
 
 /** Re-run matching on the imported donors with the latest rules (no re-upload).

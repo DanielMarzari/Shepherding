@@ -9,7 +9,8 @@ const INITIAL: ImportCsvState = { status: "idle" };
 
 /** Drag-and-drop CSV uploader for the PushPay "All Donors" export. A dashed
  *  drop zone feeds a hidden native file input (so the existing server action's
- *  formData.get("file") still works); re-importing replaces the stored set. */
+ *  formData.get("file") still works); re-importing replaces the stored set,
+ *  carrying hand matches over (importPushpay). */
 export function PushpayImportForm() {
   const [state, action, pending] = useActionState(importPushpayCsvAction, INITIAL);
   const inputRef = useRef<HTMLInputElement>(null);

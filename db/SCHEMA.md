@@ -225,8 +225,8 @@ None of the source files are kept in this repo.
 |---|--:|---|
 | `attendance_weekly` | 280 | One Sunday's totals from the quarterly "Worship and Activities Attendance" .xlsx files (22 so far, 2021 Q1–2026 Q2), uploaded on /attendance (`importAttendanceFile`). Re-uploading upserts. `exception_reason` comes from the sheet and keeps storm and closure Sundays out of averages. |
 | `attendance_service` | 2,418 | Per Sunday × room (center / chapel / kids / student) × service time, from the same files. Re-importing replaces that Sunday's rows. |
-| `pushpay_donors` | 6,423 | One row of PushPay's "All Donors" CSV, uploaded on /pushpay (`enc` holds encrypted name, email and phone), matched to a person. `match_status` is matched / manual / ambiguous / unmatched. **Re-uploading the CSV replaces every row, manual matches included** (§4). `rematchDonors` re-runs matching in place and keeps manual matches. |
-| `pushpay_transactions` | 16,574 | One gift from PushPay's Transactions CSV (/pushpay): date, source, fund, and never an amount. `person_id` comes from "Your ID" (which *is* the PCO person id) or from name, email and phone matching (`match_source`). Rows upsert by `transaction_id`, so every export window adds history. Rebuilding needs every export ever loaded (today's rows span 2026-01-01 to 2026-09-16). |
+| `pushpay_donors` | 6,423 | One row of PushPay's "All Donors" CSV, uploaded on /pushpay (`enc` holds encrypted name, email and phone), matched to a person. `match_status` is matched / manual / ambiguous / unmatched; `candidate_ids` are the people offered in review. `donor_key` is the row's position in the CSV, so it changes between uploads. **Re-uploading the CSV replaces every row but carries each manual match to the new row that is the same donor**, or sends it back to review when it can't tell (§4). `rematchDonors` re-runs matching in place and keeps manual matches. |
+| `pushpay_transactions` | 16,574 | One gift from PushPay's Transactions CSV (/pushpay): date, source, fund, and never an amount. `match_source` says where `person_id` came from, tried in this order: `your_id` ("Your ID", which *is* the PCO person id), `donor_manual` (a donor someone matched by hand on the All Donors list, recognised by the same rule a re-upload uses, §4), `donor_match` (name, email and phone matching), or `unmatched`. Gifts imported before 2026-09-22 never have `donor_manual`; importing that export again re-resolves them. Rows upsert by `transaction_id`, so every export window adds history. Rebuilding needs every export ever loaded (today's rows span 2026-01-01 to 2026-09-16). |
 | `sermons` | 429 | One Sunday message from Sermon Lab, a separate app on the host: `transcript` plus classification (`topic`, `summary`, `next_steps`, `themes`). To rebuild, `scripts/import-sermons.mjs` loads the classified rows from `db/seed-data/sermons.json`, which has no transcripts; then `scripts/backfill-sermon-transcripts.mjs` copies them from Sermon Lab's database (`SERMON_LAB_DB`). `scripts/sync-sermons-from-lab.mjs` is meant to add new sermons, unclassified, from a Wednesday host cron, but none has arrived since 2026-08-02: check that cron. A sermon classified later lives only here until it is added to the JSON. |
 
 ### Owned (22): typed in by people, so back these up
@@ -269,7 +269,7 @@ plaintext only so the page can show which key is stored.
 | `constant_contact_sync_runs` | 10 | One Constant Contact sync attempt. |
 | `constant_contact_sync_cursor` | 1 | Its high-water mark (`contacts`). |
 | `dashboard_refresh_runs` | 7 | One snapshot rebuild: `triggered_by`, progress, and `source_synced_through` (`MAX(pco_people.synced_at)` at the start). The latest ok row is the only record of what the snapshots were built from ([0089], `getSnapshotFreshness`). With no rows, freshness reads "unknown" and the self-heal does nothing until the next sync or Refresh writes one. |
-| `pushpay_import` | 1 | Counts from the last PushPay upload of either kind, overwritten by each. `kind` is set by a Transactions upload and never cleared, so it doesn't say which kind came last; `rematchDonors` rewrites the counts. |
+| `pushpay_import` | 1 | Counts from the last PushPay upload of either kind, overwritten by each. `kind` says which: `donors` (All Donors) or `transactions`. Before 2026-09-22 an All Donors upload left `kind` alone, so the row keeps a stale `transactions` or NULL until the next upload; nothing reads it yet. `rematchDonors` rewrites the three match counts in place and leaves `kind`, `total` and `file_name`, so after a Transactions upload the row mixes the two. |
 | `sessions` | 1 | A login session. Deleting rows signs people out. |
 
 ### Backups
@@ -406,10 +406,43 @@ Dropped: `road_mesh`, `mir_docs`, `mir_team_members`, `attendance_sources`
   `pruneShepherdedCareAssignments` ([care-read.ts]) hard-deletes the rows, and
   notes, of everyone who has since become shepherded, on every add from
   /care-map.
-- **Re-uploading PushPay "All Donors" wipes the manual matches.** `importPushpay`
-  deletes every `pushpay_donors` row for the org, including the ~65
-  `match_status = 'manual'` rows people reconciled by hand. Save them first, or
-  use `rematchDonors` ([pushpay-import.ts]).
+- **Re-uploading PushPay "All Donors" keeps a hand match only when it can
+  recognise the donor.** `importPushpay` replaces every `pushpay_donors` row
+  (about 65 are `match_status = 'manual'`) and carries each hand match to the
+  new row that is the same donor (`sameDonor`, `planHandMatches` in
+  [pushpay-import.ts]). That means the name as the export spells it, with Jr
+  and Sr counted, so a father never inherits his son's match, plus the same
+  email or the same phone. The name alone is enough only when neither row has
+  an email or a phone and the name, suffix aside, is on one row in each file.
+  A row with the same email and phone as before keeps its match. A row whose
+  email or phone changed keeps it only when no other row could be that donor
+  and its new details don't belong to another person with that name in PCO.
+  Otherwise the donor goes back to review (`ambiguous`, the hand-picked person
+  first in `candidate_ids`), and these come back on every upload:
+  - a hand match with no email and no phone whose name is on another row.
+    Every row with that name that no earlier row accounts for goes to review
+    with it (in an unchanged file, the other rows with no email or phone),
+    including rows matched automatically, because nothing says which is theirs;
+  - two same-name donors on one inbox that were hand-matched to different
+    people;
+  - a hand match whose row has an identical twin in the file.
+  A hand match to a person missing from `pco_people` also goes to review, but
+  that almost never happens: `pco_people` keeps people PCO merged away or
+  deleted (above), and the junk filter spares anyone a PushPay row points at.
+  So a match to a record PCO has since merged away carries to that stale
+  record, as it would have without a re-upload. A hand match that no row in
+  the new file can be is dropped and counted as not found. The /pushpay
+  message gives the kept, review and not-found counts. Two limits: a
+  same-name household member whose new row is identical to the hand-matched
+  row (same email, same or no phone) takes the match when the donor's own row
+  changed or left, since the export has no donor id to tell them apart; and a
+  review row keeps no record that it was a hand match, so Re-match on
+  /audit/pushpay (`rematchDonors`) may assign it automatically. Nothing records
+  which old row a new row came from, so save `pushpay_donors` before an upload
+  you want to audit. A Transactions import uses the same rule to reuse a hand
+  match for a payer without a usable "Your ID" (`match_source =
+  'donor_manual'`); where a re-upload would ask, the payer is matched by name
+  instead.
 - **9 `attendance_weekly` and 54 `attendance_service` rows are dated Fridays**
   between 2020-01-03 and 2020-02-28. All come from the "2021 Q1" file, whose
   headers carry the wrong year. Fix it with a corrected re-import, then delete
