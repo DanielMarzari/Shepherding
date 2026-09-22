@@ -41,7 +41,7 @@ const checkinsSeed: SeedPage = {
   title: "Check-ins",
   description:
     "Tag events as Kid / Adult / Ignore under Filters → Check-in events. Ignored events don't appear here.",
-  revision: 4,
+  revision: 5,
   blocks: [
     {
       kind: "stat",
@@ -116,7 +116,7 @@ const checkinsSeed: SeedPage = {
                      COALESCE(s.p30, 0)            AS "People (30d)",
                      COALESCE(s.total, 0)          AS "All-time",
                      date(s.lastAt)                AS "Last"
-                FROM pco_checkin_events e
+                FROM pco_check_in_events e
                 LEFT JOIN event_stats s ON s.event_id = e.pco_id
                WHERE e.org_id = :orgId
                  AND e.archived_at IS NULL
@@ -893,30 +893,31 @@ const whoKnowsWhoSeed: SeedPage = {
 };
 
 // ── Email dashboard (Constant Contact) ───────────────────────────────
-// All SQL against the synced cc_* tables — no OAuth needed at view time.
+// All SQL against the synced constant_contact_* tables — no OAuth needed at
+// view time.
 const emailDashboardSeed: SeedPage = {
   slug: "email-dashboard",
   title: "Email dashboard",
   description: "Constant Contact at a glance — audience size, send performance over time, and per-campaign open / click / bounce rates. From the synced data.",
-  revision: 2,
+  revision: 3,
   blocks: [
     { kind: "stat", config: { title: "Contacts", span: 3, sub: "in Constant Contact",
-      sql: `SELECT COUNT(*) FROM cc_contacts WHERE org_id=:orgId` } },
+      sql: `SELECT COUNT(*) FROM constant_contact_contacts WHERE org_id=:orgId` } },
     { kind: "stat", config: { title: "Campaigns sent", span: 3, color: "low", sub: "with send stats",
-      sql: `SELECT COUNT(*) FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
+      sql: `SELECT COUNT(*) FROM constant_contact_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
     { kind: "stat", config: { title: "Avg open %", span: 3, color: "success", sub: "opens ÷ sends, all campaigns",
-      sql: `SELECT ROUND(100.0*SUM(stat_opens)/NULLIF(SUM(stat_sends),0),1) FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
+      sql: `SELECT ROUND(100.0*SUM(stat_opens)/NULLIF(SUM(stat_sends),0),1) FROM constant_contact_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
     { kind: "stat", config: { title: "Avg click %", span: 3, color: "warning", sub: "clicks ÷ sends",
-      sql: `SELECT ROUND(100.0*SUM(stat_clicks)/NULLIF(SUM(stat_sends),0),1) FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
+      sql: `SELECT ROUND(100.0*SUM(stat_clicks)/NULLIF(SUM(stat_sends),0),1) FROM constant_contact_campaigns WHERE org_id=:orgId AND stat_sends>0` } },
     { kind: "chart", config: { title: "Open / Click % over time", chartType: "line", span: 8,
       sql: `SELECT substr(last_sent_at,1,7) AS "Month",
               ROUND(100.0*SUM(stat_opens)/NULLIF(SUM(stat_sends),0),1) AS "Open %",
               ROUND(100.0*SUM(stat_clicks)/NULLIF(SUM(stat_sends),0),1) AS "Click %"
-              FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0 AND last_sent_at IS NOT NULL
+              FROM constant_contact_campaigns WHERE org_id=:orgId AND stat_sends>0 AND last_sent_at IS NOT NULL
              GROUP BY 1 ORDER BY 1` } },
     { kind: "chart", config: { title: "New contacts by month", chartType: "bar", span: 4,
       sql: `SELECT substr(created_at,1,7) AS "Month", COUNT(*) AS "New"
-              FROM cc_contacts WHERE org_id=:orgId AND created_at IS NOT NULL AND created_at >= date('now','-24 months')
+              FROM constant_contact_contacts WHERE org_id=:orgId AND created_at IS NOT NULL AND created_at >= date('now','-24 months')
              GROUP BY 1 ORDER BY 1` } },
     { kind: "table", config: { title: "Campaign performance", span: 12, density: "normal", sortable: true, limit: 100,
       columnColors: { Status: "low", Sent: "low" },
@@ -927,7 +928,7 @@ const emailDashboardSeed: SeedPage = {
                    ROUND(100.0*stat_opens/NULLIF(stat_sends,0),1) AS "Open %",
                    ROUND(100.0*stat_clicks/NULLIF(stat_sends,0),1) AS "Click %",
                    ROUND(100.0*stat_bounces/NULLIF(stat_sends,0),1) AS "Bounce %"
-              FROM cc_campaigns WHERE org_id=:orgId AND stat_sends>0
+              FROM constant_contact_campaigns WHERE org_id=:orgId AND stat_sends>0
              ORDER BY last_sent_at DESC LIMIT 100` } },
   ],
 };

@@ -292,7 +292,7 @@ const FAMILY_DEDICATIONS = `
 const KID_VISIT_COUNTS = `
   SELECT c.person_id, COUNT(*) AS visits
     FROM pco_check_ins c
-    JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+    JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
    WHERE c.org_id = :orgId AND lower(e.name) LIKE '%kids%'
      AND c.person_id IS NOT NULL AND c.person_id <> ''
      AND c.pco_created_at >= datetime('now','-365 day')
@@ -404,7 +404,7 @@ const servingSlots = (serviceTypeClause: string) => `
 const checkIns = (eventClause: string) => `
   SELECT c.person_id, c.pco_created_at, e.name AS event_name
     FROM pco_check_ins c
-    JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+    JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
    WHERE c.org_id = :orgId AND c.person_id IS NOT NULL AND (${eventClause})`;
 
 /** Faith Church Music's own catalogue — the songs the church wrote and released
@@ -536,7 +536,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COUNT(*) FROM person_activity pa
            JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
           WHERE pa.org_id = :orgId AND p.is_minor = 0
-            AND (pa.in_lane_wors = 1 OR pa.in_lane_comm = 1 OR pa.in_lane_serv = 1)`),
+            AND (pa.in_worship_lane = 1 OR pa.in_community_lane = 1 OR pa.in_serving_lane = 1)`),
       chart("Where adults are discipled", "engaged adults by group type",
         `SELECT d.type_name AS "Group type", COUNT(DISTINCT d.person_id) AS "Adults"
            FROM (${DISCIPLESHIP_MEMBERS}) d
@@ -1210,15 +1210,15 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Children at the last VBX", "distinct children checked into any room but the Moms' Class",
         `SELECT COUNT(DISTINCT c.person_id)
            FROM pco_check_ins c
-           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
-           LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+           JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           LEFT JOIN pco_check_in_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
        AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
             AND (l.name NOT LIKE '%Moms%Class%' OR l.name IS NULL)
             -- The latest VBX EVENT, resolved from the four-row events table.
             -- Deriving the year by scanning 275k check-ins instead cost 6.4s a block.
-            AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
+            AND c.event_id = (SELECT e2.pco_id FROM pco_check_in_events e2
                                WHERE e2.org_id = :orgId AND e2.name LIKE 'VBX%'
                                  AND e2.name <> 'VBX Middle School'
                                ORDER BY e2.pco_created_at DESC LIMIT 1)`,
@@ -1226,28 +1226,28 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       stat("Mums in the Moms' Class", "distinct adults in the Moms' Class at the last VBX",
         `SELECT COUNT(DISTINCT c.person_id)
            FROM pco_check_ins c
-           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
-           JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+           JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           JOIN pco_check_in_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
        AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
             AND l.name LIKE '%Moms%Class%'
             -- The latest VBX EVENT, resolved from the four-row events table.
             -- Deriving the year by scanning 275k check-ins instead cost 6.4s a block.
-            AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
+            AND c.event_id = (SELECT e2.pco_id FROM pco_check_in_events e2
                                WHERE e2.org_id = :orgId AND e2.name LIKE 'VBX%'
                                  AND e2.name <> 'VBX Middle School'
                                ORDER BY e2.pco_created_at DESC LIMIT 1)`),
       stat("Selections offered", "rooms children could sign up for at the last VBX",
         `SELECT COUNT(DISTINCT c.location_id)
            FROM pco_check_ins c
-           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
        AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> '' AND c.location_id IS NOT NULL
             -- The latest VBX EVENT, resolved from the four-row events table.
             -- Deriving the year by scanning 275k check-ins instead cost 6.4s a block.
-            AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
+            AND c.event_id = (SELECT e2.pco_id FROM pco_check_in_events e2
                                WHERE e2.org_id = :orgId AND e2.name LIKE 'VBX%'
                                  AND e2.name <> 'VBX Middle School'
                                ORDER BY e2.pco_created_at DESC LIMIT 1)`),
@@ -1272,8 +1272,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                                     THEN c.person_id END) AS "Children",
                 COUNT(DISTINCT CASE WHEN l.name LIKE '%Moms%Class%' THEN c.person_id END) AS "Mums"
            FROM pco_check_ins c
-           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
-           LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+           JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           LEFT JOIN pco_check_in_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
        AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
@@ -1283,8 +1283,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                 COUNT(DISTINCT c.person_id) AS "Mums",
                 COUNT(*) AS "Check-ins"
            FROM pco_check_ins c
-           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
-           JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+           JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           JOIN pco_check_in_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
        AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> '' AND l.name LIKE '%Moms%Class%'
@@ -1293,7 +1293,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `WITH days AS (
            SELECT substr(c.event_time_starts_at,1,4) AS yr, substr(c.event_time_starts_at,1,10) AS d, c.person_id
              FROM pco_check_ins c
-             JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+             JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
             WHERE c.org_id = :orgId
        AND e.name LIKE 'VBX%' AND e.name <> 'VBX Middle School'
        AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
@@ -1326,11 +1326,11 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                 COUNT(*) AS "Check-ins",
                 COUNT(DISTINCT substr(c.event_time_starts_at,1,10)) AS "Days running"
            FROM pco_check_ins c
-           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
-           LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+           JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           LEFT JOIN pco_check_in_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId
             AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
-            AND c.event_id = (SELECT e2.pco_id FROM pco_checkin_events e2
+            AND c.event_id = (SELECT e2.pco_id FROM pco_check_in_events e2
                                WHERE e2.org_id = :orgId AND e2.name LIKE 'VBX%'
                                  AND e2.name <> 'VBX Middle School'
                                ORDER BY e2.pco_created_at DESC LIMIT 1)
@@ -1823,7 +1823,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COUNT(*) FROM (${TREE_LIGHTING_VOLUNTEERS})`, { color: "highlight" }),
       stat("Checked in on the night", "volunteers who actually scanned in",
         `SELECT COUNT(DISTINCT c.person_id) FROM pco_check_ins c
-           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
           WHERE c.org_id = :orgId AND lower(e.name) LIKE '%tree lighting%'
             AND c.person_id IS NOT NULL AND c.person_id <> ''`),
       stat("Now serving on a team", "tree-lighting volunteers on an active team today",
@@ -1845,8 +1845,8 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                      ELSE COALESCE(l.name, '(no assignment recorded)') END AS "Assignment",
                 COUNT(*) AS "Checked in"
            FROM pco_check_ins c
-           JOIN pco_checkin_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
-           LEFT JOIN pco_checkin_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
+           JOIN pco_check_in_events e ON e.pco_id = c.event_id AND e.org_id = :orgId
+           LEFT JOIN pco_check_in_locations l ON l.pco_id = c.location_id AND l.org_id = :orgId
           WHERE c.org_id = :orgId AND lower(e.name) LIKE '%tree lighting%'
           GROUP BY 1 ORDER BY 2 DESC`),
       // The Output asks for "# of new attendees at Faith Church". The weekly
@@ -1892,7 +1892,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
   "mir-communications-content-creation": {
     metrics: [
       stat("Instant Access sent", "campaigns per month, last 12 months (published target: 4.5)",
-        `SELECT ROUND(COUNT(*) / 12.0, 1) FROM cc_campaigns cc
+        `SELECT ROUND(COUNT(*) / 12.0, 1) FROM constant_contact_campaigns cc
           WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`, { color: "highlight" }),
       stat("Registrations built", "signups created per month, last 12 months (published target: 10)",
         `SELECT ROUND(COUNT(*) / 12.0, 1) FROM pco_registration_signups
@@ -1901,11 +1901,11 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COUNT(DISTINCT series_id) FROM (${SUNDAY_SERIES})
           WHERE series_id IS NOT NULL AND day >= date('now','-365 day')`),
       stat("Emails delivered by Instant Access", "total sends, last 12 months",
-        `SELECT SUM(cc.stat_sends) FROM cc_campaigns cc
+        `SELECT SUM(cc.stat_sends) FROM constant_contact_campaigns cc
           WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`),
       chart("Instant Access campaigns by month", "how the send rhythm actually runs",
         `SELECT substr(cc.last_sent_at,1,7) AS "Month", COUNT(*) AS "Campaigns"
-           FROM cc_campaigns cc
+           FROM constant_contact_campaigns cc
           WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= datetime('now','-730 day')
           GROUP BY 1 ORDER BY 1`, "bar"),
       chart("Registrations built by month", "new signups created in PCO Registrations",
@@ -1950,60 +1950,60 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
   "mir-communications-engagement": {
     metrics: [
       stat("Campaigns sent", "last 12 months",
-        `SELECT COUNT(*) FROM cc_campaigns
+        `SELECT COUNT(*) FROM constant_contact_campaigns
           WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`, { color: "highlight" }),
       stat("Emails delivered", "total sends, last 12 months",
-        `SELECT SUM(stat_sends) FROM cc_campaigns
+        `SELECT SUM(stat_sends) FROM constant_contact_campaigns
           WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`),
       stat("Open rate", "opens ÷ sends, last 12 months",
         `SELECT ROUND(100.0 * SUM(stat_opens) / NULLIF(SUM(stat_sends),0), 1) || '%'
-           FROM cc_campaigns WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`),
+           FROM constant_contact_campaigns WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`),
       stat("Click rate", "clicks ÷ sends, last 12 months",
         `SELECT ROUND(100.0 * SUM(stat_clicks) / NULLIF(SUM(stat_sends),0), 2) || '%'
-           FROM cc_campaigns WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`),
+           FROM constant_contact_campaigns WHERE org_id = :orgId AND last_sent_at >= ${YEAR}`),
       // Instant Access broken out on its own, because that is what the
       // published Outputs name: "47% opens on Instant Access per email" and
       // "10% link clicks in Instant Access per email". The all-campaign rates
       // above mix in ministry-specific sends with very different audiences.
       stat("Instant Access open rate", "opens ÷ sends, last 12 months (published target: 47%)",
         `SELECT ROUND(100.0 * SUM(cc.stat_opens) / NULLIF(SUM(cc.stat_sends),0), 1) || '%'
-           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`,
+           FROM constant_contact_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`,
         { color: "highlight" }),
       stat("Instant Access click rate", "clicks ÷ sends, last 12 months (published target: 10%)",
         `SELECT ROUND(100.0 * SUM(cc.stat_clicks) / NULLIF(SUM(cc.stat_sends),0), 2) || '%'
-           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`),
+           FROM constant_contact_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`),
       stat("Clicks per opener", "of those who opened it, the share who clicked",
         `SELECT ROUND(100.0 * SUM(cc.stat_clicks) / NULLIF(SUM(cc.stat_opens),0), 1) || '%'
-           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`),
+           FROM constant_contact_campaigns cc WHERE ${INSTANT_ACCESS} AND cc.last_sent_at >= ${YEAR}`),
       stat("Instant Access subscribers", "on the All-Church - Instant Access list",
-        `SELECT membership_count FROM cc_lists
+        `SELECT membership_count FROM constant_contact_lists
           WHERE org_id = :orgId AND name = 'All-Church - Instant Access'`),
       chart("Instant Access open rate by year", "the long view, back to 2013",
         `SELECT substr(cc.last_sent_at,1,4) AS "Year",
                 ROUND(100.0 * SUM(cc.stat_opens) / NULLIF(SUM(cc.stat_sends),0), 1) AS "Open %",
                 ROUND(100.0 * SUM(cc.stat_clicks) / NULLIF(SUM(cc.stat_sends),0), 2) AS "Click %"
-           FROM cc_campaigns cc WHERE ${INSTANT_ACCESS}
+           FROM constant_contact_campaigns cc WHERE ${INSTANT_ACCESS}
           GROUP BY 1 ORDER BY 1`, "line"),
       chart("Subscribes and unsubscribes by month", "across every Constant Contact list",
         `SELECT m AS "Month",
                 SUM(joined) AS "Subscribed", SUM(left_list) AS "Unsubscribed"
            FROM (
              SELECT substr(opted_in_at,1,7) AS m, 1 AS joined, 0 AS left_list
-               FROM cc_contacts WHERE org_id = :orgId AND opted_in_at >= datetime('now','-730 day')
+               FROM constant_contact_contacts WHERE org_id = :orgId AND opted_in_at >= datetime('now','-730 day')
              UNION ALL
              SELECT substr(opted_out_at,1,7), 0, 1
-               FROM cc_contacts WHERE org_id = :orgId AND opted_out_at >= datetime('now','-730 day')
+               FROM constant_contact_contacts WHERE org_id = :orgId AND opted_out_at >= datetime('now','-730 day')
            ) GROUP BY 1 ORDER BY 1`, "line"),
       chart("Email reach by month", "sends and opens",
         `SELECT substr(last_sent_at,1,7) AS "Month",
                 SUM(stat_sends) AS "Sends", SUM(stat_opens) AS "Opens"
-           FROM cc_campaigns
+           FROM constant_contact_campaigns
           WHERE org_id = :orgId AND last_sent_at >= datetime('now','-730 day')
           GROUP BY 1 ORDER BY 1`, "line"),
       table("Recent campaigns", "the last 15 sent, with their engagement",
         `SELECT name AS "Campaign", substr(last_sent_at,1,10) AS "Sent",
                 stat_sends AS "Sends", stat_opens AS "Opens", stat_clicks AS "Clicks"
-           FROM cc_campaigns
+           FROM constant_contact_campaigns
           WHERE org_id = :orgId AND last_sent_at IS NOT NULL
           ORDER BY last_sent_at DESC LIMIT 15`),
     ],
@@ -2166,20 +2166,20 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COUNT(*) FROM person_activity pa
            JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
           WHERE pa.org_id = :orgId AND p.is_minor = 0
-            AND (pa.in_lane_wors = 1 OR pa.in_lane_comm = 1 OR pa.in_lane_serv = 1)`,
+            AND (pa.in_worship_lane = 1 OR pa.in_community_lane = 1 OR pa.in_serving_lane = 1)`,
         { color: "highlight" }),
       stat("In the worship lane", "attending or scheduled recently",
         `SELECT COUNT(*) FROM person_activity pa
            JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
-          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.in_lane_wors = 1`),
+          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.in_worship_lane = 1`),
       stat("In the community lane", "in at least one active group",
         `SELECT COUNT(*) FROM person_activity pa
            JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
-          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.in_lane_comm = 1`),
+          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.in_community_lane = 1`),
       stat("In the serving lane", "on at least one active team",
         `SELECT COUNT(*) FROM person_activity pa
            JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId
-          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.in_lane_serv = 1`),
+          WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.in_serving_lane = 1`),
       chart("How engaged adults are classified", "the app's own activity classification",
         `SELECT pa.classification AS "Classification", COUNT(*) AS "Adults"
            FROM person_activity pa
@@ -2187,7 +2187,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
           WHERE pa.org_id = :orgId AND p.is_minor = 0 AND pa.classification IS NOT NULL
           GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
       table("Lane combinations", "how many lanes an adult is in",
-        `SELECT (pa.in_lane_wors + pa.in_lane_comm + pa.in_lane_serv) AS "Lanes",
+        `SELECT (pa.in_worship_lane + pa.in_community_lane + pa.in_serving_lane) AS "Lanes",
                 COUNT(*) AS "Adults"
            FROM person_activity pa
            JOIN pco_people p ON p.pco_id = pa.person_id AND p.org_id = :orgId

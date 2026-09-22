@@ -5,7 +5,7 @@ import { CHURCH, FAITH_CHURCH_PROFILE, getMemberGeoPoints } from "@/lib/geocode"
 import { analyzeReach } from "@/lib/map-analysis";
 import { analyzeCensus, computeDrawModel, computeGrowth } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
-import { getRoadMesh } from "@/lib/road-mesh";
+import { getRoadMesh } from "@/lib/road-network";
 import { CampusPlannerMap } from "../map/campus-planner-map";
 import { MiniMap } from "../map/mini-map";
 

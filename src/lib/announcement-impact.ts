@@ -108,7 +108,7 @@ function allCheckinWeeksByEvent(orgId: number): EventWeekRow[] {
       `SELECT date(c.event_time_starts_at, '-' || strftime('%w', c.event_time_starts_at) || ' days') wk,
               e.name AS name, COUNT(*) c
          FROM pco_check_ins c
-         JOIN pco_checkin_events e ON e.org_id = c.org_id AND e.pco_id = c.event_id
+         JOIN pco_check_in_events e ON e.org_id = c.org_id AND e.pco_id = c.event_id
         WHERE c.org_id = ? AND c.event_time_starts_at IS NOT NULL AND c.event_time_starts_at <> ''
         GROUP BY wk, e.pco_id`,
     )

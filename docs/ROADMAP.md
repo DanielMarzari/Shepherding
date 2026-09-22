@@ -55,17 +55,18 @@ Dates fields as Touchpoints — **not synced**, partly missing.
 highlighted on the map. Plus isochrones (drive-time rings).
 
 **Status:** DONE. Real driving distance + time (OSRM table service,
-person_drive), distance↔shepherding correlation, engagement-vs-drive-time
-curve, per-cohort second-campus siting (map-analysis.ts), AND the **road
-web** — a single deduplicated, usage-weighted mesh of the segments homes
-drive from Faith Church (road-mesh.ts, road_mesh table, "Build road web"
-button + canvas layer). Built incrementally: each home is routed once and
-folded in; shared roads accumulate usage (thick trunks near FC, thin
-neighborhood tips). Recomputed for new homes on the nightly cron.
+person_drive_from_church), distance↔shepherding correlation,
+engagement-vs-drive-time curve, per-cohort second-campus siting
+(map-analysis.ts), AND the **road web** — every named road homes drive from
+Faith Church, each stored once (road-network.ts, road_network table, "Build
+road web" button + canvas layer; it replaced the usage-weighted road_mesh,
+dropped in 0096). Built incrementally: each home is routed once and folded
+in (road_network_routed_people). Recomputed for new homes on the nightly
+cron.
 
 **Possible follow-on:** drive-time isochrone (coverage rings) layer, and
-decrementing mesh usage when a home's address changes (today stale
-segments linger with slightly inflated counts — negligible).
+dropping roads no home needs any more when an address changes (today they
+linger — negligible).
 
 ## Member map — ZIP view / polygons  (→ /map)
 

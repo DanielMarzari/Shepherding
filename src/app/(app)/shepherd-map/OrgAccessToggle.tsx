@@ -3,10 +3,11 @@
 import { useState, useTransition } from "react";
 import { setOrgWideAccessAction } from "./actions";
 
-/** Per-shepherd "sees the whole org" switch. The exception to
- *  shepherd-map scoping: by default a shepherd's access is limited to
- *  what they oversee; flipping this on lets them see everything.
- *  Optimistic, reverts on server failure. */
+/** Per-shepherd "sees the whole org" switch: the planned exception to
+ *  scoping each shepherd's access to what they oversee. Nothing scopes
+ *  access yet (org_wide_access, 0041, only records the intent), so today
+ *  every user sees the whole org and the switch changes nothing anyone
+ *  sees. The label says so. Optimistic, reverts on server failure. */
 export function OrgAccessToggle({
   personId,
   initial,
@@ -31,20 +32,25 @@ export function OrgAccessToggle({
 
   return (
     <label
-      className={`flex items-center gap-1.5 text-xs ${
+      className={`flex items-start gap-1.5 text-xs ${
         disabled ? "opacity-60" : "cursor-pointer"
       }`}
-      title="When on, this shepherd can see the whole organization — not just the ministry areas they oversee."
+      title="Access is not scoped yet: today every user sees the whole organization. Once each shepherd's access is limited to the ministry areas they oversee, people with this on will still see everything."
     >
       <input
         type="checkbox"
         checked={on}
         onChange={toggle}
         disabled={disabled}
-        className="accent-[var(--accent)] w-3.5 h-3.5 cursor-pointer"
+        className="accent-[var(--accent)] w-3.5 h-3.5 mt-px cursor-pointer"
       />
-      <span className={on ? "text-accent font-medium" : "text-muted"}>
-        Whole-org access
+      <span className="leading-tight max-w-[8.5rem]">
+        <span className={on ? "text-accent font-medium" : "text-muted"}>
+          Whole-org access
+        </span>
+        <span className="block text-[11px] text-subtle">
+          takes effect once access scoping exists
+        </span>
       </span>
     </label>
   );

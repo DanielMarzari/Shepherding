@@ -1,8 +1,8 @@
 import "server-only";
-import { buildMeshPending, countPendingMesh, isMeshConfigured } from "./road-mesh";
+import { buildMeshPending, countPendingMesh, isMeshConfigured } from "./road-network";
 
-// Background runner that folds homes into the road mesh in batches,
-// self-continuing until every geocoded home is meshed.
+// Background runner that folds homes into the road network in batches,
+// self-continuing until every engaged geocoded home is routed.
 
 interface RunState {
   running: boolean;

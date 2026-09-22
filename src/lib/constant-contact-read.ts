@@ -3,11 +3,12 @@ import { getDb } from "./db";
 import { decryptJson } from "./encryption";
 
 // Engagement numbers come from the rollups built by refreshCcEngagement()
-// (constant-contact-sync.ts, schema in migration 0091), never from
-// cc_contact_activity itself: that table is 234k rows and the dashboard used to
-// traverse it ~12 times per render (8.6 s of SQL on the production box). The
-// rollups are rebuilt after every CC sync attempt, the only writer of the raw
-// table. cc_contacts (person links) and person_activity are still joined live.
+// (constant-contact-sync.ts, schema in migration 0091, names from 0097), never
+// from constant_contact_activity itself: that table is 234k rows and the
+// dashboard used to traverse it ~12 times per render (8.6 s of SQL on the
+// production box). The rollups are rebuilt after every CC sync attempt, the
+// only writer of the raw table. constant_contact_contacts (person links) and
+// person_activity are still joined live.
 //
 // The ranked lists below spell out a tie-break the raw-table queries only had by
 // accident of their plans: they grouped in ascending person_id (or link_url)
@@ -31,15 +32,15 @@ export function getCcOverview(orgId: number): CcOverview {
   const db = getDb();
   const one = (sql: string) => (db.prepare(sql).get(orgId) as { n: number }).n;
   return {
-    contacts: one("SELECT COUNT(*) n FROM cc_contacts WHERE org_id = ?"),
-    linked: one("SELECT COUNT(*) n FROM cc_contacts WHERE org_id = ? AND person_id IS NOT NULL"),
-    lists: one("SELECT COUNT(*) n FROM cc_lists WHERE org_id = ?"),
-    campaigns: one("SELECT COUNT(*) n FROM cc_campaigns WHERE org_id = ?"),
-    campaignsWithStats: one("SELECT COUNT(*) n FROM cc_campaigns WHERE org_id = ? AND stat_sends IS NOT NULL"),
-    activityRows: one("SELECT COALESCE((SELECT activity_rows FROM cc_engagement_snapshot WHERE org_id = ?), 0) n"),
+    contacts: one("SELECT COUNT(*) n FROM constant_contact_contacts WHERE org_id = ?"),
+    linked: one("SELECT COUNT(*) n FROM constant_contact_contacts WHERE org_id = ? AND person_id IS NOT NULL"),
+    lists: one("SELECT COUNT(*) n FROM constant_contact_lists WHERE org_id = ?"),
+    campaigns: one("SELECT COUNT(*) n FROM constant_contact_campaigns WHERE org_id = ?"),
+    campaignsWithStats: one("SELECT COUNT(*) n FROM constant_contact_campaigns WHERE org_id = ? AND stat_sends IS NOT NULL"),
+    activityRows: one("SELECT COALESCE((SELECT activity_rows FROM constant_contact_engagement_snapshot WHERE org_id = ?), 0) n"),
     engagedPeople: one(
-      `SELECT COUNT(DISTINCT cc.person_id) n FROM cc_contact_engagement e
-         JOIN cc_contacts cc ON cc.org_id = e.org_id AND cc.contact_id = e.contact_id
+      `SELECT COUNT(DISTINCT cc.person_id) n FROM constant_contact_engagement e
+         JOIN constant_contact_contacts cc ON cc.org_id = e.org_id AND cc.contact_id = e.contact_id
         WHERE e.org_id = ? AND (e.opens > 0 OR e.clicks > 0) AND cc.person_id IS NOT NULL`,
     ),
   };
@@ -48,14 +49,14 @@ export function getCcOverview(orgId: number): CcOverview {
 export function getConsentBreakdown(orgId: number): Array<{ permission: string; count: number }> {
   return getDb().prepare(
     `SELECT COALESCE(permission_to_send, 'unknown') AS permission, COUNT(*) AS count
-       FROM cc_contacts WHERE org_id = ? GROUP BY permission ORDER BY count DESC`,
+       FROM constant_contact_contacts WHERE org_id = ? GROUP BY permission ORDER BY count DESC`,
   ).all(orgId) as Array<{ permission: string; count: number }>;
 }
 
 export function getTopLists(orgId: number, limit = 25): Array<{ name: string; count: number }> {
   return getDb().prepare(
     `SELECT COALESCE(name, '(unnamed)') AS name, COALESCE(membership_count, 0) AS count
-       FROM cc_lists WHERE org_id = ? ORDER BY count DESC LIMIT ?`,
+       FROM constant_contact_lists WHERE org_id = ? ORDER BY count DESC LIMIT ?`,
   ).all(orgId, limit) as Array<{ name: string; count: number }>;
 }
 
@@ -75,7 +76,7 @@ export function getCampaignPerformance(orgId: number, limit = 50): CampaignPerf[
     `SELECT name, current_status AS status, last_sent_at AS updatedAt,
             COALESCE(stat_sends, 0) AS sends, stat_opens AS uopens, stat_clicks AS uclicks,
             stat_bounces AS bounces, stat_optouts AS optouts
-       FROM cc_campaigns
+       FROM constant_contact_campaigns
       WHERE org_id = ? AND stat_sends IS NOT NULL
       ORDER BY last_sent_at DESC LIMIT ?`,
   ).all(orgId, limit) as Array<{ name: string | null; status: string | null; updatedAt: string | null; sends: number; uopens: number | null; uclicks: number | null; bounces: number | null; optouts: number | null }>;
@@ -95,8 +96,8 @@ export function getCampaignPerformance(orgId: number, limit = 50): CampaignPerf[
 export function getTopEngaged(orgId: number, limit = 25): Array<{ name: string; opens: number; clicks: number }> {
   const rows = getDb().prepare(
     `SELECT cc.person_id AS personId, SUM(e.opens) AS opens, SUM(e.clicks) AS clicks
-       FROM cc_contact_engagement e
-       JOIN cc_contacts cc ON cc.org_id = e.org_id AND cc.contact_id = e.contact_id
+       FROM constant_contact_engagement e
+       JOIN constant_contact_contacts cc ON cc.org_id = e.org_id AND cc.contact_id = e.contact_id
       WHERE e.org_id = ? AND cc.person_id IS NOT NULL
       GROUP BY cc.person_id
       ORDER BY SUM(e.opens) + SUM(e.clicks) DESC, cc.person_id DESC LIMIT ?`,
@@ -134,7 +135,7 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 export function getCtor(orgId: number): { openers: number; clickers: number; ctor: number | null } {
   const { openers, clickers } = getDb().prepare(
     `SELECT COALESCE(SUM(opens > 0), 0) AS openers, COALESCE(SUM(clicks > 0), 0) AS clickers
-       FROM cc_contact_engagement WHERE org_id = ?`,
+       FROM constant_contact_engagement WHERE org_id = ?`,
   ).get(orgId) as { openers: number; clickers: number };
   return { openers, clickers, ctor: openers > 0 ? clickers / openers : null };
 }
@@ -143,7 +144,7 @@ export function getCtor(orgId: number): { openers: number; clickers: number; cto
 export function getRateOverTime(orgId: number): Series {
   const rows = getDb().prepare(
     `SELECT substr(last_sent_at,1,7) AS m, SUM(stat_sends) AS sends, SUM(stat_opens) AS opens, SUM(stat_clicks) AS clicks
-       FROM cc_campaigns WHERE org_id = ? AND stat_sends > 0 AND last_sent_at IS NOT NULL
+       FROM constant_contact_campaigns WHERE org_id = ? AND stat_sends > 0 AND last_sent_at IS NOT NULL
       GROUP BY m ORDER BY m DESC LIMIT 24`,
   ).all(orgId) as Array<{ m: string; sends: number; opens: number; clicks: number }>;
   return {
@@ -155,7 +156,7 @@ export function getRateOverTime(orgId: number): Series {
 /** New Constant Contact contacts by month. */
 export function getSubscriberGrowth(orgId: number): Slice[] {
   return (getDb().prepare(
-    `SELECT substr(created_at,1,7) AS m, COUNT(*) AS n FROM cc_contacts
+    `SELECT substr(created_at,1,7) AS m, COUNT(*) AS n FROM constant_contact_contacts
       WHERE org_id = ? AND created_at IS NOT NULL GROUP BY m ORDER BY m DESC LIMIT 24`,
   ).all(orgId) as Array<{ m: string; n: number }>).reverse().map((r) => ({ label: r.m, value: r.n }));
 }
@@ -164,7 +165,7 @@ export function getSubscriberGrowth(orgId: number): Slice[] {
 export function getOpensByDow(orgId: number): Slice[] {
   const row = getDb().prepare(
     `SELECT opens_sun, opens_mon, opens_tue, opens_wed, opens_thu, opens_fri, opens_sat
-       FROM cc_engagement_snapshot WHERE org_id = ?`,
+       FROM constant_contact_engagement_snapshot WHERE org_id = ?`,
   ).get(orgId) as Record<string, number> | undefined;
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   return days.map((d) => ({ label: d, value: row?.[`opens_${d.toLowerCase()}`] ?? 0 }));
@@ -174,7 +175,7 @@ export function getOpensByDow(orgId: number): Slice[] {
 export function getBounceOptoutOverTime(orgId: number): Series {
   const rows = getDb().prepare(
     `SELECT substr(last_sent_at,1,7) AS m, SUM(stat_bounces) AS b, SUM(stat_optouts) AS o
-       FROM cc_campaigns WHERE org_id = ? AND stat_sends > 0 AND last_sent_at IS NOT NULL
+       FROM constant_contact_campaigns WHERE org_id = ? AND stat_sends > 0 AND last_sent_at IS NOT NULL
       GROUP BY m ORDER BY m DESC LIMIT 24`,
   ).all(orgId) as Array<{ m: string; b: number; o: number }>;
   return { columns: ["Month", "Bounces", "Opt-outs"], rows: rows.reverse().map((r) => [r.m, r.b ?? 0, r.o ?? 0]) };
@@ -184,7 +185,7 @@ export function getBounceOptoutOverTime(orgId: number): Series {
 export function getCampaignTypePerf(orgId: number): Array<{ type: string; campaigns: number; openRate: number | null; clickRate: number | null }> {
   const rows = getDb().prepare(
     `SELECT COALESCE(type,'(none)') AS type, COUNT(*) AS campaigns, SUM(stat_sends) AS sends, SUM(stat_opens) AS opens, SUM(stat_clicks) AS clicks
-       FROM cc_campaigns WHERE org_id = ? AND stat_sends > 0 GROUP BY type ORDER BY sends DESC`,
+       FROM constant_contact_campaigns WHERE org_id = ? AND stat_sends > 0 GROUP BY type ORDER BY sends DESC`,
   ).all(orgId) as Array<{ type: string; campaigns: number; sends: number; opens: number; clicks: number }>;
   return rows.map((r) => ({ type: r.type, campaigns: r.campaigns, openRate: r.sends ? r.opens / r.sends : null, clickRate: r.sends ? r.clicks / r.sends : null }));
 }
@@ -194,7 +195,7 @@ export function getReachGapPeople(orgId: number, limit = 20): PersonRow[] {
   const rows = getDb().prepare(
     `SELECT pa.person_id AS pid, pa.classification AS cls FROM person_activity pa
       WHERE pa.org_id = ? AND pa.classification IN ('shepherded','active','present')
-        AND pa.person_id NOT IN (SELECT person_id FROM cc_contacts WHERE org_id = ? AND person_id IS NOT NULL)
+        AND pa.person_id NOT IN (SELECT person_id FROM constant_contact_contacts WHERE org_id = ? AND person_id IS NOT NULL)
       LIMIT ?`,
   ).all(orgId, orgId, limit) as Array<{ pid: string; cls: string }>;
   return rows.map((r) => ({ name: personName(orgId, r.pid), detail: r.cls }));
@@ -203,11 +204,11 @@ export function getReachGapPeople(orgId: number, limit = 20): PersonRow[] {
 /** Engaged church people who ARE in CC but have never opened an email (in synced tracking). */
 export function getActiveNeverOpen(orgId: number, limit = 20): PersonRow[] {
   const rows = getDb().prepare(
-    `SELECT DISTINCT cc.person_id AS pid, pa.classification AS cls FROM cc_contacts cc
+    `SELECT DISTINCT cc.person_id AS pid, pa.classification AS cls FROM constant_contact_contacts cc
        JOIN person_activity pa ON pa.org_id = cc.org_id AND pa.person_id = cc.person_id
       WHERE cc.org_id = ? AND cc.person_id IS NOT NULL AND pa.classification IN ('shepherded','active','present')
         AND cc.person_id NOT IN (
-          SELECT c2.person_id FROM cc_contact_engagement e JOIN cc_contacts c2 ON c2.org_id = e.org_id AND c2.contact_id = e.contact_id
+          SELECT c2.person_id FROM constant_contact_engagement e JOIN constant_contact_contacts c2 ON c2.org_id = e.org_id AND c2.contact_id = e.contact_id
            WHERE e.org_id = ? AND e.opens > 0 AND c2.person_id IS NOT NULL)
       ORDER BY cc.person_id LIMIT ?`,
   ).all(orgId, orgId, limit) as Array<{ pid: string; cls: string }>;
@@ -217,8 +218,8 @@ export function getActiveNeverOpen(orgId: number, limit = 20): PersonRow[] {
 /** People who engage with our email but aren't in a group or on a team — warm next-step targets. */
 export function getEngagedNotInGroup(orgId: number, limit = 20): PersonRow[] {
   const rows = getDb().prepare(
-    `SELECT cc.person_id AS pid, SUM(e.opens + e.clicks) AS acts FROM cc_contact_engagement e
-       JOIN cc_contacts cc ON cc.org_id = e.org_id AND cc.contact_id = e.contact_id
+    `SELECT cc.person_id AS pid, SUM(e.opens + e.clicks) AS acts FROM constant_contact_engagement e
+       JOIN constant_contact_contacts cc ON cc.org_id = e.org_id AND cc.contact_id = e.contact_id
        JOIN person_activity pa ON pa.org_id = cc.org_id AND pa.person_id = cc.person_id
       WHERE e.org_id = ? AND (e.opens > 0 OR e.clicks > 0) AND cc.person_id IS NOT NULL
         AND COALESCE(pa.active_group_count,0) = 0 AND COALESCE(pa.active_team_count,0) = 0
@@ -231,8 +232,8 @@ export function getEngagedNotInGroup(orgId: number, limit = 20): PersonRow[] {
 export function getWinBack(orgId: number, limit = 20): { count: number; people: PersonRow[] } {
   const cutoff = new Date(Date.now() - 6 * 30 * 24 * 60 * 60 * 1000).toISOString();
   const db = getDb();
-  const base = `FROM cc_contacts cc WHERE cc.org_id = ? AND cc.created_at IS NOT NULL AND cc.created_at < ?
-     AND NOT EXISTS (SELECT 1 FROM cc_contact_engagement e WHERE e.org_id = cc.org_id AND e.contact_id = cc.contact_id AND e.opens > 0)`;
+  const base = `FROM constant_contact_contacts cc WHERE cc.org_id = ? AND cc.created_at IS NOT NULL AND cc.created_at < ?
+     AND NOT EXISTS (SELECT 1 FROM constant_contact_engagement e WHERE e.org_id = cc.org_id AND e.contact_id = cc.contact_id AND e.opens > 0)`;
   const count = (db.prepare(`SELECT COUNT(*) n ${base}`).get(orgId, cutoff) as { n: number }).n;
   const rows = db.prepare(`SELECT cc.person_id AS pid ${base} AND cc.person_id IS NOT NULL ORDER BY cc.person_id LIMIT ?`).all(orgId, cutoff, limit) as Array<{ pid: string }>;
   return { count, people: rows.map((r) => ({ name: personName(orgId, r.pid), detail: "no opens" })) };
@@ -243,7 +244,7 @@ export function getWinBack(orgId: number, limit = 20): { count: number; people: 
 export function getAllChurchTiers(orgId: number): { listName: string | null; data: Slice[] } {
   const db = getDb();
   const list = db.prepare(
-    `SELECT list_id, name FROM cc_lists WHERE org_id = ?
+    `SELECT list_id, name FROM constant_contact_lists WHERE org_id = ?
       ORDER BY (CASE WHEN lower(name) LIKE '%all%church%' THEN 0 WHEN lower(name) LIKE '%all%' THEN 1 ELSE 2 END),
                COALESCE(membership_count, 0) DESC LIMIT 1`,
   ).get(orgId) as { list_id: string; name: string } | undefined;
@@ -252,8 +253,8 @@ export function getAllChurchTiers(orgId: number): { listName: string | null; dat
     `SELECT CASE WHEN e.clicks > 0 THEN 'Clicked a link'
                  WHEN e.opens > 0 THEN 'Opened only'
                  ELSE 'No opens/clicks' END AS tier, COUNT(*) AS n
-       FROM cc_contact_lists m
-       LEFT JOIN cc_contact_engagement e ON e.org_id = m.org_id AND e.contact_id = m.contact_id
+       FROM constant_contact_list_memberships m
+       LEFT JOIN constant_contact_engagement e ON e.org_id = m.org_id AND e.contact_id = m.contact_id
       WHERE m.org_id = @org AND m.list_id = @lid
       GROUP BY tier`,
   ).all({ org: orgId, lid: list.list_id }) as Array<{ tier: string; n: number }>;
@@ -268,7 +269,7 @@ export function getEngagedCcCoverage(orgId: number): { data: Slice[]; inCc: numb
   const rows = getDb().prepare(
     `SELECT CASE WHEN cc.pid IS NOT NULL THEN 'In Constant Contact' ELSE 'Not in Constant Contact' END AS grp, COUNT(*) AS n
        FROM person_activity pa
-       LEFT JOIN (SELECT DISTINCT person_id AS pid FROM cc_contacts WHERE org_id = @org AND person_id IS NOT NULL) cc
+       LEFT JOIN (SELECT DISTINCT person_id AS pid FROM constant_contact_contacts WHERE org_id = @org AND person_id IS NOT NULL) cc
          ON cc.pid = pa.person_id
       WHERE pa.org_id = @org AND pa.classification IN ('shepherded','active','present')
       GROUP BY grp`,
@@ -281,7 +282,7 @@ export function getEngagedCcCoverage(orgId: number): { data: Slice[]; inCc: numb
 /** Most-clicked links across all synced campaigns. */
 export function getTopClickedLinks(orgId: number, limit = 15): Array<{ url: string; clicks: number }> {
   return getDb().prepare(
-    `SELECT link_url AS url, clicks FROM cc_link_clicks
+    `SELECT link_url AS url, clicks FROM constant_contact_link_clicks
       WHERE org_id = ? ORDER BY clicks DESC, link_url DESC LIMIT ?`,
   ).all(orgId, limit) as Array<{ url: string; clicks: number }>;
 }
@@ -307,7 +308,7 @@ function linkCategory(url: string): string {
 export function getClicksByCategory(orgId: number): Array<{ category: string; clicks: number }> {
   // link_url order: ties in the final sort keep first-seen category order.
   const rows = getDb().prepare(
-    "SELECT link_url AS url, clicks FROM cc_link_clicks WHERE org_id = ? ORDER BY link_url",
+    "SELECT link_url AS url, clicks FROM constant_contact_link_clicks WHERE org_id = ? ORDER BY link_url",
   ).all(orgId) as Array<{ url: string; clicks: number }>;
   const map = new Map<string, number>();
   for (const r of rows) { const c = linkCategory(r.url); map.set(c, (map.get(c) ?? 0) + r.clicks); }
@@ -336,7 +337,7 @@ function campaignCategory(name: string): string {
 /** Aggregated performance grouped by campaign category. */
 export function getCampaignGroupPerf(orgId: number): Array<{ category: string; campaigns: number; sends: number; openRate: number | null; clickRate: number | null }> {
   const rows = getDb().prepare(
-    `SELECT name, stat_sends AS sends, stat_opens AS opens, stat_clicks AS clicks FROM cc_campaigns WHERE org_id = ? AND stat_sends > 0`,
+    `SELECT name, stat_sends AS sends, stat_opens AS opens, stat_clicks AS clicks FROM constant_contact_campaigns WHERE org_id = ? AND stat_sends > 0`,
   ).all(orgId) as Array<{ name: string | null; sends: number; opens: number; clicks: number }>;
   const agg = new Map<string, { campaigns: number; sends: number; opens: number; clicks: number }>();
   for (const r of rows) {
@@ -355,16 +356,17 @@ export function getCampaignGroupPerf(orgId: number): Array<{ category: string; c
 export function getNextStepEffectiveness(orgId: number): NextStepEffect {
   const rows = getDb().prepare(
     // "Engaged" is a correlated EXISTS with its join order pinned by CROSS JOIN:
-    // person -> their contacts (cc_contacts_person) -> rollup PK, two seeks. The
-    // obvious LEFT JOIN to a DISTINCT CTE was 27 ms with table statistics but
+    // person -> their contacts (index constant_contact_contacts_person) ->
+    // rollup PK, two seeks. The obvious LEFT JOIN to a DISTINCT CTE was 27 ms
+    // with table statistics but
     // 2.4 s without them (a planner guessing ~10 rows scanned the CTE once per
     // linked person); this form measured 24 ms either way.
     `WITH linked AS (
-        SELECT DISTINCT person_id AS pid FROM cc_contacts WHERE org_id = @org AND person_id IS NOT NULL
+        SELECT DISTINCT person_id AS pid FROM constant_contact_contacts WHERE org_id = @org AND person_id IS NOT NULL
       )
       SELECT CASE WHEN EXISTS (
-                SELECT 1 FROM cc_contacts c2
-                 CROSS JOIN cc_contact_engagement e ON e.org_id = c2.org_id AND e.contact_id = c2.contact_id
+                SELECT 1 FROM constant_contact_contacts c2
+                 CROSS JOIN constant_contact_engagement e ON e.org_id = c2.org_id AND e.contact_id = c2.contact_id
                  WHERE c2.org_id = @org AND c2.person_id = l.pid AND (e.opens > 0 OR e.clicks > 0)
              ) THEN 'engaged' ELSE 'not' END AS grp,
              COALESCE(pa.classification, 'unknown') AS classification,

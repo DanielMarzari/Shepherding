@@ -7,7 +7,8 @@ import { CHURCH } from "./geocode";
 // /route with steps), and fold each named step (a stretch of road) into
 // road_network keyed by name + quantized endpoints — shared stretches
 // collapse to one row. A road's presence means it's needed; there is no
-// usage weighting. Dormant until OSRM_URL is set.
+// usage weighting. road_network_routed_people records each home once it has
+// been routed, so a home is added once. Dormant until OSRM_URL is set.
 
 const OSRM_URL = process.env.OSRM_URL?.replace(/\/$/, "") ?? "";
 const Q = 1e4; // quantize endpoints to 4 decimals (~11 m) for the dedupe key
@@ -35,7 +36,7 @@ function pendingHomes(orgId: number, limit: number): HomeRow[] {
          FROM person_geo g
          JOIN person_activity pa
            ON pa.org_id = g.org_id AND pa.person_id = g.person_id
-         LEFT JOIN person_mesh m
+         LEFT JOIN road_network_routed_people m
            ON m.org_id = g.org_id AND m.person_id = g.person_id
         WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL
           AND pa.classification IN ${ENGAGED}
@@ -52,7 +53,7 @@ export function countPendingMesh(orgId: number): number {
          FROM person_geo g
          JOIN person_activity pa
            ON pa.org_id = g.org_id AND pa.person_id = g.person_id
-         LEFT JOIN person_mesh m
+         LEFT JOIN road_network_routed_people m
            ON m.org_id = g.org_id AND m.person_id = g.person_id
         WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL
           AND pa.classification IN ${ENGAGED}
@@ -84,7 +85,8 @@ async function routeSteps(home: HomeRow): Promise<OsrmStep[] | null> {
   return json.routes?.[0]?.legs?.flatMap((l) => l.steps ?? []) ?? [];
 }
 
-/** Fold a batch of not-yet-meshed engaged homes into the road network. */
+/** Fold a batch of not-yet-routed engaged homes into the road network. A
+ *  home whose route fails is recorded too, so it is not retried. */
 export async function buildMeshPending(
   orgId: number,
   limit = 60,
@@ -103,7 +105,7 @@ export async function buildMeshPending(
      ON CONFLICT(org_id, road_key) DO NOTHING`,
   );
   const markDone = db.prepare(
-    `INSERT OR IGNORE INTO person_mesh (org_id, person_id) VALUES (?, ?)`,
+    `INSERT OR IGNORE INTO road_network_routed_people (org_id, person_id) VALUES (?, ?)`,
   );
 
   let added = 0;

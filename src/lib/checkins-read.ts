@@ -72,7 +72,7 @@ export function getCheckinSummary(orgId: number): CheckinSummary {
       `SELECT
          COUNT(*) AS totalEvents,
          SUM(CASE WHEN archived_at IS NULL THEN 1 ELSE 0 END) AS activeEvents
-       FROM pco_checkin_events WHERE org_id = ?`,
+       FROM pco_check_in_events WHERE org_id = ?`,
     )
     .get(orgId) as { totalEvents: number; activeEvents: number | null };
 
@@ -103,7 +103,7 @@ export function listCheckinEvents(orgId: number): CheckinEventRow[] {
 
   // Pre-aggregate pco_check_ins per event in a CTE — one pass over the
   // big table — then LEFT JOIN that small per-event summary against
-  // pco_checkin_events. Previously the LEFT JOIN + GROUP BY ran across
+  // pco_check_in_events. Previously the LEFT JOIN + GROUP BY ran across
   // the full 265k-row check-in table with a sort on every page hit.
   const rows = db
     .prepare(
@@ -129,7 +129,7 @@ export function listCheckinEvents(orgId: number): CheckinEventRow[] {
          COALESCE(s.checkinsLast30, 0)  AS checkinsLast30,
          COALESCE(s.peopleLast30, 0)    AS peopleLast30,
          s.lastCheckinAt                AS lastCheckinAt
-       FROM pco_checkin_events e
+       FROM pco_check_in_events e
        LEFT JOIN event_stats s ON s.event_id = e.pco_id
        WHERE e.org_id = ?
          AND e.archived_at IS NULL
@@ -215,7 +215,7 @@ export function listPersonCheckins(
                THEN 1 ELSE 0 END) AS byOther,
          MAX(ci.pco_created_at) AS lastAt
        FROM pco_check_ins ci
-       JOIN pco_checkin_events e
+       JOIN pco_check_in_events e
          ON e.org_id = ci.org_id AND e.pco_id = ci.event_id
        WHERE ci.org_id = ?
          AND ci.person_id = ?

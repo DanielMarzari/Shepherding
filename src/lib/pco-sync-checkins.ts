@@ -223,7 +223,7 @@ function upsertEvent(
   },
 ) {
   prepareCached(
-    `INSERT INTO pco_checkin_events
+    `INSERT INTO pco_check_in_events
       (org_id, pco_id, name, frequency, archived_at, pco_created_at, pco_updated_at, synced_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, pco_id) DO UPDATE SET
@@ -247,7 +247,7 @@ function upsertLocation(
   },
 ) {
   prepareCached(
-    `INSERT INTO pco_checkin_locations
+    `INSERT INTO pco_check_in_locations
       (org_id, pco_id, name, kind, parent_id, archived_at, synced_at)
      VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, pco_id) DO UPDATE SET

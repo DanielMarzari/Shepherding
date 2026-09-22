@@ -78,9 +78,9 @@ export async function GET(req: Request) {
 
     // Backstop for a Constant Contact sync killed before its own rebuild ran
     // (deploy restart, pm2 memory cap), or run by the old code during a
-    // deploy: rebuild the email-engagement rollups whenever cc_contact_activity
-    // has moved past their watermark. ~0.02 ms when fresh. Synchronous, and
-    // never allowed to break the tick.
+    // deploy: rebuild the email-engagement rollups whenever
+    // constant_contact_activity has moved past their watermark. ~0.02 ms when
+    // fresh. Synchronous, and never allowed to break the tick.
     try {
       if (isCcEngagementStale(id)) refreshCcEngagement(id);
     } catch (e) {

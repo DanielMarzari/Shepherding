@@ -620,7 +620,7 @@ async function rebuildPersonActivityAsync(
      SELECT
        p.org_id,
        p.pco_id AS person_id,
-       p.last_form_submission_at AS last_form_at,
+       p.last_form_submission_at,
        p.last_check_in_at,
        ma.last_at AS last_attended_at,
        ms.last_at AS last_served_at,
@@ -638,9 +638,9 @@ async function rebuildPersonActivityAsync(
        coalesce(gc.n, 0) AS active_group_count,
        coalesce(tc.n, 0) AS active_team_count,
        CASE WHEN wg.person_id IS NOT NULL OR wp.person_id IS NOT NULL
-            THEN 1 ELSE 0 END AS in_lane_wors,
-       CASE WHEN coalesce(gc.n, 0) > 0 THEN 1 ELSE 0 END AS in_lane_comm,
-       CASE WHEN coalesce(tc.n, 0) > 0 THEN 1 ELSE 0 END AS in_lane_serv,
+            THEN 1 ELSE 0 END AS in_worship_lane,
+       CASE WHEN coalesce(gc.n, 0) > 0 THEN 1 ELSE 0 END AS in_community_lane,
+       CASE WHEN coalesce(tc.n, 0) > 0 THEN 1 ELSE 0 END AS in_serving_lane,
        fc.at AS first_comm_at,
        fs.at AS first_serv_at
      FROM pco_people p
@@ -664,16 +664,16 @@ async function rebuildPersonActivityAsync(
     db.prepare(
       `INSERT INTO person_activity
          (org_id, person_id,
-          last_form_at, last_check_in_at, last_attended_at, last_served_at,
+          last_form_submission_at, last_check_in_at, last_attended_at, last_served_at,
           last_pco_updated_at, last_activity_at,
           active_group_count, active_team_count,
-          in_lane_wors, in_lane_comm, in_lane_serv,
+          in_worship_lane, in_community_lane, in_serving_lane,
           first_comm_at, first_serv_at, classification)
        SELECT org_id, person_id,
-              last_form_at, last_check_in_at, last_attended_at, last_served_at,
+              last_form_submission_at, last_check_in_at, last_attended_at, last_served_at,
               last_pco_updated_at, last_activity_at,
               active_group_count, active_team_count,
-              in_lane_wors, in_lane_comm, in_lane_serv,
+              in_worship_lane, in_community_lane, in_serving_lane,
               first_comm_at, first_serv_at, NULL
          FROM _pa_new`,
     ).run();
@@ -872,7 +872,7 @@ function rebuildPersonActivity(
         GROUP BY person_id`,
   ).run(orgId, nowIso);
   db.exec(`CREATE INDEX _pa_first_serv_pid ON _pa_first_serv(person_id);`);
-  // For in_lane_wors we need "any group event attendance in window"
+  // For in_worship_lane we need "any group event attendance in window"
   // OR "any non-declined plan serve in window" — two single-pass
   // sets that the INSERT probes via O(1) indexed lookups per row.
   db.prepare(
@@ -902,10 +902,10 @@ function rebuildPersonActivity(
   db.prepare(
     `INSERT INTO person_activity
        (org_id, person_id,
-        last_form_at, last_check_in_at, last_attended_at, last_served_at,
+        last_form_submission_at, last_check_in_at, last_attended_at, last_served_at,
         last_pco_updated_at, last_activity_at,
         active_group_count, active_team_count,
-        in_lane_wors, in_lane_comm, in_lane_serv,
+        in_worship_lane, in_community_lane, in_serving_lane,
         first_comm_at, first_serv_at,
         classification)
      SELECT
@@ -989,7 +989,7 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
         SET classification = CASE
               WHEN person_id IN (SELECT person_id FROM temp.shep_set)
                    THEN 'shepherded'
-              WHEN (last_form_at IS NOT NULL AND last_form_at >= ?)
+              WHEN (last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
                 OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?)
                    THEN 'active'
               WHEN (last_pco_updated_at IS NOT NULL AND last_pco_updated_at >= ?)
@@ -1143,11 +1143,11 @@ function rebuildOrgSnapshot(orgId: number, activityMonths: number): void {
          SUM(CASE WHEN pa.active_group_count = 0
                    AND pa.active_team_count = 0
                   THEN 1 ELSE 0 END) AS unshepherded,
-         SUM(pa.in_lane_wors) AS lane_wors,
-         SUM(pa.in_lane_comm) AS lane_comm,
-         SUM(pa.in_lane_serv) AS lane_serv,
-         SUM(CASE WHEN pa.in_lane_wors = 0 AND pa.in_lane_comm = 0
-                   AND pa.in_lane_serv = 0
+         SUM(pa.in_worship_lane) AS lane_wors,
+         SUM(pa.in_community_lane) AS lane_comm,
+         SUM(pa.in_serving_lane) AS lane_serv,
+         SUM(CASE WHEN pa.in_worship_lane = 0 AND pa.in_community_lane = 0
+                   AND pa.in_serving_lane = 0
                   THEN 1 ELSE 0 END) AS lane_none
        FROM person_activity pa
        JOIN pco_people p

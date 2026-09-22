@@ -755,7 +755,7 @@ export function getCheckinEventStats(orgId: number): {
          COUNT(ci.pco_id)               AS totalCheckins,
          COUNT(DISTINCT ci.person_id)   AS distinctPeople,
          MAX(ci.pco_created_at)         AS lastEventAt
-       FROM pco_checkin_events e
+       FROM pco_check_in_events e
        LEFT JOIN pco_check_ins ci
          ON ci.org_id = e.org_id AND ci.event_id = e.pco_id
        WHERE e.org_id = ?

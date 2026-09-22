@@ -107,8 +107,8 @@ export function getRetention(orgId: number): RetentionSummary {
       `SELECT p.pco_id AS personId,
               p.pco_created_at AS created,
               pa.last_activity_at AS lastActivity,
-              re.first_mi AS firstMi,
-              re.last_mi AS lastMi,
+              re.first_activity_month_index AS firstMi,
+              re.last_activity_month_index AS lastMi,
               CASE WHEN pa.classification IS NOT NULL
                     AND pa.classification != 'inactive'
                    THEN 1 ELSE 0 END AS retained
@@ -562,7 +562,7 @@ export async function refreshRetentionReturns(orgId: number): Promise<void> {
          WHERE pp.org_id=${orgId} AND pl.sort_date >= '${cutoff}'
       )
     )
-    SELECT pid, MIN(mi) AS first_mi, MAX(mi) AS last_mi
+    SELECT pid, MIN(mi) AS first_activity_month_index, MAX(mi) AS last_activity_month_index
       FROM am
      WHERE pid IS NOT NULL AND pid != '' AND mi <= ${currentYear} * 12 + 11
      GROUP BY pid;`;
@@ -584,7 +584,7 @@ export async function refreshRetentionReturns(orgId: number): Promise<void> {
   const engTx = db.transaction(() => {
     db.prepare("DELETE FROM retention_engagement WHERE org_id = ?").run(orgId);
     const ins = db.prepare(
-      "INSERT INTO retention_engagement (org_id, person_id, first_mi, last_mi) VALUES (?, ?, ?, ?)",
+      "INSERT INTO retention_engagement (org_id, person_id, first_activity_month_index, last_activity_month_index) VALUES (?, ?, ?, ?)",
     );
     for (const e of eng) ins.run(orgId, e.pid, e.first, e.last);
   });

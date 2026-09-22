@@ -65,13 +65,13 @@ export default async function ShepherdMapPage() {
             that list in PCO to add or remove people.
           </p>
           <p className="text-muted text-xs mt-2 max-w-2xl">
-            What a shepherd oversees here will also set what they can see
-            in the app. The{" "}
+            Today every user sees the whole organization. Access scoping,
+            where what a shepherd oversees here sets what they can see in
+            the app, is not built yet. The{" "}
             <span className="text-accent">Whole-org access</span> switch on
-            each card is the exception — flip it on for people who should
-            see the entire organization, not just their ministry areas.
-            (Page-by-page scope enforcement is still being built; for now
-            this records who the exceptions are.)
+            each card only takes effect once it is: it marks the people who
+            should keep seeing everything. Until then it records who they
+            are and changes nothing anyone sees.
           </p>
         </div>
 

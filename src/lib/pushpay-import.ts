@@ -91,13 +91,13 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
   const byOrg = new Map<string, string[]>();
   const birthYear = new Map<string, number>();
   for (const p of db
-    .prepare(`SELECT pco_id, first_name, last_name, nickname, given_name, enc_pii, birth_year FROM pco_people WHERE org_id = ?`)
+    .prepare(`SELECT pco_id, first_name, last_name, nickname, legal_first_name, enc_pii, birth_year FROM pco_people WHERE org_id = ?`)
     .all(orgId) as Array<{
     pco_id: string;
     first_name: string | null;
     last_name: string | null;
     nickname: string | null;
-    given_name: string | null;
+    legal_first_name: string | null;
     enc_pii: string | null;
     birth_year: number | null;
   }>) {
@@ -110,8 +110,8 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
     }
     const ln = normNamePart(l ?? "");
     // PCO keeps up to three first-name forms and a donor may use any of them:
-    // first_name "John", given_name "Jung", nickname "Johnny" — one person.
-    const firstForms = [f, p.nickname, p.given_name]
+    // first_name "John", legal_first_name "Jung", nickname "Johnny" — one person.
+    const firstForms = [f, p.nickname, p.legal_first_name]
       .map((x) => normNamePart(x ?? ""))
       .filter((x) => x.length > 0);
     if (ln && firstForms.length) {

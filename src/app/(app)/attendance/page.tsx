@@ -6,7 +6,6 @@ import {
   getServiceAttendance,
   listImportedAttendanceFiles,
 } from "@/lib/attendance-read";
-import { listAttendanceSources } from "@/lib/attendance-sources-read";
 import { buildAttendanceDistribution } from "@/lib/attendance-distribution";
 import { classifyException, type AttendanceMarker } from "@/lib/attendance-exclusion";
 import { holidayMarkersForWeeks } from "@/lib/church-holidays";
@@ -22,8 +21,6 @@ import { analyzeFamilyTrends } from "@/lib/attendance-family";
 import { getSyncSettings } from "@/lib/pco";
 import { getClassificationCounts } from "@/lib/people-read";
 import {
-  addAttendanceSourceAction,
-  removeAttendanceSourceAction,
   removeAttendanceImportAction,
 } from "./actions";
 import { AttendanceUploadForm } from "./upload-form";
@@ -40,7 +37,6 @@ export default async function AttendancePage() {
   const session = await requireOrg();
   const settings = getSyncSettings(session.orgId);
   const counts = getClassificationCounts(session.orgId, settings.activityMonths);
-  const sources = listAttendanceSources(session.orgId);
   const history = getWeeklyAttendance(session.orgId);
   const serviceRows = getServiceAttendance(session.orgId);
   // Markers shared by the per-room and per-service charts: cancellations /
@@ -570,24 +566,15 @@ export default async function AttendancePage() {
         </Card>
 
         <Card>
-          <CardHeader
-            title="Data sources"
-            right={
-              <span className="text-xs text-muted">
-                {sources.length} link{sources.length === 1 ? "" : "s"}
-              </span>
-            }
-          />
+          <CardHeader title="Data sources" />
           <div className="p-5 space-y-4">
             <p className="text-xs text-muted">
-              Spreadsheets and docs that hold historical attendance data
-              (e.g. SharePoint Excel files). Links go below; for the
-              standard{" "}
+              Historical attendance comes from the standard{" "}
               <span className="text-fg">
                 Worship and Activities Attendance
               </span>{" "}
-              quarterly files you can also drop the .xlsx into the
-              importer to populate the chart above.
+              quarterly files: drop the .xlsx into the importer to
+              populate the chart above.
             </p>
             {isAdmin && (
               <div className="rounded-lg border border-border-soft bg-bg-elev-2/50 p-4">
@@ -646,85 +633,9 @@ export default async function AttendancePage() {
               </div>
             )}
 
-            {sources.length > 0 && (
-              <ul className="divide-y divide-border-softer rounded-lg border border-border-soft">
-                {sources.map((s) => (
-                  <li
-                    key={s.id}
-                    className="flex items-start gap-3 px-3.5 py-2.5 text-sm"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <a
-                        href={s.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-medium hover:text-accent break-words"
-                      >
-                        {s.label} ↗
-                      </a>
-                      <div className="text-[11px] text-subtle truncate">
-                        {s.url}
-                      </div>
-                      {s.notes && (
-                        <div className="text-xs text-muted mt-1">
-                          {s.notes}
-                        </div>
-                      )}
-                    </div>
-                    {isAdmin && (
-                      <form action={removeAttendanceSourceAction}>
-                        <input type="hidden" name="id" value={s.id} />
-                        <button
-                          type="submit"
-                          className="text-xs text-muted hover:text-warn-soft-fg cursor-pointer"
-                          title="Remove this source"
-                        >
-                          Remove
-                        </button>
-                      </form>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {isAdmin && (
-              <form
-                key={sources.length}
-                action={addAttendanceSourceAction}
-                className="grid grid-cols-1 sm:grid-cols-[1fr_2fr_auto] gap-2 text-sm"
-              >
-                <input
-                  name="label"
-                  required
-                  maxLength={200}
-                  placeholder="Label (e.g. 2023 Sunday attendance)"
-                  className="bg-bg-elev-2 border border-border-soft rounded px-2.5 py-1.5 text-fg placeholder:text-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                />
-                <input
-                  name="url"
-                  type="url"
-                  required
-                  maxLength={2000}
-                  placeholder="https://..."
-                  className="bg-bg-elev-2 border border-border-soft rounded px-2.5 py-1.5 text-fg placeholder:text-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                />
-                <button
-                  type="submit"
-                  className="px-3 py-1.5 rounded-lg border border-accent text-accent hover:bg-accent hover:text-bg text-xs font-medium cursor-pointer"
-                >
-                  Add source
-                </button>
-                <input
-                  name="notes"
-                  maxLength={1000}
-                  placeholder="Notes (optional)"
-                  className="sm:col-span-3 bg-bg-elev-2 border border-border-soft rounded px-2.5 py-1.5 text-fg placeholder:text-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                />
-              </form>
-            )}
-            {!isAdmin && sources.length === 0 && (
+            {!isAdmin && importedFiles.length === 0 && (
               <p className="text-sm text-muted">
-                No sources added yet.
+                No files imported yet.
               </p>
             )}
           </div>

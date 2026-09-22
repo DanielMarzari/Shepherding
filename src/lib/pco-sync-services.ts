@@ -408,7 +408,8 @@ function toPlanItemRow(planId: string, serviceTypeId: string, it: PCOResource) {
     title: (a.title as string | undefined) ?? null,
     description: (a.description as string | undefined) ?? null,
     htmlDetails: (a.html_details as string | undefined) ?? null,
-    length: (a.length as number | undefined) ?? null,
+    // PCO's Item.length is the item's planned running time in seconds.
+    durationSeconds: (a.length as number | undefined) ?? null,
   };
 }
 
@@ -426,13 +427,13 @@ function replacePlanItems(
     ).run(orgId, planId);
     const stmt = prepareCached(
       `INSERT INTO pco_plan_items
-        (org_id, pco_id, plan_id, service_type_id, sequence, item_type, title, description, html_details, length, synced_at)
+        (org_id, pco_id, plan_id, service_type_id, sequence, item_type, title, description, html_details, duration_seconds, synced_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        ON CONFLICT(org_id, pco_id) DO UPDATE SET
          plan_id = excluded.plan_id, service_type_id = excluded.service_type_id,
          sequence = excluded.sequence, item_type = excluded.item_type,
          title = excluded.title, description = excluded.description,
-         html_details = excluded.html_details, length = excluded.length,
+         html_details = excluded.html_details, duration_seconds = excluded.duration_seconds,
          synced_at = excluded.synced_at`,
     );
     for (const r of rows) {
@@ -446,7 +447,7 @@ function replacePlanItems(
         r.title,
         r.description,
         r.htmlDetails,
-        r.length,
+        r.durationSeconds,
       );
     }
   })();

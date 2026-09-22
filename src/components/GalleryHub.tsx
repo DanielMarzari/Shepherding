@@ -18,6 +18,7 @@ export function GalleryHub({
   emptyHint,
   homeContent,
   homeLabel = "Home",
+  initialSection,
 }: {
   sections: GallerySection[];
   pinned: string[];
@@ -26,6 +27,9 @@ export function GalleryHub({
    *  this content (the dashboard) instead of cards — this is the home hub. */
   homeContent?: ReactNode;
   homeLabel?: string;
+  /** Section id to open on first render instead of the first rail entry.
+   *  Read once: remount (key) the hub when it changes. */
+  initialSection?: string;
 }) {
   const pathname = usePathname();
   const [pins, setPins] = useState<Set<string>>(new Set(pinned));
@@ -48,7 +52,11 @@ export function GalleryHub({
     return base.concat(sections.map((s) => ({ id: s.id, label: s.label, count: s.links.length, icon: s.icon })));
   }, [sections, pinnedLinks.length, homeContent, homeLabel]);
 
-  const [selected, setSelected] = useState<string>(() => railEntries[0]?.id ?? "");
+  const [selected, setSelected] = useState<string>(() =>
+    initialSection && railEntries.some((e) => e.id === initialSection)
+      ? initialSection
+      : railEntries[0]?.id ?? "",
+  );
 
   const q = query.trim().toLowerCase();
   const searching = q.length > 0;

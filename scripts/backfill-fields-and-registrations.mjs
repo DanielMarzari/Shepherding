@@ -116,10 +116,10 @@ for (const def of defs) {
 // ── 2. Registrations signups + attendees ───────────────────────────────
 const signups = await all("/registrations/v2/signups?per_page=100");
 const insSignup = db.prepare(
-  `INSERT INTO pco_registration_signups (org_id, pco_id, name, archived, open, pco_created_at, pco_updated_at, synced_at)
+  `INSERT INTO pco_registration_signups (org_id, pco_id, name, is_archived, open, pco_created_at, pco_updated_at, synced_at)
    VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
    ON CONFLICT(org_id, pco_id) DO UPDATE SET
-     name=excluded.name, archived=excluded.archived, open=excluded.open,
+     name=excluded.name, is_archived=excluded.is_archived, open=excluded.open,
      pco_created_at=excluded.pco_created_at, pco_updated_at=excluded.pco_updated_at,
      synced_at=excluded.synced_at`,
 );

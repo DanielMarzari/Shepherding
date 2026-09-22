@@ -44,7 +44,7 @@ export async function syncRegistrationsAll(
       upsertSignup(orgId, {
         pcoId: s.id,
         name: (a.name as string | undefined) ?? null,
-        archived: a.archived === true ? 1 : 0,
+        isArchived: a.archived === true ? 1 : 0,
         open: a.open === true ? 1 : 0,
         pcoCreatedAt: (a.created_at as string | undefined) ?? null,
         pcoUpdatedAt: (a.updated_at as string | undefined) ?? null,
@@ -98,7 +98,7 @@ function upsertSignup(
   s: {
     pcoId: string;
     name: string | null;
-    archived: number;
+    isArchived: number;
     open: number;
     pcoCreatedAt: string | null;
     pcoUpdatedAt: string | null;
@@ -106,16 +106,16 @@ function upsertSignup(
 ) {
   prepareCached(
     `INSERT INTO pco_registration_signups
-      (org_id, pco_id, name, archived, open, pco_created_at, pco_updated_at, synced_at)
+      (org_id, pco_id, name, is_archived, open, pco_created_at, pco_updated_at, synced_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, pco_id) DO UPDATE SET
        name = excluded.name,
-       archived = excluded.archived,
+       is_archived = excluded.is_archived,
        open = excluded.open,
        pco_created_at = excluded.pco_created_at,
        pco_updated_at = excluded.pco_updated_at,
        synced_at = excluded.synced_at`,
-  ).run(orgId, s.pcoId, s.name, s.archived, s.open, s.pcoCreatedAt, s.pcoUpdatedAt);
+  ).run(orgId, s.pcoId, s.name, s.isArchived, s.open, s.pcoCreatedAt, s.pcoUpdatedAt);
 }
 
 interface AttendeeRow {

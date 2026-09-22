@@ -23,6 +23,17 @@ export function buildHubSections(orgId: number): GallerySection[] {
   return sectionsFor(orgId, "hub");
 }
 
+/** The section a `?layer=` link names, by id or by its label as a slug
+ *  ("Ministry Impact Reports" -> ministry-impact-reports). The label matters
+ *  because resolveNavConfig files pages into an admin's own layer of the same
+ *  name, which has a generated id (Faith Church's MIR layer is
+ *  layer-10-kejpb), so a link cannot know the id. */
+export function findSectionId(sections: GallerySection[], layer: string | undefined): string | undefined {
+  if (!layer) return undefined;
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return (sections.find((s) => s.id === layer) ?? sections.find((s) => slug(s.label) === layer))?.id;
+}
+
 /** The layers that render on /settings, reached from the top-right menu. Same
  *  config, same Nav Builder — just a different surface. */
 export function buildSettingsSections(orgId: number): GallerySection[] {

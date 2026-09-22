@@ -1,10 +1,11 @@
-// One-time backfill of pco_people.nickname / given_name from PCO.
+// One-time backfill of pco_people.nickname / legal_first_name from PCO.
 //
 // PCO keeps three first-name forms (first_name, nickname, given_name) and we
 // only ever stored first_name, so donor matching missed people who give under
 // a different form — e.g. "Jung Cho" vs PCO's first_name "John", given_name
-// "Jung". The nightly sync fills these going forward, but it's incremental, so
-// existing records need one pass.
+// "Jung". PCO's given_name is the legal first name, stored here as
+// legal_first_name (0097 renamed the column). The nightly sync fills these
+// going forward, but it's incremental, so existing records need one pass.
 //
 // Run on the server with the app env loaded:
 //   set -a; . /var/www/apps/shepherdly/.env.production; set +a
@@ -34,20 +35,13 @@ function decrypt(payload) {
 
 const db = new Database(DB_PATH);
 db.pragma("busy_timeout = 15000");
-// Columns normally arrive via migration 0079. If we add them out-of-band we
-// MUST record the migration too, or the next deploy re-runs it, hits
-// "duplicate column name", and aborts before pm2 restarts.
+// The columns come from migrations 0079 (nickname, given_name) and 0097
+// (given_name renamed legal_first_name). This script no longer adds them
+// out-of-band: a column it added would not match what 0097 expects to rename.
 const cols = db.prepare("PRAGMA table_info(pco_people)").all().map((c) => c.name);
-if (!cols.includes("nickname") || !cols.includes("given_name")) {
-  if (!cols.includes("nickname")) db.exec("ALTER TABLE pco_people ADD COLUMN nickname TEXT");
-  if (!cols.includes("given_name")) db.exec("ALTER TABLE pco_people ADD COLUMN given_name TEXT");
-  db.exec(
-    "CREATE TABLE IF NOT EXISTS _migrations (filename TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))",
-  );
-  db.prepare("INSERT OR IGNORE INTO _migrations (filename) VALUES (?)").run(
-    "0079_person_name_variants.sql",
-  );
-  console.log("Added nickname/given_name and recorded migration 0079 as applied.");
+if (!cols.includes("nickname") || !cols.includes("legal_first_name")) {
+  console.error("pco_people has no nickname/legal_first_name yet — start the app once so its migrations run, then re-run this.");
+  process.exit(1);
 }
 
 const cred = db.prepare("SELECT app_id_enc, secret_enc FROM pco_credentials WHERE org_id=?").get(ORG_ID);
@@ -68,7 +62,7 @@ async function getJson(url, attempt = 0) {
   return res.json();
 }
 
-const upd = db.prepare("UPDATE pco_people SET nickname = ?, given_name = ? WHERE org_id = ? AND pco_id = ?");
+const upd = db.prepare("UPDATE pco_people SET nickname = ?, legal_first_name = ? WHERE org_id = ? AND pco_id = ?");
 let url = "/people/v2/people?per_page=100";
 let seen = 0, withNick = 0, withGiven = 0, pages = 0;
 while (url) {
@@ -89,4 +83,4 @@ while (url) {
   if (++pages % 25 === 0) console.log(`  ${seen} people…`);
   await sleep(200);
 }
-console.log(`Done. ${seen} people: ${withNick} have a nickname, ${withGiven} have a given_name.`);
+console.log(`Done. ${seen} people: ${withNick} have a nickname, ${withGiven} have a legal first name (given_name).`);

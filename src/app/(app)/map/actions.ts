@@ -55,7 +55,7 @@ export async function driveStatusAction(): Promise<DriveRunStatus> {
   return getDriveStatus(s.orgId);
 }
 
-/** Kick off road-mesh building (admin only, no-op if OSRM not set). */
+/** Kick off road-network building (admin only, no-op if OSRM not set). */
 export async function startMeshAction(): Promise<MeshRunStatus> {
   const s = await requireOrg();
   if (s.role !== "admin") return getMeshStatus(s.orgId);

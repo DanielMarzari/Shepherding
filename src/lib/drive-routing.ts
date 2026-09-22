@@ -31,7 +31,7 @@ function pendingHomes(orgId: number, limit: number): HomeRow[] {
     .prepare(
       `SELECT g.person_id, g.lat, g.lng
          FROM person_geo g
-         LEFT JOIN person_drive d
+         LEFT JOIN person_drive_from_church d
            ON d.org_id = g.org_id AND d.person_id = g.person_id
         WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL
           AND (d.person_id IS NULL OR d.lat != g.lat OR d.lng != g.lng)
@@ -45,7 +45,7 @@ export function countPendingDrive(orgId: number): number {
     .prepare(
       `SELECT COUNT(*) AS n
          FROM person_geo g
-         LEFT JOIN person_drive d
+         LEFT JOIN person_drive_from_church d
            ON d.org_id = g.org_id AND d.person_id = g.person_id
         WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL
           AND (d.person_id IS NULL OR d.lat != g.lat OR d.lng != g.lng)`,
@@ -105,7 +105,7 @@ export async function computeDrivesPending(
   }
 
   const upsert = getDb().prepare(
-    `INSERT INTO person_drive (org_id, person_id, lat, lng, miles, minutes, status, computed_at)
+    `INSERT INTO person_drive_from_church (org_id, person_id, lat, lng, miles, minutes, status, computed_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, person_id) DO UPDATE SET
        lat = excluded.lat, lng = excluded.lng, miles = excluded.miles,
@@ -151,7 +151,7 @@ export interface DriveStats {
 export function getDriveMap(orgId: number): Map<string, { miles: number; minutes: number }> {
   const rows = getDb()
     .prepare(
-      `SELECT person_id, miles, minutes FROM person_drive
+      `SELECT person_id, miles, minutes FROM person_drive_from_church
         WHERE org_id = ? AND status = 'ok' AND minutes IS NOT NULL`,
     )
     .all(orgId) as Array<{ person_id: string; miles: number; minutes: number }>;

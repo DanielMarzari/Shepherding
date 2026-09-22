@@ -2,12 +2,21 @@ import { AppShell } from "@/components/AppShell";
 import { GalleryHub } from "@/components/GalleryHub";
 import { requireOrg } from "@/lib/auth";
 import { getPinnedKeys } from "@/lib/nav-config-db";
-import { buildHubSections } from "@/lib/hub-sections";
+import { buildHubSections, findSectionId } from "@/lib/hub-sections";
 
-export default async function MorePage() {
+export default async function MorePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ layer?: string | string[] }>;
+}) {
   const session = await requireOrg();
   const sections = buildHubSections(session.orgId);
   const pinned = getPinnedKeys(session.orgId, session.user.id);
+  // ?layer= opens one layer, e.g. the Ministry Impact Reports card and the old
+  // /mir URLs (see next.config.ts). Keyed so a link to another layer from this
+  // page switches the rail instead of keeping the hub's current selection.
+  const { layer } = await searchParams;
+  const initial = findSectionId(sections, typeof layer === "string" ? layer : undefined);
 
   return (
     <AppShell active="See more" breadcrumb="See more" rail={false}>
@@ -20,7 +29,7 @@ export default async function MorePage() {
             themselves under Settings &rarr; Navigation.
           </p>
         </div>
-        <GalleryHub sections={sections} pinned={pinned} />
+        <GalleryHub key={initial ?? ""} sections={sections} pinned={pinned} initialSection={initial} />
       </div>
     </AppShell>
   );

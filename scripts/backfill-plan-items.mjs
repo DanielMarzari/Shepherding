@@ -38,12 +38,14 @@ function decrypt(payload) {
 
 const db = new Database(DB_PATH);
 db.pragma("busy_timeout = 15000");
-db.exec(`CREATE TABLE IF NOT EXISTS pco_plan_items (
-  org_id INTEGER NOT NULL, pco_id TEXT NOT NULL, plan_id TEXT NOT NULL, service_type_id TEXT,
-  sequence INTEGER, item_type TEXT, title TEXT, description TEXT, html_details TEXT, length INTEGER,
-  synced_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), PRIMARY KEY (org_id, pco_id));
-CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON pco_plan_items(org_id, plan_id);
-CREATE INDEX IF NOT EXISTS idx_plan_items_st ON pco_plan_items(org_id, service_type_id);`);
+// The table comes from the app's migrations (0077, then 0095 and 0097, which
+// renamed length to duration_seconds). This script used to create it when
+// missing; a table it created would not be the one those migrations expect.
+const cols = db.prepare("PRAGMA table_info(pco_plan_items)").all().map((c) => c.name);
+if (!cols.includes("duration_seconds")) {
+  console.error("pco_plan_items is missing or not yet migrated — start the app once so its migrations run, then re-run this.");
+  process.exit(1);
+}
 
 const cred = db.prepare("SELECT app_id_enc, secret_enc FROM pco_credentials WHERE org_id=?").get(ORG_ID);
 if (!cred) { console.error("No PCO credentials for org", ORG_ID); process.exit(1); }
@@ -68,12 +70,12 @@ async function getJson(url, attempt = 0) {
 const replacePlan = db.transaction((planId, stId, rows) => {
   db.prepare("DELETE FROM pco_plan_items WHERE org_id=? AND plan_id=?").run(ORG_ID, planId);
   const ins = db.prepare(`INSERT INTO pco_plan_items
-    (org_id, pco_id, plan_id, service_type_id, sequence, item_type, title, description, html_details, length, synced_at)
+    (org_id, pco_id, plan_id, service_type_id, sequence, item_type, title, description, html_details, duration_seconds, synced_at)
     VALUES (?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     ON CONFLICT(org_id,pco_id) DO UPDATE SET plan_id=excluded.plan_id, service_type_id=excluded.service_type_id,
       sequence=excluded.sequence, item_type=excluded.item_type, title=excluded.title, description=excluded.description,
-      html_details=excluded.html_details, length=excluded.length, synced_at=excluded.synced_at`);
-  for (const r of rows) ins.run(ORG_ID, r.id, planId, stId, r.sequence, r.item_type, r.title, r.description, r.html_details, r.length);
+      html_details=excluded.html_details, duration_seconds=excluded.duration_seconds, synced_at=excluded.synced_at`);
+  for (const r of rows) ins.run(ORG_ID, r.id, planId, stId, r.sequence, r.item_type, r.title, r.description, r.html_details, r.duration_seconds);
 });
 
 const plans = db.prepare(
@@ -99,7 +101,7 @@ for (const p of plans) {
           title: a.title ?? null,
           description: a.description ?? null,
           html_details: a.html_details ?? null,
-          length: a.length ?? null,
+          duration_seconds: a.length ?? null, // PCO's Item.length, in seconds
         });
       }
       url = page.links?.next ?? null;

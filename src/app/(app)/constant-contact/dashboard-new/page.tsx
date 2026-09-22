@@ -2,7 +2,7 @@ import { requireOrg } from "@/lib/auth";
 import { renderBuilderRoute } from "../../builder/render-route";
 
 // Builder version of /constant-contact/dashboard (Email dashboard), staged at
-// /constant-contact/dashboard-new for review. All from the synced cc_* tables;
+// /constant-contact/dashboard-new for review. All from the synced constant_contact_* tables;
 // the original stays live until this is approved and promoted.
 export default async function EmailDashboardNewPage({
   searchParams,

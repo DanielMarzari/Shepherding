@@ -2,44 +2,26 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  // pdf-parse / pdfjs-dist do their own dynamic loading (workers etc.)
-  // that Next's bundler chokes on — keep them external and resolved at
-  // runtime by Node, same as better-sqlite3.
-  serverExternalPackages: [
-    "better-sqlite3",
-    "pdf-parse",
-    "pdfjs-dist",
-    "tesseract.js",
-    "@napi-rs/canvas",
-  ],
-  // pdfjs loads its "fake worker" via a dynamic import to a sibling
-  // file Next's tracer can't see — without this the standalone build
-  // ships pdf.mjs but NOT pdf.worker.mjs, and uploads die with
-  // "Setting up fake worker failed". Pin the worker files into the
-  // standalone output for any /mir route.
-  outputFileTracingIncludes: {
-    "/mir": [
-      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
-      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
-      // tesseract.js worker + WASM core + native canvas binding — none
-      // of these are reachable by Next's static tracer.
-      "./node_modules/tesseract.js/**/*",
-      "./node_modules/tesseract.js-core/**/*",
-      "./node_modules/@napi-rs/canvas/**/*",
-    ],
-    "/mir/**": [
-      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
-      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
-      "./node_modules/tesseract.js/**/*",
-      "./node_modules/tesseract.js-core/**/*",
-      "./node_modules/@napi-rs/canvas/**/*",
-    ],
+  serverExternalPackages: ["better-sqlite3"],
+  async redirects() {
+    return [
+      // /mir was the first Ministry Impact Reports: an empty form-and-PDF
+      // version whose tables 0096 drops. The reports are the mir-* builder
+      // pages, listed together in their own hub layer, so every old /mir URL
+      // (the list, /mir/new, /mir/<id>) opens that layer.
+      {
+        source: "/mir/:path*",
+        destination: "/more?layer=ministry-impact-reports",
+        permanent: true,
+      },
+    ];
   },
   experimental: {
     serverActions: {
-      // Default is 1 MB, which silently 502s MIR PDF uploads (the real
-      // ones can be 5-10 MB). Cap at 20 MB to leave room without
-      // inviting truly huge uploads.
+      // Default is 1 MB. Raised for the MIR PDF upload (gone with /mir) and
+      // kept for the two uploads left: the attendance .xlsx importer takes a
+      // quarter's files at once, and the PushPay CSV import a whole export.
+      // 20 MB leaves room without inviting truly huge uploads.
       bodySizeLimit: "20mb",
     },
   },

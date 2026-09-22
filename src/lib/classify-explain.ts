@@ -177,7 +177,7 @@ export function explainClassification(
          COUNT(*) AS total,
          MAX(pco_created_at) AS latest,
          SUM(CASE WHEN event_id IN (
-           SELECT pco_id FROM pco_checkin_events WHERE org_id = ?
+           SELECT pco_id FROM pco_check_in_events WHERE org_id = ?
          ) THEN 1 ELSE 0 END) AS toAnyEvent
        FROM pco_check_ins
        WHERE org_id = ? AND person_id = ?`,

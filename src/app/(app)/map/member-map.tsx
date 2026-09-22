@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MemberPoint } from "@/lib/geocode";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
-import type { RoadLine } from "@/lib/road-mesh";
+import type { RoadLine } from "@/lib/road-network";
 import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
 import { LV_TRACTS } from "@/lib/lv-census";
 import { SURROUNDING_TRACTS } from "@/lib/surrounding-tracts";

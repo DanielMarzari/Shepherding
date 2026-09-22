@@ -60,12 +60,12 @@ const n = (v: any): number | null => { const x = Number(v); return Number.isFini
 
 // ── cursor + run bookkeeping ─────────────────────────────────────────
 function readCursor(orgId: number, resource: string): string | null {
-  const row = getDb().prepare("SELECT last_updated_at FROM cc_sync_cursor WHERE org_id = ? AND resource = ?").get(orgId, resource) as { last_updated_at: string | null } | undefined;
+  const row = getDb().prepare("SELECT last_updated_at FROM constant_contact_sync_cursor WHERE org_id = ? AND resource = ?").get(orgId, resource) as { last_updated_at: string | null } | undefined;
   return row?.last_updated_at ?? null;
 }
 function writeCursor(orgId: number, resource: string, lastUpdatedAt: string | null): void {
   getDb().prepare(
-    `INSERT INTO cc_sync_cursor (org_id, resource, last_updated_at, last_synced_at)
+    `INSERT INTO constant_contact_sync_cursor (org_id, resource, last_updated_at, last_synced_at)
      VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, resource) DO UPDATE SET last_updated_at = excluded.last_updated_at, last_synced_at = excluded.last_synced_at`,
   ).run(orgId, resource, lastUpdatedAt);
@@ -83,7 +83,7 @@ function cutoff(orgId: number, resource: string, full: boolean): string | null {
 // ── resource syncs ───────────────────────────────────────────────────
 async function syncLists(orgId: number, budget: Budget): Promise<number> {
   const up = getDb().prepare(
-    `INSERT INTO cc_lists (org_id, list_id, name, membership_count, favorite, created_at, updated_at, synced_at)
+    `INSERT INTO constant_contact_lists (org_id, list_id, name, membership_count, favorite, created_at, updated_at, synced_at)
      VALUES (@org, @id, @name, @count, @fav, @created, @updated, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, list_id) DO UPDATE SET name=excluded.name, membership_count=excluded.membership_count,
        favorite=excluded.favorite, updated_at=excluded.updated_at, synced_at=excluded.synced_at`,
@@ -102,14 +102,14 @@ async function syncContacts(orgId: number, budget: Budget, full: boolean): Promi
   const db = getDb();
   const resolvePerson = db.prepare("SELECT person_id FROM pco_person_emails WHERE org_id = ? AND email_hash = ? LIMIT 1");
   const up = db.prepare(
-    `INSERT INTO cc_contacts (org_id, contact_id, email_hash, person_id, permission_to_send, opt_in_source, opted_in_at, opted_out_at, create_source, created_at, updated_at, synced_at)
+    `INSERT INTO constant_contact_contacts (org_id, contact_id, email_hash, person_id, permission_to_send, opt_in_source, opted_in_at, opted_out_at, create_source, created_at, updated_at, synced_at)
      VALUES (@org, @id, @hash, @person, @perm, @optinSrc, @optedInAt, @optedOutAt, @createSrc, @created, @updated, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, contact_id) DO UPDATE SET email_hash=excluded.email_hash, person_id=excluded.person_id,
        permission_to_send=excluded.permission_to_send, opt_in_source=excluded.opt_in_source, opted_in_at=excluded.opted_in_at,
        opted_out_at=excluded.opted_out_at, create_source=excluded.create_source, updated_at=excluded.updated_at, synced_at=excluded.synced_at`,
   );
-  const delLists = db.prepare("DELETE FROM cc_contact_lists WHERE org_id = ? AND contact_id = ?");
-  const insList = db.prepare("INSERT OR IGNORE INTO cc_contact_lists (org_id, contact_id, list_id) VALUES (?, ?, ?)");
+  const delLists = db.prepare("DELETE FROM constant_contact_list_memberships WHERE org_id = ? AND contact_id = ?");
+  const insList = db.prepare("INSERT OR IGNORE INTO constant_contact_list_memberships (org_id, contact_id, list_id) VALUES (?, ?, ?)");
 
   const after = cutoff(orgId, "contacts", full);
   const params = new URLSearchParams({ limit: "500", status: "all", include: "list_memberships" });
@@ -141,7 +141,7 @@ async function syncContacts(orgId: number, budget: Budget, full: boolean): Promi
 
 async function syncCampaigns(orgId: number, budget: Budget): Promise<number> {
   const up = getDb().prepare(
-    `INSERT INTO cc_campaigns (org_id, campaign_id, campaign_activity_id, name, current_status, type, created_at, updated_at, synced_at)
+    `INSERT INTO constant_contact_campaigns (org_id, campaign_id, campaign_activity_id, name, current_status, type, created_at, updated_at, synced_at)
      VALUES (@org, @id, @actId, @name, @status, @type, @created, @updated, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, campaign_id) DO UPDATE SET name=excluded.name,
        current_status=excluded.current_status, type=excluded.type, updated_at=excluded.updated_at, synced_at=excluded.synced_at`,
@@ -159,13 +159,15 @@ async function syncCampaigns(orgId: number, budget: Budget): Promise<number> {
 }
 
 /** Per-campaign summary stats. CC keys these by campaign_id (not activity id)
- *  with counts under `unique_counts`, so we fold them into cc_campaigns. */
+ *  with counts under `unique_counts`, so we fold them into
+ *  constant_contact_campaigns. Only the counts something reads are kept:
+ *  forwards, abuse reports, not-opened and a stats timestamp were written here
+ *  and read nowhere (dropped in 0096). */
 async function syncCampaignStats(orgId: number, budget: Budget): Promise<number> {
   const up = getDb().prepare(
-    `UPDATE cc_campaigns SET
+    `UPDATE constant_contact_campaigns SET
         stat_sends = @sends, stat_opens = @opens, stat_clicks = @clicks, stat_bounces = @bounces,
-        stat_optouts = @optouts, stat_forwards = @fwd, stat_abuse = @abuse, stat_not_opened = @dno,
-        last_sent_at = COALESCE(@lastSentAt, last_sent_at), stats_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        stat_optouts = @optouts, last_sent_at = COALESCE(@lastSentAt, last_sent_at)
       WHERE org_id = @org AND campaign_id = @id`,
   );
   let count = 0;
@@ -177,7 +179,7 @@ async function syncCampaignStats(orgId: number, budget: Budget): Promise<number>
       const info = up.run({
         org: orgId, id, lastSentAt: s(r.last_sent_date),
         sends: n(u.sends), opens: n(u.opens), clicks: n(u.clicks), bounces: n(u.bounces),
-        optouts: n(u.optouts), fwd: n(u.forwards), abuse: n(u.abuse), dno: n(u.not_opened),
+        optouts: n(u.optouts),
       });
       if (info.changes) count++;
     }
@@ -194,16 +196,16 @@ async function syncCampaignActivity(orgId: number, budget: Budget, full: boolean
   const db = getDb();
   const window = new Date(Date.now() - LOOKBACK_MS * 4).toISOString(); // ~12 months of sent campaigns
   const candidates = db.prepare(
-    `SELECT campaign_id FROM cc_campaigns
+    `SELECT campaign_id FROM constant_contact_campaigns
       WHERE org_id = ? AND last_sent_at IS NOT NULL AND last_sent_at > ?
         AND (activity_synced_at IS NULL ${full ? "OR 1 = 1" : "OR last_sent_at > activity_synced_at"})
       ORDER BY last_sent_at DESC`,
   ).all(orgId, window) as Array<{ campaign_id: string }>;
 
-  const setActId = db.prepare("UPDATE cc_campaigns SET campaign_activity_id = ? WHERE org_id = ? AND campaign_id = ?");
-  const insCampList = db.prepare("INSERT OR IGNORE INTO cc_campaign_lists (org_id, campaign_activity_id, list_id) VALUES (?,?,?)");
-  const insAct = db.prepare("INSERT OR IGNORE INTO cc_contact_activity (org_id, campaign_activity_id, contact_id, activity_type, occurred_at, link_url) VALUES (?,?,?,?,?,?)");
-  const markDone = db.prepare("UPDATE cc_campaigns SET activity_synced_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ? AND campaign_id = ?");
+  const setActId = db.prepare("UPDATE constant_contact_campaigns SET campaign_activity_id = ? WHERE org_id = ? AND campaign_id = ?");
+  const insCampList = db.prepare("INSERT OR IGNORE INTO constant_contact_campaign_lists (org_id, campaign_activity_id, list_id) VALUES (?,?,?)");
+  const insAct = db.prepare("INSERT OR IGNORE INTO constant_contact_activity (org_id, campaign_activity_id, contact_id, activity_type, occurred_at, link_url) VALUES (?,?,?,?,?,?)");
+  const markDone = db.prepare("UPDATE constant_contact_campaigns SET activity_synced_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ? AND campaign_id = ?");
 
   let campaigns = 0, rowCount = 0, errors = 0;
   for (const c of candidates) {
@@ -245,8 +247,8 @@ async function syncCampaignActivity(orgId: number, budget: Budget, full: boolean
  *  after the contact was synced. Cheap, keeps the join current. */
 function relinkContacts(orgId: number): number {
   return getDb().prepare(
-    `UPDATE cc_contacts
-        SET person_id = (SELECT pe.person_id FROM pco_person_emails pe WHERE pe.org_id = cc_contacts.org_id AND pe.email_hash = cc_contacts.email_hash LIMIT 1)
+    `UPDATE constant_contact_contacts
+        SET person_id = (SELECT pe.person_id FROM pco_person_emails pe WHERE pe.org_id = constant_contact_contacts.org_id AND pe.email_hash = constant_contact_contacts.email_hash LIMIT 1)
       WHERE org_id = ? AND email_hash IS NOT NULL`,
   ).run(orgId).changes;
 }
@@ -254,74 +256,79 @@ function relinkContacts(orgId: number): number {
 // ── engagement rollups ───────────────────────────────────────────────
 // Schema and rationale: db/migrations/0091_constant_contact_engagement.sql,
 // whose populate step is this same SQL for every org at once — keep them in step
-// (its activity_time is occurred_at here: 0093 renamed the column).
+// (its activity_time is occurred_at here: 0093 renamed the column; and its
+// cc_contact_activity, cc_contact_engagement, cc_link_clicks and
+// cc_engagement_snapshot are the constant_contact_ tables here: 0097 renamed
+// them).
 
-/** Rebuild the org's engagement rollups (cc_contact_engagement, cc_link_clicks,
- *  cc_engagement_snapshot) from cc_contact_activity, from scratch, in one
- *  transaction: readers see the old rollup or the new one, never half of each.
+/** Rebuild the org's engagement rollups (constant_contact_engagement,
+ *  constant_contact_link_clicks, constant_contact_engagement_snapshot) from
+ *  constant_contact_activity, from scratch, in one transaction: readers see
+ *  the old rollup or the new one, never half of each.
  *  The watermark (the table-wide MAX(rowid)) is read inside the same
  *  transaction, so every row at or below it was counted. */
 export function refreshCcEngagement(orgId: number): void {
   const db = getDb();
   db.transaction(() => {
-    db.prepare("DELETE FROM cc_contact_engagement WHERE org_id = ?").run(orgId);
-    db.prepare("DELETE FROM cc_link_clicks WHERE org_id = ?").run(orgId);
-    db.prepare("DELETE FROM cc_engagement_snapshot WHERE org_id = ?").run(orgId);
+    db.prepare("DELETE FROM constant_contact_engagement WHERE org_id = ?").run(orgId);
+    db.prepare("DELETE FROM constant_contact_link_clicks WHERE org_id = ?").run(orgId);
+    db.prepare("DELETE FROM constant_contact_engagement_snapshot WHERE org_id = ?").run(orgId);
     // Walks the (org_id, contact_id, activity_type) index in order: no sort,
     // and no table reads, since every column it needs is in the index.
     db.prepare(
-      `INSERT INTO cc_contact_engagement (org_id, contact_id, opens, clicks, bounces, optouts)
+      `INSERT INTO constant_contact_engagement (org_id, contact_id, opens, clicks, bounces, optouts)
        SELECT org_id, contact_id,
               SUM(activity_type = 'open'), SUM(activity_type = 'click'),
               SUM(activity_type = 'bounce'), SUM(activity_type = 'optout')
-         FROM cc_contact_activity WHERE org_id = ?
+         FROM constant_contact_activity WHERE org_id = ?
         GROUP BY contact_id`,
     ).run(orgId);
     db.prepare(
-      `INSERT INTO cc_link_clicks (org_id, link_url, clicks)
-       SELECT org_id, link_url, COUNT(*) FROM cc_contact_activity
+      `INSERT INTO constant_contact_link_clicks (org_id, link_url, clicks)
+       SELECT org_id, link_url, COUNT(*) FROM constant_contact_activity
         WHERE org_id = ? AND activity_type = 'click' AND link_url <> ''
         GROUP BY link_url`,
     ).run(orgId);
     // One row even when the org has no activity yet, so "built, and empty" is
     // distinguishable from "never built".
     db.prepare(
-      `INSERT INTO cc_engagement_snapshot
+      `INSERT INTO constant_contact_engagement_snapshot
          (org_id, activity_rows, activity_watermark_rowid,
           opens_sun, opens_mon, opens_tue, opens_wed, opens_thu, opens_fri, opens_sat)
-       SELECT @org, t.n, (SELECT COALESCE(MAX(rowid), 0) FROM cc_contact_activity),
+       SELECT @org, t.n, (SELECT COALESCE(MAX(rowid), 0) FROM constant_contact_activity),
               COALESCE(d.sun, 0), COALESCE(d.mon, 0), COALESCE(d.tue, 0), COALESCE(d.wed, 0),
               COALESCE(d.thu, 0), COALESCE(d.fri, 0), COALESCE(d.sat, 0)
-         FROM (SELECT COUNT(*) AS n FROM cc_contact_activity WHERE org_id = @org) t
+         FROM (SELECT COUNT(*) AS n FROM constant_contact_activity WHERE org_id = @org) t
          LEFT JOIN (
                SELECT SUM(CASE WHEN dow = 0 THEN n END) AS sun, SUM(CASE WHEN dow = 1 THEN n END) AS mon,
                       SUM(CASE WHEN dow = 2 THEN n END) AS tue, SUM(CASE WHEN dow = 3 THEN n END) AS wed,
                       SUM(CASE WHEN dow = 4 THEN n END) AS thu, SUM(CASE WHEN dow = 5 THEN n END) AS fri,
                       SUM(CASE WHEN dow = 6 THEN n END) AS sat
                  FROM (SELECT CAST(strftime('%w', occurred_at) AS INTEGER) AS dow, COUNT(*) AS n
-                         FROM cc_contact_activity
+                         FROM constant_contact_activity
                         WHERE org_id = @org AND activity_type = 'open' AND occurred_at IS NOT NULL
                         GROUP BY dow)) d`,
     ).run({ org: orgId });
   })();
 }
 
-/** True when cc_contact_activity has moved past the watermark the rollups were
- *  built from, e.g. a sync that was killed before its own rebuild, or the old
- *  code syncing during a deploy. The cron tick calls this every 15 minutes, so
- *  it compares the table-wide MAX(rowid), which is one seek on the rowid
- *  b-tree (0.003-0.007 ms, +0.2 MB RSS on the production copy). A per-org
- *  COUNT(*) walked a 13 MB index instead: 7-8 ms warm, up to 229 ms cold,
- *  +14-15 MB RSS. Table-wide means another org's sync also marks this org
- *  stale. The cost is one unneeded rebuild. */
+/** True when constant_contact_activity has moved past the watermark the
+ *  rollups were built from, e.g. a sync that was killed before its own
+ *  rebuild, or the old code syncing during a deploy. The cron tick calls this
+ *  every 15 minutes, so it compares the table-wide MAX(rowid), which is one
+ *  seek on the rowid b-tree (0.003-0.007 ms, +0.2 MB RSS on the production
+ *  copy). A per-org COUNT(*) walked a 13 MB index instead: 7-8 ms warm, up
+ *  to 229 ms cold, +14-15 MB RSS. Table-wide means another org's sync also
+ *  marks this org stale. The cost is one unneeded rebuild. Renaming the table
+ *  (0097) kept every rowid, so the stored watermarks stayed valid. */
 export function isCcEngagementStale(orgId: number): boolean {
   const db = getDb();
   const built = db.prepare(
-    "SELECT activity_watermark_rowid AS w FROM cc_engagement_snapshot WHERE org_id = ?",
+    "SELECT activity_watermark_rowid AS w FROM constant_contact_engagement_snapshot WHERE org_id = ?",
   ).get(orgId) as { w: number } | undefined;
   // Never built: stale only if the org has activity to count. One index seek.
-  if (!built) return db.prepare("SELECT 1 FROM cc_contact_activity WHERE org_id = ? LIMIT 1").get(orgId) !== undefined;
-  const live = db.prepare("SELECT COALESCE(MAX(rowid), 0) AS w FROM cc_contact_activity").get() as { w: number };
+  if (!built) return db.prepare("SELECT 1 FROM constant_contact_activity WHERE org_id = ? LIMIT 1").get(orgId) !== undefined;
+  const live = db.prepare("SELECT COALESCE(MAX(rowid), 0) AS w FROM constant_contact_activity").get() as { w: number };
   // !== rather than >: a lower max means rows were deleted, which is stale too.
   return live.w !== built.w;
 }
@@ -339,11 +346,11 @@ export async function runCcSync(orgId: number, trigger: "manual" | "auto" = "man
   const db = getDb();
   const full = !!opts.fullRefresh;
   if (full) {
-    db.prepare("DELETE FROM cc_sync_cursor WHERE org_id = ?").run(orgId);
-    db.prepare("UPDATE cc_campaigns SET activity_synced_at = NULL WHERE org_id = ?").run(orgId);
+    db.prepare("DELETE FROM constant_contact_sync_cursor WHERE org_id = ?").run(orgId);
+    db.prepare("UPDATE constant_contact_campaigns SET activity_synced_at = NULL WHERE org_id = ?").run(orgId);
   }
   const runId = Number(
-    db.prepare("INSERT INTO cc_sync_runs (org_id, started_at, trigger, status, full_refresh) VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, 'running', ?)")
+    db.prepare("INSERT INTO constant_contact_sync_runs (org_id, started_at, trigger, status, full_refresh) VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, 'running', ?)")
       .run(orgId, trigger, full ? 1 : 0).lastInsertRowid,
   );
   const budget: Budget = { count: 0, capped: false };
@@ -356,12 +363,12 @@ export async function runCcSync(orgId: number, trigger: "manual" | "auto" = "man
     details.activity = await syncCampaignActivity(orgId, budget, full);
     details.relinked = relinkContacts(orgId);
     details.capped = budget.capped;
-    db.prepare("UPDATE cc_sync_runs SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), status = ?, requests = ?, details = ? WHERE id = ?")
+    db.prepare("UPDATE constant_contact_sync_runs SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), status = ?, requests = ?, details = ? WHERE id = ?")
       .run(budget.capped ? "partial" : "ok", budget.count, JSON.stringify(details), runId);
     return { ok: true, requests: budget.count, capped: budget.capped, details };
   } catch (e) {
     const error = e instanceof Error ? e.message : "sync failed";
-    db.prepare("UPDATE cc_sync_runs SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), status = 'error', requests = ?, details = ?, error = ? WHERE id = ?")
+    db.prepare("UPDATE constant_contact_sync_runs SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), status = 'error', requests = ?, details = ?, error = ? WHERE id = ?")
       .run(budget.count, JSON.stringify(details), error, runId);
     return { ok: false, requests: budget.count, capped: budget.capped, details, error };
   } finally {
@@ -378,6 +385,6 @@ export async function runCcSync(orgId: number, trigger: "manual" | "auto" = "man
 }
 
 export function getLastCcSyncRun(orgId: number): { startedAt: string; finishedAt: string | null; status: string; requests: number; details: string | null } | null {
-  const r = getDb().prepare("SELECT started_at AS startedAt, finished_at AS finishedAt, status, requests, details FROM cc_sync_runs WHERE org_id = ? ORDER BY id DESC LIMIT 1").get(orgId) as any;
+  const r = getDb().prepare("SELECT started_at AS startedAt, finished_at AS finishedAt, status, requests, details FROM constant_contact_sync_runs WHERE org_id = ? ORDER BY id DESC LIMIT 1").get(orgId) as any;
   return r ?? null;
 }

@@ -597,7 +597,9 @@ async function syncPeople(
       }
 
       const nickname = (attrs.nickname as string | undefined) ?? null;
-      const givenName = (attrs.given_name as string | undefined) ?? null;
+      // PCO's given_name is the legal first name (first_name is the name they
+      // go by: first_name "Tom", given_name "Thomas").
+      const legalFirstName = (attrs.given_name as string | undefined) ?? null;
       const pii = {
         first_name: (attrs.first_name as string | undefined) ?? null,
         last_name: (attrs.last_name as string | undefined) ?? null,
@@ -617,7 +619,7 @@ async function syncPeople(
         firstName: pii.first_name,
         lastName: pii.last_name,
         nickname,
-        givenName,
+        legalFirstName,
         gender: (attrs.gender as string | undefined) ?? null,
         membershipType: (attrs.membership as string | undefined) ?? null,
         maritalStatus: maritalValue,
@@ -771,7 +773,7 @@ function upsertPerson(
     firstName: string | null;
     lastName: string | null;
     nickname: string | null;
-    givenName: string | null;
+    legalFirstName: string | null;
     gender: string | null;
     membershipType: string | null;
     maritalStatus: string | null;
@@ -783,7 +785,7 @@ function upsertPerson(
 ) {
   prepareCached(
     `INSERT INTO pco_people
-      (org_id, pco_id, enc_pii, first_name, last_name, nickname, given_name, gender, membership_type,
+      (org_id, pco_id, enc_pii, first_name, last_name, nickname, legal_first_name, gender, membership_type,
        marital_status, status, pco_created_at, pco_updated_at, inactivated_at, synced_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, pco_id) DO UPDATE SET
@@ -791,7 +793,7 @@ function upsertPerson(
        first_name = excluded.first_name,
        last_name = excluded.last_name,
        nickname = excluded.nickname,
-       given_name = excluded.given_name,
+       legal_first_name = excluded.legal_first_name,
        gender = excluded.gender,
        membership_type = excluded.membership_type,
        marital_status = excluded.marital_status,
@@ -807,7 +809,7 @@ function upsertPerson(
     p.firstName,
     p.lastName,
     p.nickname,
-    p.givenName,
+    p.legalFirstName,
     p.gender,
     p.membershipType,
     p.maritalStatus,
@@ -1087,9 +1089,10 @@ function refreshLastActivity(orgId: number) {
 
 /** A junk-named person with any of these is kept, not deleted: they are typed
  *  in by people (care rosters and notes, "I know them" marks, shepherd links,
- *  whole-org access, Ministry Impact Report leads and teams) or attribute
- *  gifts to them (PushPay: a manual match is a human decision, and a giver is
- *  not junk). No sync can bring these back. The first four tables also carry
+ *  whole-org access) or attribute gifts to them (PushPay: a manual match is a
+ *  human decision, and a giver is not junk). No sync can bring these back.
+ *  (The first Ministry Impact Reports' leads and teams were here too, until
+ *  0096 dropped those empty tables.) The first four tables also carry
  *  foreign keys to pco_people ON DELETE RESTRICT (0094), so deleting such a
  *  person would fail the whole pass rather than lose them. */
 const HAS_OWNED_DATA_SQL = `SELECT
@@ -1100,13 +1103,11 @@ const HAS_OWNED_DATA_SQL = `SELECT
   OR EXISTS (SELECT 1 FROM shepherd_assignments WHERE org_id = @org AND shepherd_person_id = @id)
   OR EXISTS (SELECT 1 FROM shepherd_assignments WHERE org_id = @org AND target_kind = 'person' AND target_id = @id)
   OR EXISTS (SELECT 1 FROM org_wide_access WHERE org_id = @org AND person_id = @id)
-  OR EXISTS (SELECT 1 FROM mir_team_members WHERE org_id = @org AND person_id = @id)
-  OR EXISTS (SELECT 1 FROM mir_docs WHERE org_id = @org AND (lead_person_id = @id OR sponsor_person_id = @id))
   OR EXISTS (SELECT 1 FROM pushpay_donors WHERE org_id = @org AND person_id = @id)
   OR EXISTS (SELECT 1 FROM pushpay_transactions WHERE org_id = @org AND person_id = @id) AS owned`;
 
 /** The person's own rows mirrored from PCO, the per-person rows computed from
- *  them (activity snapshot, geocode, drive time, road mesh, retention), and
+ *  them (activity snapshot, geocode, drive time, road network, retention), and
  *  the duplicate-name pairs naming them. A deleted person's rows go with them
  *  in the same transaction, so they can never outlive the person. All but
  *  duplicate_pairs (7k rows) are indexed on (org_id, person_id).
@@ -1137,9 +1138,9 @@ const PERSON_ROW_DELETES = [
   "DELETE FROM pco_registration_attendees WHERE org_id = ? AND person_id = ?",
   "DELETE FROM pco_team_memberships WHERE org_id = ? AND person_id = ?",
   "DELETE FROM person_activity WHERE org_id = ? AND person_id = ?",
-  "DELETE FROM person_drive WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM person_drive_from_church WHERE org_id = ? AND person_id = ?",
   "DELETE FROM person_geo WHERE org_id = ? AND person_id = ?",
-  "DELETE FROM person_mesh WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM road_network_routed_people WHERE org_id = ? AND person_id = ?",
   "DELETE FROM retention_engagement WHERE org_id = ? AND person_id = ?",
   "DELETE FROM duplicate_pairs WHERE org_id = ? AND ? IN (person_a, person_b)",
 ] as const;
@@ -1170,8 +1171,8 @@ export function refreshIsMinor(orgId: number): string | null {
   // What relinkContacts (constant-contact-sync.ts) would set once the
   // person's email hashes are gone: another person with that address, or none.
   const relinkCc = db.prepare(
-    `UPDATE cc_contacts
-        SET person_id = (SELECT pe.person_id FROM pco_person_emails pe WHERE pe.org_id = cc_contacts.org_id AND pe.email_hash = cc_contacts.email_hash LIMIT 1)
+    `UPDATE constant_contact_contacts
+        SET person_id = (SELECT pe.person_id FROM pco_person_emails pe WHERE pe.org_id = constant_contact_contacts.org_id AND pe.email_hash = constant_contact_contacts.email_hash LIMIT 1)
       WHERE org_id = ? AND person_id = ?`,
   );
   const kept: string[] = [];
@@ -1392,10 +1393,10 @@ export function getSyncedCounts(orgId: number): SyncedDataCounts {
       "SELECT COUNT(*) AS n FROM pco_group_events WHERE org_id = ?",
     ),
     checkinEvents: one(
-      "SELECT COUNT(*) AS n FROM pco_checkin_events WHERE org_id = ?",
+      "SELECT COUNT(*) AS n FROM pco_check_in_events WHERE org_id = ?",
     ),
     checkinLocations: one(
-      "SELECT COUNT(*) AS n FROM pco_checkin_locations WHERE org_id = ?",
+      "SELECT COUNT(*) AS n FROM pco_check_in_locations WHERE org_id = ?",
     ),
     checkIns: one(
       "SELECT COUNT(*) AS n FROM pco_check_ins WHERE org_id = ?",
