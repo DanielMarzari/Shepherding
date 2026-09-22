@@ -6,7 +6,11 @@ import {
   getCommunityLaneStats,
   listCommunityPeople,
 } from "@/lib/community-lane";
-import { getGiveLaneStats, listGivingPeople } from "@/lib/give-lane";
+import {
+  GIVE_LANE_LAPSE_DAYS,
+  getGiveLaneStats,
+  listGivingPeople,
+} from "@/lib/give-lane";
 import {
   LANE_STATS,
   type LaneKey,
@@ -688,7 +692,7 @@ function ServingLane({
   );
 }
 
-// ─── Giving lane (real data from imported PushPay donors) ─────────────────
+// ─── Giving lane (real data from the imported PushPay gifts) ──────────────
 
 function GivingLane({
   laneStats,
@@ -714,17 +718,28 @@ function GivingLane({
             </h1>
             <Pill tone="muted">{stats.givers.toLocaleString()} givers</Pill>
             <span className="text-xs text-muted">
-              real data from <code className="font-mono">pushpay_donors</code>
+              {stats.windowStart && stats.windowEnd ? (
+                <>
+                  gifts from {stats.windowStart} to {stats.windowEnd}
+                </>
+              ) : (
+                "no gifts imported"
+              )}
             </span>
           </div>
           <p className="text-muted text-sm mt-2 max-w-2xl">
             Anyone matched to an imported PushPay gift counts as Giving — a next
-            step they&apos;ve <span className="text-fg">completed</span>. Import
-            or refresh the data on{" "}
+            step they&apos;ve <span className="text-fg">completed</span>. Every
+            number here is a count of{" "}
+            <span className="text-fg">gifts and people</span>: the PushPay
+            Transactions export carries no amounts, so no figure on this page is
+            money. It also only reaches back to the first gift in the window
+            above, so someone who stopped giving before it does not appear at
+            all. Import or refresh the Transactions export on{" "}
             <Link href="/pushpay" className="text-accent hover:underline">
               PushPay
             </Link>
-            . Donors we couldn&apos;t confidently place are reconciled on{" "}
+            . Payers we couldn&apos;t confidently place are reconciled on{" "}
             <Link href="/audit/pushpay" className="text-accent hover:underline">
               PushPay connections
             </Link>
@@ -737,44 +752,68 @@ function GivingLane({
             <p className="text-sm text-muted">
               No giving imported yet.{" "}
               <Link href="/pushpay" className="text-accent hover:underline">
-                Drop the PushPay “All Donors” export →
+                Drop the PushPay “Transactions” export →
               </Link>
             </p>
           </Card>
         ) : (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               <Card className="p-4">
                 <div className="text-xs text-muted mb-1.5">Givers</div>
                 <div className="tnum text-2xl font-semibold">
                   {stats.givers.toLocaleString()}
                 </div>
                 <div className="text-xs text-muted mt-1">
-                  people who have given
+                  people linked to a gift in the window
                 </div>
               </Card>
               <Card className="p-4">
-                <div className="text-xs text-muted mb-1.5">Recurring</div>
+                <div className="text-xs text-muted mb-1.5">On a schedule</div>
                 <div className="tnum text-2xl font-semibold">
                   {stats.recurring.toLocaleString()}
                 </div>
-                <div className="text-xs text-muted mt-1">regular / scheduled</div>
+                <div className="text-xs text-muted mt-1">
+                  gave at least once through a recurring schedule
+                </div>
               </Card>
               <Card className="p-4">
                 <div className="text-xs text-muted mb-1.5">Lapsed</div>
                 <div className="tnum text-2xl font-semibold text-warn-soft-fg">
                   {stats.lapsed.toLocaleString()}
                 </div>
-                <div className="text-xs text-muted mt-1">stopped giving</div>
+                <div className="text-xs text-muted mt-1">
+                  no gift in the last {GIVE_LANE_LAPSE_DAYS} days of the window
+                  — our rule, read off the gifts
+                </div>
+              </Card>
+              <Card className="p-4">
+                <div className="text-xs text-muted mb-1.5">First seen</div>
+                <div className="tnum text-2xl font-semibold">
+                  {stats.firstSeen.toLocaleString()}
+                </div>
+                <div className="text-xs text-muted mt-1">
+                  first gift in those same {GIVE_LANE_LAPSE_DAYS} days — new to
+                  this import, not necessarily to the church
+                </div>
+              </Card>
+              <Card className="p-4">
+                <div className="text-xs text-muted mb-1.5">Gifts</div>
+                <div className="tnum text-2xl font-semibold">
+                  {stats.gifts.toLocaleString()}
+                </div>
+                <div className="text-xs text-muted mt-1">
+                  individual gifts in the window — a count, never an amount
+                </div>
               </Card>
               <Card
-                className={`p-4 ${stats.unlinked > 0 ? "border-accent" : ""}`}
+                className={`p-4 ${stats.unlinkedPayers > 0 ? "border-accent" : ""}`}
               >
-                <div className="text-xs text-muted mb-1.5">Unlinked donors</div>
+                <div className="text-xs text-muted mb-1.5">Unlinked payers</div>
                 <div className="tnum text-2xl font-semibold">
-                  {stats.unlinked.toLocaleString()}
+                  {stats.unlinkedPayers.toLocaleString()}
                 </div>
-                {stats.unlinked > 0 ? (
+                {stats.unlinkedPayers > 0 ? (
                   <Link
                     href="/audit/pushpay"
                     className="text-xs text-accent hover:underline mt-1 inline-block"
@@ -792,13 +831,14 @@ function GivingLane({
                 title="People in Giving"
                 right={
                   <span className="text-xs text-muted">
-                    top {people.length} by most recent gift
+                    top {people.length} by most recent gift · gift counts, not
+                    amounts
                   </span>
                 }
               />
               {people.length === 0 ? (
                 <div className="px-5 py-12 text-center text-sm text-muted">
-                  Every gift is still awaiting reconciliation — assign donors on{" "}
+                  Every gift is still awaiting reconciliation — assign payers on{" "}
                   <Link
                     href="/audit/pushpay"
                     className="text-accent hover:underline"
@@ -811,11 +851,12 @@ function GivingLane({
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm table-fixed min-w-[820px]">
                     <colgroup>
-                      <col className="w-[30%]" />
-                      <col className="w-[16%]" />
-                      <col className="w-[16%]" />
-                      <col className="w-[16%]" />
+                      <col className="w-[28%]" />
                       <col className="w-[14%]" />
+                      <col className="w-[18%]" />
+                      <col className="w-[16%]" />
+                      <col className="w-[10%]" />
+                      <col className="w-[7%]" />
                       <col className="w-[12%]" />
                     </colgroup>
                     <thead className="text-xs text-muted">
@@ -827,13 +868,16 @@ function GivingLane({
                           Membership
                         </th>
                         <th className="text-left font-medium px-5 py-2">
-                          Donor stage
+                          Pattern
                         </th>
                         <th className="text-left font-medium px-5 py-2">
-                          Last gift fund
+                          Funds
                         </th>
                         <th className="text-left font-medium px-5 py-2">
-                          Channel
+                          How
+                        </th>
+                        <th className="text-right font-medium px-5 py-2">
+                          Gifts
                         </th>
                         <th className="text-right font-medium px-5 py-2">
                           Last gift
@@ -868,19 +912,24 @@ function GivingLane({
                             )}
                           </td>
                           <td className="px-5 py-2.5">
-                            {p.stage ? (
-                              <span className="text-[11px] px-1.5 py-0.5 rounded bg-bg-elev-2 text-muted">
-                                {p.stage}
-                              </span>
-                            ) : (
-                              <span className="text-subtle">—</span>
-                            )}
+                            <span
+                              className={`text-[11px] px-1.5 py-0.5 rounded bg-bg-elev-2 ${
+                                p.lapsed
+                                  ? "text-warn-soft-fg font-medium"
+                                  : "text-muted"
+                              }`}
+                            >
+                              {p.pattern}
+                            </span>
                           </td>
                           <td className="px-5 py-2.5 text-muted truncate">
-                            {p.fund ?? <span className="text-subtle">—</span>}
+                            {p.funds ?? <span className="text-subtle">—</span>}
                           </td>
                           <td className="px-5 py-2.5 text-muted truncate">
-                            {p.channel ?? <span className="text-subtle">—</span>}
+                            {p.method || <span className="text-subtle">—</span>}
+                          </td>
+                          <td className="px-5 py-2.5 text-right tnum text-muted">
+                            {p.gifts.toLocaleString()}
                           </td>
                           <td className="px-5 py-2.5 text-right tnum text-muted">
                             {p.lastGiftDate ?? "—"}

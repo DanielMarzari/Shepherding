@@ -11,7 +11,7 @@ import { TARGET_KIND_LABELS } from "./assignments-types";
 import { getListByName } from "./lists-read";
 import { getShepherdTeamBreakdown } from "./shepherd-team-read";
 import { type AuditFlag, auditMembershipType, findNameIssuesAcrossOrg, listDuplicatePairs } from "./audit-read";
-import { listGivingPeople } from "./give-lane";
+import { listGivingPeople, listLapsedGivers } from "./give-lane";
 import { buildRelationshipGraph } from "./graph-read";
 import { getIntakeGraph } from "./intake-graph";
 import { getRetention } from "./retention-read";
@@ -375,22 +375,25 @@ const SOURCES: Record<string, SourceFn> = {
     return R(["Name", "Membership", "Engagement"], rows.map((r) => [nameOf(r.enc), r.mt ?? "—", r.cls]));
   },
 
-  // Givers, one row per person (latest gift wins), decrypted names. For the
-  // giving stats page + any custom donor list.
+  // Givers, one row per person, most recent gift first, decrypted names. For
+  // the giving stats page + any custom giver list. Gift COUNTS: the PushPay
+  // export carries no amounts.
   giving_directory: (orgId) => {
     const rows = listGivingPeople(orgId, 1000);
     return R(
-      ["Name", "Membership", "Donor stage", "Last gift fund", "Channel", "Last gift"],
-      rows.map((r) => [r.fullName, r.membershipType ?? "—", r.stage ?? "—", r.fund ?? "—", r.channel ?? "—", r.lastGiftDate ?? "—"]),
+      ["Name", "Membership", "Pattern", "Funds", "How", "Gifts", "First gift", "Last gift"],
+      rows.map((r) => [r.fullName, r.membershipType ?? "—", r.pattern, r.funds ?? "—", r.method || "—", r.gifts, r.firstGiftDate ?? "—", r.lastGiftDate ?? "—"]),
     );
   },
 
-  // Lapsed givers to reconnect — same list narrowed to a lapsed donor stage.
+  // Givers who have gone quiet — its own query, ordered longest-silence-first,
+  // rather than the directory filtered: the directory is capped at the 1,000
+  // most recent givers, which is exactly the wrong 1,000 for this list.
   giving_lapsed: (orgId) => {
-    const rows = listGivingPeople(orgId, 1000).filter((r) => (r.stage ?? "").toLowerCase().includes("lapsed"));
+    const rows = listLapsedGivers(orgId, 1000);
     return R(
-      ["Name", "Membership", "Last gift fund", "Last gift"],
-      rows.map((r) => [r.fullName, r.membershipType ?? "—", r.fund ?? "—", r.lastGiftDate ?? "—"]),
+      ["Name", "Membership", "Funds", "Gifts", "First gift", "Last gift"],
+      rows.map((r) => [r.fullName, r.membershipType ?? "—", r.funds ?? "—", r.gifts, r.firstGiftDate ?? "—", r.lastGiftDate ?? "—"]),
     );
   },
 };

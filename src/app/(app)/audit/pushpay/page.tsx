@@ -4,6 +4,7 @@ import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import {
   countDonorsByStatus,
+  getPushpayGivingSummary,
   getPushpayImport,
   listDonorsByStatus,
 } from "@/lib/pushpay-import";
@@ -28,6 +29,7 @@ export default async function PushpayConnectionsPage({
   const params = await searchParams;
   const meta = getPushpayImport(session.orgId);
   const counts = countDonorsByStatus(session.orgId);
+  const giving = getPushpayGivingSummary(session.orgId);
 
   const status =
     params.status && TABS.some((t) => t.key === params.status)
@@ -46,16 +48,54 @@ export default async function PushpayConnectionsPage({
             PushPay connections
           </h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
-            Donors from the PushPay export that we couldn&apos;t confidently tie
-            to one person. <span className="text-fg">Needs review</span> are
-            donors matching more than one person (a shared household email, or
-            two people with the same name); <span className="text-fg">Unmatched</span>{" "}
-            found no person at all. Assign each to the right PCO record — that
-            marks them as having given and feeds the giving stats. Search by
+            Rows from the PushPay <span className="text-fg">All Donors</span>{" "}
+            export that we couldn&apos;t confidently tie to one person.{" "}
+            <span className="text-fg">Needs review</span> are donors matching
+            more than one person (a shared household email, or two people with
+            the same name); <span className="text-fg">Unmatched</span> found no
+            person at all. Assign each to the right PCO record. Search by
             <span className="text-fg"> name, email, or phone</span> to find the
             right person — the best way to place organizations and odd names.
           </p>
         </div>
+
+        <Card className="p-4">
+          <div className="text-sm font-medium mb-1">
+            Where giving comes from now
+          </div>
+          <p className="text-xs text-muted max-w-3xl">
+            The giving figures across the app are built from the PushPay{" "}
+            <span className="text-fg">Transactions</span> export — one row per
+            gift, keyed by Payer ID — and not from the All Donors list below,
+            which has not been loaded since 22 September 2026. Nothing in either
+            export carries an amount, so every giving number is a count of gifts
+            or of people.{" "}
+            {giving ? (
+              <>
+                The loaded gifts run from{" "}
+                <span className="text-fg">{giving.firstGiftOn ?? "?"}</span> to{" "}
+                <span className="text-fg">{giving.lastGiftOn ?? "?"}</span>:{" "}
+                {giving.gifts.toLocaleString()} gifts from{" "}
+                {giving.payers.toLocaleString()} payers, of which{" "}
+                <span className="text-fg">
+                  {(giving.payers - giving.linkedPayers).toLocaleString()}
+                </span>{" "}
+                have no person attached. A payer is linked by the “Your ID”
+                column in the export, so the way to place those is to fill that
+                field in PushPay and upload the export again — reconciling the
+                donor list below does not reach them.
+              </>
+            ) : (
+              <>
+                No Transactions export has been imported yet, so there are no
+                gifts to attach to anyone.
+              </>
+            )}{" "}
+            <Link href="/pushpay" className="text-accent hover:underline">
+              Import on PushPay →
+            </Link>
+          </p>
+        </Card>
 
         {meta && session.role === "admin" && (
           <div className="rounded-xl border border-border-soft p-4">
@@ -75,7 +115,7 @@ export default async function PushpayConnectionsPage({
             <p className="text-sm text-muted">
               No PushPay data imported yet.{" "}
               <Link href="/pushpay" className="text-accent hover:underline">
-                Import the donor export →
+                Import the Transactions export →
               </Link>
             </p>
           </Card>

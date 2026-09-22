@@ -46,6 +46,11 @@ const SECTION_TO_GROUP: Record<string, string> = {
  *  somebody actually wants one of these gone. */
 const MANAGED_PAGES: Record<string, string> = {
   spotify: "settings-integration",
+  // Giving impact joins the two pages it shares a method with. Faith Church's
+  // saved nav keeps Sermon impact and Announcement impact together in
+  // "Next steps", so that is where this belongs for them too — without it the
+  // page would be reachable only by URL.
+  "giving-impact": "next-steps",
   // Where PushPay's and Subsplash's credential slots moved when their own
   // pages stopped holding credentials (migration 0092).
   credentials: "settings-integration",

@@ -1,5 +1,13 @@
 import "server-only";
 import type { SeedBlock } from "./builder-seeds";
+import {
+  givingMethodCase,
+  givingPatternCase,
+  givingWindow,
+  givingWindowLabel,
+  lapseCutoff,
+  payerMethodFlags,
+} from "./giving-sql";
 import type { MirExtras } from "./mir-seeds";
 
 // Live metrics for the Ministry Impact Report pages — the "Outputs" column of
@@ -315,6 +323,9 @@ const KID_VISIT_COUNTS = `
  *  comparison is possible yet. Every block below is scoped to whatever the
  *  table actually holds rather than to a rolling window that would silently
  *  read as complete. */
+/** The loaded gift window, for a label that has to say what it counts. */
+const GIFT_WINDOW = givingWindow();
+
 const GIFTS = `
   SELECT t.transaction_id, t.received_on, t.source, t.person_id, t.fund_name,
          substr(t.received_on, 1, 7) AS month,
@@ -993,7 +1004,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         SELECT "From", "To", "People"
           FROM flows
          WHERE "People" > 0;`, "sankey", { span: 12 }),
-      chart("Other next steps among small group members", "people in a small group who are also serving or giving",
+      chart("Other next steps among small group members", "people in a small group who are also serving, or who gave inside the PushPay gift window",
         `
         WITH sg AS (
           SELECT DISTINCT gm.person_id AS person_id
@@ -1011,19 +1022,22 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                                     WHERE tm.org_id = :orgId
                                       AND tm.person_id = sg.person_id
                                       AND tm.archived_at IS NULL) THEN 1 ELSE 0 END AS serving,
-                 CASE WHEN EXISTS (SELECT 1 FROM pushpay_donors d
-                                    WHERE d.org_id = :orgId
-                                      AND d.person_id = sg.person_id) THEN 1 ELSE 0 END AS giving
+                 CASE WHEN EXISTS (SELECT 1 FROM pushpay_payer_summary s
+                                    WHERE s.org_id = :orgId
+                                      AND s.person_id = sg.person_id) THEN 1 ELSE 0 END AS giving
             FROM sg
         )
+        -- The two giving rows carry the gift window in their label. Giving
+        -- here means a gift inside the loaded PushPay Transactions export, not
+        -- ever, and a bar that just said "Also giving" would be read as ever.
         SELECT "Next step", "People" FROM (
           SELECT 'In a small group'       AS "Next step", COUNT(*) AS "People", 1 AS ord FROM flags
           UNION ALL
           SELECT 'Also serving on a team', COALESCE(SUM(serving), 0), 2 FROM flags
           UNION ALL
-          SELECT 'Also giving',            COALESCE(SUM(giving), 0),  3 FROM flags
+          SELECT 'Also giving, ' || ${GIFT_WINDOW}, COALESCE(SUM(giving), 0),  3 FROM flags
           UNION ALL
-          SELECT 'Serving and giving',
+          SELECT 'Serving and giving, ' || ${GIFT_WINDOW},
                  COALESCE(SUM(CASE WHEN serving = 1 AND giving = 1 THEN 1 ELSE 0 END), 0), 4 FROM flags
         ) ORDER BY ord`, "bar", { span: 6 }),
       chart("Share of the church in a small group", "against three different denominators, because they disagree",
@@ -1651,10 +1665,12 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         `SELECT COUNT(*) FROM pco_person_fields
           WHERE org_id = :orgId AND field_name = 'Baptism'
             AND value_on IS NOT NULL AND value_on >= date('now','-365 day')`),
-      stat("People giving", "gave at least once in the last 12 months",
-        `SELECT COUNT(DISTINCT person_id) FROM pushpay_donors
-          WHERE org_id = :orgId AND person_id IS NOT NULL
-            AND last_gift_on IS NOT NULL AND last_gift_on >= date('now','-365 day')`),
+      // Not "in the last 12 months": the loaded gift window is shorter than a
+      // year (1 Jan - 16 Sep 2026), so a rolling-year phrasing would read as
+      // complete when it is not.
+      stat("People giving", "gave at least once inside the PushPay gift window",
+        `SELECT COUNT(DISTINCT person_id) FROM pushpay_payer_summary
+          WHERE org_id = :orgId AND person_id IS NOT NULL`),
       chart("Sunday attendance", "on campus, live online, and on demand — every Sunday on the sheet",
         `SELECT sunday_on AS "Week",
                 in_person_total AS "On campus",
@@ -1704,10 +1720,9 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
          UNION ALL SELECT 'Serving on a team',
                 (SELECT COUNT(DISTINCT person_id) FROM pco_team_memberships
                   WHERE org_id = :orgId AND archived_at IS NULL AND person_id <> '')
-         UNION ALL SELECT 'Giving (last 12 months)',
-                (SELECT COUNT(DISTINCT person_id) FROM pushpay_donors
-                  WHERE org_id = :orgId AND person_id IS NOT NULL
-                    AND last_gift_on IS NOT NULL AND last_gift_on >= date('now','-365 day'))
+         UNION ALL SELECT 'Giving (in the gift window)',
+                (SELECT COUNT(DISTINCT person_id) FROM pushpay_payer_summary
+                  WHERE org_id = :orgId AND person_id IS NOT NULL)
          UNION ALL SELECT 'A member',
                 (SELECT COUNT(*) FROM pco_people
                   WHERE org_id = :orgId AND membership_type = 'Member')
@@ -2066,21 +2081,32 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
 
   "mir-finance": {
     metrics: [
-      stat("Donors on record", "PushPay donors matched to a person",
-        `SELECT COUNT(DISTINCT person_id) FROM pushpay_donors
-          WHERE org_id = :orgId AND person_id IS NOT NULL`, { color: "highlight" }),
-      stat("Gave in the last year", "donors with a gift in the last 12 months",
-        `SELECT COUNT(*) FROM pushpay_donors
-          WHERE org_id = :orgId AND last_gift_on >= date('now','-365 day')`),
-      stat("Recurring donors", "donors PushPay classes as recurring",
-        `SELECT COUNT(*) FROM pushpay_donors
-          WHERE org_id = :orgId AND donor_stage = 'Recurring Donor'`),
-      stat("Giving households reached", "distinct households with a matched donor",
+      // The window this page can speak about at all, printed first: every
+      // figure below counts gifts or people inside it, and the All Donors
+      // export that used to supply an all-time donor list was emptied on
+      // 2026-09-22 (see giving-sql.ts).
+      stat("Gift window", "the dates the loaded PushPay export covers - no figure on this page reaches outside them, and none of them is an amount",
+        givingWindowLabel(), { span: 12 }),
+      // Payers, not people: the id PushPay puts on a gift. "People who gave"
+      // below counts the ones that resolve to a PCO record, which is the
+      // smaller number and the one to quote about the congregation.
+      stat("Payers on record", "PushPay payer ids with a gift in the window, whether or not we can name the person behind them",
+        `SELECT COALESCE((SELECT payers FROM pushpay_giving_snapshot WHERE org_id = :orgId), 0)`,
+        { color: "highlight" }),
+      // Not "in the last year": the window is shorter than a year, so the
+      // nearest honest question is the trailing quarter of what we hold.
+      stat("Gave in the last 90 days", "payers with a gift in the last 90 days of the window",
+        `SELECT COUNT(*) FROM pushpay_payer_summary
+          WHERE org_id = :orgId AND last_gift_on >= ${lapseCutoff()}`),
+      stat("Payers giving on a schedule", "payers with at least one Recurring gift - a schedule set up in advance, which cannot respond to a given Sunday. Payers, not people: the /giving page counts the same schedules per person and reads lower",
+        `SELECT COUNT(*) FROM pushpay_payer_summary
+          WHERE org_id = :orgId AND recurring_gifts > 0`),
+      stat("Giving households reached", "distinct households with a giver in the window",
         `SELECT COUNT(DISTINCT hm.household_id)
-           FROM pushpay_donors d
+           FROM pushpay_payer_summary s
            JOIN pco_household_memberships hm
-             ON hm.person_id = d.person_id AND hm.org_id = :orgId
-          WHERE d.org_id = :orgId AND d.person_id IS NOT NULL`),
+             ON hm.person_id = s.person_id AND hm.org_id = :orgId
+          WHERE s.org_id = :orgId AND s.person_id IS NOT NULL`),
       // Everything below comes from the TRANSACTIONS export — one row per
       // gift — rather than the donor summary above. It is what makes
       // frequency, method over time and recurring share answerable at all.
@@ -2115,48 +2141,50 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                 COUNT(*) AS "Gifts",
                 COUNT(DISTINCT person_id) AS "People"
            FROM (${GIFTS}) GROUP BY 1 ORDER BY 2 DESC`),
-      chart("Donors by stage", "how PushPay classifies each donor",
-        `SELECT COALESCE(donor_stage,'(unclassified)') AS "Stage", COUNT(*) AS "Donors"
-           FROM pushpay_donors WHERE org_id = :orgId
+      chart("Giving pattern", "worked out from the gifts themselves - PushPay's own donor stages came with the All Donors export, which is no longer loaded",
+        `SELECT ${givingPatternCase("s")} AS "Pattern", COUNT(*) AS "Payers"
+           FROM pushpay_payer_summary s WHERE s.org_id = :orgId
           GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
-      // PushPay's own words are "Digital" and "Offline"; relabelled, because
-      // offline means a cheque or cash in the plate and that is the question
-      // being asked. Scoped to the last twelve months: across all time the
-      // split is dominated by lapsed donors and describes a church that no
-      // longer exists — 3,410 offline to 2,958 digital ever, against 639 to
-      // 1,016 in the last year.
-      chart("How people give", "donors who gave in the last 12 months, by method",
-        `SELECT CASE COALESCE(giving_channel,'(unknown)')
-                  WHEN 'Digital' THEN 'Online'
-                  WHEN 'Offline' THEN 'Check or cash'
-                  ELSE COALESCE(giving_channel,'(unknown)') END AS "How they gave",
-                COUNT(*) AS "Donors"
-           FROM pushpay_donors
-          WHERE org_id = :orgId AND last_gift_on IS NOT NULL
-            AND last_gift_on >= date('now','-365 day')
+      // The old donor export gave each donor one "Giving Channel"; the gifts
+      // give a payer as many as they used, so these count a PAYER once and say
+      // "Both" where they used both. Check or cash is PushPay's Batch Entry -
+      // a gift keyed in afterwards, which is how plate giving is recorded. The
+      // pair is the trailing quarter against the whole window, which is as far
+      // apart as the loaded data can put them.
+      //
+      // PAYERS, NOT PEOPLE, and the titles say so. payerMethodFlags keys on
+      // the PushPay payer id: the whole-window split totals 1,669, which is
+      // the "Payers on record" stat above and NOT the 1,113 people "People who
+      // gave" counts. Aggregating to person_id instead would drop the 548
+      // payers with no PCO id - people who really do give by one method or the
+      // other - so the page keeps every payer and labels the axis honestly.
+      chart("How payers give", "payers with a gift in the last 90 days of the window, by method - payer ids, so a household with two of them counts twice",
+        `SELECT ${givingMethodCase("pm.offline_gifts", "pm.online_gifts")} AS "How they gave",
+                COUNT(*) AS "Payers"
+           FROM (${payerMethodFlags(":orgId", ` AND received_on >= ${lapseCutoff()}`)}) pm
           GROUP BY 1 ORDER BY 2 DESC`, "donut"),
-      chart("How people give, all time", "every matched donor on record, by method",
-        `SELECT CASE COALESCE(giving_channel,'(unknown)')
-                  WHEN 'Digital' THEN 'Online'
-                  WHEN 'Offline' THEN 'Check or cash'
-                  ELSE COALESCE(giving_channel,'(unknown)') END AS "How they gave",
-                COUNT(*) AS "Donors"
-           FROM pushpay_donors WHERE org_id = :orgId
+      chart("How payers give, whole window", "every payer with a gift anywhere in the window, by method - these total the Payers on record above, not the people behind them",
+        `SELECT ${givingMethodCase("pm.offline_gifts", "pm.online_gifts")} AS "How they gave",
+                COUNT(*) AS "Payers"
+           FROM (${payerMethodFlags()}) pm
           GROUP BY 1 ORDER BY 2 DESC`, "bar"),
     ],
     gaps: {
       title: "What these numbers do and don't cover",
       intro:
-        "Measured here: who gives and how they are classified (from the donor export), and — new — every individual gift, so frequency, channel over time and recurring share can be answered rather than estimated.",
+        "Measured here: every individual gift in the loaded window — who gave, how often, through which channel, to which fund — and the people and households behind them. All of it counts gifts and people; none of it is money.",
       items: [
         "**NO AMOUNTS, BY DESIGN AND BY DATA.** The Transactions export carries no dollar figure at all, which matches the instruction that these reports show giving without money. Nothing on this page is a financial total, and no total could be derived from it.",
-        "**The gift-level window is 1 Jan to 16 Sep 2026** — not a year, and not the whole history. The donor-level blocks above it (stage, recency, households) still cover all time. Nothing here can be compared year over year until an export covering earlier years is loaded.",
-        "**82% of gifts are linked to a person.** 13,626 of 16,574 resolve to a PCO record through the “Your ID” field, which carries the PCO person id. The remaining 2,948 belong to payers with no id on their PushPay record; uploading the full export through Settings → PushPay name-matches many of those, since that path also reads the name and email columns.",
-        "**“Check or cash” means keyed in afterwards.** It is PushPay’s Batch Entry channel, which is how plate giving is recorded. A Kiosk gift happens on campus but is an electronic transaction and counts as online.",
+        "**THE WINDOW IS THE WHOLE STORY.** Everything here is bounded by the gift window printed at the top — 1 Jan to 16 Sep 2026 today. There is no longer an all-time layer beneath it: the All Donors export, which carried PushPay's own donor stages over its full history, was emptied on 22 September 2026 because it has no stable donor id to re-match on. So nobody who stopped giving before January 2026 appears anywhere on this page, \"gone quiet\" means quiet inside the window, and no year-over-year comparison is possible until an export covering earlier years is loaded.",
+        "**\"Recurring\", \"lapsed\" and \"first seen\" are our words, not PushPay's.** They are derived from the gifts: a Recurring source on a gift, 90 days of silence before the window's last gift, and a first gift inside those same 90 days. PushPay's own stage names are deliberately not reused, because the thresholds behind them were not ours.",
+        "**82% of gifts are linked to a person.** 13,626 of 16,574 resolve to a PCO record through the “Your ID” field, which carries the PCO person id. The remaining 2,948 belong to payers with no id on their PushPay record; filling that field in PushPay and uploading the export again is what places them.",
+        "**“Check or cash” means keyed in afterwards.** It is PushPay’s Batch Entry channel, which is how plate giving is recorded, so its date lags the Sunday it was given on. A Kiosk gift happens on campus but is an electronic transaction and counts as online.",
+        "**Two counts of a gift, 0.7% apart.** The gift-level blocks count only Status = Success (16,451); the payer rollup behind the people-level blocks counts every row, including the 123 still processing (16,574).",
+        "**A payer is not a person.** Blocks titled “payers” count PushPay payer ids — 1,669 of them — and blocks titled “people” count the 1,113 PCO records those ids resolve to. The gap is the 548 payers with no “Your ID” plus the households that hold two ids, so the two never agree and neither is wrong; check the title before quoting either.",
         "**Budget performance, expense ratios and designated-fund balances** live in the accounting system, which is not synced.",
       ],
       footer:
-        "_Of the 1,113 people this window can put a name to, 186 gave exactly once and 176 gave 27 times or more — a spread the donor-summary import could not see at all. Counting every payer including the unlinked, it is 421 giving once against 194 giving 27+._",
+        "_Of the 1,113 people this window can put a name to, 185 gave exactly once and 177 gave 27 times or more — a spread the donor-summary import could not see at all. Counting every payer including the unlinked, it is 422 giving once against 194 giving 27+. Measured on the 22 September 2026 export; these five are written out rather than queried, so re-read them off the page's own blocks after the next import._",
     },
   },
 

@@ -51,14 +51,14 @@ export const PERF_SUGGESTIONS: PerfSuggestion[] = [
   },
   {
     key: "giving-double-decrypt",
-    title: "Giving page decrypted every donor twice",
+    title: "Giving page decrypted every giver twice",
     pages: ["Giving statistics"],
     whatsSlow:
-      "The donor directory block and the lapsed-givers block each called listGivingPeople(1000) independently, so the giving page decrypted up to 1,000 donors twice per render.",
+      "The giver directory block and the lapsed-givers block each called listGivingPeople(1000) independently, so the giving page decrypted up to 1,000 givers twice per render.",
     location: "src/lib/give-lane.ts, src/lib/builder-sources.ts (giving_directory / giving_lapsed)",
     bigOBefore: "2 × O(donors) decrypt",
     bigOAfter: "1 × O(donors) decrypt",
-    fix: "Memoize listGivingPeople with React cache() per request; the lapsed view filters the shared result. Output-identical.",
+    fix: "Memoize listGivingPeople with React cache() per request. The lapsed list later became its own memoized query (listLapsedGivers) when giving moved onto the Transactions import — filtering the capped directory would have dropped exactly the quietest givers.",
     safety: "safe",
     how: "claude-code",
     defaultStatus: "applied",

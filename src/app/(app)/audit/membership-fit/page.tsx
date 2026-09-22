@@ -50,7 +50,10 @@ export default async function MembershipFitPage({
             checks that assertion against what they actually do — giving,
             groups, teams, serving, check-ins, events, forms — and flags the
             people whose label no longer matches. Read-only: fix the records in
-            PCO.{" "}
+            PCO. Giving comes from the PushPay{" "}
+            <span className="text-fg">Transactions</span> import, so it can
+            only see gifts inside the window that import covers — never a
+            dollar figure, which the export does not carry.{" "}
             <Link href="/audit" className="text-accent hover:underline">
               Data hygiene lives on the main audit →
             </Link>
@@ -343,7 +346,7 @@ async function TypeDetail({
         <Stat
           label="Gives"
           value={audit.signalCounts.giving.toLocaleString()}
-          delta={`${audit.signalCounts.givingRecent.toLocaleString()} in the last year`}
+          delta={`${audit.signalCounts.givingRecent.toLocaleString()} in the last 365 days`}
         />
         <Stat
           label="Connected"
@@ -669,9 +672,11 @@ function FitTr({ r }: { r: FitRow }) {
       <td className="px-5 py-3 text-xs text-muted whitespace-nowrap">
         {r.signals.giving ? (
           <>
-            <div>{r.donorStage ?? "donor"}</div>
+            <div>{r.givingPattern ?? "gave"}</div>
             <div className="text-subtle">
-              {r.givingChannel ?? "—"}
+              {r.giftCount.toLocaleString()}{" "}
+              {r.giftCount === 1 ? "gift" : "gifts"}
+              {r.givingMethod ? ` · ${r.givingMethod}` : ""}
               {r.lastGiftDate ? ` · ${r.lastGiftDate}` : ""}
             </div>
           </>

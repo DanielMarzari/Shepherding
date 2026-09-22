@@ -29,9 +29,13 @@ export default async function PushpayPage() {
             one row per gift, or <span className="text-fg">All Donors</span>, one
             row per donor — and Shepherdly matches each giver to a person, marks
             giving as a completed next step, and powers the giving statistics
-            pages. One drop zone takes either file; it reads the header to tell
-            them apart. No API connection needed, and no amounts: PushPay&apos;s
-            export doesn&apos;t carry them.
+            pages. <span className="text-fg">Transactions is the giving
+            source:</span> every figure on the Give lane, the giving page and
+            the Finance report is built from those gifts, because only that
+            export carries a stable Payer ID. The All Donors list is kept for
+            matching help alone. One drop zone takes either file; it reads the
+            header to tell them apart. No API connection needed, and no amounts:
+            neither export carries them, so nothing anywhere is money.
           </p>
         </div>
 
@@ -173,14 +177,17 @@ export default async function PushpayPage() {
               >
                 Audit → PushPay connections
               </Link>{" "}
-              — assign donors we couldn&apos;t confidently match to a person.
+              — assign the All Donors rows we couldn&apos;t confidently match
+              to a person. Payers on a gift are linked by the export&apos;s
+              “Your ID” column instead.
             </li>
             <li>
               <Link href="/giving" className="text-accent hover:underline">
                 Giving statistics
               </Link>{" "}
-              — membership vs. giving, donor stages, funds, and location — a
-              customizable Page Builder page.
+              — who gives, how and how often, funds, and location, over the
+              gift window the page prints at the top — a customizable Page
+              Builder page. Gift and giver counts, never amounts.
             </li>
           </ul>
         </Card>

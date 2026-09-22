@@ -1401,30 +1401,16 @@ export function listDonorsByStatus(orgId: number, status: string, limit = 500): 
   });
 }
 
-export interface MatchedDonor { pcoId: string; name: string; stage: string | null; fund: string | null; channel: string | null; lastGiftDate: string | null }
-
-/** Matched donors joined to their person (decrypted name + pco id for links).
- *  Optional stage filter (e.g. "Lapsed Donor"). Used by builder sources. */
-export function listMatchedDonors(orgId: number, opts: { stage?: string; limit?: number } = {}): MatchedDonor[] {
-  const args: unknown[] = [orgId];
-  let where = `WHERE d.org_id = ? AND d.person_id IS NOT NULL`;
-  if (opts.stage) { where += ` AND d.donor_stage = ?`; args.push(opts.stage); }
-  args.push(opts.limit ?? 1000);
-  const rows = getDb().prepare(
-    `SELECT d.person_id AS pco, d.donor_stage AS stage, d.last_gift_fund AS fund, d.giving_channel AS channel, d.last_gift_on AS lg, p.first_name AS fn, p.last_name AS ln, p.enc_pii AS enc
-       FROM pushpay_donors d JOIN pco_people p ON p.org_id = d.org_id AND p.pco_id = d.person_id
-       ${where} ORDER BY d.last_gift_on DESC LIMIT ?`,
-  ).all(...args) as Array<{ pco: string; stage: string | null; fund: string | null; channel: string | null; lg: string | null; fn: string | null; ln: string | null; enc: string | null }>;
-  return rows.map((r) => ({
-    pcoId: r.pco, name: personLabel(r.fn, r.ln, r.enc, r.pco), stage: r.stage, fund: r.fund, channel: r.channel, lastGiftDate: r.lg,
-  }));
-}
-
 /** Distinct people tied to at least one imported gift — the "has given"
- *  population that fills the Give next-step lane. */
+ *  population that fills the Give next-step lane.
+ *
+ *  Reads the per-payer rollup, not `pushpay_donors`: the All Donors export was
+ *  emptied on 2026-09-22 and giving now comes from the Transactions export.
+ *  One person can hold several payer ids, hence DISTINCT. This counts people
+ *  who gave inside the loaded gift window — the lane prints that window. */
 export function countGivers(orgId: number): number {
   const r = getDb()
-    .prepare(`SELECT COUNT(DISTINCT person_id) AS n FROM pushpay_donors WHERE org_id = ? AND person_id IS NOT NULL`)
+    .prepare(`SELECT COUNT(DISTINCT person_id) AS n FROM pushpay_payer_summary WHERE org_id = ? AND person_id IS NOT NULL`)
     .get(orgId) as { n: number } | undefined;
   return r?.n ?? 0;
 }

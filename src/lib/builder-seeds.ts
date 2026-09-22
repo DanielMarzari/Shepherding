@@ -1,6 +1,12 @@
 import "server-only";
 import { getDb } from "./db";
 import type { BlockConfig, BlockKind } from "./builder";
+import {
+  LAPSE_DAYS,
+  givingPatternCase,
+  givingWindowLabel,
+  lapseCutoff,
+} from "./giving-sql";
 import { MIR_SEEDS } from "./mir-seeds";
 
 /** One block in a seeded page definition (position is the array order). */
@@ -971,42 +977,71 @@ const pipelineSeed: SeedPage = {
   ],
 };
 
-// ── Giving (imported PushPay donors) ─────────────────────────────────
-// Aggregates run as plain read-only SQL against pushpay_donors (joined to
-// pco_people / person_geo). Name-bearing tables use the decrypt-capable
-// giving_directory / giving_lapsed sources, since builder SQL can't read
-// encrypted PII. Donor stage buckets are matched loosely (LIKE) because the
-// export's wording varies (Recurring / Regular Giver / Lapsed Donor / …).
-const GIVERS = `SELECT COUNT(DISTINCT person_id) FROM pushpay_donors WHERE org_id=:orgId AND person_id IS NOT NULL`;
+// ── Giving (imported PushPay gifts) ──────────────────────────────────
+// Everything here reads the Transactions import: `pushpay_transactions`
+// (one row per gift) and `pushpay_payer_summary` / `pushpay_giving_snapshot`,
+// its per-payer and per-org rollups (0098). It used to read `pushpay_donors`,
+// the All Donors export, which was emptied on 2026-09-22 and is not coming
+// back — see giving-sql.ts for what each of PushPay's donor stages has been
+// replaced with, and why those replacements are bounded by the gift window.
+//
+// TWO RULES FOR EVERY BLOCK BELOW. Nothing is money: the export carries no
+// amounts, so no title, subtitle or axis may imply one. And nothing covers all
+// of history: the first block on the page prints the window the gifts span,
+// because a count here is only ever "inside that window".
+//
+// Name-bearing tables use the decrypt-capable giving_directory / giving_lapsed
+// sources, since builder SQL can't read encrypted PII.
+
+/** One row per PERSON, not per payer: a household can give from two cards, so
+ *  every person-level count aggregates the payer rollup first. */
+const PERSON_GIFTS = `SELECT person_id AS pid,
+                             MIN(first_gift_on)   AS firstGift,
+                             MAX(last_gift_on)    AS lastGift,
+                             SUM(gifts)           AS gifts,
+                             SUM(recurring_gifts) AS recurringGifts
+                        FROM pushpay_payer_summary
+                       WHERE org_id=:orgId AND person_id IS NOT NULL
+                       GROUP BY person_id`;
+const GIVERS = `SELECT COUNT(*) FROM (${PERSON_GIFTS})`;
 const givingSeed: SeedPage = {
   slug: "giving",
   title: "Giving statistics",
   description:
-    "Giving from the imported PushPay donor export — who gives, membership vs. giving coverage, donor stages, funds, channels, where givers live, recency, and new givers over time. Import or refresh on the PushPay page.",
-  revision: 3,
+    "Giving from the imported PushPay Transactions export — who gives, membership vs. giving coverage, how people give, funds, channels, where givers live, recency, and first gifts. Gift and giver counts only: the export carries no amounts. Import or refresh on the PushPay page.",
+  revision: 4,
   moreSection: "Reports & insights",
   blocks: [
-    { kind: "stat", config: { title: "Givers", span: 2, sub: "people who have given", sql: GIVERS } },
-    { kind: "stat", config: { title: "Recurring", span: 2, color: "success", sub: "regular / scheduled",
-      sql: `${GIVERS} AND (lower(donor_stage) LIKE '%recurring%' OR lower(donor_stage) LIKE '%regular%')` } },
-    { kind: "stat", config: { title: "Lapsed", span: 2, color: "warning", sub: "stopped giving",
-      sql: `${GIVERS} AND lower(donor_stage) LIKE '%lapsed%'` } },
-    { kind: "stat", config: { title: "First-time", span: 2, color: "highlight", sub: "new donors",
-      sql: `${GIVERS} AND (lower(donor_stage) LIKE '%first%' OR lower(donor_stage) LIKE '%new%')` } },
-    { kind: "stat", config: { title: "Donor records", span: 2, color: "low", sub: "rows in the export",
-      sql: `SELECT COUNT(*) FROM pushpay_donors WHERE org_id=:orgId` } },
-    { kind: "stat", config: { title: "Unlinked", span: 2, color: "low", sub: "not tied to a person yet",
-      sql: `SELECT COUNT(*) FROM pushpay_donors WHERE org_id=:orgId AND person_id IS NULL` } },
+    { kind: "stat", config: { title: "Gift window", span: 12,
+      sub: "every figure on this page counts gifts or people inside these dates — never an amount, which the export does not carry, and never anyone who stopped giving before the window opened",
+      sql: givingWindowLabel() } },
+
+    { kind: "stat", config: { title: "Givers", span: 2, sub: "people linked to a gift",
+      sql: GIVERS } },
+    { kind: "stat", config: { title: "On a schedule", span: 2, color: "success",
+      sub: "gave at least once through a recurring schedule",
+      sql: `${GIVERS} WHERE recurringGifts > 0` } },
+    { kind: "stat", config: { title: "Lapsed", span: 2, color: "warning",
+      sub: `no gift in the last ${LAPSE_DAYS} days of the window — our rule, read off the gifts, not a stage PushPay assigned`,
+      sql: `${GIVERS} WHERE lastGift < ${lapseCutoff()}` } },
+    { kind: "stat", config: { title: "First seen", span: 2, color: "highlight",
+      sub: `first gift in those same ${LAPSE_DAYS} days — new to this import, not necessarily to the church`,
+      sql: `${GIVERS} WHERE firstGift >= ${lapseCutoff()}` } },
+    { kind: "stat", config: { title: "Gifts", span: 2, color: "low", sub: "individual gifts — a count, never an amount",
+      sql: `SELECT COALESCE((SELECT gifts FROM pushpay_giving_snapshot WHERE org_id=:orgId), 0)` } },
+    { kind: "stat", config: { title: "Unlinked payers", span: 2, color: "low", sub: "PushPay payer ids with no person yet",
+      sql: `SELECT COUNT(*) FROM pushpay_payer_summary WHERE org_id=:orgId AND person_id IS NULL` } },
 
     { kind: "divider", config: { title: "Membership vs. giving", span: 12 } },
     { kind: "chart", config: { title: "Givers by membership", chartType: "bar", colorByCategory: true, span: 6,
-      sql: `SELECT COALESCE(p.membership_type,'(none)') AS "Membership", COUNT(DISTINCT d.person_id) AS "Givers"
-              FROM pushpay_donors d JOIN pco_people p ON p.org_id=d.org_id AND p.pco_id=d.person_id
-             WHERE d.org_id=:orgId AND d.person_id IS NOT NULL
+      sub: "people with a gift in the window, by their PCO membership type",
+      sql: `SELECT COALESCE(p.membership_type,'(none)') AS "Membership", COUNT(DISTINCT s.person_id) AS "Givers"
+              FROM pushpay_payer_summary s JOIN pco_people p ON p.org_id=s.org_id AND p.pco_id=s.person_id
+             WHERE s.org_id=:orgId AND s.person_id IS NOT NULL
              GROUP BY 1 ORDER BY 2 DESC` } },
     { kind: "table", config: { title: "Giving coverage by membership", span: 6, density: "condensed",
-      sub: "what share of each membership type has given",
-      sql: `WITH givers AS (SELECT DISTINCT person_id FROM pushpay_donors WHERE org_id=:orgId AND person_id IS NOT NULL)
+      sub: "what share of each membership type has a gift in the window",
+      sql: `WITH givers AS (SELECT DISTINCT person_id FROM pushpay_payer_summary WHERE org_id=:orgId AND person_id IS NOT NULL)
             SELECT COALESCE(p.membership_type,'(none)') AS "Membership",
                    COUNT(*) AS "People",
                    COUNT(g.person_id) AS "Givers",
@@ -1018,54 +1053,53 @@ const givingSeed: SeedPage = {
              GROUP BY 1 ORDER BY COUNT(g.person_id) DESC` } },
 
     { kind: "divider", config: { title: "Giving mix", span: 12 } },
-    { kind: "chart", config: { title: "Donor stage", chartType: "bar", colorByCategory: true, span: 4,
-      sql: `SELECT COALESCE(donor_stage,'(unknown)') AS "Stage", COUNT(*) AS "Donors"
-              FROM pushpay_donors WHERE org_id=:orgId GROUP BY 1 ORDER BY 2 DESC` } },
-    { kind: "chart", config: { title: "Last gift fund", chartType: "bar", colorByCategory: true, span: 4,
-      sql: `SELECT COALESCE(last_gift_fund,'(none)') AS "Fund", COUNT(*) AS "Gifts"
-              FROM pushpay_donors WHERE org_id=:orgId GROUP BY 1 ORDER BY 2 DESC LIMIT 12` } },
-    { kind: "chart", config: { title: "Giving channel", chartType: "donut", span: 4,
-      sql: `SELECT COALESCE(giving_channel,'(unknown)') AS "Channel", COUNT(*) AS "Donors"
-              FROM pushpay_donors WHERE org_id=:orgId GROUP BY 1 ORDER BY 2 DESC` } },
+    { kind: "chart", config: { title: "Giving pattern", chartType: "bar", colorByCategory: true, span: 4,
+      sub: "worked out from the gifts themselves — PushPay's own donor stages came with the All Donors export, which is no longer loaded",
+      sql: `SELECT ${givingPatternCase("s")} AS "Pattern", COUNT(*) AS "Payers"
+              FROM pushpay_payer_summary s WHERE s.org_id=:orgId GROUP BY 1 ORDER BY 2 DESC` } },
+    { kind: "chart", config: { title: "Gifts by fund", chartType: "bar", colorByCategory: true, span: 4,
+      sub: "how many gifts each fund received — counts, not amounts",
+      sql: `SELECT COALESCE(fund_name,'(none)') AS "Fund", COUNT(*) AS "Gifts"
+              FROM pushpay_transactions WHERE org_id=:orgId GROUP BY 1 ORDER BY 2 DESC LIMIT 12` } },
+    { kind: "chart", config: { title: "How gifts arrive", chartType: "donut", span: 4,
+      sub: "PushPay's channel on each gift — Batch Entry is cash or a cheque keyed in afterwards, so its date lags the Sunday",
+      sql: `SELECT COALESCE(source,'(unknown)') AS "Channel", COUNT(*) AS "Gifts"
+              FROM pushpay_transactions WHERE org_id=:orgId GROUP BY 1 ORDER BY 2 DESC` } },
 
     { kind: "divider", config: { title: "Where givers live", span: 12 } },
     { kind: "stat", config: { title: "Givers mapped", span: 4, sub: "geocoded to a home",
-      sql: `SELECT COUNT(DISTINCT d.person_id)
-              FROM pushpay_donors d JOIN person_geo g ON g.org_id=d.org_id AND g.person_id=d.person_id
-             WHERE d.org_id=:orgId AND d.person_id IS NOT NULL AND g.status='ok' AND g.lat IS NOT NULL` } },
+      sql: `SELECT COUNT(DISTINCT s.person_id)
+              FROM pushpay_payer_summary s JOIN person_geo g ON g.org_id=s.org_id AND g.person_id=s.person_id
+             WHERE s.org_id=:orgId AND s.person_id IS NOT NULL AND g.status='ok' AND g.lat IS NOT NULL` } },
     { kind: "map", config: { title: "Givers", span: 8, height: "double",
-      sql: `SELECT g.lat, g.lng, MAX(COALESCE(d.donor_stage,'Donor')) AS "Stage"
-              FROM pushpay_donors d JOIN person_geo g ON g.org_id=d.org_id AND g.person_id=d.person_id
-             WHERE d.org_id=:orgId AND d.person_id IS NOT NULL AND g.status='ok' AND g.lat IS NOT NULL
-             GROUP BY d.person_id, g.lat, g.lng LIMIT 4000` } },
+      sub: "one pin per giver with a geocoded home",
+      sql: `SELECT g.lat, g.lng, MAX(${givingPatternCase("s")}) AS "Pattern"
+              FROM pushpay_payer_summary s JOIN person_geo g ON g.org_id=s.org_id AND g.person_id=s.person_id
+             WHERE s.org_id=:orgId AND s.person_id IS NOT NULL AND g.status='ok' AND g.lat IS NOT NULL
+             GROUP BY s.person_id, g.lat, g.lng LIMIT 4000` } },
 
     { kind: "divider", config: { title: "Recency", span: 12 } },
-    { kind: "chart", config: { title: "Most recent gift by month", chartType: "line", span: 12,
-      sub: "the export carries each donor's last gift only — this is when people most recently gave",
-      sql: `SELECT substr(last_gift_on,1,7) AS "Month", COUNT(*) AS "Donors"
-              FROM pushpay_donors WHERE org_id=:orgId AND last_gift_on IS NOT NULL AND length(last_gift_on)>=7
+    { kind: "chart", config: { title: "Gifts and givers by month", chartType: "line", span: 12,
+      sub: "every gift by the date PushPay recorded it, and how many payers are behind them — cash and cheques are keyed in afterwards, so their month can lag the Sunday",
+      sql: `SELECT substr(received_on,1,7) AS "Month",
+                   COUNT(*) AS "Gifts",
+                   COUNT(DISTINCT COALESCE(payer_id,'tx:'||transaction_id)) AS "Payers giving"
+              FROM pushpay_transactions WHERE org_id=:orgId AND received_on IS NOT NULL
              GROUP BY 1 ORDER BY 1` } },
 
-    { kind: "divider", config: { title: "New givers over time", span: 12 } },
-    { kind: "text", config: { span: 12, text: "Each person counted by the month/year of their FIRST gift. This needs a \"First Gift - Date\" column in the PushPay export — the standard All Donors export only carries the last gift date, so until you drop an export that includes first-gift dates, these two charts stay empty. Import it on the PushPay page and they fill in automatically." } },
-    { kind: "stat", config: { title: "New givers tracked", span: 3, sub: "with a first-gift date",
-      sql: `SELECT COUNT(*) FROM pushpay_donors WHERE org_id=:orgId AND first_gift_on IS NOT NULL` } },
-    { kind: "chart", config: { title: "New givers by year", chartType: "bar", colorByCategory: true, span: 9,
-      sub: "count of people whose first gift landed in each year (since 2017)",
-      sql: `SELECT substr(first_gift_on,1,4) AS "Year", COUNT(*) AS "New givers"
-              FROM pushpay_donors WHERE org_id=:orgId AND first_gift_on IS NOT NULL AND first_gift_on >= '2017'
-             GROUP BY 1 ORDER BY 1` } },
-    { kind: "chart", config: { title: "New givers by month", chartType: "line", span: 12,
-      sub: "first-time givers per month since 2017",
-      sql: `SELECT substr(first_gift_on,1,7) AS "Month", COUNT(*) AS "New givers"
-              FROM pushpay_donors WHERE org_id=:orgId AND first_gift_on IS NOT NULL AND first_gift_on >= '2017'
+    { kind: "divider", config: { title: "First gifts", span: 12 } },
+    { kind: "text", config: { span: 12, text: "Each person counted by the month of their FIRST gift in the loaded window. The first month is always the tallest bar and does not mean a wave of new givers: everyone already giving when the window opens has their first gift inside it. Only once an export covering earlier years is loaded can this read as \"new to the church\" rather than \"new to this import\"." } },
+    { kind: "chart", config: { title: "First gifts by month", chartType: "bar", colorByCategory: true, span: 12,
+      sub: "people by the month their first gift in the window landed",
+      sql: `SELECT substr(firstGift,1,7) AS "Month", COUNT(*) AS "People"
+              FROM (${PERSON_GIFTS}) WHERE firstGift IS NOT NULL
              GROUP BY 1 ORDER BY 1` } },
 
-    { kind: "divider", config: { title: "Donors", span: 12 } },
+    { kind: "divider", config: { title: "Givers", span: 12 } },
     { kind: "table", config: { title: "Giving directory", span: 12, density: "normal", sortable: true,
-      source: "giving_directory", sub: "one row per giver, most recent gift" } },
+      source: "giving_directory", sub: "one row per giver, most recent gift first — gift counts, not amounts" } },
     { kind: "table", config: { title: "Lapsed givers to reconnect", span: 12, density: "condensed", sortable: true,
-      source: "giving_lapsed", sub: "givers whose donor stage reads as lapsed" } },
+      source: "giving_lapsed", sub: `givers with no gift in the last ${LAPSE_DAYS} days of the window, longest silence first — it cannot see anyone who stopped before the window opened` } },
   ],
 };
 

@@ -45,13 +45,13 @@ export const SOURCE_META: SourceMeta[] = [
   {
     id: "giving_directory",
     label: "Giving directory",
-    description: "Matched PushPay givers, one row per person (latest gift): Name, Membership, Donor stage, Last gift fund, Channel, Last gift. Decrypted names.",
+    description: "People with a gift in the PushPay window, one row per person, most recent first: Name, Membership, Pattern, Funds, How, Gifts, First gift, Last gift. Gift counts, never amounts. Decrypted names.",
     kinds: ["table"],
   },
   {
     id: "giving_lapsed",
     label: "Lapsed givers",
-    description: "Givers whose PushPay donor stage reads as lapsed — a reconnect list: Name, Membership, Last gift fund, Last gift. Decrypted names.",
+    description: "Givers with no gift in the last 90 days of the PushPay window, longest silence first — a reconnect list: Name, Membership, Funds, Gifts, First gift, Last gift. Cannot see anyone who stopped before the window opened. Decrypted names.",
     kinds: ["table"],
   },
   {

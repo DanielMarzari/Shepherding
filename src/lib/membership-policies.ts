@@ -29,7 +29,7 @@ export type SignalKey =
 
 export const SIGNAL_LABELS: Record<SignalKey, string> = {
   giving: "gives",
-  givingRecent: "gave in the last year",
+  givingRecent: "gave recently",
   group: "in a group",
   team: "on a serving team",
   served: "scheduled to serve",

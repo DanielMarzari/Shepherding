@@ -41,7 +41,7 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   "care-map": { href: "/care-map", defaultLabel: "Care map", activeAliases: ["Care map"], description: "Care assignments mapped across the congregation." },
   // Settings & Integration members
   pco: { href: "/pco", defaultLabel: "PCO", activeAliases: ["PCO"], description: "The source of people, groups, teams, and check-ins. Connect the account and manage the sync." },
-  pushpay: { href: "/pushpay", defaultLabel: "PushPay", activeAliases: ["PushPay"], description: "Drop the donor export to line giving up against people, and reconcile the ambiguous matches." },
+  pushpay: { href: "/pushpay", defaultLabel: "PushPay", activeAliases: ["PushPay"], description: "Drop the Transactions export to line gifts up against people, and reconcile the ambiguous matches." },
   "constant-contact": { href: "/constant-contact", defaultLabel: "Constant Contact", activeAliases: ["Constant Contact"], description: "Email engagement — contacts, campaigns, opens and clicks — joined to your PCO people." },
   spotify: { href: "/spotify", defaultLabel: "Spotify", activeAliases: ["Spotify"], description: "Connect the church's Spotify catalogue for the Original Music impact report." },
   credentials: { href: "/settings/integrations", defaultLabel: "Credentials", activeAliases: ["Credentials"], description: "Connections that don't exist yet \u2014 app stores, YouTube, Instagram, Subsplash \u2014 with what each needs, what's blocking it, and where to save the key when it turns up." },
@@ -95,6 +95,7 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   staff: { href: "/staff", defaultLabel: "Staff", activeAliases: ["Staff"], description: "Staff members and what each of them oversees." },
   giving: { href: "/giving", defaultLabel: "Giving statistics", activeAliases: ["Giving statistics"], description: "Giving from the PushPay import — coverage, stages, and funds." },
   "announcement-impact": { href: "/announcement-impact", defaultLabel: "Announcement impact", activeAliases: ["Announcement impact"], description: "What each announcement asked for, against what people actually did afterward." },
+  "giving-impact": { href: "/giving-impact", defaultLabel: "Giving impact", activeAliases: ["Giving impact"], description: "What we said about giving from the stage \u2014 sermons, the order of service, Brew Break \u2014 against weekly gift and giver counts, with Recurring as a control. Counts only: the export carries no amounts." },
   sermons: { href: "/sermons", defaultLabel: "Sermons", activeAliases: ["Sermons"], description: "Sermons with their transcripts and the next steps each one called for." },
   "service-plans": { href: "/service-plans", defaultLabel: "Service plans", activeAliases: ["Service plans"], description: "Service plans from Planning Center Services, and who was scheduled." },
   "constant-contact-explore": { href: "/constant-contact/explore", defaultLabel: "Email explorer", activeAliases: ["Email explorer", "Constant Contact explore"], description: "Dig into individual campaigns, lists, and contact activity from Constant Contact." },
@@ -155,7 +156,7 @@ export const DEFAULT_NAV_CONFIG: NavConfig = {
     { id: "dashboard", label: "Dashboard", mode: "top", items: [P("home"), P("care-queue")] },
     { id: "leadership", label: "Leadership", mode: "top", items: [P("shepherd-team"), P("shepherds")] },
     { id: "pco", label: "PCO data", mode: "top", collapsible: true, items: [P("people"), P("groups"), P("teams"), P("checkins")] },
-    { id: "next-steps", label: "Next steps", mode: "top", items: [P("lanes-overview"), P("lanes-list"), P("announcement-impact"), P("sermons"), P("service-plans")] },
+    { id: "next-steps", label: "Next steps", mode: "top", items: [P("lanes-overview"), P("lanes-list"), P("announcement-impact"), P("giving-impact"), P("sermons"), P("service-plans")] },
     { id: "mappings", label: "Maps", mode: "top", collapsible: true, items: [P("shepherd-map"), P("care-map")] },
     { id: "more", label: "More", mode: "top", items: [P("more")] },
     {

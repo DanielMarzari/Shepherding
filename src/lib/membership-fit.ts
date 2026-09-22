@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { getDb } from "./db";
+import { givingMethodCase, givingPatternExpr } from "./giving-sql";
 import {
   type FitFlag,
   MS_PER_DAY,
@@ -44,10 +45,11 @@ interface RawSignalRow {
   nickname: string | null;
   checkinCount: number;
   lastCheckinAt: string | null;
-  hasDonor: number;
+  hasGift: number;
   lastGiftDate: string | null;
-  donorStage: string | null;
-  givingChannel: string | null;
+  givingPattern: string | null;
+  givingMethod: string | null;
+  giftCount: number;
   hasGroup: number;
   hasTeam: number;
   hasServed: number;
@@ -105,11 +107,31 @@ function loadSignalRows(orgId: number): RawSignalRow[] {
                  WHERE org_id = @orgId AND attended = 1 GROUP BY person_id),
          fm AS (SELECT person_id AS pid FROM pco_form_submissions
                  WHERE org_id = @orgId AND person_id IS NOT NULL GROUP BY person_id),
-         dn AS (SELECT person_id AS pid, MAX(last_gift_on) AS lastGift,
-                       MIN(donor_stage) AS stage, MIN(giving_channel) AS chan
-                  FROM pushpay_donors
-                 WHERE org_id = @orgId AND person_id IS NOT NULL
-                 GROUP BY person_id),
+         -- Giving, from the PushPay Transactions import. pushpay_donors
+         -- (the All Donors export, with PushPay's own donor_stage) was
+         -- emptied on 2026-09-22; pushpay_payer_summary is the per-payer
+         -- rollup of the gifts that replaced it, and one person can hold
+         -- several payer ids, so it is aggregated per person here. The
+         -- pattern and method labels are ours, derived from the gifts --
+         -- see giving-sql.ts, which also explains why the gift window bounds
+         -- what "lapsed" can mean. Never an amount: the export has none.
+         dn AS (SELECT pid, lastGift, gifts,
+                       ${givingPatternExpr("lastGift", "recurringGifts", "@orgId")} AS pattern
+                  FROM (SELECT s.person_id AS pid,
+                               MAX(s.last_gift_on)    AS lastGift,
+                               SUM(s.gifts)           AS gifts,
+                               SUM(s.recurring_gifts) AS recurringGifts
+                          FROM pushpay_payer_summary s
+                         WHERE s.org_id = @orgId AND s.person_id IS NOT NULL
+                         GROUP BY s.person_id)),
+         dnm AS (SELECT t.person_id AS pid,
+                        ${givingMethodCase(
+                          `MAX(CASE WHEN t.source = 'Batch Entry' THEN 1 ELSE 0 END)`,
+                          `MAX(CASE WHEN t.source IS NULL OR t.source <> 'Batch Entry' THEN 1 ELSE 0 END)`,
+                        )} AS method
+                   FROM pushpay_transactions t
+                  WHERE t.org_id = @orgId AND t.person_id IS NOT NULL
+                  GROUP BY t.person_id),
          -- Households containing at least one person who checks in, then the
          -- members of those households. Drives the "Parent Only" check: the
          -- parent's warrant for being in the system is the child's attendance.
@@ -132,10 +154,11 @@ function loadSignalRows(orgId: number): RawSignalRow[] {
          p.nickname                      AS nickname,
          COALESCE(ci.n, 0)               AS checkinCount,
          p.last_check_in_at              AS lastCheckinAt,
-         (dn.pid IS NOT NULL)            AS hasDonor,
+         (dn.pid IS NOT NULL)            AS hasGift,
          dn.lastGift                     AS lastGiftDate,
-         dn.stage                        AS donorStage,
-         dn.chan                         AS givingChannel,
+         dn.pattern                      AS givingPattern,
+         dnm.method                      AS givingMethod,
+         COALESCE(dn.gifts, 0)           AS giftCount,
          (g.pid  IS NOT NULL)            AS hasGroup,
          (t.pid  IS NOT NULL)            AS hasTeam,
          (sv.pid IS NOT NULL)            AS hasServed,
@@ -150,6 +173,7 @@ function loadSignalRows(orgId: number): RawSignalRow[] {
        LEFT JOIN ev ON ev.pid = p.pco_id
        LEFT JOIN fm ON fm.pid = p.pco_id
        LEFT JOIN dn ON dn.pid = p.pco_id
+       LEFT JOIN dnm ON dnm.pid = p.pco_id
        LEFT JOIN hh ON hh.pid = p.pco_id
        WHERE p.org_id = @orgId`,
     )
@@ -158,7 +182,7 @@ function loadSignalRows(orgId: number): RawSignalRow[] {
 
 function toSignals(r: RawSignalRow, recentCutoff: string): PersonSignals {
   return {
-    giving: r.hasDonor === 1,
+    giving: r.hasGift === 1,
     givingRecent:
       r.lastGiftDate !== null && r.lastGiftDate >= recentCutoff.slice(0, 10),
     group: r.hasGroup === 1,
@@ -196,8 +220,9 @@ export interface FitRow {
   flags: FitFlag[];
   suggested: string | null;
   lastGiftDate: string | null;
-  donorStage: string | null;
-  givingChannel: string | null;
+  givingPattern: string | null;
+  givingMethod: string | null;
+  giftCount: number;
   checkinCount: number;
   lastCheckinAt: string | null;
 }
@@ -269,8 +294,9 @@ function auditTypeImpl(orgId: number, membershipType: string | null): TypeAudit 
       flags,
       suggested: flags.length > 0 ? suggestType(signals, membershipType) : null,
       lastGiftDate: r.lastGiftDate,
-      donorStage: r.donorStage,
-      givingChannel: r.givingChannel,
+      givingPattern: r.givingPattern,
+      givingMethod: r.givingMethod,
+      giftCount: r.giftCount,
       checkinCount: r.checkinCount,
       lastCheckinAt: r.lastCheckinAt,
     });

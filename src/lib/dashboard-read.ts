@@ -493,9 +493,11 @@ export function getLaneStats(
   const comm = snap?.laneComm ?? 0;
   const serv = snap?.laneServ ?? 0;
   const none = snap?.laneNone ?? 0;
-  // Give = distinct people matched to an imported PushPay gift. Filled in
-  // as soon as the "All Donors" export is dropped on /pushpay; before that
-  // the lane stays greyed-out with a pointer to the importer.
+  // Give = distinct people matched to an imported PushPay gift, from the
+  // per-payer rollup of the Transactions export. Filled in as soon as that
+  // export is dropped on /pushpay; before that the lane stays greyed-out with
+  // a pointer to the importer. The All Donors export is no longer a giving
+  // source (see giving-sql.ts).
   const give = countGivers(orgId);
 
   return [
@@ -510,7 +512,7 @@ export function getLaneStats(
           count: null,
           unavailable: true,
           reason:
-            "No giving imported yet — drop the PushPay “All Donors” export on the PushPay page.",
+            "No giving imported yet — drop the PushPay “Transactions” export on the PushPay page.",
         },
     {
       key: "outr",

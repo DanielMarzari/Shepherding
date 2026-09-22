@@ -2,6 +2,13 @@ import "server-only";
 import { cache } from "react";
 import { getDb } from "./db";
 import { decryptJson } from "./encryption";
+import {
+  LAPSE_DAYS,
+  givingMethodCase,
+  givingPattern,
+  lapseCutoff,
+  PATTERN_LAPSED,
+} from "./giving-sql";
 
 interface PIIBlob {
   first_name?: string | null;
@@ -9,50 +16,92 @@ interface PIIBlob {
 }
 
 export interface GiveLaneStats {
-  /** Distinct people matched to at least one imported gift. */
+  /** Distinct people linked to at least one gift in the window. */
   givers: number;
-  /** Givers whose donor stage reads as recurring / regular. */
+  /** Givers with at least one gift PushPay recorded as Recurring. */
   recurring: number;
-  /** Givers whose donor stage reads as lapsed. */
+  /** Givers with no gift in the last LAPSE_DAYS days of the window. */
   lapsed: number;
-  /** Givers whose donor stage reads as first-time / new. */
-  firstTime: number;
-  /** Imported donor rows not yet tied to a person (ambiguous + unmatched). */
-  unlinked: number;
-  /** Total donor rows in the last import. */
-  totalDonors: number;
+  /** Givers whose FIRST gift in the window is in its last LAPSE_DAYS days. */
+  firstSeen: number;
+  /** PushPay payer ids with no person behind them yet. */
+  unlinkedPayers: number;
+  /** Gifts in the window. A count of gifts — never an amount. */
+  gifts: number;
+  /** First and last gift date the loaded export covers, or null before any
+   *  Transactions import. Every giving surface has to print these. */
+  windowStart: string | null;
+  windowEnd: string | null;
 }
 
-/** Headline counts for the Give lane, all from the imported PushPay set.
- *  Stage buckets are matched loosely (LIKE) because the export's "Donor
- *  Stage" wording varies (Recurring / Regular Giver / Lapsed Donor / …). */
+/** How many days of silence reads as lapsed, for the pages' own copy. */
+export const GIVE_LANE_LAPSE_DAYS = LAPSE_DAYS;
+
+/** Per-person rollup of the per-payer rollup. One person can hold more than
+ *  one PushPay payer id — a household giving from two cards — so every
+ *  person-level number here aggregates the payer rows first. */
+const PER_PERSON = `
+  SELECT person_id AS pid,
+         MIN(first_gift_on)   AS firstGift,
+         MAX(last_gift_on)    AS lastGift,
+         SUM(gifts)           AS gifts,
+         SUM(recurring_gifts) AS recurringGifts
+    FROM pushpay_payer_summary
+   WHERE org_id = @orgId AND person_id IS NOT NULL
+   GROUP BY person_id`;
+
+/** Headline counts for the Give lane, from the PushPay Transactions import.
+ *
+ *  All of it comes from `pushpay_payer_summary`, the per-payer rollup of
+ *  `pushpay_transactions` (0098), except the gift total and the window, which
+ *  come from its snapshot row. What "recurring", "lapsed" and "first seen"
+ *  mean here — and why they are our words rather than PushPay's donor stages,
+ *  which came from the All Donors export and are gone — is set out at the top
+ *  of giving-sql.ts. The short version: recurring is a gift PushPay sourced as
+ *  'Recurring'; lapsed is no gift in the 90 days to the last gift in the data,
+ *  and cannot see anyone who stopped before the window opened; first seen is a
+ *  first gift inside those same 90 days, so it means new to this import, not
+ *  new to the church. Nothing here is money: the export carries no amounts. */
 export function getGiveLaneStats(orgId: number): GiveLaneStats {
   const r = getDb()
     .prepare(
-      `SELECT
-         COUNT(DISTINCT CASE WHEN person_id IS NOT NULL THEN person_id END) AS givers,
-         COUNT(DISTINCT CASE WHEN person_id IS NOT NULL AND (lower(donor_stage) LIKE '%recurring%' OR lower(donor_stage) LIKE '%regular%') THEN person_id END) AS recurring,
-         COUNT(DISTINCT CASE WHEN person_id IS NOT NULL AND lower(donor_stage) LIKE '%lapsed%' THEN person_id END) AS lapsed,
-         COUNT(DISTINCT CASE WHEN person_id IS NOT NULL AND (lower(donor_stage) LIKE '%first%' OR lower(donor_stage) LIKE '%new%') THEN person_id END) AS firstTime,
-         SUM(CASE WHEN person_id IS NULL THEN 1 ELSE 0 END) AS unlinked,
-         COUNT(*) AS totalDonors
-       FROM pushpay_donors WHERE org_id = ?`,
+      `WITH me AS (${PER_PERSON}), cut AS (SELECT ${lapseCutoff("@orgId")} AS d)
+       SELECT COUNT(*) AS givers,
+              COALESCE(SUM(CASE WHEN me.recurringGifts > 0 THEN 1 ELSE 0 END), 0) AS recurring,
+              COALESCE(SUM(CASE WHEN me.lastGift  <  cut.d THEN 1 ELSE 0 END), 0) AS lapsed,
+              COALESCE(SUM(CASE WHEN me.firstGift >= cut.d THEN 1 ELSE 0 END), 0) AS firstSeen
+         FROM me, cut`,
     )
-    .get(orgId) as {
+    .get({ orgId }) as {
     givers: number | null;
     recurring: number | null;
     lapsed: number | null;
-    firstTime: number | null;
-    unlinked: number | null;
-    totalDonors: number | null;
+    firstSeen: number | null;
   };
+  const w = getDb()
+    .prepare(
+      `SELECT s.gifts AS gifts, s.first_gift_on AS windowStart, s.last_gift_on AS windowEnd,
+              (SELECT COUNT(*) FROM pushpay_payer_summary
+                WHERE org_id = s.org_id AND person_id IS NULL) AS unlinkedPayers
+         FROM pushpay_giving_snapshot s WHERE s.org_id = ?`,
+    )
+    .get(orgId) as
+    | {
+        gifts: number;
+        windowStart: string | null;
+        windowEnd: string | null;
+        unlinkedPayers: number;
+      }
+    | undefined;
   return {
     givers: r.givers ?? 0,
     recurring: r.recurring ?? 0,
     lapsed: r.lapsed ?? 0,
-    firstTime: r.firstTime ?? 0,
-    unlinked: r.unlinked ?? 0,
-    totalDonors: r.totalDonors ?? 0,
+    firstSeen: r.firstSeen ?? 0,
+    unlinkedPayers: w?.unlinkedPayers ?? 0,
+    gifts: w?.gifts ?? 0,
+    windowStart: w?.windowStart ?? null,
+    windowEnd: w?.windowEnd ?? null,
   };
 }
 
@@ -61,66 +110,126 @@ export interface GivingPersonRow {
   fullName: string;
   initials: string;
   membershipType: string | null;
-  stage: string | null;
-  fund: string | null;
-  channel: string | null;
+  /** Recurring schedule / One gift at a time / Lapsed — our words, worked out
+   *  from the gifts. See giving-sql.ts. */
+  pattern: string;
+  /** True when `pattern` is the lapsed one, so callers never match on text. */
+  lapsed: boolean;
+  /** Funds this person's gifts were designated to, comma-separated. */
+  funds: string | null;
+  /** Online / Check or cash / Both, counted once per person. */
+  method: string;
+  firstGiftDate: string | null;
   lastGiftDate: string | null;
-  /** Donor rows tied to this person (usually 1; >1 for shared-email households). */
+  /** Gifts from this person in the window. A count, not an amount. */
   gifts: number;
 }
 
-/** People who have given, one row per person (latest gift wins), most
- *  recent first. Powers the Give lane person list. Memoized per (orgId, limit)
- *  within a request — the giving builder page reads it from two blocks
- *  (directory + lapsed), which would otherwise decrypt up to 1000 donors twice. */
-export const listGivingPeople = cache((orgId: number, limit = 50): GivingPersonRow[] => {
-  const rows = getDb()
+/** `order`: most recent first for the directory, longest silent first for the
+ *  reconnect list. Both are bounded by `limit`, so they cannot be the same
+ *  query sorted twice — at 1,113 givers, taking the 1,000 most recent and then
+ *  filtering to the lapsed ones would drop exactly the people the reconnect
+ *  list is for. */
+function loadGivers(
+  orgId: number,
+  limit: number,
+  order: "recent" | "quietest",
+  lapsedOnly: boolean,
+): GivingPersonRow[] {
+  const db = getDb();
+  const cutoff = (
+    db.prepare(`SELECT ${lapseCutoff("?")} AS cutoff`).get(orgId) as {
+      cutoff: string | null;
+    }
+  ).cutoff;
+
+  const rows = db
     .prepare(
-      `WITH ranked AS (
-         SELECT
-           d.person_id     AS pcoId,
-           d.donor_stage   AS stage,
-           d.last_gift_fund AS fund,
-           d.giving_channel AS channel,
-           d.last_gift_on AS lastGiftDate,
-           ROW_NUMBER() OVER (PARTITION BY d.person_id ORDER BY d.last_gift_on DESC) AS rn,
-           COUNT(*)     OVER (PARTITION BY d.person_id) AS gifts
-         FROM pushpay_donors d
-         WHERE d.org_id = ? AND d.person_id IS NOT NULL
+      `WITH me AS (${PER_PERSON}), cut AS (SELECT ${lapseCutoff("@orgId")} AS d),
+       picked AS (
+         SELECT me.* FROM me, cut
+          WHERE (@lapsedOnly = 0 OR (cut.d IS NOT NULL AND me.lastGift < cut.d))
+          ORDER BY CASE WHEN @quietest = 1 THEN me.lastGift END ASC,
+                   CASE WHEN @quietest = 0 THEN me.lastGift END DESC,
+                   me.pid
+          LIMIT @limit
        )
-       SELECT r.pcoId, r.stage, r.fund, r.channel, r.lastGiftDate, r.gifts,
-              p.enc_pii AS encPii, p.membership_type AS membershipType
-       FROM ranked r
-       JOIN pco_people p ON p.org_id = ? AND p.pco_id = r.pcoId
-       WHERE r.rn = 1
-       ORDER BY r.lastGiftDate DESC NULLS LAST, r.pcoId
-       LIMIT ?`,
+       SELECT m.pid AS pcoId, m.firstGift AS firstGiftDate, m.lastGift AS lastGiftDate,
+              m.gifts, m.recurringGifts,
+              p.first_name AS firstName, p.last_name AS lastName,
+              p.enc_pii AS encPii, p.membership_type AS membershipType,
+              (SELECT group_concat(DISTINCT t.fund_name)
+                 FROM pushpay_transactions t
+                WHERE t.org_id = @orgId AND t.person_id = m.pid
+                  AND t.fund_name IS NOT NULL AND t.fund_name <> '') AS funds,
+              (SELECT ${givingMethodCase(
+                `MAX(CASE WHEN t.source = 'Batch Entry' THEN 1 ELSE 0 END)`,
+                `MAX(CASE WHEN t.source IS NULL OR t.source <> 'Batch Entry' THEN 1 ELSE 0 END)`,
+              )}
+                 FROM pushpay_transactions t
+                WHERE t.org_id = @orgId AND t.person_id = m.pid) AS method
+         FROM picked m
+         JOIN pco_people p ON p.org_id = @orgId AND p.pco_id = m.pid
+        ORDER BY CASE WHEN @quietest = 1 THEN m.lastGift END ASC,
+                 CASE WHEN @quietest = 0 THEN m.lastGift END DESC,
+                 m.pid`,
     )
-    .all(orgId, orgId, limit) as Array<{
+    .all({
+      orgId,
+      limit,
+      quietest: order === "quietest" ? 1 : 0,
+      lapsedOnly: lapsedOnly ? 1 : 0,
+    }) as Array<{
     pcoId: string;
-    stage: string | null;
-    fund: string | null;
-    channel: string | null;
+    firstGiftDate: string | null;
     lastGiftDate: string | null;
     gifts: number;
+    recurringGifts: number;
+    firstName: string | null;
+    lastName: string | null;
     encPii: string | null;
     membershipType: string | null;
+    funds: string | null;
+    method: string | null;
   }>;
 
   return rows.map((r) => {
-    const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
-    const f = pii?.first_name ?? null;
-    const l = pii?.last_name ?? null;
+    // Names are plaintext since 0097; enc_pii is only a fallback for a record
+    // written before it and never re-synced since.
+    let f = r.firstName;
+    let l = r.lastName;
+    if (f == null && l == null && r.encPii) {
+      const pii = decryptJson<PIIBlob>(r.encPii);
+      f = pii?.first_name ?? null;
+      l = pii?.last_name ?? null;
+    }
+    const pattern = givingPattern(r.lastGiftDate, r.recurringGifts, cutoff);
     return {
       pcoId: r.pcoId,
       fullName: [f, l].filter(Boolean).join(" ") || `(unknown #${r.pcoId})`,
       initials: ((f?.[0] ?? "") + (l?.[0] ?? "")).toUpperCase() || "??",
       membershipType: r.membershipType,
-      stage: r.stage,
-      fund: r.fund,
-      channel: r.channel,
+      pattern,
+      lapsed: pattern === PATTERN_LAPSED,
+      funds: r.funds,
+      method: r.method ?? "",
+      firstGiftDate: r.firstGiftDate,
       lastGiftDate: r.lastGiftDate,
       gifts: r.gifts,
     };
   });
-});
+}
+
+/** People who have given, one row per person, most recent gift first. Powers
+ *  the Give lane person list and the giving page's directory. Memoized per
+ *  (orgId, limit) within a request. */
+export const listGivingPeople = cache((orgId: number, limit = 50): GivingPersonRow[] =>
+  loadGivers(orgId, limit, "recent", false),
+);
+
+/** Givers who have gone quiet, longest silence first — the reconnect worklist.
+ *  See giving-sql.ts: this can only see people who gave inside the loaded
+ *  window and then stopped, never anyone who stopped before it opened. */
+export const listLapsedGivers = cache((orgId: number, limit = 50): GivingPersonRow[] =>
+  loadGivers(orgId, limit, "quietest", true),
+);

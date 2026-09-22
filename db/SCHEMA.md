@@ -6,6 +6,9 @@ naming rules, the traps, and how to change the schema without wedging a deploy.
 Row counts come from the production copy of 2026-09-22, with every migration
 through [0097] applied. The four tables [0098] adds are marked, and their row
 counts are what that migration writes from the 16,574 gifts already stored.
+[0099] adds no tables: it moves every giving surface off the emptied
+`pushpay_donors` and onto those gifts, rewriting 22 stored builder queries and
+adding one block to each of two pages (so `builder_blocks` is 509 after it).
 
 For a table's exact columns, ask the database (`.schema pco_people` in the
 sqlite3 CLI, or the column list in the Page Builder's SQL editor) rather than
@@ -219,7 +222,7 @@ the migration's first build; keep them in step.
 
 | Table | Rows | A row is |
 |---|--:|---|
-| `pushpay_payer_summary` | 1,668 | One per PushPay payer: `person_id` and `is_linked`, first and last gift date, gift count, `recurring_gifts` / `other_gifts`, and `funds` (a sorted JSON array of fund names). NEVER an amount. A gift whose export row had no Payer ID is its own payer, keyed `tx:<transaction id>`. A payer whose gifts name different people takes the one on the most recently imported gift that names anyone. |
+| `pushpay_payer_summary` | 1,668 | **What every giving surface now counts** ([0099]). One per PushPay payer: `person_id` and `is_linked`, first and last gift date, gift count, `recurring_gifts` / `other_gifts`, and `funds` (a sorted JSON array of fund names). NEVER an amount. A gift whose export row had no Payer ID is its own payer, keyed `tx:<transaction id>`. A payer whose gifts name different people takes the one on the most recently imported gift that names anyone. |
 | `pushpay_giving_snapshot` | 1 | One per org: payers, linked payers, gifts, the span of gift dates, and the `source_rows` / `source_written_at` watermark the staleness check reads. One row even with no gifts, so "built, and empty" is not "never built". |
 
 **Map.** Background runners, started by the cron after a successful sync and by
@@ -240,7 +243,7 @@ None of the source files are kept in this repo.
 |---|--:|---|
 | `attendance_weekly` | 280 | One Sunday's totals from the quarterly "Worship and Activities Attendance" .xlsx files (22 so far, 2021 Q1–2026 Q2), uploaded on /attendance (`importAttendanceFile`). Re-uploading upserts. `exception_reason` comes from the sheet and keeps storm and closure Sundays out of averages. |
 | `attendance_service` | 2,418 | Per Sunday × room (center / chapel / kids / student) × service time, from the same files. Re-importing replaces that Sunday's rows. |
-| `pushpay_donors` | 0 | **Emptied on 2026-09-22 at Dan's request**: the Transactions export, whose Payer ID is PushPay's stable donor key, is the giving source from here on. The 6,423 rows it held (65 hand-matched) are saved as `/home/ubuntu/backups/pushpay_donors-before-delete-20260922T1620Z.sql` (names, emails and phones still encrypted). Until the pages move onto `pushpay_transactions`, everything that reads this table shows no donors: the Giving page, the Give lane, the donor blocks on MIR Finance, and the giving check in the membership audit. Otherwise: one row of PushPay's "All Donors" CSV, uploaded on /pushpay (`enc` holds encrypted name, email and phone), matched to a person. `match_status` is matched / manual / ambiguous / unmatched; `candidate_ids` are the people offered in review. `donor_key` is the row's position in the CSV, so it changes between uploads. **Re-uploading the CSV replaces every row but carries each manual match to the new row that is the same donor**, or sends it back to review when it can't tell (§4). `rematchDonors` re-runs matching in place and keeps manual matches. Removing the newest All Donors upload on /pushpay empties this table, because that upload *is* the set ([0098]). |
+| `pushpay_donors` | 0 | **Emptied on 2026-09-22 at Dan's request**: the Transactions export, whose Payer ID is PushPay's stable donor key, is the giving source from here on. The 6,423 rows it held (65 hand-matched) are saved as `/home/ubuntu/backups/pushpay_donors-before-delete-20260922T1620Z.sql` (names, emails and phones still encrypted). **Nothing reads this table any more except the import and the /audit/pushpay reconciliation over it** ([pushpay-import.ts]), plus the junk filter's "don't delete a giver" check: [0099] moved the Giving page, the Give lane, the MIR Finance and Small Groups blocks and the membership audit onto `pushpay_payer_summary` / `pushpay_transactions`, and [giving-sql.ts] holds what each of PushPay's donor stages became and why. Otherwise: one row of PushPay's "All Donors" CSV, uploaded on /pushpay (`enc` holds encrypted name, email and phone), matched to a person. `match_status` is matched / manual / ambiguous / unmatched; `candidate_ids` are the people offered in review. `donor_key` is the row's position in the CSV, so it changes between uploads. **Re-uploading the CSV replaces every row but carries each manual match to the new row that is the same donor**, or sends it back to review when it can't tell (§4). `rematchDonors` re-runs matching in place and keeps manual matches. Removing the newest All Donors upload on /pushpay empties this table, because that upload *is* the set ([0098]). |
 | `pushpay_transactions` | 16,574 | One gift from PushPay's Transactions CSV (/pushpay): date, source, fund, and never an amount. `match_source` says where `person_id` came from, tried in this order: `your_id` ("Your ID", which *is* the PCO person id), `donor_manual` (a donor someone matched by hand on the All Donors list, recognised by the same rule a re-upload uses, §4), `donor_match` (name, email and phone matching), or `unmatched`. Gifts imported before 2026-09-22 never have `donor_manual`; importing that export again re-resolves them. Rows upsert by `transaction_id`, so every export window adds history. `first_upload_id` is the `pushpay_uploads` row that inserted the gift and never changes; `last_upload_id` is the one that last wrote its values, and moves on every re-supply ([0098]). They are **value provenance only** — which files a gift is in, and so whether a removal may delete it, is `pushpay_transaction_uploads` (§4). Either column is NULL once the upload it named has been removed, or on a gift the old code wrote during the 0098 deploy. Rebuilding needs every export ever loaded (today's rows span 2026-01-01 to 2026-09-16). |
 | `sermons` | 429 | One Sunday message from Sermon Lab, a separate app on the host: `transcript` plus classification (`topic`, `summary`, `next_steps`, `themes`). To rebuild, `scripts/import-sermons.mjs` loads the classified rows from `db/seed-data/sermons.json`, which has no transcripts; then `scripts/backfill-sermon-transcripts.mjs` copies them from Sermon Lab's database (`SERMON_LAB_DB`). `scripts/sync-sermons-from-lab.mjs` is meant to add new sermons, unclassified, from a Wednesday host cron, but none has arrived since 2026-08-02: check that cron. A sermon classified later lives only here until it is added to the JSON. |
 
@@ -253,7 +256,7 @@ None of the source files are kept in this repo.
 | `shepherd_known_people` | 1,731 | An "I know them" mark from a /know session (`source = 'know'`) or /present session (`'present'`) ([shepherd-intake.ts]). |
 | `org_wide_access` | 0 | The /shepherd-map "sees the whole org" switch. Records intent only (§4). |
 | `builder_pages` | 52 | A Page Builder page. `nav_section` / `more_section` place it in the nav. `seed_revision` is set on the 48 seeded from code; the unedited ones come back from code (§4), so the hand work is in the other 8. |
-| `builder_blocks` | 611 | One widget on a page. `config` is JSON holding its SQL (319 blocks) or named source, title and layout. |
+| `builder_blocks` | 507 | One widget on a page (509 after [0099]). `config` is JSON holding its SQL (246 blocks, 248 after [0099]) or named source, title and layout. |
 | `builder_page_versions` | 27 | An Undo snapshot, keeping the last 10 per page. `snapshot` embeds each block's config as a JSON string inside JSON. |
 | `builder_theme` | 0 | The org's SQL-editor color theme. |
 | `nav_config` | 1 | The org's navigation as NavConfig JSON (/settings/navigation). |
@@ -278,7 +281,7 @@ plaintext only so the page can show which key is stored.
 
 | Table | Rows | A row is |
 |---|--:|---|
-| `_migrations` | 99 | An applied migration file. A lost row re-runs that file on the next deploy or boot, which for most files fails the deploy; a lost table re-runs all 99. |
+| `_migrations` | 100 | An applied migration file. A lost row re-runs that file on the next deploy or boot, which for most files fails the deploy; a lost table re-runs all 100. |
 | `pco_sync_runs` | 158 | One sync attempt: trigger, status, changes, `warning` (the junk filter's "kept" note lands here), `details` JSON. `cleanupStaleSyncRuns` reaps a row left `running` by a dead process. |
 | `pco_sync_cursor` | 6 | A fetch high-water mark per resource (`people`, `checkins:check_ins`, `groups:applications`, `form:<id>:submissions`). Deleting one forces a full re-fetch of that resource. |
 | `constant_contact_sync_runs` | 10 | One Constant Contact sync attempt. |
@@ -538,9 +541,17 @@ Dropped: `road_mesh`, `mir_docs`, `mir_team_members`, `attendance_sources`
   meeting. `pco_check_ins.event_id` is an undated `pco_check_in_events` row,
   whose occurrence is `event_time_starts_at`. A calendar event is undated too;
   its dated rows are `pco_calendar_event_instances`.
-- **Stored SQL names tables and columns.** 319 `builder_blocks.config` values
+- **Stored SQL names tables and columns.** 246 `builder_blocks.config` values
   and the Undo `builder_page_versions.snapshot`s embed queries. A rename that
   doesn't rewrite them breaks saved pages silently (§5).
+- **Giving is bounded by the loaded gift window, and carries no amounts.**
+  `pushpay_transactions` holds whatever export windows have been imported
+  (2026-01-01 to 2026-09-16 today) and no dollar figure at all, so every giving
+  figure is a count of gifts or of people inside that span. Nobody who stopped
+  giving before it opened has a row anywhere, which is why "lapsed" on the
+  giving surfaces means "gave inside the window and then went quiet" and each
+  surface prints the span from `pushpay_giving_snapshot`. The rules, and what
+  replaced each PushPay donor stage, are in [giving-sql.ts] ([0099]).
 - **Seeded builder pages are code until someone edits them.** A seeded page
   whose `builder_pages.updated_at` is within 5 s of `created_at` counts as
   pristine: `ensureSeededPage` ([builder-seeds.ts]) recreates it on visit if
@@ -552,7 +563,7 @@ Dropped: `road_mesh`, `mir_docs`, `mir_team_members`, `attendance_sources`
 These rules were learned the hard way.
 
 1. **Only in a migration file**, `db/migrations/NNNN_name.sql`, numbered after
-   the highest (0098). Files are applied in filename order and recorded by
+   the highest (0099). Files are applied in filename order and recorded by
    filename. Never `ALTER` by hand on the server or from a script. An
    out-of-band change makes the migration that later does the same thing fail
    ("duplicate column name"). The deploy's migrate step then stops before the
@@ -605,7 +616,13 @@ These rules were learned the hard way.
    (fingerprinted, so they re-seed themselves), the revision of any
    hand-numbered seed in [builder-seeds.ts] whose SQL changed, and the rename
    table in §3. [0090] (text rewrite), [0093] (column renames) and [0097]
-   (tables, columns, indexes, stats, guard) are the models.
+   (tables, columns, indexes, stats, guard) are the models. A rewrite that
+   changes what a block *asks*, not just what it names, is [0099]: its SQL is
+   generated from the seed templates so the two cannot drift, it sets only
+   `$.sql` / `$.title` / `$.sub` so a hand-restyled block keeps its styling,
+   and it rebuilds each Undo snapshot element by element (`json_each` →
+   `json_set` → `json(…)` → `json_group_array`) so only the configs that named
+   the old table are replaced.
 5. **DROP TABLE on a parent cascades.** With foreign keys on, DROP first deletes
    every row and fires the ON DELETE actions. `DROP TABLE organizations` would
    empty 87 tables; dropping `pco_people` fails while the owned tables name
@@ -667,6 +684,7 @@ These rules were learned the hard way.
 [0096]: migrations/0096_remove_dead_schema.sql
 [0097]: migrations/0097_clear_names.sql
 [0098]: migrations/0098_pushpay_uploads.sql
+[0099]: migrations/0099_giving_on_transactions.sql
 [db.ts]: ../src/lib/db.ts
 [builder.ts]: ../src/lib/builder.ts
 [builder-seeds.ts]: ../src/lib/builder-seeds.ts
@@ -680,6 +698,7 @@ These rules were learned the hard way.
 [retention-read.ts]: ../src/lib/retention-read.ts
 [care-read.ts]: ../src/lib/care-read.ts
 [pushpay-import.ts]: ../src/lib/pushpay-import.ts
+[giving-sql.ts]: ../src/lib/giving-sql.ts
 [attendance-import.ts]: ../src/lib/attendance-import.ts
 [shepherd-intake.ts]: ../src/lib/shepherd-intake.ts
 [integrations.ts]: ../src/lib/integrations.ts
