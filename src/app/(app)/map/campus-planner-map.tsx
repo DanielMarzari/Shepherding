@@ -7,7 +7,7 @@ import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
 import { LV_TRACTS } from "@/lib/lv-census";
 import { LV_CHURCHES } from "@/lib/lv-churches";
 import { LVPC_NEW_HOMES, LVPC_NEW_HOMES_AS_OF } from "@/lib/lvpc-residential";
-import { FC_ISO_25, FC_ISO_30 } from "@/lib/fc-isochrones";
+import { ISO_DEFAULT_MINUTES, ISO_MINUTES, isoRing } from "@/lib/fc-isochrones";
 import {
   loadLeaflet,
   makeBasemapLayer,
@@ -45,8 +45,12 @@ const CLASS_COLOR: Record<string, string> = {
 const FC_COLOR = "#dc2626";
 const LV_COLOR = "#7c3aed";
 const DOT_BLUE = "#2563eb";
-const DRIVE25_COLOR = "#16a34a"; // 25-min isochrone blob
-const ISO30_COLOR = "#dc2626"; // 30-min campus limit
+// One colour for one shape. This used to be a green blob plus a red limit
+// ring, which is the worst pairing available for a red-green colourblind
+// reader — and they are now the same ring anyway, since the chosen drive time
+// is both what is drawn and what a campus is sited within. Blue, with the
+// dashed boundary carrying the meaning instead of the hue.
+const DRIVE_COLOR = "#2563eb"; // the selected drive-time isochrone
 const HOME_COLOR = "#ea580c"; // LVPC new-home developments (orange)
 
 const ENGAGED_CLASSES = new Set(["shepherded", "active", "present"]);
@@ -260,13 +264,19 @@ export function CampusPlannerMap({
   const fcRef = useRef<any>(null);
   const lvRef = useRef<any>(null);
   const suggRef = useRef<any>(null);
+  const limitRef = useRef<any>(null);
+  // The Leaflet drag handlers are bound once, inside the map-init effect, so
+  // they would capture whatever drive time was selected at mount and clamp to
+  // it forever. A ref gives them the live value.
+  const driveMinutesRef = useRef<number>(ISO_DEFAULT_MINUTES);
 
   const byGeoid = useMemo(() => new Map(tracts.map((t) => [t.geoid, t])), [tracts]);
 
   const [showDots, setShowDots] = useState(true);
   const [metric, setMetric] = useState<CensusMetric | "none">("need");
   const [showRoads, setShowRoads] = useState(false);
-  const [showDrive25, setShowDrive25] = useState(false);
+  const [showDrive, setShowDrive] = useState(false);
+  const [driveMinutes, setDriveMinutes] = useState<number>(ISO_DEFAULT_MINUTES);
   const [showHomes, setShowHomes] = useState(false);
   const [peopleFilter, setPeopleFilter] = useState<string[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -280,7 +290,8 @@ export function CampusPlannerMap({
     setShowDots(lsGet("shepherdly.planner.dots", true));
     setMetric(lsGet("shepherdly.planner.metric", "need"));
     setShowRoads(lsGet("shepherdly.planner.roads", false));
-    setShowDrive25(lsGet("shepherdly.planner.drive25", false));
+    setShowDrive(lsGet("shepherdly.planner.driveBlob", false));
+    setDriveMinutes(lsGet("shepherdly.planner.driveMinutes", ISO_DEFAULT_MINUTES));
     setShowHomes(lsGet("shepherdly.planner.homes", false));
     setPeopleFilter(lsGet("shepherdly.planner.peopleFilter", []));
     setSaved(lsGet("shepherdly.planner.saved", []));
@@ -396,12 +407,13 @@ export function CampusPlannerMap({
       }).addTo(layer);
     }
 
-    // 25-minute drive blob (Faith Church): a real OSRM isochrone — an organic,
-    // rounded shape of exactly 25 min driving outward, not a circle or tracts.
-    if (showDrive25) {
-      L.polygon(FC_ISO_25.map(([lng, lat]) => [lat, lng]) as any, {
-        interactive: false, color: DRIVE25_COLOR, weight: 1, opacity: 0.7,
-        fillColor: DRIVE25_COLOR, fillOpacity: 0.16,
+    // The drive blob (Faith Church): a real OSRM isochrone for whichever drive
+    // time is selected — an organic, rounded shape of exactly that many minutes
+    // driving outward, not a circle and not built from tracts.
+    if (showDrive) {
+      L.polygon(isoRing(driveMinutes).map(([lng, lat]) => [lat, lng]) as any, {
+        interactive: false, color: DRIVE_COLOR, weight: 1, opacity: 0.7,
+        fillColor: DRIVE_COLOR, fillOpacity: 0.16,
       }).addTo(layer);
     }
 
@@ -454,10 +466,11 @@ export function CampusPlannerMap({
         interactive: false,
         style: { color: LV_COLOR, weight: 1.5, opacity: 0.85, fillColor: LV_COLOR, fillOpacity: 0.06 },
       }).addTo(map);
-      // 30-minute drive limit: a campus can't be sited beyond this (the dragged
-      // candidate is clamped to it). Drawn as a dashed boundary, always on.
-      L.polygon(FC_ISO_30.map(([lng, lat]) => [lat, lng]) as any, {
-        interactive: false, color: ISO30_COLOR, weight: 1.5, opacity: 0.6, dashArray: "6 4", fill: false,
+      // The siting limit: a campus can't be placed beyond the selected drive
+      // time (the dragged candidate is clamped to it). Dashed, always on, and
+      // redrawn by the effect below whenever the drive time changes.
+      limitRef.current = L.polygon(isoRing(driveMinutesRef.current).map(([lng, lat]) => [lat, lng]) as any, {
+        interactive: false, color: DRIVE_COLOR, weight: 1.5, opacity: 0.6, dashArray: "6 4", fill: false,
       }).addTo(map);
       const lvBounds = lvRef.current.getBounds();
       try { map.fitBounds(lvBounds, { padding: [12, 12] }); } catch { /* noop */ }
@@ -483,22 +496,22 @@ export function CampusPlannerMap({
         iconSize: [20, 20],
         iconAnchor: [10, 10],
       });
-      // Start inside the 30-min limit (clamp the suggested initial if needed).
-      const start = clampToRing(initial.lat, initial.lng, FC_ISO_30);
+      // Start inside the limit (clamp the suggested initial if needed).
+      const start = clampToRing(initial.lat, initial.lng, isoRing(driveMinutesRef.current));
       markerRef.current = L.marker([start.lat, start.lng], { draggable: true, icon, zIndexOffset: 1000 })
-        .bindTooltip("Drag me to test a campus location (within 30 min of FC)", { direction: "top" })
+        .bindTooltip("Drag me to test a campus location (within the selected drive time of FC)", { direction: "top" })
         .addTo(map);
       setStats(compute(start.lat, start.lng));
       markerRef.current.on("drag", (e: any) => {
         const ll = e.target.getLatLng();
-        const c = clampToRing(ll.lat, ll.lng, FC_ISO_30);
+        const c = clampToRing(ll.lat, ll.lng, isoRing(driveMinutesRef.current));
         if (c.lat !== ll.lat || c.lng !== ll.lng) e.target.setLatLng([c.lat, c.lng]);
         setStats(compute(c.lat, c.lng));
       });
       // On drop, snap inside the limit + update candidate so layers re-render.
       markerRef.current.on("dragend", (e: any) => {
         const ll = e.target.getLatLng();
-        const c = clampToRing(ll.lat, ll.lng, FC_ISO_30);
+        const c = clampToRing(ll.lat, ll.lng, isoRing(driveMinutesRef.current));
         e.target.setLatLng([c.lat, c.lng]);
         setCandPos({ lat: c.lat, lng: c.lng });
       });
@@ -525,7 +538,7 @@ export function CampusPlannerMap({
   useEffect(() => {
     if (mapReady) renderOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDots, metric, showRoads, showDrive25, showHomes, peopleFilter, mapReady, candPos]);
+  }, [showDots, metric, showRoads, showDrive, driveMinutes, showHomes, peopleFilter, mapReady, candPos]);
 
   function lockIn() {
     if (!stats) return;
@@ -545,14 +558,37 @@ export function CampusPlannerMap({
   function goTo(lat: number, lng: number) {
     const m = markerRef.current, map = mapRef.current;
     if (!m || !map) return;
-    const c = clampToRing(lat, lng, FC_ISO_30); // keep inside the 30-min limit
+    const c = clampToRing(lat, lng, isoRing(driveMinutesRef.current)); // keep inside the limit
     m.setLatLng([c.lat, c.lng]);
     map.panTo([c.lat, c.lng]);
     setStats(compute(c.lat, c.lng));
   }
+  useEffect(() => {
+    driveMinutesRef.current = driveMinutes;
+    const L = LRef.current, limit = limitRef.current;
+    if (!L || !limit) return;
+    limit.setLatLngs(isoRing(driveMinutes).map(([lng, lat]) => [lat, lng]) as any);
+  }, [driveMinutes]);
+
   function toggleDots() { const v = !showDots; setShowDots(v); lsSet("shepherdly.planner.dots", v); }
   function toggleRoads() { const v = !showRoads; setShowRoads(v); lsSet("shepherdly.planner.roads", v); }
-  function toggleDrive25() { const v = !showDrive25; setShowDrive25(v); lsSet("shepherdly.planner.drive25", v); }
+  function toggleDrive() { const v = !showDrive; setShowDrive(v); lsSet("shepherdly.planner.driveBlob", v); }
+  /** Changing the drive time moves the siting limit too, so the marker is
+   *  re-clamped: narrowing to 15 minutes must not leave a candidate sitting
+   *  outside the range it is now being judged against. */
+  function pickDriveMinutes(mins: number) {
+    setDriveMinutes(mins);
+    lsSet("shepherdly.planner.driveMinutes", mins);
+    const m = markerRef.current;
+    if (!m) return;
+    const ll = m.getLatLng();
+    const c = clampToRing(ll.lat, ll.lng, isoRing(mins));
+    if (c.lat !== ll.lat || c.lng !== ll.lng) {
+      m.setLatLng([c.lat, c.lng]);
+      setCandPos({ lat: c.lat, lng: c.lng });
+    }
+    setStats(compute(c.lat, c.lng));
+  }
   function toggleHomes() { const v = !showHomes; setShowHomes(v); lsSet("shepherdly.planner.homes", v); }
   function pickMetric(m: CensusMetric | "none") { setMetric(m); lsSet("shepherdly.planner.metric", m); }
   function togglePeople(key: string) {
@@ -592,8 +628,19 @@ export function CampusPlannerMap({
               <span className="text-muted">Roads driven</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={showDrive25} onChange={toggleDrive25} />
-              <span className="text-muted">25-min drive blob (FC)</span>
+              <input type="checkbox" checked={showDrive} onChange={toggleDrive} />
+              <span className="text-muted">Drive blob (FC)</span>
+              <select
+                value={driveMinutes}
+                onChange={(e) => pickDriveMinutes(Number(e.target.value))}
+                onClick={(e) => e.stopPropagation()}
+                aria-label="Drive time from Faith Church"
+                className="text-xs rounded border border-white/15 bg-black/20 px-1.5 py-0.5"
+              >
+                {ISO_MINUTES.map((m) => (
+                  <option key={m} value={m}>{m} min</option>
+                ))}
+              </select>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={showHomes} onChange={toggleHomes} />
@@ -652,8 +699,8 @@ export function CampusPlannerMap({
             <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: HOME_COLOR, border: "1px solid #7c2d12" }} />new homes · sized by units (LVPC)</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: FC_COLOR }} />Faith Church</span>
             <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm border" style={{ background: `${LV_COLOR}22`, borderColor: LV_COLOR }} />Lehigh Valley</span>
-            <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: `${DRIVE25_COLOR}40`, border: `1px solid ${DRIVE25_COLOR}` }} />25-min drive blob</span>
-            <span className="flex items-center gap-1.5"><span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: ISO30_COLOR }} />30-min limit (candidate clamped)</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: `${DRIVE_COLOR}40`, border: `1px solid ${DRIVE_COLOR}` }} />{driveMinutes}-min drive blob</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-4 border-t-2 border-dashed" style={{ borderColor: DRIVE_COLOR }} />{driveMinutes}-min limit (candidate clamped)</span>
           </div>
         </div>
       </div>
