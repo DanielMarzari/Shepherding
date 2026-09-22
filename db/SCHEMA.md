@@ -225,7 +225,7 @@ None of the source files are kept in this repo.
 |---|--:|---|
 | `attendance_weekly` | 280 | One Sunday's totals from the quarterly "Worship and Activities Attendance" .xlsx files (22 so far, 2021 Q1–2026 Q2), uploaded on /attendance (`importAttendanceFile`). Re-uploading upserts. `exception_reason` comes from the sheet and keeps storm and closure Sundays out of averages. |
 | `attendance_service` | 2,418 | Per Sunday × room (center / chapel / kids / student) × service time, from the same files. Re-importing replaces that Sunday's rows. |
-| `pushpay_donors` | 6,423 | One row of PushPay's "All Donors" CSV, uploaded on /pushpay (`enc` holds encrypted name, email and phone), matched to a person. `match_status` is matched / manual / ambiguous / unmatched; `candidate_ids` are the people offered in review. `donor_key` is the row's position in the CSV, so it changes between uploads. **Re-uploading the CSV replaces every row but carries each manual match to the new row that is the same donor**, or sends it back to review when it can't tell (§4). `rematchDonors` re-runs matching in place and keeps manual matches. |
+| `pushpay_donors` | 0 | **Emptied on 2026-09-22 at Dan's request**: the Transactions export, whose Payer ID is PushPay's stable donor key, is the giving source from here on. The 6,423 rows it held (65 hand-matched) are saved as `/home/ubuntu/backups/pushpay_donors-before-delete-20260922T1620Z.sql` (names, emails and phones still encrypted). Until the pages move onto `pushpay_transactions`, everything that reads this table shows no donors: the Giving page, the Give lane, the donor blocks on MIR Finance, and the giving check in the membership audit. Otherwise: one row of PushPay's "All Donors" CSV, uploaded on /pushpay (`enc` holds encrypted name, email and phone), matched to a person. `match_status` is matched / manual / ambiguous / unmatched; `candidate_ids` are the people offered in review. `donor_key` is the row's position in the CSV, so it changes between uploads. **Re-uploading the CSV replaces every row but carries each manual match to the new row that is the same donor**, or sends it back to review when it can't tell (§4). `rematchDonors` re-runs matching in place and keeps manual matches. |
 | `pushpay_transactions` | 16,574 | One gift from PushPay's Transactions CSV (/pushpay): date, source, fund, and never an amount. `match_source` says where `person_id` came from, tried in this order: `your_id` ("Your ID", which *is* the PCO person id), `donor_manual` (a donor someone matched by hand on the All Donors list, recognised by the same rule a re-upload uses, §4), `donor_match` (name, email and phone matching), or `unmatched`. Gifts imported before 2026-09-22 never have `donor_manual`; importing that export again re-resolves them. Rows upsert by `transaction_id`, so every export window adds history. Rebuilding needs every export ever loaded (today's rows span 2026-01-01 to 2026-09-16). |
 | `sermons` | 429 | One Sunday message from Sermon Lab, a separate app on the host: `transcript` plus classification (`topic`, `summary`, `next_steps`, `themes`). To rebuild, `scripts/import-sermons.mjs` loads the classified rows from `db/seed-data/sermons.json`, which has no transcripts; then `scripts/backfill-sermon-transcripts.mjs` copies them from Sermon Lab's database (`SERMON_LAB_DB`). `scripts/sync-sermons-from-lab.mjs` is meant to add new sermons, unclassified, from a Wednesday host cron, but none has arrived since 2026-08-02: check that cron. A sermon classified later lives only here until it is added to the JSON. |
 
@@ -407,8 +407,9 @@ Dropped: `road_mesh`, `mir_docs`, `mir_team_members`, `attendance_sources`
   notes, of everyone who has since become shepherded, on every add from
   /care-map.
 - **Re-uploading PushPay "All Donors" keeps a hand match only when it can
-  recognise the donor.** `importPushpay` replaces every `pushpay_donors` row
-  (about 65 are `match_status = 'manual'`) and carries each hand match to the
+  recognise the donor.** (The table is empty since 2026-09-22; this applies if
+  an All Donors export is uploaded again.) `importPushpay` replaces every
+  `pushpay_donors` row and carries each hand match to the
   new row that is the same donor (`sameDonor`, `planHandMatches` in
   [pushpay-import.ts]). That means the name as the export spells it, with Jr
   and Sr counted, so a father never inherits his son's match, plus the same
@@ -435,7 +436,8 @@ Dropped: `road_mesh`, `mir_docs`, `mir_team_members`, `attendance_sources`
   message gives the kept, review and not-found counts. Two limits: a
   same-name household member whose new row is identical to the hand-matched
   row (same email, same or no phone) takes the match when the donor's own row
-  changed or left, since the export has no donor id to tell them apart; and a
+  changed or left, since the All Donors export has no donor id to tell them apart (the
+  Transactions export does: Payer ID); and a
   review row keeps no record that it was a hand match, so Re-match on
   /audit/pushpay (`rematchDonors`) may assign it automatically. Nothing records
   which old row a new row came from, so save `pushpay_donors` before an upload
