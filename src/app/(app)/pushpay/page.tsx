@@ -2,13 +2,22 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { getPushpayImport } from "@/lib/pushpay-import";
+import { getPushpayGivingSummary, getPushpayImport, listPushpayUploads } from "@/lib/pushpay-import";
 import { PushpayImportForm } from "./import-form";
+import { PushpayUploadList, type UploadView } from "./upload-list";
 
 export default async function PushpayPage() {
   const session = await requireOrg();
   const isAdmin = session.role === "admin";
   const last = getPushpayImport(session.orgId);
+  const giving = getPushpayGivingSummary(session.orgId);
+  // Timestamps are formatted here, on the server, the way the last-import line
+  // below already does it — the list itself is a client component and would
+  // otherwise render one time zone on the server and another in the browser.
+  const uploads: UploadView[] = listPushpayUploads(session.orgId).map((u) => ({
+    ...u,
+    importedLabel: new Date(u.importedAt).toLocaleString(),
+  }));
 
   return (
     <AppShell active="PushPay" breadcrumb="Giving › PushPay">
@@ -16,25 +25,33 @@ export default async function PushpayPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">PushPay giving</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">
-            Drop your PushPay <span className="text-fg">All Donors</span> export
-            and Shepherdly matches each donor to a person, marks giving as a
-            completed next step, and powers the giving statistics pages. No API
-            connection needed — just the CSV.
+            Drop a PushPay export — <span className="text-fg">Transactions</span>,
+            one row per gift, or <span className="text-fg">All Donors</span>, one
+            row per donor — and Shepherdly matches each giver to a person, marks
+            giving as a completed next step, and powers the giving statistics
+            pages. One drop zone takes either file; it reads the header to tell
+            them apart. No API connection needed, and no amounts: PushPay&apos;s
+            export doesn&apos;t carry them.
           </p>
         </div>
 
         {/* Import card */}
         <Card className="p-5 space-y-4">
           <div>
-            <h2 className="text-sm font-semibold">Import the donor export</h2>
+            <h2 className="text-sm font-semibold">Import an export</h2>
             <p className="text-xs text-muted mt-1 leading-relaxed max-w-2xl">
               In PushPay, export{" "}
-              <span className="text-fg">Donors → All Donors</span> as CSV
-              (First/Last name, Email, Donor Stage, Giving Channel, Last Gift).
-              Drop the file below. Re-importing a fresh export replaces the
-              previous one and re-matches everyone except donors matched by
-              hand: those stay matched when the new file still has them, and
-              go back to review when it can&apos;t tell which row is theirs.
+              <span className="text-fg">Transactions</span> as CSV for the
+              window you want (Transaction ID, Received On, Source, Fund, Payer
+              ID, Your ID): gifts are <span className="text-fg">added</span> to
+              the history, so each new window builds on the last. Or export{" "}
+              <span className="text-fg">Donors → All Donors</span> (First/Last
+              name, Email, Donor Stage, Giving Channel, Last Gift), which{" "}
+              <span className="text-fg">replaces</span> the donor list and
+              re-matches everyone except donors matched by hand: those stay
+              matched when the new file still has them, and go back to review
+              when it can&apos;t tell which row is theirs. Every upload is
+              listed under Datasets below, and can be removed from there.
             </p>
           </div>
 
@@ -66,7 +83,7 @@ export default async function PushpayPage() {
                   <span className="text-fg tnum">
                     {last.total.toLocaleString()}
                   </span>{" "}
-                  donors
+                  {last.kind === "transactions" ? "gifts" : "donors"}
                 </span>
                 <span>
                   <span className="text-good-soft-fg tnum">
@@ -74,12 +91,16 @@ export default async function PushpayPage() {
                   </span>{" "}
                   matched
                 </span>
-                <span>
-                  <span className="text-warn-soft-fg tnum">
-                    {last.ambiguous.toLocaleString()}
-                  </span>{" "}
-                  to review
-                </span>
+                {/* A payer is resolved or it is not — the Transactions import
+                    has no "to review" state, so the count is always 0 there. */}
+                {last.kind !== "transactions" && (
+                  <span>
+                    <span className="text-warn-soft-fg tnum">
+                      {last.ambiguous.toLocaleString()}
+                    </span>{" "}
+                    to review
+                  </span>
+                )}
                 <span>
                   <span className="tnum">{last.unmatched.toLocaleString()}</span>{" "}
                   unmatched
@@ -101,6 +122,38 @@ export default async function PushpayPage() {
             app key — the same protection used for PCO and all PII. Matching uses
             one-way hashes, never plaintext.
           </p>
+        </Card>
+
+        {/* Datasets: what has been uploaded, and how to take one back out */}
+        <Card className="p-5 space-y-4">
+          <div>
+            <h2 className="text-sm font-semibold">Datasets</h2>
+            <p className="text-xs text-muted mt-1 leading-relaxed max-w-2xl">
+              Every file that has been saved, newest first. A Transactions upload adds gifts
+              to the history rather than replacing it, and export windows overlap, so removing
+              one takes out only the gifts no other upload supplies: a gift another file also
+              carried stays, holding whichever file wrote it last. An All Donors upload
+              replaces the whole donor list, so removing it empties that list.
+            </p>
+          </div>
+
+          {giving && giving.gifts > 0 && (
+            <p className="text-xs text-muted tnum">
+              In the database now:{" "}
+              <span className="text-fg">{giving.gifts.toLocaleString()}</span> gifts from{" "}
+              <span className="text-fg">{giving.payers.toLocaleString()}</span> payers
+              {giving.firstGiftOn && giving.lastGiftOn
+                ? `, dated ${giving.firstGiftOn} to ${giving.lastGiftOn}`
+                : ""}
+              . {giving.linkedPayers.toLocaleString()} of those payers are tied to a person.
+            </p>
+          )}
+
+          <PushpayUploadList uploads={uploads} isAdmin={isAdmin} />
+
+          {!isAdmin && uploads.length > 0 && (
+            <p className="text-[11px] text-subtle">Only admins can remove a dataset.</p>
+          )}
         </Card>
 
         {/* Where giving shows up */}

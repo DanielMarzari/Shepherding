@@ -646,9 +646,406 @@ export function importPushpay(orgId: number, fileName: string, csvText: string):
       VALUES (?,?,?,?,?,?, 'donors', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       ON CONFLICT(org_id) DO UPDATE SET file_name=excluded.file_name, total=excluded.total, matched=excluded.matched, ambiguous=excluded.ambiguous, unmatched=excluded.unmatched, kind=excluded.kind, imported_at=excluded.imported_at`)
       .run(orgId, fileName, counts.total, counts.matched, counts.ambiguous, counts.unmatched);
+    // The upload history. This import replaces the whole donor set, so every
+    // row it wrote is new to us (inserted = total) and the set it leaves is
+    // the one an earlier All Donors upload used to hold: removing THIS upload
+    // is what empties pushpay_donors (0098).
+    recordUpload(orgId, "donors", fileName, { ...counts, inserted: counts.total });
     return { ...counts, handMatches };
   });
   return run.immediate();
+}
+
+// ── Upload history ──────────────────────────────────────────────────────────
+//
+// pushpay_uploads holds one row per upload of either export, so the /pushpay
+// page can list what has been loaded and take one back out. Schema, and the
+// removal semantics, in db/migrations/0098_pushpay_uploads.sql.
+
+export type PushpayUploadKind = "donors" | "transactions";
+
+interface UploadCounts {
+  total: number;
+  inserted: number;
+  matched: number;
+  ambiguous: number;
+  unmatched: number;
+  byYourId?: number;
+  byDonorManual?: number;
+  byDonorMatch?: number;
+  firstGiftOn?: string | null;
+  lastGiftOn?: string | null;
+}
+
+/** Record an upload and return its id. Always called inside the import's own
+ *  transaction. A transactions import calls it FIRST, because every gift it
+ *  writes is stamped with this id, and then updates `inserted` once the rows
+ *  are in and the new ones can be counted; a donors import, which stamps
+ *  nothing, calls it last. */
+function recordUpload(orgId: number, kind: PushpayUploadKind, fileName: string, c: UploadCounts): number {
+  const r = getDb().prepare(
+    `INSERT INTO pushpay_uploads
+       (org_id, kind, file_name, total, inserted, matched, ambiguous, unmatched,
+        by_your_id, by_donor_manual, by_donor_match, first_gift_on, last_gift_on)
+     VALUES (@org, @kind, @file, @total, @inserted, @matched, @ambiguous, @unmatched,
+             @yourId, @donorManual, @donorMatch, @firstOn, @lastOn)`,
+  ).run({
+    org: orgId, kind, file: fileName,
+    total: c.total, inserted: c.inserted, matched: c.matched, ambiguous: c.ambiguous, unmatched: c.unmatched,
+    yourId: c.byYourId ?? 0, donorManual: c.byDonorManual ?? 0, donorMatch: c.byDonorMatch ?? 0,
+    firstOn: c.firstGiftOn ?? null, lastOn: c.lastGiftOn ?? null,
+  });
+  return Number(r.lastInsertRowid);
+}
+
+/** The org's uploads, newest first, each with what removing it would do. */
+export interface PushpayUploadRow {
+  id: number;
+  kind: PushpayUploadKind;
+  fileName: string | null;
+  importedAt: string;
+  total: number;
+  inserted: number;
+  matched: number;
+  ambiguous: number;
+  unmatched: number;
+  byYourId: number;
+  byDonorManual: number;
+  byDonorMatch: number;
+  firstGiftOn: string | null;
+  lastGiftOn: string | null;
+  /** The synthetic row standing for the gifts that were here before this
+   *  history began (written by 0098). */
+  isBackfilled: boolean;
+  /** Gifts of this file still in the database (pushpay_transaction_uploads). */
+  giftsHeld: number;
+  /** Of those, the ones no OTHER upload supplies: exactly what Remove deletes. */
+  giftsOwned: number;
+  /** Of those, the ones another upload supplies too, older or newer. They stay,
+   *  because that file still says the gift happened. */
+  giftsShared: number;
+  /** Of the ones that stay, how many still hold the person, source and fund
+   *  THIS file wrote (last_upload_id = it). Removing the upload cannot put the
+   *  earlier values back — we keep no per-upload versions of a row. */
+  giftsKeepingValues: number;
+  /** Donors it would empty (the whole set, since All Donors replaces it). */
+  donorsHeld: number;
+  /** A donors upload whose set a later All Donors upload has already replaced.
+   *  Removing it takes nothing out of pushpay_donors — only this record. */
+  superseded: boolean;
+}
+
+export function listPushpayUploads(orgId: number): PushpayUploadRow[] {
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT id, kind, file_name, imported_at, total, inserted, matched, ambiguous, unmatched,
+            by_your_id, by_donor_manual, by_donor_match, first_gift_on, last_gift_on, is_backfilled
+       FROM pushpay_uploads WHERE org_id = ? ORDER BY imported_at DESC, id DESC`,
+  ).all(orgId) as Array<{
+    id: number; kind: string; file_name: string | null; imported_at: string;
+    total: number; inserted: number; matched: number; ambiguous: number; unmatched: number;
+    by_your_id: number; by_donor_manual: number; by_donor_match: number;
+    first_gift_on: string | null; last_gift_on: string | null; is_backfilled: number;
+  }>;
+  // One grouped pass over the org's supply rows (16.5k today), rather than
+  // three counts per upload. `n` is how many uploads supply each gift: 1 means
+  // this upload is the only thing keeping it, so Remove deletes it.
+  const held = new Map<number, { held: number; owned: number; keeps: number }>();
+  for (const r of db.prepare(
+    `SELECT l.upload_id AS id,
+            COUNT(*) AS held,
+            SUM(CASE WHEN c.n = 1 THEN 1 ELSE 0 END) AS owned,
+            SUM(CASE WHEN c.n > 1 AND t.last_upload_id = l.upload_id THEN 1 ELSE 0 END) AS keeps
+       FROM pushpay_transaction_uploads l
+       JOIN pushpay_transactions t
+         ON t.org_id = l.org_id AND t.transaction_id = l.transaction_id
+       JOIN (SELECT org_id, transaction_id, COUNT(*) AS n
+               FROM pushpay_transaction_uploads WHERE org_id = ?
+              GROUP BY org_id, transaction_id) c
+         ON c.org_id = l.org_id AND c.transaction_id = l.transaction_id
+      WHERE l.org_id = ?
+      GROUP BY l.upload_id`,
+  ).all(orgId, orgId) as Array<{ id: number; held: number; owned: number; keeps: number }>) {
+    held.set(r.id, { held: r.held, owned: r.owned, keeps: r.keeps });
+  }
+  const donors = (db.prepare(`SELECT COUNT(*) AS n FROM pushpay_donors WHERE org_id = ?`).get(orgId) as { n: number }).n;
+  const newestDonorUpload = rows.find((r) => r.kind === "donors")?.id ?? null;
+  return rows.map((r) => {
+    const g = held.get(r.id) ?? { held: 0, owned: 0, keeps: 0 };
+    const superseded = r.kind === "donors" && r.id !== newestDonorUpload;
+    const isDonors = r.kind === "donors";
+    return {
+      id: r.id, kind: isDonors ? "donors" : "transactions",
+      fileName: r.file_name, importedAt: r.imported_at,
+      total: r.total, inserted: r.inserted, matched: r.matched, ambiguous: r.ambiguous, unmatched: r.unmatched,
+      byYourId: r.by_your_id, byDonorManual: r.by_donor_manual, byDonorMatch: r.by_donor_match,
+      firstGiftOn: r.first_gift_on, lastGiftOn: r.last_gift_on, isBackfilled: r.is_backfilled === 1,
+      giftsHeld: isDonors ? 0 : g.held,
+      giftsOwned: isDonors ? 0 : g.owned,
+      giftsShared: isDonors ? 0 : g.held - g.owned,
+      giftsKeepingValues: isDonors ? 0 : g.keeps,
+      donorsHeld: isDonors && !superseded ? donors : 0,
+      superseded,
+    };
+  });
+}
+
+/** Rewrite pushpay_import — the one-row-per-org "last import" summary two
+ *  pages still read (getPushpayImport) — from the newest upload left, or drop
+ *  it when none are. Called after a removal, so the page can never name a file
+ *  that has just been taken out.
+ *
+ *  A donors upload is only eligible while its rows are actually here. Remove
+ *  the newest All Donors upload and pushpay_donors is emptied; the donors
+ *  upload before it is then the newest row in the table, but its donors were
+ *  replaced long ago and have now been deleted, so summarising it would put
+ *  "3 donors — 2 matched" on a page whose donor list is empty. */
+function rewritePushpayImportSummary(orgId: number): void {
+  const db = getDb();
+  type Row = { kind: string; file_name: string | null; total: number; matched: number; ambiguous: number; unmatched: number; imported_at: string };
+  const pick = (onlyTransactions: boolean) =>
+    db.prepare(
+      `SELECT kind, file_name, total, matched, ambiguous, unmatched, imported_at
+         FROM pushpay_uploads WHERE org_id = ?${onlyTransactions ? ` AND kind = 'transactions'` : ""}
+        ORDER BY imported_at DESC, id DESC LIMIT 1`,
+    ).get(orgId) as Row | undefined;
+  let u = pick(false);
+  if (u?.kind === "donors") {
+    const donors = (db.prepare(`SELECT COUNT(*) AS n FROM pushpay_donors WHERE org_id = ?`).get(orgId) as { n: number }).n;
+    if (donors === 0) u = pick(true);
+  }
+  if (!u) {
+    db.prepare(`DELETE FROM pushpay_import WHERE org_id = ?`).run(orgId);
+    return;
+  }
+  db.prepare(
+    `INSERT INTO pushpay_import (org_id, file_name, total, matched, ambiguous, unmatched, kind, imported_at)
+     VALUES (?,?,?,?,?,?,?,?)
+     ON CONFLICT(org_id) DO UPDATE SET file_name=excluded.file_name, total=excluded.total,
+       matched=excluded.matched, ambiguous=excluded.ambiguous, unmatched=excluded.unmatched,
+       kind=excluded.kind, imported_at=excluded.imported_at`,
+  ).run(orgId, u.file_name, u.total, u.matched, u.ambiguous, u.unmatched, u.kind, u.imported_at);
+}
+
+export interface UploadRemovalResult {
+  kind: PushpayUploadKind;
+  fileName: string | null;
+  /** Gifts deleted: the ones this upload supplied that no other upload did. */
+  giftsRemoved: number;
+  /** Gifts it supplied that another upload supplies too, so they stayed. */
+  giftsKept: number;
+  /** Of those, the ones still holding the person, source and fund this upload
+   *  wrote. Nothing can put the earlier values back. */
+  giftsKeepingValues: number;
+  donorsRemoved: number;
+  /** Its donors had already been replaced by a later All Donors upload, so
+   *  only the record went. */
+  supersededDonors: boolean;
+}
+
+/** Remove one upload: its rows, then its record, then the rollup.
+ *
+ *  Transactions: delete the gifts this upload supplied that NO other upload
+ *  still supplies (pushpay_transaction_uploads). A gift another file also
+ *  carried stays, whether that file is older or newer — it is still here and
+ *  still says the gift happened. Once every upload that supplied a gift has
+ *  been removed the gift goes, because nothing left says it happened.
+ *
+ *  The two provenance columns take no part in that decision, which is the
+ *  whole reason the supply table exists: export windows overlap, so with three
+ *  files C1 ⊂ C2 ⊂ C3 all holding gift x, two columns can only remember two of
+ *  the three, and removing C1 then C3 used to delete x while C2 was still in
+ *  the list. What the columns DO say is where a surviving gift's values came
+ *  from, so removing an upload blanks the ones that named it: the file that
+ *  wrote them is gone, and no other file is credited with its work. A gift that
+ *  stays keeps the person, source and fund it holds now — we keep no
+ *  per-upload versions of a row, so there is nothing to put back, and the UI
+ *  counts those gifts and says so before it asks.
+ *
+ *  Donors: the All Donors import replaces the whole set, so removing the
+ *  newest one empties pushpay_donors. An older one's donors are already gone
+ *  (a later upload replaced them): removing it takes out the record alone.
+ *
+ *  All of it in ONE transaction, IMMEDIATE because it reads the upload row
+ *  before it writes, and ending with the rollup rebuild — so the derived
+ *  tables can never be left describing gifts that are no longer here. */
+export function removePushpayUpload(orgId: number, uploadId: number): UploadRemovalResult {
+  const db = getDb();
+  const run = db.transaction(() => {
+    const u = db.prepare(`SELECT id, kind, file_name FROM pushpay_uploads WHERE org_id = ? AND id = ?`)
+      .get(orgId, uploadId) as { id: number; kind: string; file_name: string | null } | undefined;
+    if (!u) throw new Error("That upload is no longer in the history — someone may have removed it already.");
+    const out: UploadRemovalResult = {
+      kind: u.kind === "donors" ? "donors" : "transactions",
+      fileName: u.file_name, giftsRemoved: 0, giftsKept: 0, giftsKeepingValues: 0,
+      donorsRemoved: 0, supersededDonors: false,
+    };
+    if (out.kind === "transactions") {
+      // Counted before anything is deleted: gifts of this file that another
+      // upload also supplies (so they stay), and how many of those still hold
+      // the values THIS file wrote.
+      const kept = db.prepare(
+        `SELECT COUNT(*) AS n,
+                SUM(CASE WHEN t.last_upload_id = ? THEN 1 ELSE 0 END) AS mine
+           FROM pushpay_transaction_uploads l
+           JOIN pushpay_transactions t
+             ON t.org_id = l.org_id AND t.transaction_id = l.transaction_id
+          WHERE l.org_id = ? AND l.upload_id = ?
+            AND EXISTS (SELECT 1 FROM pushpay_transaction_uploads o
+                         WHERE o.org_id = l.org_id AND o.transaction_id = l.transaction_id
+                           AND o.upload_id <> l.upload_id)`,
+      ).get(u.id, orgId, u.id) as { n: number; mine: number | null };
+      out.giftsKept = kept.n;
+      out.giftsKeepingValues = kept.mine ?? 0;
+      // Gifts nothing else supplies. Restricted to this upload's own gifts, so
+      // a gift that belongs to no upload at all (written by the old code during
+      // a deploy) is never swept up by someone else's removal.
+      out.giftsRemoved = db.prepare(
+        `DELETE FROM pushpay_transactions
+          WHERE org_id = ? AND transaction_id IN (
+            SELECT l.transaction_id FROM pushpay_transaction_uploads l
+             WHERE l.org_id = ? AND l.upload_id = ?
+               AND NOT EXISTS (SELECT 1 FROM pushpay_transaction_uploads o
+                                WHERE o.org_id = l.org_id AND o.transaction_id = l.transaction_id
+                                  AND o.upload_id <> l.upload_id))`,
+      ).run(orgId, orgId, u.id).changes;
+      // The supply rows of the gifts just deleted went with them (this upload
+      // was their only one); this clears the ones on the gifts that stayed.
+      db.prepare(`DELETE FROM pushpay_transaction_uploads WHERE org_id = ? AND upload_id = ?`).run(orgId, u.id);
+      // Value provenance: blank what named this upload, rather than crediting
+      // another file with values it did not write.
+      db.prepare(`UPDATE pushpay_transactions SET first_upload_id = NULL WHERE org_id = ? AND first_upload_id = ?`).run(orgId, u.id);
+      db.prepare(`UPDATE pushpay_transactions SET last_upload_id = NULL WHERE org_id = ? AND last_upload_id = ?`).run(orgId, u.id);
+    } else {
+      const newest = db.prepare(
+        `SELECT id FROM pushpay_uploads WHERE org_id = ? AND kind = 'donors' ORDER BY imported_at DESC, id DESC LIMIT 1`,
+      ).get(orgId) as { id: number } | undefined;
+      out.supersededDonors = newest?.id !== u.id;
+      if (!out.supersededDonors) {
+        out.donorsRemoved = db.prepare(`DELETE FROM pushpay_donors WHERE org_id = ?`).run(orgId).changes;
+      }
+    }
+    db.prepare(`DELETE FROM pushpay_uploads WHERE org_id = ? AND id = ?`).run(orgId, u.id);
+    refreshPushpayGiving(orgId);
+    rewritePushpayImportSummary(orgId);
+    return out;
+  });
+  return run.immediate();
+}
+
+// ── Per-giver rollup ────────────────────────────────────────────────────────
+//
+// pushpay_payer_summary / pushpay_giving_snapshot, one row per payer and one
+// per org, rebuilt whole from pushpay_transactions. Schema and reasoning in
+// db/migrations/0098_pushpay_uploads.sql, whose first build is this same SQL
+// over every org at once — keep the two in step, as 0091 and
+// refreshCcEngagement do for the email rollups.
+
+const PAYER_SUMMARY_SQL = `
+INSERT INTO pushpay_payer_summary
+  (org_id, payer_id, person_id, is_linked, first_gift_on, last_gift_on,
+   gifts, recurring_gifts, other_gifts, funds)
+WITH g AS (
+  SELECT org_id, COALESCE(payer_id, 'tx:' || transaction_id) AS pk,
+         transaction_id, person_id, received_on, source, fund_name, imported_at
+    FROM pushpay_transactions WHERE org_id = @org
+),
+link AS (
+  SELECT pk, person_id FROM (
+    SELECT pk, person_id,
+           ROW_NUMBER() OVER (PARTITION BY pk
+                              ORDER BY (person_id IS NULL), imported_at DESC, transaction_id DESC) AS rn
+      FROM g)
+   WHERE rn = 1
+),
+fund AS (
+  SELECT pk, json_group_array(fund_name) AS funds
+    FROM (SELECT DISTINCT pk, fund_name FROM g
+           WHERE fund_name IS NOT NULL AND fund_name <> ''
+           ORDER BY pk, fund_name)
+   GROUP BY pk
+)
+SELECT g.org_id, g.pk, l.person_id,
+       CASE WHEN l.person_id IS NULL THEN 0 ELSE 1 END,
+       MIN(g.received_on), MAX(g.received_on), COUNT(*),
+       SUM(CASE WHEN g.source = 'Recurring' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN g.source = 'Recurring' THEN 0 ELSE 1 END),
+       COALESCE(f.funds, '[]')
+  FROM g
+  JOIN link l ON l.pk = g.pk
+  LEFT JOIN fund f ON f.pk = g.pk
+ GROUP BY g.pk`;
+
+const GIVING_SNAPSHOT_SQL = `
+INSERT INTO pushpay_giving_snapshot
+  (org_id, payers, linked_payers, gifts, first_gift_on, last_gift_on, source_rows, source_written_at)
+SELECT @org,
+       COUNT(*), COALESCE(SUM(s.is_linked), 0), COALESCE(SUM(s.gifts), 0),
+       MIN(s.first_gift_on), MAX(s.last_gift_on),
+       (SELECT COUNT(*) FROM pushpay_transactions t WHERE t.org_id = @org),
+       (SELECT MAX(t.imported_at) FROM pushpay_transactions t WHERE t.org_id = @org)
+  FROM pushpay_payer_summary s WHERE s.org_id = @org`;
+
+/** Rebuild the org's giving rollups from pushpay_transactions, from scratch,
+ *  in one transaction: readers see the old rollup or the new one, never half
+ *  of each.
+ *
+ *  Called at the END of every transactions import and every dataset removal,
+ *  from INSIDE their transaction — which is stronger than the "run it on every
+ *  attempt, success or failure" rule the email rollups follow: the rebuild
+ *  commits with the gifts or not at all, so a killed import (this process is
+ *  capped at 150 MB and gets killed) can never leave the rollup describing
+ *  gifts that are not there. isPushpayGivingStale is the backstop for the
+ *  seconds of a deploy when the old code still serves, and for hand edits. */
+export function refreshPushpayGiving(orgId: number): void {
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(`DELETE FROM pushpay_payer_summary WHERE org_id = ?`).run(orgId);
+    db.prepare(`DELETE FROM pushpay_giving_snapshot WHERE org_id = ?`).run(orgId);
+    db.prepare(PAYER_SUMMARY_SQL).run({ org: orgId });
+    // One row even with no gifts, so "built, and empty" is distinguishable
+    // from "never built" — the GROUP-less aggregate always returns one row.
+    db.prepare(GIVING_SNAPSHOT_SQL).run({ org: orgId });
+  })();
+}
+
+/** True when pushpay_transactions has moved since the rollup was built: a
+ *  different row count, or a row written later than the watermark. Both come
+ *  from one query covered by pushpay_tx_imported, so the check never reads the
+ *  table itself. The cron calls it every 15 minutes. */
+export function isPushpayGivingStale(orgId: number): boolean {
+  const db = getDb();
+  const live = db.prepare(
+    `SELECT COUNT(*) AS n, MAX(imported_at) AS w FROM pushpay_transactions WHERE org_id = ?`,
+  ).get(orgId) as { n: number; w: string | null };
+  const built = db.prepare(
+    `SELECT source_rows AS n, source_written_at AS w FROM pushpay_giving_snapshot WHERE org_id = ?`,
+  ).get(orgId) as { n: number; w: string | null } | undefined;
+  if (!built) return live.n > 0;
+  return built.n !== live.n || built.w !== live.w;
+}
+
+export interface PushpayGivingSummary {
+  payers: number;
+  linkedPayers: number;
+  gifts: number;
+  firstGiftOn: string | null;
+  lastGiftOn: string | null;
+  builtAt: string;
+}
+
+/** What the database holds now, from the rollup's snapshot row. Null before
+ *  the rollup has ever been built for the org. */
+export function getPushpayGivingSummary(orgId: number): PushpayGivingSummary | null {
+  const r = getDb().prepare(
+    `SELECT payers, linked_payers, gifts, first_gift_on, last_gift_on, built_at
+       FROM pushpay_giving_snapshot WHERE org_id = ?`,
+  ).get(orgId) as
+    | { payers: number; linked_payers: number; gifts: number; first_gift_on: string | null; last_gift_on: string | null; built_at: string }
+    | undefined;
+  return r
+    ? { payers: r.payers, linkedPayers: r.linked_payers, gifts: r.gifts, firstGiftOn: r.first_gift_on, lastGiftOn: r.last_gift_on, builtAt: r.built_at }
+    : null;
 }
 
 export interface TransactionImportResult {
@@ -801,27 +1198,61 @@ export function importPushpayTransactions(
     return { ...g, personId: d.personId, how: d.how };
   });
 
+  // One transaction: the upload's record, its gifts, and the rollup rebuilt
+  // from them all commit together, or none of them do. IMMEDIATE because it
+  // reads (the row count, to tell new gifts from re-supplied ones) before it
+  // writes, and a transaction that reads first cannot wait out another writer.
   const run = db.transaction(() => {
+    const countRows = db.prepare(`SELECT COUNT(*) AS n FROM pushpay_transactions WHERE org_id = ?`);
+    const before = (countRows.get(orgId) as { n: number }).n;
+    const matched = out.byYourId + out.byDonorManual + out.byDonorMatch;
+    const uploadId = recordUpload(orgId, "transactions", fileName, {
+      total: out.total, inserted: 0, matched, ambiguous: 0, unmatched: out.unmatched,
+      byYourId: out.byYourId, byDonorManual: out.byDonorManual, byDonorMatch: out.byDonorMatch,
+      firstGiftOn: out.firstDate, lastGiftOn: out.lastDate,
+    });
+    // first_upload_id is set only on insert, so it keeps naming the upload
+    // that introduced the gift; last_upload_id moves to whoever wrote the
+    // values it holds now. They are value provenance only — what a removal
+    // may delete is decided by pushpay_transaction_uploads below (0098).
     const ins = db.prepare(`INSERT INTO pushpay_transactions
-      (org_id, transaction_id, received_on, status, source, payer_id, person_id, match_source, fund_name, fund_code, imported_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      (org_id, transaction_id, received_on, status, source, payer_id, person_id, match_source, fund_name, fund_code, first_upload_id, last_upload_id, imported_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       ON CONFLICT(org_id, transaction_id) DO UPDATE SET
         received_on = excluded.received_on, status = excluded.status, source = excluded.source,
         payer_id = excluded.payer_id, person_id = excluded.person_id,
         match_source = excluded.match_source, fund_name = excluded.fund_name,
-        fund_code = excluded.fund_code, imported_at = excluded.imported_at`);
+        fund_code = excluded.fund_code, last_upload_id = excluded.last_upload_id,
+        imported_at = excluded.imported_at`);
+    // One supply row per gift THIS file listed, re-supplies included: that is
+    // what says the gift may not be deleted while this file is here, and what
+    // lets three overlapping windows all claim the same gift. OR IGNORE
+    // because one file can list a transaction id twice, and because a file
+    // imported again writes the same pair.
+    const link = db.prepare(
+      `INSERT OR IGNORE INTO pushpay_transaction_uploads (org_id, transaction_id, upload_id) VALUES (?,?,?)`,
+    );
     for (const p of parsed) {
-      const res = ins.run(orgId, p.txId, p.date, p.status, p.source, p.payer, p.personId, p.how, p.fundName, p.fundCode);
-      if (res.changes) out.inserted++;
+      ins.run(orgId, p.txId, p.date, p.status, p.source, p.payer, p.personId, p.how, p.fundName, p.fundCode, uploadId, uploadId);
+      link.run(orgId, p.txId, uploadId);
     }
+    // How many were NEW. An INSERT ... ON CONFLICT DO UPDATE reports one
+    // change whether it inserted or updated, so the statement's own result
+    // cannot tell them apart; the row count before and after can.
+    out.inserted = (countRows.get(orgId) as { n: number }).n - before;
+    db.prepare(`UPDATE pushpay_uploads SET inserted = ? WHERE id = ?`).run(out.inserted, uploadId);
     db.prepare(`INSERT INTO pushpay_import (org_id, file_name, total, matched, ambiguous, unmatched, kind, imported_at)
       VALUES (?,?,?,?,?,?, 'transactions', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       ON CONFLICT(org_id) DO UPDATE SET file_name=excluded.file_name, total=excluded.total,
         matched=excluded.matched, ambiguous=excluded.ambiguous, unmatched=excluded.unmatched,
         kind=excluded.kind, imported_at=excluded.imported_at`)
-      .run(orgId, fileName, out.total, out.byYourId + out.byDonorManual + out.byDonorMatch, 0, out.unmatched);
+      .run(orgId, fileName, out.total, matched, 0, out.unmatched);
+    // Last, and inside the transaction, so the rollup always describes the
+    // gifts that just landed — not on a success-only branch that a killed
+    // process could skip.
+    refreshPushpayGiving(orgId);
   });
-  run();
+  run.immediate();
   return out;
 }
 
@@ -857,12 +1288,27 @@ export function rematchDonors(orgId: number): RematchResult {
   return { total, matched, ambiguous: c.ambiguous, unmatched: c.unmatched, changed };
 }
 
-export interface PushpayImportMeta { fileName: string | null; total: number; matched: number; ambiguous: number; unmatched: number; importedAt: string | null }
+export interface PushpayImportMeta {
+  fileName: string | null;
+  total: number;
+  matched: number;
+  ambiguous: number;
+  unmatched: number;
+  importedAt: string | null;
+  /** Which export this row describes: 'transactions' (its counts are gifts) or
+   *  'donors'. NULL only on a row written before 0087 added the column. */
+  kind: string | null;
+}
 
+/** The last upload of either kind, the one-row-per-org summary pushpay_import
+ *  has always held. Both importers still write it, and a removal rewrites it
+ *  from the newest upload left (rewritePushpayImportSummary), so it can never
+ *  name a file that is no longer in the Datasets list. The list itself comes
+ *  from pushpay_uploads (listPushpayUploads); this is the summary line. */
 export function getPushpayImport(orgId: number): PushpayImportMeta | null {
-  const r = getDb().prepare(`SELECT file_name, total, matched, ambiguous, unmatched, imported_at FROM pushpay_import WHERE org_id = ?`).get(orgId) as
-    | { file_name: string | null; total: number; matched: number; ambiguous: number; unmatched: number; imported_at: string } | undefined;
-  return r ? { fileName: r.file_name, total: r.total, matched: r.matched, ambiguous: r.ambiguous, unmatched: r.unmatched, importedAt: r.imported_at } : null;
+  const r = getDb().prepare(`SELECT file_name, total, matched, ambiguous, unmatched, imported_at, kind FROM pushpay_import WHERE org_id = ?`).get(orgId) as
+    | { file_name: string | null; total: number; matched: number; ambiguous: number; unmatched: number; imported_at: string; kind: string | null } | undefined;
+  return r ? { fileName: r.file_name, total: r.total, matched: r.matched, ambiguous: r.ambiguous, unmatched: r.unmatched, importedAt: r.imported_at, kind: r.kind } : null;
 }
 
 export interface DonorRow {

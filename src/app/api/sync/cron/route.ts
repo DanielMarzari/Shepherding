@@ -10,6 +10,7 @@ import { refreshRetentionReturns } from "@/lib/retention-read";
 import { refreshGeoAssignments } from "@/lib/census-analysis";
 import { getCcSyncSettings, getStoredConstantContactCreds, isCcSyncDue } from "@/lib/constant-contact";
 import { isCcEngagementStale, refreshCcEngagement, runCcSync } from "@/lib/constant-contact-sync";
+import { isPushpayGivingStale, refreshPushpayGiving } from "@/lib/pushpay-import";
 
 /**
  * Cron-tickable endpoint. For each org with `auto-sync enabled`, we check
@@ -85,6 +86,15 @@ export async function GET(req: Request) {
       if (isCcEngagementStale(id)) refreshCcEngagement(id);
     } catch (e) {
       console.error("refreshCcEngagement failed", id, e);
+    }
+
+    // Same backstop for the giving rollups: an import or a dataset removal
+    // rebuilds them in its own transaction, so this only covers a process
+    // killed in between, or a hand edit to pushpay_transactions.
+    try {
+      if (isPushpayGivingStale(id)) refreshPushpayGiving(id);
+    } catch (e) {
+      console.error("refreshPushpayGiving failed", id, e);
     }
 
     // Clear any run left "running" by a process that died — a deploy restart
