@@ -374,7 +374,8 @@ export async function runSync(
     refreshLastActivity(orgId);
     // Update minors flag from decrypted birthdate; gates the kids-checked-
     // in-to-shepherded-event rule.
-    refreshIsMinor(orgId);
+    const junkKept = refreshIsMinor(orgId);
+    if (junkKept) warning = appendWarning(warning, junkKept);
     // is_parent depends on is_minor + households, so it must run AFTER both.
     refreshIsParent(orgId);
 
@@ -1084,14 +1085,75 @@ function refreshLastActivity(orgId: number) {
   ).run(orgId);
 }
 
+/** A junk-named person with any of these is kept, not deleted: they are typed
+ *  in by people (care rosters and notes, "I know them" marks, shepherd links,
+ *  whole-org access, Ministry Impact Report leads and teams) or attribute
+ *  gifts to them (PushPay: a manual match is a human decision, and a giver is
+ *  not junk). No sync can bring these back. The first four tables also carry
+ *  foreign keys to pco_people ON DELETE RESTRICT (0094), so deleting such a
+ *  person would fail the whole pass rather than lose them. */
+const HAS_OWNED_DATA_SQL = `SELECT
+     EXISTS (SELECT 1 FROM care_assignments WHERE org_id = @org AND person_id = @id)
+  OR EXISTS (SELECT 1 FROM care_assignments WHERE org_id = @org AND shepherd_person_id = @id)
+  OR EXISTS (SELECT 1 FROM shepherd_known_people WHERE org_id = @org AND person_id = @id)
+  OR EXISTS (SELECT 1 FROM shepherd_known_people WHERE org_id = @org AND shepherd_person_id = @id)
+  OR EXISTS (SELECT 1 FROM shepherd_assignments WHERE org_id = @org AND shepherd_person_id = @id)
+  OR EXISTS (SELECT 1 FROM shepherd_assignments WHERE org_id = @org AND target_kind = 'person' AND target_id = @id)
+  OR EXISTS (SELECT 1 FROM org_wide_access WHERE org_id = @org AND person_id = @id)
+  OR EXISTS (SELECT 1 FROM mir_team_members WHERE org_id = @org AND person_id = @id)
+  OR EXISTS (SELECT 1 FROM mir_docs WHERE org_id = @org AND (lead_person_id = @id OR sponsor_person_id = @id))
+  OR EXISTS (SELECT 1 FROM pushpay_donors WHERE org_id = @org AND person_id = @id)
+  OR EXISTS (SELECT 1 FROM pushpay_transactions WHERE org_id = @org AND person_id = @id) AS owned`;
+
+/** The person's own rows mirrored from PCO, the per-person rows computed from
+ *  them (activity snapshot, geocode, drive time, road mesh, retention), and
+ *  the duplicate-name pairs naming them. A deleted person's rows go with them
+ *  in the same transaction, so they can never outlive the person. All but
+ *  duplicate_pairs (7k rows) are indexed on (org_id, person_id).
+ *
+ *  Rows that only point AT the person from someone else's record are left
+ *  alone: pco_check_ins.checked_in_by_id / checked_out_by_id,
+ *  pco_households.primary_contact_id, pco_calendar_events.owner_id. They
+ *  belong to that other record, and the next sync rewrites them from PCO.
+ *
+ *  There is deliberately no sweep of rows whose person is already missing.
+ *  On 2026-09-21 ~567 mirror rows named people absent from pco_people, and
+ *  they were not junk: 146 real people were missing because the 2026-09-03
+ *  filter fix never re-fetched them (a cursor reset restored them). Sweeping
+ *  "orphans" would have deleted real people's history, e.g. 174 check-ins of
+ *  "Lah Ler Paw" / "-". Only a person this filter deletes takes rows along. */
+const PERSON_ROW_DELETES = [
+  "DELETE FROM pco_check_ins WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_event_attendances WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_form_submissions WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_group_applications WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_group_memberships WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_household_memberships WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_list_memberships WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_person_emails WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_person_fields WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_person_phones WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_plan_people WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_registration_attendees WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM pco_team_memberships WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM person_activity WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM person_drive WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM person_geo WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM person_mesh WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM retention_engagement WHERE org_id = ? AND person_id = ?",
+  "DELETE FROM duplicate_pairs WHERE org_id = ? AND ? IN (person_a, person_b)",
+] as const;
+
 /** Refresh the is_minor + birth_year denormalized columns by decrypting
  *  each person's birthdate from enc_pii. is_minor gates the kids-checked-
  *  in-to-shepherded-event rule; birth_year drives the demographic charts.
  *  Also deletes rows that carry no real name at all (see
- *  looksLikeNonPerson) — they clutter every list. Organizations ("_" / "Acme
- *  LLC") and people with no surname ("Paw Pah" / "-") are NOT that, and are
- *  kept. */
-function refreshIsMinor(orgId: number) {
+ *  looksLikeNonPerson) — they clutter every list — together with their rows
+ *  in PERSON_ROW_DELETES. Organizations ("_" / "Acme LLC") and people with no
+ *  surname ("Paw Pah" / "-") are NOT that, and are kept. So is anyone with
+ *  data in HAS_OWNED_DATA_SQL; the return value is the sync warning naming
+ *  them, or null. Exported for the write-path tests. */
+export function refreshIsMinor(orgId: number): string | null {
   const db = getDb();
   const rows = db
     .prepare(
@@ -1103,6 +1165,16 @@ function refreshIsMinor(orgId: number) {
     `UPDATE pco_people SET is_minor = ?, birth_year = ? WHERE org_id = ? AND pco_id = ?`,
   );
   const del = db.prepare(`DELETE FROM pco_people WHERE org_id = ? AND pco_id = ?`);
+  const hasOwned = db.prepare(HAS_OWNED_DATA_SQL).pluck();
+  const delRows = PERSON_ROW_DELETES.map((sql) => db.prepare(sql));
+  // What relinkContacts (constant-contact-sync.ts) would set once the
+  // person's email hashes are gone: another person with that address, or none.
+  const relinkCc = db.prepare(
+    `UPDATE cc_contacts
+        SET person_id = (SELECT pe.person_id FROM pco_person_emails pe WHERE pe.org_id = cc_contacts.org_id AND pe.email_hash = cc_contacts.email_hash LIMIT 1)
+      WHERE org_id = ? AND person_id = ?`,
+  );
+  const kept: string[] = [];
   const tx = db.transaction(
     (
       items: Array<{
@@ -1113,11 +1185,15 @@ function refreshIsMinor(orgId: number) {
       }>,
     ) => {
       for (const it of items) {
-        if (it.junk) {
+        if (it.junk && hasOwned.get({ org: orgId, id: it.pcoId }) === 1) {
+          kept.push(it.pcoId);
+        } else if (it.junk) {
+          for (const d of delRows) d.run(orgId, it.pcoId);
+          relinkCc.run(orgId, it.pcoId);
           del.run(orgId, it.pcoId);
-        } else {
-          update.run(it.minor, it.birthYear, orgId, it.pcoId);
+          continue;
         }
+        update.run(it.minor, it.birthYear, orgId, it.pcoId);
       }
     },
   );
@@ -1151,7 +1227,10 @@ function refreshIsMinor(orgId: number) {
     const minor = b && isUnder18(b, now) ? 1 : 0;
     batch.push({ pcoId: r.pco_id, minor, birthYear, junk });
   }
-  tx(batch);
+  // IMMEDIATE: the owned-data check reads before the deletes write, and a
+  // deferred transaction would fail at once (no busy wait) if another
+  // connection wrote in between.
+  tx.immediate(batch);
 
   // Overlay pass: flip a no-birthday person to is_minor=1 ONLY when
   // they have a DEPENDENT check-in (done BY SOMEONE ELSE — a parent /
@@ -1203,6 +1282,14 @@ function refreshIsMinor(orgId: number) {
           )`,
     ).run(orgId, orgId, ...adultEvents);
   }
+
+  if (kept.length === 0) return null;
+  const ids = kept.slice(0, 5).join(", ") + (kept.length > 5 ? ", …" : "");
+  return (
+    `Name filter kept ${kept.length} placeholder-named ${kept.length === 1 ? "person" : "people"} ` +
+    `(PCO ${ids}) because care, shepherd, report or giving records name them. ` +
+    `If they are real, fix the name in PCO; if not, remove those records and the next sync deletes them.`
+  );
 }
 
 function isUnder18(birthdateIso: string, nowMs: number): boolean {

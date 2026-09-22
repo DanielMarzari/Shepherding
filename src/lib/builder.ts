@@ -519,8 +519,16 @@ function touchPage(pageId: number): void {
     .run(pageId);
 }
 
+/** builder_blocks.org_id is a copy of its page's org, and every block read and
+ *  write is scoped by it. pageId arrives from the client, so blocks are only
+ *  ever written onto a page of the caller's org. */
+function ownsPage(orgId: number, pageId: number): boolean {
+  return getDb().prepare("SELECT 1 FROM builder_pages WHERE id = ? AND org_id = ?").get(pageId, orgId) !== undefined;
+}
+
 export function addBuilderBlock(orgId: number, pageId: number, kind: BlockKind): number {
   const db = getDb();
+  if (!ownsPage(orgId, pageId)) throw new Error("No such page");
   const max = (db.prepare("SELECT COALESCE(MAX(position), -1) AS m FROM builder_blocks WHERE page_id = ?").get(pageId) as { m: number }).m;
   const info = db
     .prepare("INSERT INTO builder_blocks (page_id, org_id, position, kind, config) VALUES (?, ?, ?, ?, ?)")
@@ -586,6 +594,9 @@ export function countPageVersions(orgId: number, pageId: number): number {
  *  targeting survives. Returns false when there's nothing to undo. */
 export function undoPageVersion(orgId: number, pageId: number): boolean {
   const db = getDb();
+  // The snapshot's org_id is a copy too; the page itself must be this org's
+  // before its blocks are replaced.
+  if (!ownsPage(orgId, pageId)) return false;
   const row = db
     .prepare("SELECT id, snapshot FROM builder_page_versions WHERE page_id = ? AND org_id = ? ORDER BY id DESC LIMIT 1")
     .get(pageId, orgId) as { id: number; snapshot: string } | undefined;

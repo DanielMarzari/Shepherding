@@ -252,6 +252,12 @@ if (!SHEPHERD_PCO_ID) {
   );
   process.exit(1);
 }
+// care_assignments has foreign keys to pco_people (0094): a SHEPHERD_PCO_ID
+// override naming nobody would otherwise fail the --apply insert.
+if (!db.prepare("SELECT 1 FROM pco_people WHERE org_id = ? AND pco_id = ?").get(ORG_ID, SHEPHERD_PCO_ID)) {
+  console.error(`Shepherd ${SHEPHERD_PCO_ID} is not in pco_people for org ${ORG_ID}.`);
+  process.exit(1);
+}
 
 const excluded = excludedFor(ORG_ID);
 const inOrg = people.filter((p) => p.orgId === ORG_ID);

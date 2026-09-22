@@ -162,6 +162,9 @@ function ensureMigrationsApplied(db: Database.Database) {
   for (const f of files) {
     if (applied.has(f)) continue;
     db.exec(fs.readFileSync(path.join(dir, f), "utf8"));
-    db.prepare("INSERT INTO _migrations (filename) VALUES (?)").run(f);
+    // OR IGNORE: a file that runs its own transaction records itself before
+    // its COMMIT (0094, 0095), so a lock error on this second write cannot
+    // leave it applied but unrecorded. See the header of 0095_org_keys.sql.
+    db.prepare("INSERT OR IGNORE INTO _migrations (filename) VALUES (?)").run(f);
   }
 }

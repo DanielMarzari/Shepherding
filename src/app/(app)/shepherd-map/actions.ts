@@ -47,6 +47,12 @@ export async function addAssignmentAction(formData: FormData) {
   }
 
   const db = getDb();
+  // shepherd_assignments.shepherd_person_id has a foreign key to pco_people
+  // (0094), which OR IGNORE does not cover. The page lists only pco_people,
+  // but a shepherd can leave between page load and submit.
+  if (!db.prepare(`SELECT 1 FROM pco_people WHERE org_id = ? AND pco_id = ?`).get(session.orgId, shepherdPersonId)) {
+    throw new Error("That shepherd is no longer in PCO. Reload the page.");
+  }
   const insert = db.prepare(
     `INSERT OR IGNORE INTO shepherd_assignments
        (org_id, shepherd_person_id, target_kind, target_id, note)
@@ -74,6 +80,11 @@ export async function setOrgWideAccessAction(
   if (!personId) return { ok: false };
   const db = getDb();
   if (enabled) {
+    // Only a person still in pco_people (foreign key, 0094); for anyone
+    // else the switch reverts.
+    if (!db.prepare(`SELECT 1 FROM pco_people WHERE org_id = ? AND pco_id = ?`).get(session.orgId, personId)) {
+      return { ok: false };
+    }
     db.prepare(
       `INSERT OR IGNORE INTO org_wide_access (org_id, person_id) VALUES (?, ?)`,
     ).run(session.orgId, personId);

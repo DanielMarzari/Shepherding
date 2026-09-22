@@ -27,6 +27,15 @@ export async function addCareAssignmentsAction(formData: FormData) {
   const note = noteRaw === "" ? null : noteRaw.slice(0, 500);
 
   const db = getDb();
+  // care_assignments has foreign keys to pco_people (0094), and OR IGNORE
+  // does not cover them. Both pickers list only pco_people, but an id can
+  // leave between page load and submit (the sync's junk-name filter), so a
+  // missing shepherd is a clear error and a missing person is skipped.
+  const inPco = db.prepare(`SELECT 1 FROM pco_people WHERE org_id = ? AND pco_id = ?`);
+  if (!inPco.get(session.orgId, shepherdPersonId)) {
+    throw new Error("That shepherd is no longer in PCO. Reload the page.");
+  }
+
   // Tidy first: drop any rows for people who are now shepherded so
   // coverage counts stay honest.
   pruneShepherdedCareAssignments(session.orgId);
@@ -34,11 +43,11 @@ export async function addCareAssignmentsAction(formData: FormData) {
   const insert = db.prepare(
     `INSERT OR IGNORE INTO care_assignments
        (org_id, shepherd_person_id, person_id, note)
-     VALUES (?, ?, ?, ?)`,
+     SELECT org_id, ?, pco_id, ? FROM pco_people WHERE org_id = ? AND pco_id = ?`,
   );
   const insertMany = db.transaction((ids: string[]) => {
     for (const pid of ids) {
-      insert.run(session.orgId, shepherdPersonId, pid, note);
+      insert.run(shepherdPersonId, note, session.orgId, pid);
     }
   });
   insertMany(personIds);

@@ -39,7 +39,10 @@ function personName(orgId: number, personId: string): {
 /** Match an email to a shepherd-team member. Hashes the address (we
  *  never store plaintext), finds people with that email hash across
  *  all orgs, then keeps only those on that org's "REFERENCE - Shepherd
- *  Team" list. Returns the single match, or a reason it failed:
+ *  Team" list who are in pco_people: their marks carry a foreign key to
+ *  it (0094), and list memberships and email hashes can name a person
+ *  missing locally (2026-09-21: 17 email hashes did). Returns the single
+ *  match, or a reason it failed:
  *   - "none"      → no shepherd-team member has that email
  *   - "ambiguous" → the email maps to more than one shepherd-team
  *                   member (shared family address); admin must sort it. */
@@ -59,6 +62,8 @@ export function matchShepherdByEmail(
            ON m.org_id = pe.org_id AND m.person_id = pe.person_id
          JOIN pco_lists l
            ON l.org_id = m.org_id AND l.pco_id = m.list_id
+         JOIN pco_people p
+           ON p.org_id = pe.org_id AND p.pco_id = pe.person_id
         WHERE pe.email_hash = ?
           AND l.name = ?`,
     )
@@ -109,12 +114,14 @@ export async function getIntakeSession(): Promise<IntakeSession | null> {
     return null;
   }
   if (Date.now() > exp) return null;
-  // Re-verify the person is STILL on the shepherd team — revoked
-  // access takes effect on next page load, not just at login.
+  // Re-verify the person is STILL on the shepherd team (and still in
+  // pco_people, as at login) — revoked access takes effect on next page
+  // load, not just at login.
   const stillOnTeam = getDb()
     .prepare(
       `SELECT 1 FROM pco_list_memberships m
          JOIN pco_lists l ON l.org_id = m.org_id AND l.pco_id = m.list_id
+         JOIN pco_people p ON p.org_id = m.org_id AND p.pco_id = m.person_id
         WHERE m.org_id = ? AND m.person_id = ? AND l.name = ?
         LIMIT 1`,
     )
@@ -218,11 +225,17 @@ export function setKnown(
 ): void {
   const db = getDb();
   if (known) {
+    // Both ids must be in pco_people (foreign keys, 0094; OR IGNORE does not
+    // cover them). The list shows only pco_people, so this skips just a
+    // person who left it since the page loaded, instead of failing the tap.
     db.prepare(
       `INSERT OR IGNORE INTO shepherd_known_people
          (org_id, shepherd_person_id, person_id, source)
-       VALUES (?, ?, ?, ?)`,
-    ).run(orgId, shepherdPersonId, personId, source);
+       SELECT p.org_id, s.pco_id, p.pco_id, ?
+         FROM pco_people p
+         JOIN pco_people s ON s.org_id = p.org_id AND s.pco_id = ?
+        WHERE p.org_id = ? AND p.pco_id = ?`,
+    ).run(source, shepherdPersonId, orgId, personId);
   } else {
     db.prepare(
       `DELETE FROM shepherd_known_people
