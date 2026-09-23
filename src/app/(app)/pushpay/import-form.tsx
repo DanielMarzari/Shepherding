@@ -7,10 +7,11 @@ import { type ImportCsvState, importPushpayCsvAction } from "./actions";
 
 const INITIAL: ImportCsvState = { status: "idle" };
 
-/** Drag-and-drop CSV uploader for the PushPay "All Donors" export. A dashed
- *  drop zone feeds a hidden native file input (so the existing server action's
- *  formData.get("file") still works); re-importing replaces the stored set,
- *  carrying hand matches over (importPushpay). */
+/** Drag-and-drop CSV uploader for either PushPay export. A dashed drop zone
+ *  feeds a hidden native file input (so the existing server action's
+ *  formData.get("file") still works); the action reads the header to tell a
+ *  Transactions file (gifts, added to the history, and the givers behind them)
+ *  from an All Donors one (which replaces the donor list). */
 export function PushpayImportForm() {
   const [state, action, pending] = useActionState(importPushpayCsvAction, INITIAL);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -22,7 +23,7 @@ export function PushpayImportForm() {
   function accept(file: File | undefined | null) {
     if (!file) return;
     if (!/\.csv$/i.test(file.name)) {
-      setDropError("That's not a .csv file — export the PushPay donor list as CSV.");
+      setDropError("That's not a .csv file — export from PushPay as CSV.");
       return;
     }
     // Push the dropped file into the real input so the form submits it natively.
@@ -143,18 +144,26 @@ export function PushpayImportForm() {
 
       {r && (
         <div className="rounded-lg border border-border-soft overflow-hidden">
+          {/* These count gifts for a Transactions upload and donors for an
+              All Donors one, so the labels follow the file. */}
           <div className="grid grid-cols-4 divide-x divide-border-softer text-center">
-            <Stat label="Donors" value={r.total} tone="fg" />
+            <Stat label={r.kind === "transactions" ? "Gifts" : "Donors"} value={r.total} tone="fg" />
             <Stat label="Matched" value={r.matched} tone="good" />
-            <Stat label="To review" value={r.ambiguous} tone="warn" />
+            <Stat
+              label={r.kind === "transactions" ? "Givers to place" : "To review"}
+              value={r.kind === "transactions" ? r.toPlace ?? 0 : r.ambiguous}
+              tone="warn"
+            />
             <Stat label="Unmatched" value={r.unmatched} tone="muted" />
           </div>
-          {(r.ambiguous > 0 || r.unmatched > 0) && (
+          {(r.kind === "transactions" ? (r.toPlace ?? 0) > 0 : r.ambiguous + r.unmatched > 0) && (
             <Link
               href="/audit/pushpay"
               className="block border-t border-border-softer px-3 py-2 text-xs font-medium text-accent hover:bg-accent-soft-bg"
             >
-              Review {(r.ambiguous + r.unmatched).toLocaleString()} donors that need a person →
+              {r.kind === "transactions"
+                ? `Place ${(r.toPlace ?? 0).toLocaleString()} givers that need a person →`
+                : `Review ${(r.ambiguous + r.unmatched).toLocaleString()} donors that need a person →`}
             </Link>
           )}
         </div>

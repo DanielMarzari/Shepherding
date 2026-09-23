@@ -1,7 +1,7 @@
 # Database schema
 
 Start here. The app keeps everything in one SQLite file. This page covers what
-each of its 97 tables holds, which ones can be rebuilt and which cannot, the
+each of its 98 tables holds, which ones can be rebuilt and which cannot, the
 naming rules, the traps, and how to change the schema without wedging a deploy.
 Row counts come from the production copy of 2026-09-22, with every migration
 through [0097] applied. The four tables [0098] adds are marked, and their row
@@ -9,6 +9,10 @@ counts are what that migration writes from the 16,574 gifts already stored.
 [0099] adds no tables: it moves every giving surface off the emptied
 `pushpay_donors` and onto those gifts, rewriting 22 stored builder queries and
 adding one block to each of two pages (so `builder_blocks` is 509 after it).
+[0100] adds `pushpay_payers`, the one place a PushPay giver's name, email and
+phone are kept, and it starts empty on purpose: nothing in the database can
+reconstruct an identity the gifts never carried, so it fills from the next
+Transactions import (see the gotcha in §4).
 
 For a table's exact columns, ask the database (`.schema pco_people` in the
 sqlite3 CLI, or the column list in the Page Builder's SQL editor) rather than
@@ -25,7 +29,7 @@ times since.
   `./shepherding.db`. To browse production, copy it on the host (Backups,
   below) and download the copy. The `sqlite_*` tables a viewer also lists are
   SQLite's own (AUTOINCREMENT counters, planner statistics): don't edit them.
-- **Tenant key.** 91 of the 97 tables have `org_id INTEGER NOT NULL REFERENCES
+- **Tenant key.** 92 of the 98 tables have `org_id INTEGER NOT NULL REFERENCES
   organizations(id) ON DELETE CASCADE`, and nearly every index leads with it.
   Six tables have no `org_id`: `_migrations`, `organizations`, `users`,
   `sessions`, `geocode_cache`, `weather_daily`. Production has one organization
@@ -37,15 +41,17 @@ times since.
   so: `pco_check_ins.checked_in_by_id` / `checked_out_by_id`,
   `pco_households.primary_contact_id`, `pco_calendar_events.owner_id`,
   `duplicate_pairs.person_a` / `person_b`, `shepherd_assignments.target_id`
-  when `target_kind = 'person'`, and `pushpay_donors.candidate_ids` (a JSON
-  array). `pco_people` holds everyone PCO has, about half of them inactive,
+  when `target_kind = 'person'`, and `pushpay_donors.candidate_ids` /
+  `pushpay_payers.candidate_ids` (JSON arrays). `pco_people` holds everyone PCO has, about half of them inactive,
   plus system accounts: when counting by hand, filter on `status` and on
   `pco_sync_settings.excluded_membership_types`.
 - **Foreign keys are few and deliberate.** `org_id` → `organizations` ON DELETE
   CASCADE everywhere ([0095] added the missing ones). The four tables of
   hand-entered person data point at `pco_people(org_id, pco_id)` ON DELETE
   RESTRICT ([0094]), so deleting a person someone has written about fails
-  instead of orphaning the notes. `builder_blocks` / `builder_page_versions` →
+  instead of orphaning the notes; `pushpay_payers.person_id` does the same
+  ([0100]), because a hand-placed giver is written by a person too.
+  `builder_blocks` / `builder_page_versions` →
   `builder_pages` CASCADE; `memberships` / `sessions` → `users` CASCADE;
   `organizations.created_by` → `users` RESTRICT. **Mirror tables declare no
   keys between themselves:** `pco_group_memberships.group_id` →
@@ -62,8 +68,10 @@ times since.
   (AES-256-GCM JSON). Congregation emails and phones synced from PCO are stored
   only as keyed HMACs (`pco_person_emails`, `pco_person_phones`,
   `constant_contact_contacts.email_hash`). Also encrypted: form answers
-  (`pco_form_submissions.enc_data`), PushPay donors' name, email and phone
-  (`pushpay_donors.enc`), and secrets (`*_enc`). Plaintext on purpose: app
+  (`pco_form_submissions.enc_data`), PushPay donors' and givers' name, email
+  and phone (`pushpay_donors.enc`, `pushpay_payers.enc` — the only place a
+  giver's identity exists, with `name_hash` / `export_name_hash` /
+  `email_hash` / `phone_hash` beside it for matching), and secrets (`*_enc`). Plaintext on purpose: app
   logins' `users.email`, and the pastoral `care_assignments.note`. All of it
   uses `ENCRYPTION_KEY` ([encryption.ts]); under a different key the encrypted
   values can't be read and the hashes no longer match each other.
@@ -222,7 +230,7 @@ the migration's first build; keep them in step.
 
 | Table | Rows | A row is |
 |---|--:|---|
-| `pushpay_payer_summary` | 1,668 | **What every giving surface now counts** ([0099]). One per PushPay payer: `person_id` and `is_linked`, first and last gift date, gift count, `recurring_gifts` / `other_gifts`, and `funds` (a sorted JSON array of fund names). NEVER an amount. A gift whose export row had no Payer ID is its own payer, keyed `tx:<transaction id>`. A payer whose gifts name different people takes the one on the most recently imported gift that names anyone. |
+| `pushpay_payer_summary` | 1,668 | **What every giving surface now counts** ([0099]). One per PushPay payer: `person_id` and `is_linked`, first and last gift date, gift count, `recurring_gifts` / `other_gifts`, and `funds` (a sorted JSON array of fund names). NEVER an amount. A gift whose export row had no Payer ID is its own payer, keyed `tx:<transaction id>`. A payer whose gifts name different people takes the one on the most recently imported gift that names anyone. **Identity and human decisions cannot live here**: this table is rebuilt by DELETE+INSERT on every import and every removal, so a name or a hand match written onto it would be gone by the next rebuild. They live on `pushpay_payers` ([0100]), which joins to this one on `payer_id`. |
 | `pushpay_giving_snapshot` | 1 | One per org: payers, linked payers, gifts, the span of gift dates, and the `source_rows` / `source_written_at` watermark the staleness check reads. One row even with no gifts, so "built, and empty" is not "never built". |
 
 **Map.** Background runners, started by the cron after a successful sync and by
@@ -235,16 +243,20 @@ the admin buttons on /map. They call outside services.
 | `road_network` | 12,188 | `buildMeshPending` (`startMeshRun`) | One road stretch (`road_key` = name + rounded endpoints) as a JSON polyline. Rows are only ever added. |
 | `road_network_routed_people` | 8,040 | same | A home already folded into `road_network`. Failures are recorded too and never retried. To rebuild the road web, delete both tables' rows for the org. |
 
-### Imported by hand (5): rebuild only from the original files
+### Imported by hand (6): rebuild only from the original files
 
-None of the source files are kept in this repo.
+None of the source files are kept in this repo. `pushpay_payers` is the odd one
+out: the identity on it refills from the Transactions export, but its
+`match_status = 'manual'` rows are a human's decision and refill from nothing,
+so back that table up as if it were owned.
 
 | Table | Rows | A row is, and how it is (re)loaded |
 |---|--:|---|
 | `attendance_weekly` | 280 | One Sunday's totals from the quarterly "Worship and Activities Attendance" .xlsx files (22 so far, 2021 Q1–2026 Q2), uploaded on /attendance (`importAttendanceFile`). Re-uploading upserts. `exception_reason` comes from the sheet and keeps storm and closure Sundays out of averages. |
 | `attendance_service` | 2,418 | Per Sunday × room (center / chapel / kids / student) × service time, from the same files. Re-importing replaces that Sunday's rows. |
-| `pushpay_donors` | 0 | **Emptied on 2026-09-22 at Dan's request**: the Transactions export, whose Payer ID is PushPay's stable donor key, is the giving source from here on. The 6,423 rows it held (65 hand-matched) are saved as `/home/ubuntu/backups/pushpay_donors-before-delete-20260922T1620Z.sql` (names, emails and phones still encrypted). **Nothing reads this table any more except the import and the /audit/pushpay reconciliation over it** ([pushpay-import.ts]), plus the junk filter's "don't delete a giver" check: [0099] moved the Giving page, the Give lane, the MIR Finance and Small Groups blocks and the membership audit onto `pushpay_payer_summary` / `pushpay_transactions`, and [giving-sql.ts] holds what each of PushPay's donor stages became and why. Otherwise: one row of PushPay's "All Donors" CSV, uploaded on /pushpay (`enc` holds encrypted name, email and phone), matched to a person. `match_status` is matched / manual / ambiguous / unmatched; `candidate_ids` are the people offered in review. `donor_key` is the row's position in the CSV, so it changes between uploads. **Re-uploading the CSV replaces every row but carries each manual match to the new row that is the same donor**, or sends it back to review when it can't tell (§4). `rematchDonors` re-runs matching in place and keeps manual matches. Removing the newest All Donors upload on /pushpay empties this table, because that upload *is* the set ([0098]). |
-| `pushpay_transactions` | 16,574 | One gift from PushPay's Transactions CSV (/pushpay): date, source, fund, and never an amount. `match_source` says where `person_id` came from, tried in this order: `your_id` ("Your ID", which *is* the PCO person id), `donor_manual` (a donor someone matched by hand on the All Donors list, recognised by the same rule a re-upload uses, §4), `donor_match` (name, email and phone matching), or `unmatched`. Gifts imported before 2026-09-22 never have `donor_manual`; importing that export again re-resolves them. Rows upsert by `transaction_id`, so every export window adds history. `first_upload_id` is the `pushpay_uploads` row that inserted the gift and never changes; `last_upload_id` is the one that last wrote its values, and moves on every re-supply ([0098]). They are **value provenance only** — which files a gift is in, and so whether a removal may delete it, is `pushpay_transaction_uploads` (§4). Either column is NULL once the upload it named has been removed, or on a gift the old code wrote during the 0098 deploy. Rebuilding needs every export ever loaded (today's rows span 2026-01-01 to 2026-09-16). |
+| `pushpay_donors` | 0 | **Emptied on 2026-09-22 at Dan's request**: the Transactions export, whose Payer ID is PushPay's stable donor key, is the giving source from here on. The 6,423 rows it held (65 hand-matched) are saved as `/home/ubuntu/backups/pushpay_donors-before-delete-20260922T1620Z.sql` (names, emails and phones still encrypted). **Nothing reads this table any more except the import and the /audit/pushpay reconciliation over it** ([pushpay-import.ts]), plus the junk filter's "don't delete a giver" check: [0099] moved the Giving page, the Give lane, the MIR Finance and Small Groups blocks and the membership audit onto `pushpay_payer_summary` / `pushpay_transactions`, and [giving-sql.ts] holds what each of PushPay's donor stages became and why. Otherwise: one row of PushPay's "All Donors" CSV, uploaded on /pushpay (`enc` holds encrypted name, email and phone), matched to a person. `match_status` is matched / manual / ambiguous / unmatched; `candidate_ids` are the people offered in review. `donor_key` is the row's position in the CSV, so it changes between uploads. **Re-uploading the CSV replaces every row but carries each manual match to the new row that is the same donor**, or sends it back to review when it can't tell (§4). Removing the newest All Donors upload on /pushpay empties this table, because that upload *is* the set ([0098]). |
+| `pushpay_transactions` | 16,574 | One gift from PushPay's Transactions CSV (/pushpay): date, source, fund, and never an amount. **Still no identity at all** — [0087] said so because identity then lived in `pushpay_donors`, and since [0100] it lives in `pushpay_payers`; the claim about this table is unchanged. `match_source` says where `person_id` came from, tried in this order: `payer_manual` (a hand match on the giver's own profile, [0100] — never overwritten), `your_id` ("Your ID", which *is* the PCO person id), `donor_manual` (a donor someone matched by hand on the All Donors list, recognised by the same rule a re-upload uses, §4), `donor_match` (name, email and phone matching), or `unmatched`. **Every gift of one payer id carries that giver's one answer**, and an import restamps the giver's earlier gifts too, so the gifts, `pushpay_payer_summary` and the Give lane cannot disagree — the count of gifts that moved outside the uploaded file's dates is reported back on /pushpay, and a file whose columns cannot identify anyone is refused rather than allowed to unlink them (§4). Gifts imported before 2026-09-22 never have `donor_manual`; importing that export again re-resolves them. Rows upsert by `transaction_id`, so every export window adds history. `first_upload_id` is the `pushpay_uploads` row that inserted the gift and never changes; `last_upload_id` is the one that last wrote its values, and moves on every re-supply ([0098]). They are **value provenance only** — which files a gift is in, and so whether a removal may delete it, is `pushpay_transaction_uploads` (§4). Either column is NULL once the upload it named has been removed, or on a gift the old code wrote during the 0098 deploy. Rebuilding needs every export ever loaded (today's rows span 2026-01-01 to 2026-09-16). |
+| `pushpay_payers` | 0 | **New in [0100], and empty until the next Transactions import.** One giver's PushPay profile, keyed by `payer_id` — PushPay's stable Payer ID, the thing the All Donors export never had (a gift whose row carried none is its own giver, keyed `tx:<transaction id>`, the same key `pushpay_payer_summary` uses, so the two join one to one). `enc` holds the name, email and phone from the Transactions export, encrypted, and is the ONLY place that identity exists; `name_hash` (suffixes dropped), `export_name_hash` (suffix kept), `email_hash` and `phone_hash` are the keyed HMACs matching uses. `your_id` is the export's "Your ID" cell, which is a `pco_id`. Then the decision: `person_id`, `match_status` (matched / manual / ambiguous / unmatched), `match_source`, and `candidate_ids`, the people offered in review. `first_seen_at` never moves once set; `last_seen_at` moves on every import that carries the giver. **A `manual` row is never overwritten** — by any later import, or by Match again on /audit/pushpay — which is what the Payer ID buys: no re-recognition, no guessing, unlike `pushpay_donors` (§4). Re-uploading a Transactions export re-fills every other row. `person_id` has a foreign key to `pco_people` ON DELETE RESTRICT, and [pco-sync.ts]'s `HAS_OWNED_DATA_SQL` spares anyone this table names. |
 | `sermons` | 429 | One Sunday message from Sermon Lab, a separate app on the host: `transcript` plus classification (`topic`, `summary`, `next_steps`, `themes`). To rebuild, `scripts/import-sermons.mjs` loads the classified rows from `db/seed-data/sermons.json`, which has no transcripts; then `scripts/backfill-sermon-transcripts.mjs` copies them from Sermon Lab's database (`SERMON_LAB_DB`). `scripts/sync-sermons-from-lab.mjs` is meant to add new sermons, unclassified, from a Wednesday host cron, but none has arrived since 2026-08-02: check that cron. A sermon classified later lives only here until it is added to the JSON. |
 
 ### Owned (22): typed in by people, so back these up
@@ -281,14 +293,14 @@ plaintext only so the page can show which key is stored.
 
 | Table | Rows | A row is |
 |---|--:|---|
-| `_migrations` | 100 | An applied migration file. A lost row re-runs that file on the next deploy or boot, which for most files fails the deploy; a lost table re-runs all 100. |
+| `_migrations` | 101 | An applied migration file. A lost row re-runs that file on the next deploy or boot, which for most files fails the deploy; a lost table re-runs all 101. |
 | `pco_sync_runs` | 158 | One sync attempt: trigger, status, changes, `warning` (the junk filter's "kept" note lands here), `details` JSON. `cleanupStaleSyncRuns` reaps a row left `running` by a dead process. |
 | `pco_sync_cursor` | 6 | A fetch high-water mark per resource (`people`, `checkins:check_ins`, `groups:applications`, `form:<id>:submissions`). Deleting one forces a full re-fetch of that resource. |
 | `constant_contact_sync_runs` | 10 | One Constant Contact sync attempt. |
 | `constant_contact_sync_cursor` | 1 | Its high-water mark (`contacts`). |
 | `dashboard_refresh_runs` | 7 | One snapshot rebuild: `triggered_by`, progress, and `source_synced_through` (`MAX(pco_people.synced_at)` at the start). The latest ok row is the only record of what the snapshots were built from ([0089], `getSnapshotFreshness`). With no rows, freshness reads "unknown" and the self-heal does nothing until the next sync or Refresh writes one. |
 | `pushpay_import` | 1 | Counts from the last PushPay upload of either kind, overwritten by each, and now also rewritten from the newest upload left whenever one is removed ([0098]), so it can never name a file that has gone; a `donors` upload is skipped there while `pushpay_donors` is empty, so the card cannot print donor counts over an empty list. `kind` says which: `donors` (All Donors) or `transactions`; /pushpay reads it to label the counts, /audit/pushpay to tell whether anything has been imported (`getPushpayImport`). Before 2026-09-22 an All Donors upload left `kind` alone, so a row untouched since then can hold a stale `transactions` or NULL. `rematchDonors` rewrites the three match counts in place and leaves `kind`, `total` and `file_name`, so after a Transactions upload the row mixes the two. The per-file record is `pushpay_uploads`. |
-| `pushpay_uploads` | 1 | **Not safe to lose.** One PushPay upload of either kind ([0098]): `kind`, `file_name`, `imported_at`, `total` rows in the file, how many were new (`inserted`), the match breakdown (`matched` / `ambiguous` / `unmatched`, and for transactions `by_your_id` / `by_donor_manual` / `by_donor_match`), and for transactions the file's `first_gift_on` and `last_gift_on`. Ids are AUTOINCREMENT and never reused, so an id always means the upload that had it. Losing this table strands every gift: nothing could ever be removed again. `is_backfilled = 1` marks the one synthetic row 0098 wrote for the 16,574 gifts that predate the table. The /pushpay Datasets card lists these newest first, with a Remove control per row. |
+| `pushpay_uploads` | 1 | **Not safe to lose.** One PushPay upload of either kind ([0098]): `kind`, `file_name`, `imported_at`, `total` rows in the file, how many were new (`inserted`), the match breakdown (`matched` / `ambiguous` / `unmatched`, and for transactions `by_your_id` / `by_payer_manual` ([0100]) / `by_donor_manual` / `by_donor_match`), and for transactions the file's `first_gift_on` and `last_gift_on`. Ids are AUTOINCREMENT and never reused, so an id always means the upload that had it. Losing this table strands every gift: nothing could ever be removed again. `is_backfilled = 1` marks the one synthetic row 0098 wrote for the 16,574 gifts that predate the table. The /pushpay Datasets card lists these newest first, with a Remove control per row. |
 | `pushpay_transaction_uploads` | 16,574 | **Not safe to lose.** One `(gift, upload that carried it)` pair ([0098]) — the whole answer to which files a gift is in, and so to what a removal may delete. PushPay export windows overlap, so a gift has one row here per file that listed it; the importer writes a row for every row of the file, re-supplies included. This is a many-to-many fact and cannot live in columns on the gift: with three overlapping files all holding one gift, two columns can only remember two of them (§4). Losing this table makes every gift unremovable. |
 | `sessions` | 1 | A login session. Deleting rows signs people out. |
 
@@ -300,7 +312,8 @@ while the app runs (recent writes sit in `shepherdly.db-wal`). The copy is only
 partly readable without `ENCRYPTION_KEY` (a GitHub secret that the deploy writes
 to `/var/www/apps/shepherdly/.env.production`), so keep the key somewhere else.
 A partial restore can skip the mirrors (except `pco_people`) and the derived
-tables, but not the owned tables, the imported-by-hand tables, `_migrations`,
+tables, but not the owned tables, the imported-by-hand tables (`pushpay_payers`
+included: its hand matches come back from nowhere), `_migrations`,
 `pushpay_uploads` or `pushpay_transaction_uploads` (without those two no gift
 can ever be removed again).
 
@@ -309,7 +322,7 @@ can ever be removed again).
 These rules have to survive the next migration.
 
 - **`_at` is a full ISO-8601 instant in UTC**, `YYYY-MM-DDTHH:MM:SS[.sss]Z`.
-  All 169 `_at` columns hold that shape. Defaults are
+  All 174 `_at` columns hold that shape. Defaults are
   `strftime('%Y-%m-%dT%H:%M:%fZ','now')`; in code, `new Date().toISOString()`.
   Don't use `datetime('now')`: its space sorts below `T`, so text comparisons
   against stored values go wrong ([0090]).
@@ -428,6 +441,51 @@ Dropped: `road_mesh`, `mir_docs`, `mir_team_members`, `attendance_sources`
   `pruneShepherdedCareAssignments` ([care-read.ts]) hard-deletes the rows, and
   notes, of everyone who has since become shepherded, on every add from
   /care-map.
+- **A giver only has a name once an import running [0100] has seen them.**
+  `pushpay_transactions` never stored identity ([0087]), so nothing in the
+  database can reconstruct one for a gift already loaded: `pushpay_payers`
+  starts empty and is deliberately not backfilled. Until the next Transactions
+  upload, /giving can count 548 unlinked givers while /audit/pushpay has
+  nothing to list — which is exactly the bug [0100] fixes, and the reason the
+  page now says so instead of rendering an empty queue. The fix is one upload:
+  the import upserts on Transaction ID, so re-uploading a file already loaded
+  adds no gift and simply fills in the identities. `getPayerIdentityCoverage`
+  is the query that tells the two apart, and `GiveLaneStats.unlinkedReviewable`
+  is why the Give lane's card links to /pushpay rather than to an empty queue.
+  A gift whose export row carried no Payer ID is its own giver, keyed
+  `tx:<transaction id>`, so it gets a profile like any other. A profile with a row but
+  no name — an export that carried "Your ID" and no name columns — is counted
+  by neither the tabs nor `withIdentity`, because it cannot be shown to anyone
+  as a row they could judge; `countPayersByStatus` and `listPayersByStatus`
+  both require `name_hash IS NOT NULL` for that reason.
+- **A Transactions export is refused when its columns cannot say who gave.**
+  Resolution happens once per giver and every one of that giver's gifts takes
+  the answer, *including gifts from windows the file does not contain* — which
+  is what keeps the queue, `pushpay_payer_summary` and the Give lane agreeing,
+  and also means a file's column set reaches far beyond its own rows. PushPay's
+  export builder lets you choose the columns, so `importPushpayTransactions`
+  refuses two cases before it reads or writes anything: a file with no "Your
+  ID" column **and** no name columns (it can identify nobody), and a file with
+  no "Your ID" column while gifts here are matched by it (it would re-decide
+  those givers from names alone). Measured on a copy of production: a
+  September-only export with "Your ID" left out took gifts with no person from
+  2,948 to 13,862 and unlinked givers from 548 to 1,143, silently, in about a
+  second. For the same reason a column a file leaves out never erases what an
+  earlier one stored — a missing column is an absence of information, not an
+  instruction to forget — and the gifts an import moves outside the uploaded
+  file's dates are reported on /pushpay (`earlierGiftsRelinked` /
+  `earlierGiftsUnlinked`) rather than moved silently.
+- **A hand match on a giver is never re-recognised, and never overwritten.**
+  Against a stable Payer ID there is nothing to guess: `assignPayer` writes
+  `match_status = 'manual'`, and every later import, and Match again, leave it
+  alone. It is dropped only if the person it names has left `pco_people`, in
+  which case the giver falls back to automatic matching. Unassign
+  (`clearPayerMatch`) is an undo, not a blanket "nobody": it re-runs "Your ID"
+  and then name/email/phone matching, so a giver whose export says who they
+  are goes straight back to that person. All three write the giver's profile,
+  restamp every one of that giver's gifts and rebuild the rollups in ONE
+  transaction, so the queue, /giving and the Give lane are never left
+  disagreeing. Contrast the All Donors rule below, which is what this replaces.
 - **Re-uploading PushPay "All Donors" keeps a hand match only when it can
   recognise the donor.** (The table is empty since 2026-09-22; this applies if
   an All Donors export is uploaded again.) `importPushpay` replaces every
@@ -563,7 +621,7 @@ Dropped: `road_mesh`, `mir_docs`, `mir_team_members`, `attendance_sources`
 These rules were learned the hard way.
 
 1. **Only in a migration file**, `db/migrations/NNNN_name.sql`, numbered after
-   the highest (0099). Files are applied in filename order and recorded by
+   the highest (0100). Files are applied in filename order and recorded by
    filename. Never `ALTER` by hand on the server or from a script. An
    out-of-band change makes the migration that later does the same thing fail
    ("duplicate column name"). The deploy's migrate step then stops before the
@@ -673,6 +731,7 @@ These rules were learned the hard way.
    header, as 0094–0097 do.
 
 [0086]: migrations/0086_integration_credentials.sql
+[0087]: migrations/0087_pushpay_transactions.sql
 [0088]: migrations/0088_checkin_covering_index.sql
 [0089]: migrations/0089_dashboard_refresh_watermark.sql
 [0090]: migrations/0090_plan_date_upper_bound.sql
@@ -685,6 +744,7 @@ These rules were learned the hard way.
 [0097]: migrations/0097_clear_names.sql
 [0098]: migrations/0098_pushpay_uploads.sql
 [0099]: migrations/0099_giving_on_transactions.sql
+[0100]: migrations/0100_pushpay_payers.sql
 [db.ts]: ../src/lib/db.ts
 [builder.ts]: ../src/lib/builder.ts
 [builder-seeds.ts]: ../src/lib/builder-seeds.ts

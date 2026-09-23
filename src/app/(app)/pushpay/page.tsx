@@ -32,10 +32,13 @@ export default async function PushpayPage() {
             pages. <span className="text-fg">Transactions is the giving
             source:</span> every figure on the Give lane, the giving page and
             the Finance report is built from those gifts, because only that
-            export carries a stable Payer ID. The All Donors list is kept for
-            matching help alone. One drop zone takes either file; it reads the
-            header to tell them apart. No API connection needed, and no amounts:
-            neither export carries them, so nothing anywhere is money.
+            export carries a stable Payer ID. It also carries each giver&apos;s
+            name, email and phone, which are kept — encrypted — so a giver
+            nobody could place automatically can be placed by hand, once, and
+            stay placed. The All Donors list is kept for matching help alone.
+            One drop zone takes either file; it reads the header to tell them
+            apart. No API connection needed, and no amounts: neither export
+            carries them, so nothing anywhere is money.
           </p>
         </div>
 
@@ -47,15 +50,18 @@ export default async function PushpayPage() {
               In PushPay, export{" "}
               <span className="text-fg">Transactions</span> as CSV for the
               window you want (Transaction ID, Received On, Source, Fund, Payer
-              ID, Your ID): gifts are <span className="text-fg">added</span> to
-              the history, so each new window builds on the last. Or export{" "}
+              ID, Your ID, and the giver&apos;s name, email and mobile): gifts
+              are <span className="text-fg">added</span> to the history, so each
+              new window builds on the last, and a file already loaded can be
+              uploaded again safely — gifts match on their Transaction ID and
+              update in place. Or export{" "}
               <span className="text-fg">Donors → All Donors</span> (First/Last
               name, Email, Donor Stage, Giving Channel, Last Gift), which{" "}
               <span className="text-fg">replaces</span> the donor list and
-              re-matches everyone except donors matched by hand: those stay
-              matched when the new file still has them, and go back to review
-              when it can&apos;t tell which row is theirs. Every upload is
-              listed under Datasets below, and can be removed from there.
+              re-matches everyone. It has no donor id, so it only ever helped
+              matching — the givers themselves, and anything placed by hand,
+              live with the Transactions import. Every upload is listed under
+              Datasets below, and can be removed from there.
             </p>
           </div>
 
@@ -95,8 +101,10 @@ export default async function PushpayPage() {
                   </span>{" "}
                   matched
                 </span>
-                {/* A payer is resolved or it is not — the Transactions import
-                    has no "to review" state, so the count is always 0 there. */}
+                {/* These counts are GIFTS for a Transactions import, and a
+                    gift is placed or it is not: whether the giver behind it
+                    needs a human is counted per giver on PushPay connections,
+                    not here, so this row is always 0 for transactions. */}
                 {last.kind !== "transactions" && (
                   <span>
                     <span className="text-warn-soft-fg tnum">
@@ -122,9 +130,10 @@ export default async function PushpayPage() {
           )}
 
           <p className="text-[11px] text-subtle">
-            Donor names, emails, and phone numbers are encrypted at rest with the
+            Giver names, emails, and phone numbers are encrypted at rest with the
             app key — the same protection used for PCO and all PII. Matching uses
-            one-way hashes, never plaintext.
+            one-way hashes, never plaintext, and the gift rows themselves carry
+            no identity at all.
           </p>
         </Card>
 
@@ -145,11 +154,11 @@ export default async function PushpayPage() {
             <p className="text-xs text-muted tnum">
               In the database now:{" "}
               <span className="text-fg">{giving.gifts.toLocaleString()}</span> gifts from{" "}
-              <span className="text-fg">{giving.payers.toLocaleString()}</span> payers
+              <span className="text-fg">{giving.payers.toLocaleString()}</span> giver profiles
               {giving.firstGiftOn && giving.lastGiftOn
                 ? `, dated ${giving.firstGiftOn} to ${giving.lastGiftOn}`
                 : ""}
-              . {giving.linkedPayers.toLocaleString()} of those payers are tied to a person.
+              . {giving.linkedPayers.toLocaleString()} of those giver profiles are tied to a person.
             </p>
           )}
 
@@ -177,9 +186,9 @@ export default async function PushpayPage() {
               >
                 Audit → PushPay connections
               </Link>{" "}
-              — assign the All Donors rows we couldn&apos;t confidently match
-              to a person. Payers on a gift are linked by the export&apos;s
-              “Your ID” column instead.
+              — every giver in the Transactions export and which person their
+              gifts belong to. Place the ones no rule could: their gifts, the
+              rollups and the Give lane all move with them.
             </li>
             <li>
               <Link href="/giving" className="text-accent hover:underline">

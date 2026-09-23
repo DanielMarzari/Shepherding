@@ -739,7 +739,7 @@ function GivingLane({
             <Link href="/pushpay" className="text-accent hover:underline">
               PushPay
             </Link>
-            . Payers we couldn&apos;t confidently place are reconciled on{" "}
+            . Givers we couldn&apos;t confidently place are matched by hand on{" "}
             <Link href="/audit/pushpay" className="text-accent hover:underline">
               PushPay connections
             </Link>
@@ -809,19 +809,29 @@ function GivingLane({
               <Card
                 className={`p-4 ${stats.unlinkedPayers > 0 ? "border-accent" : ""}`}
               >
-                <div className="text-xs text-muted mb-1.5">Unlinked payers</div>
+                <div className="text-xs text-muted mb-1.5">Unlinked givers</div>
                 <div className="tnum text-2xl font-semibold">
                   {stats.unlinkedPayers.toLocaleString()}
                 </div>
-                {stats.unlinkedPayers > 0 ? (
+                {/* A giver can only be placed by hand once an import has
+                    stored their name, so the card never sends anyone to a
+                    queue that cannot list them. */}
+                {stats.unlinkedPayers === 0 ? (
+                  <div className="text-xs text-muted mt-1">all matched</div>
+                ) : stats.unlinkedReviewable > 0 ? (
                   <Link
                     href="/audit/pushpay"
                     className="text-xs text-accent hover:underline mt-1 inline-block"
                   >
-                    reconcile →
+                    place {stats.unlinkedReviewable.toLocaleString()} by hand →
                   </Link>
                 ) : (
-                  <div className="text-xs text-muted mt-1">all matched</div>
+                  <Link
+                    href="/pushpay"
+                    className="text-xs text-accent hover:underline mt-1 inline-block"
+                  >
+                    no names on file — re-upload the export →
+                  </Link>
                 )}
               </Card>
             </div>
@@ -838,7 +848,7 @@ function GivingLane({
               />
               {people.length === 0 ? (
                 <div className="px-5 py-12 text-center text-sm text-muted">
-                  Every gift is still awaiting reconciliation — assign payers on{" "}
+                  Every gift is still awaiting a person — place givers on{" "}
                   <Link
                     href="/audit/pushpay"
                     className="text-accent hover:underline"

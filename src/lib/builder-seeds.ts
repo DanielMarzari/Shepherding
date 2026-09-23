@@ -1009,7 +1009,7 @@ const givingSeed: SeedPage = {
   title: "Giving statistics",
   description:
     "Giving from the imported PushPay Transactions export — who gives, membership vs. giving coverage, how people give, funds, channels, where givers live, recency, and first gifts. Gift and giver counts only: the export carries no amounts. Import or refresh on the PushPay page.",
-  revision: 4,
+  revision: 5,
   moreSection: "Reports & insights",
   blocks: [
     { kind: "stat", config: { title: "Gift window", span: 12,
@@ -1029,7 +1029,8 @@ const givingSeed: SeedPage = {
       sql: `${GIVERS} WHERE firstGift >= ${lapseCutoff()}` } },
     { kind: "stat", config: { title: "Gifts", span: 2, color: "low", sub: "individual gifts — a count, never an amount",
       sql: `SELECT COALESCE((SELECT gifts FROM pushpay_giving_snapshot WHERE org_id=:orgId), 0)` } },
-    { kind: "stat", config: { title: "Unlinked payers", span: 2, color: "low", sub: "PushPay payer ids with no person yet",
+    { kind: "stat", config: { title: "Unlinked givers", span: 2, color: "low",
+      sub: "PushPay giver profiles with no person attached — a household can hold two. They can be placed by hand on Audit › PushPay connections once an import has stored their names; until then that queue is empty and says so.",
       sql: `SELECT COUNT(*) FROM pushpay_payer_summary WHERE org_id=:orgId AND person_id IS NULL` } },
 
     { kind: "divider", config: { title: "Membership vs. giving", span: 12 } },
@@ -1055,7 +1056,7 @@ const givingSeed: SeedPage = {
     { kind: "divider", config: { title: "Giving mix", span: 12 } },
     { kind: "chart", config: { title: "Giving pattern", chartType: "bar", colorByCategory: true, span: 4,
       sub: "worked out from the gifts themselves — PushPay's own donor stages came with the All Donors export, which is no longer loaded",
-      sql: `SELECT ${givingPatternCase("s")} AS "Pattern", COUNT(*) AS "Payers"
+      sql: `SELECT ${givingPatternCase("s")} AS "Pattern", COUNT(*) AS "Giver profiles"
               FROM pushpay_payer_summary s WHERE s.org_id=:orgId GROUP BY 1 ORDER BY 2 DESC` } },
     { kind: "chart", config: { title: "Gifts by fund", chartType: "bar", colorByCategory: true, span: 4,
       sub: "how many gifts each fund received — counts, not amounts",
@@ -1080,10 +1081,10 @@ const givingSeed: SeedPage = {
 
     { kind: "divider", config: { title: "Recency", span: 12 } },
     { kind: "chart", config: { title: "Gifts and givers by month", chartType: "line", span: 12,
-      sub: "every gift by the date PushPay recorded it, and how many payers are behind them — cash and cheques are keyed in afterwards, so their month can lag the Sunday",
+      sub: "every gift by the date PushPay recorded it, and how many giver profiles are behind them — cash and cheques are keyed in afterwards, so their month can lag the Sunday",
       sql: `SELECT substr(received_on,1,7) AS "Month",
                    COUNT(*) AS "Gifts",
-                   COUNT(DISTINCT COALESCE(payer_id,'tx:'||transaction_id)) AS "Payers giving"
+                   COUNT(DISTINCT COALESCE(payer_id,'tx:'||transaction_id)) AS "Giver profiles giving"
               FROM pushpay_transactions WHERE org_id=:orgId AND received_on IS NOT NULL
              GROUP BY 1 ORDER BY 1` } },
 

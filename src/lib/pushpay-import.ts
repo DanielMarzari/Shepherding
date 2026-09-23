@@ -1,16 +1,26 @@
 import "server-only";
-import { getDb } from "./db";
+import { getDb, prepareCached } from "./db";
 import { decryptJson, encryptJson, hmac } from "./encryption";
 import { firstNameSimilar, normNamePart, fullNameKey, organizationKey, looksLikeOrgName } from "./name-match";
 import { normPhone } from "./phone";
+import { givingMethodCase, givingPattern, lapseCutoff } from "./giving-sql";
 
-// PushPay giving import + person matching. No API — an admin uploads the
-// "All Donors" CSV export. Donor PII is encrypted at rest; only keyed HMAC
-// tokens are kept for matching (same approach as pco_person_emails). Matching
-// combines three one-way signals — normalized name, email hash, and phone
-// hash: anyone confirmed by two signals wins outright; a lone unique signal
-// still matches; when signals point at several people (shared household email,
-// same-name pair) the donor is flagged ambiguous for manual reconciliation.
+// PushPay giving import + person matching. No API — an admin uploads a CSV
+// export. TWO exports land here and one drop zone takes either (the header
+// tells them apart):
+//   * TRANSACTIONS — one row per gift, and the giving source for the whole
+//     app. Gifts go to `pushpay_transactions` (no identity on them, ever,
+//     0087) and each giver's identity and match decision to `pushpay_payers`,
+//     keyed by PushPay's stable Payer ID (0100).
+//   * ALL DONORS — one row per donor, into `pushpay_donors`. Emptied on
+//     2026-09-22 and kept only for matching help: it has no donor id, so a
+//     re-upload has to recognise every donor again from name, email and phone.
+// Identity from either export is encrypted at rest; only keyed HMAC tokens are
+// kept for matching (same approach as pco_person_emails). Matching combines
+// three one-way signals — normalized name, email hash, and phone hash: anyone
+// confirmed by two signals wins outright; a lone unique signal still matches;
+// when signals point at several people (shared household email, same-name
+// pair) the giver is flagged ambiguous for a human to decide.
 
 interface PII { first_name?: string | null; last_name?: string | null }
 interface DonorPII { firstName: string; lastName: string; email: string; phone: string }
@@ -31,13 +41,40 @@ function normName(first: string, last: string): string {
     .trim();
 }
 
-/** "31-Aug-26" → "2026-08-31". */
+/** A PushPay export date → "YYYY-MM-DD", or null if it cannot be read.
+ *
+ *  PushPay does not write one format. The All Donors export we first built
+ *  against writes "31-Aug-26"; the Transactions export downloaded on
+ *  2026-09-22 writes "9/16/2026" for every one of its 16,574 rows. Only the
+ *  first was accepted, so that file imported nothing at all — silently, since
+ *  a row with an unreadable date is skipped and the run still "succeeded".
+ *
+ *  Slash dates are read MONTH-FIRST, which is what PushPay's US exports emit
+ *  (in that file the first component never exceeds 9 while the second reaches
+ *  31). A date whose first component is above 12 is day-first, which this
+ *  cannot tell apart from a month-first one for days 1-12 — so it is REFUSED
+ *  rather than guessed, and the caller reports the file as unreadable instead
+ *  of shifting every date in it. */
 function parseDate(s: string): string | null {
-  const m = /^(\d{1,2})-([A-Za-z]{3})-(\d{2})$/.exec((s || "").trim());
-  if (!m) return null;
-  const mon = MONTHS[m[2].toLowerCase()];
-  if (!mon) return null;
-  return `${2000 + parseInt(m[3], 10)}-${String(mon).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  const v = (s || "").trim();
+  if (!v) return null;
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (iso) return v;
+  const named = /^(\d{1,2})-([A-Za-z]{3})-(\d{2}|\d{4})$/.exec(v);
+  if (named) {
+    const mon = MONTHS[named[2].toLowerCase()];
+    if (!mon) return null;
+    const yr = named[3].length === 4 ? Number(named[3]) : 2000 + Number(named[3]);
+    return `${yr}-${String(mon).padStart(2, "0")}-${named[1].padStart(2, "0")}`;
+  }
+  const slash = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(v);
+  if (slash) {
+    const a = Number(slash[1]), b = Number(slash[2]);
+    if (a > 12 || b > 31 || a < 1 || b < 1) return null; // day-first, or not a date
+    const yr = slash[3].length === 4 ? Number(slash[3]) : 2000 + Number(slash[3]);
+    return `${yr}-${String(a).padStart(2, "0")}-${String(b).padStart(2, "0")}`;
+  }
+  return null;
 }
 
 /** Minimal quote-aware CSV parser → rows of string cells. */
@@ -90,9 +127,13 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
   const byFullName = new Map<string, string[]>();
   const byOrg = new Map<string, string[]>();
   const birthYear = new Map<string, number>();
+  // .iterate(), not .all(): reading all 34,674 people at once cost a measured
+  // +51 MB of RSS on a process pm2 restarts at 150 MB, and every row is thrown
+  // away as soon as its name is indexed. Streaming keeps one row alive at a
+  // time. Same below for the emails and the phones.
   for (const p of db
     .prepare(`SELECT pco_id, first_name, last_name, nickname, legal_first_name, enc_pii, birth_year FROM pco_people WHERE org_id = ?`)
-    .all(orgId) as Array<{
+    .iterate(orgId) as IterableIterator<{
     pco_id: string;
     first_name: string | null;
     last_name: string | null;
@@ -132,19 +173,20 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
   }
   const email = new Map<string, string[]>();
   const emailsOf = new Map<string, Set<string>>();
-  for (const e of db.prepare(`SELECT email_hash, person_id FROM pco_person_emails WHERE org_id = ?`).all(orgId) as Array<{ email_hash: string; person_id: string }>) {
+  for (const e of db.prepare(`SELECT email_hash, person_id FROM pco_person_emails WHERE org_id = ?`).iterate(orgId) as IterableIterator<{ email_hash: string; person_id: string }>) {
     (email.get(e.email_hash) ?? email.set(e.email_hash, []).get(e.email_hash)!).push(e.person_id);
     (emailsOf.get(e.person_id) ?? emailsOf.set(e.person_id, new Set()).get(e.person_id)!).add(e.email_hash);
   }
   const phone = new Map<string, string[]>();
   const phonesOf = new Map<string, Set<string>>();
-  for (const ph of db.prepare(`SELECT phone_hash, person_id FROM pco_person_phones WHERE org_id = ?`).all(orgId) as Array<{ phone_hash: string; person_id: string }>) {
+  for (const ph of db.prepare(`SELECT phone_hash, person_id FROM pco_person_phones WHERE org_id = ?`).iterate(orgId) as IterableIterator<{ phone_hash: string; person_id: string }>) {
     (phone.get(ph.phone_hash) ?? phone.set(ph.phone_hash, []).get(ph.phone_hash)!).push(ph.person_id);
     (phonesOf.get(ph.person_id) ?? phonesOf.set(ph.person_id, new Set()).get(ph.person_id)!).add(ph.phone_hash);
   }
-  const active = new Set<string>(
-    (db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'inactive'`).all(orgId) as Array<{ person_id: string }>).map((r) => r.person_id),
-  );
+  const active = new Set<string>();
+  for (const r of db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'inactive'`).iterate(orgId) as IterableIterator<{ person_id: string }>) {
+    active.add(r.person_id);
+  }
   return { byLast, byFullName, byOrg, email, phone, emailsOf, phonesOf, birthYear, active };
 }
 
@@ -538,10 +580,13 @@ function planHandMatches(
 
 /** Every pco_id in the org: a hand match carries only to a person who is still here. */
 function knownPeople(orgId: number): Set<string> {
-  return new Set(
-    (getDb().prepare(`SELECT pco_id FROM pco_people WHERE org_id = ?`).all(orgId) as Array<{ pco_id: string }>)
-      .map((r) => r.pco_id),
-  );
+  const out = new Set<string>();
+  // Streamed for the same reason buildMatchIndexes streams: the intermediate
+  // array of 34,674 row objects is pure peak, and this runs on a 150 MB process.
+  for (const r of getDb().prepare(`SELECT pco_id FROM pco_people WHERE org_id = ?`).iterate(orgId) as IterableIterator<{ pco_id: string }>) {
+    out.add(r.pco_id);
+  }
+  return out;
 }
 
 /** What a new All Donors upload did with the hand matches of the one it replaced. */
@@ -671,6 +716,7 @@ interface UploadCounts {
   ambiguous: number;
   unmatched: number;
   byYourId?: number;
+  byPayerManual?: number;
   byDonorManual?: number;
   byDonorMatch?: number;
   firstGiftOn?: string | null;
@@ -686,13 +732,14 @@ function recordUpload(orgId: number, kind: PushpayUploadKind, fileName: string, 
   const r = getDb().prepare(
     `INSERT INTO pushpay_uploads
        (org_id, kind, file_name, total, inserted, matched, ambiguous, unmatched,
-        by_your_id, by_donor_manual, by_donor_match, first_gift_on, last_gift_on)
+        by_your_id, by_payer_manual, by_donor_manual, by_donor_match, first_gift_on, last_gift_on)
      VALUES (@org, @kind, @file, @total, @inserted, @matched, @ambiguous, @unmatched,
-             @yourId, @donorManual, @donorMatch, @firstOn, @lastOn)`,
+             @yourId, @payerManual, @donorManual, @donorMatch, @firstOn, @lastOn)`,
   ).run({
     org: orgId, kind, file: fileName,
     total: c.total, inserted: c.inserted, matched: c.matched, ambiguous: c.ambiguous, unmatched: c.unmatched,
-    yourId: c.byYourId ?? 0, donorManual: c.byDonorManual ?? 0, donorMatch: c.byDonorMatch ?? 0,
+    yourId: c.byYourId ?? 0, payerManual: c.byPayerManual ?? 0,
+    donorManual: c.byDonorManual ?? 0, donorMatch: c.byDonorMatch ?? 0,
     firstOn: c.firstGiftOn ?? null, lastOn: c.lastGiftOn ?? null,
   });
   return Number(r.lastInsertRowid);
@@ -710,6 +757,8 @@ export interface PushpayUploadRow {
   ambiguous: number;
   unmatched: number;
   byYourId: number;
+  /** Gifts placed by a hand match on the giver's PushPay profile (0100). */
+  byPayerManual: number;
   byDonorManual: number;
   byDonorMatch: number;
   firstGiftOn: string | null;
@@ -739,12 +788,13 @@ export function listPushpayUploads(orgId: number): PushpayUploadRow[] {
   const db = getDb();
   const rows = db.prepare(
     `SELECT id, kind, file_name, imported_at, total, inserted, matched, ambiguous, unmatched,
-            by_your_id, by_donor_manual, by_donor_match, first_gift_on, last_gift_on, is_backfilled
+            by_your_id, by_payer_manual, by_donor_manual, by_donor_match,
+            first_gift_on, last_gift_on, is_backfilled
        FROM pushpay_uploads WHERE org_id = ? ORDER BY imported_at DESC, id DESC`,
   ).all(orgId) as Array<{
     id: number; kind: string; file_name: string | null; imported_at: string;
     total: number; inserted: number; matched: number; ambiguous: number; unmatched: number;
-    by_your_id: number; by_donor_manual: number; by_donor_match: number;
+    by_your_id: number; by_payer_manual: number; by_donor_manual: number; by_donor_match: number;
     first_gift_on: string | null; last_gift_on: string | null; is_backfilled: number;
   }>;
   // One grouped pass over the org's supply rows (16.5k today), rather than
@@ -778,7 +828,8 @@ export function listPushpayUploads(orgId: number): PushpayUploadRow[] {
       id: r.id, kind: isDonors ? "donors" : "transactions",
       fileName: r.file_name, importedAt: r.imported_at,
       total: r.total, inserted: r.inserted, matched: r.matched, ambiguous: r.ambiguous, unmatched: r.unmatched,
-      byYourId: r.by_your_id, byDonorManual: r.by_donor_manual, byDonorMatch: r.by_donor_match,
+      byYourId: r.by_your_id, byPayerManual: r.by_payer_manual,
+      byDonorManual: r.by_donor_manual, byDonorMatch: r.by_donor_match,
       firstGiftOn: r.first_gift_on, lastGiftOn: r.last_gift_on, isBackfilled: r.is_backfilled === 1,
       giftsHeld: isDonors ? 0 : g.held,
       giftsOwned: isDonors ? 0 : g.owned,
@@ -1048,17 +1099,262 @@ export function getPushpayGivingSummary(orgId: number): PushpayGivingSummary | n
     : null;
 }
 
+// ── The giver's PushPay profile ─────────────────────────────────────────────
+//
+// `pushpay_payers` (0100): one row per PushPay Payer ID — the stable giver key
+// the All Donors export never had. It exists because the review queue had
+// nothing to show: the giving surfaces count unlinked payers off the gift
+// rollup, but 0087 deliberately stored no identity on a gift, so all an
+// unplaceable giver left behind was an opaque id. The Transactions export
+// carries First Name, Last Name, Suffix, Email and Mobile Number on every
+// row; the importer parsed them to match on and threw them away. Now they are
+// kept here, once per giver.
+//
+// STORED THE WAY THE REST OF THIS APP STORES IDENTITY. The name, email and
+// phone live encrypted in one `enc` blob (encryptJson) and nowhere else — no
+// plaintext column — with keyed HMACs beside it for matching, exactly as
+// pushpay_donors did and as pco_person_emails does. Everything a page shows
+// comes out of `enc`, which is why the review list is a TypeScript read and
+// not stored builder SQL (the Page Builder's connection cannot decrypt).
+//
+// A PROFILE IS NOT A PERSON. One household can hold two PushPay profiles, so
+// a count of these is never a count of people. User-facing copy says "giver"
+// or "a giver's PushPay profile"; `payer_id` keeps PushPay's word because it
+// is PushPay's column.
+//
+// WHY THE HUMAN DECISION LIVES HERE AND NOT ON THE ROLLUP.
+// pushpay_payer_summary is derived — DELETE+INSERT from the gifts on every
+// import and removal (refreshPushpayGiving) — so a match someone made by hand
+// would be deleted by the next rebuild. Here it survives, and because the
+// Payer ID is stable it survives with NO GUESSING AT ALL: the All Donors
+// re-upload rule (sameDonor / planHandMatches) had to recognise a donor again
+// from a name, an email and a phone, and sent them back to review whenever it
+// could not. That whole problem is gone for a payer id.
+
+/** matched — the matcher placed them; manual — a person did, and nothing
+ *  automatic may overwrite it; ambiguous — several candidates, needs a human;
+ *  unmatched — nobody to offer. */
+export type PayerMatchStatus = "matched" | "manual" | "ambiguous" | "unmatched";
+
+/** Where a resolved person came from. Every one of these is also written to
+ *  `pushpay_transactions.match_source`, which is why 'your_id',
+ *  'donor_manual', 'donor_match' and 'unmatched' keep the spellings 0087 and
+ *  0098 gave them; 'payer_manual' is new with 0100. */
+export type PayerMatchSource =
+  | "your_id"
+  | "payer_manual"
+  | "donor_manual"
+  | "donor_match"
+  | "unmatched";
+
+interface PayerDecision {
+  personId: string | null;
+  status: PayerMatchStatus;
+  source: PayerMatchSource;
+  /** The people to offer in review. Kept even on a match, so Unassign has
+   *  something to fall back to. */
+  candidates: string[] | null;
+}
+
+/** The decision a stored profile holds now (no decryption — just the verdict). */
+interface StoredPayerDecision {
+  personId: string | null;
+  status: string;
+  candidates: string[] | null;
+}
+
+function parseIds(json: string | null): string[] | null {
+  if (!json) return null;
+  try {
+    const v = JSON.parse(json) as unknown;
+    return Array.isArray(v) ? (v as string[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every stored profile's verdict for the org, keyed by payer id. Read inside
+ *  the import's transaction, so a hand match made while the file was being
+ *  matched is not lost between the read and the write. */
+function readPayerDecisions(orgId: number): Map<string, StoredPayerDecision> {
+  const out = new Map<string, StoredPayerDecision>();
+  for (const r of getDb()
+    .prepare(`SELECT payer_id, person_id, match_status, candidate_ids FROM pushpay_payers WHERE org_id = ?`)
+    .all(orgId) as Array<{ payer_id: string; person_id: string | null; match_status: string; candidate_ids: string | null }>) {
+    out.set(r.payer_id, { personId: r.person_id, status: r.match_status, candidates: parseIds(r.candidate_ids) });
+  }
+  return out;
+}
+
+/** What the stored profiles already know about each giver — the identity blob
+ *  and the "Your ID" cell — keyed by payer id.
+ *
+ *  Read only when the uploaded file LEAVES A COLUMN OUT. A column the export
+ *  does not carry is an absence of information, not an instruction to forget:
+ *  PushPay's export builder lets you choose the columns, and a narrower export
+ *  must not erase a name or a PCO id an earlier one supplied. */
+function readStoredPayerIdentities(orgId: number): Map<string, { enc: string | null; yourId: string | null }> {
+  const out = new Map<string, { enc: string | null; yourId: string | null }>();
+  for (const r of getDb()
+    .prepare(`SELECT payer_id, enc, your_id FROM pushpay_payers WHERE org_id = ?`)
+    .iterate(orgId) as IterableIterator<{ payer_id: string; enc: string | null; your_id: string | null }>) {
+    out.set(r.payer_id, { enc: r.enc, yourId: r.your_id });
+  }
+  return out;
+}
+
+const PAYER_UPSERT_SQL = `INSERT INTO pushpay_payers
+  (org_id, payer_id, enc, name_hash, export_name_hash, email_hash, phone_hash, your_id,
+   person_id, match_status, match_source, candidate_ids, first_seen_at, last_seen_at)
+ VALUES (@org, @payer, @enc, @nameHash, @exportNameHash, @emailHash, @phoneHash, @yourId,
+   @personId, @status, @source, @candidates, @now, @now)
+ ON CONFLICT(org_id, payer_id) DO UPDATE SET
+   enc = excluded.enc, name_hash = excluded.name_hash,
+   export_name_hash = excluded.export_name_hash, email_hash = excluded.email_hash,
+   phone_hash = excluded.phone_hash, your_id = excluded.your_id,
+   person_id = excluded.person_id, match_status = excluded.match_status,
+   match_source = excluded.match_source, candidate_ids = excluded.candidate_ids,
+   last_seen_at = excluded.last_seen_at`;
+
+/** `first_seen_at` is set on insert and never moved, so it keeps meaning "the
+ *  import that first carried this giver"; `last_seen_at` moves every time. */
+function upsertPayer(
+  orgId: number,
+  payerId: string,
+  id: { first: string; last: string; email: string; phone: string; identity: DonorIdentity; yourId: string },
+  d: PayerDecision,
+  now: string,
+): void {
+  prepareCached(PAYER_UPSERT_SQL).run({
+    org: orgId,
+    payer: payerId,
+    enc: encryptJson({ firstName: id.first, lastName: id.last, email: id.email, phone: id.phone } as DonorPII),
+    nameHash: id.identity.bucket,
+    exportNameHash: id.identity.name,
+    emailHash: id.identity.email,
+    phoneHash: id.identity.phone,
+    yourId: id.yourId || null,
+    personId: d.personId,
+    status: d.status,
+    source: d.source,
+    candidates: d.candidates && d.candidates.length ? JSON.stringify(d.candidates) : null,
+    now,
+  });
+}
+
+/** Every gift of one giver, without the un-indexable
+ *  `COALESCE(payer_id, 'tx:' || transaction_id)`: a real payer id uses
+ *  pushpay_tx_payer, and a 'tx:' key is one gift, found by its primary key. */
+function stampPayerGifts(orgId: number, payerId: string, personId: string | null, source: PayerMatchSource): number {
+  const tx = payerId.startsWith("tx:") ? payerId.slice(3) : null;
+  const sql = tx
+    ? `UPDATE pushpay_transactions SET person_id = @person, match_source = @source
+        WHERE org_id = @org AND transaction_id = @tx AND payer_id IS NULL
+          AND (person_id IS NOT @person OR match_source IS NOT @source)`
+    : `UPDATE pushpay_transactions SET person_id = @person, match_source = @source
+        WHERE org_id = @org AND payer_id = @payer
+          AND (person_id IS NOT @person OR match_source IS NOT @source)`;
+  return prepareCached(sql).run({ org: orgId, payer: payerId, tx, person: personId, source }).changes;
+}
+
+/** How many of one giver's gifts point at somebody OTHER than `personId`
+ *  (including nobody, when `personId` is a person, and somebody, when it is
+ *  null). Asked immediately before a restamp, so it is the exact number of
+ *  gifts that restamp will move — `changes` from the UPDATE itself also counts
+ *  a row whose person is unchanged and whose match_source is being corrected. */
+function countPayerGiftsNotOn(orgId: number, payerId: string, personId: string | null): number {
+  const tx = payerId.startsWith("tx:") ? payerId.slice(3) : null;
+  const sql = tx
+    ? `SELECT COUNT(*) AS n FROM pushpay_transactions
+        WHERE org_id = @org AND transaction_id = @tx AND payer_id IS NULL AND person_id IS NOT @person`
+    : `SELECT COUNT(*) AS n FROM pushpay_transactions
+        WHERE org_id = @org AND payer_id = @payer AND person_id IS NOT @person`;
+  return (prepareCached(sql).get({ org: orgId, payer: payerId, tx, person: personId }) as { n: number }).n;
+}
+
+/** Read a stored profile's identity back out of `enc`. */
+function payerIdentityOf(enc: string | null): { first: string; last: string; email: string; phone: string; identity: DonorIdentity } {
+  const p = decryptJson<DonorPII>(enc ?? null);
+  const first = p?.firstName ?? "";
+  const last = p?.lastName ?? "";
+  const email = p?.email ?? "";
+  const phone = p?.phone ?? "";
+  return { first, last, email, phone, identity: donorIdentity(first, last, email, phone) };
+}
+
+/** Resolve a giver automatically: "Your ID" first, because it IS the PCO
+ *  person id and so beats any guess, then decideMatch on the name, email and
+ *  phone under Dan's rules (name agreement mandatory with nickname variants,
+ *  inactive not disqualifying, duplicate PCO records interchangeable, anything
+ *  genuinely ambiguous goes to review with its candidates).
+ *
+ *  This is what Unassign and Re-match fall back to. It does not consult the
+ *  All Donors hand matches: that step only ever applied at import time, needs
+ *  the whole file to weigh a donor against, and pushpay_donors is empty. */
+function resolvePayerAutomatically(
+  id: { first: string; last: string; identity: DonorIdentity; yourId: string },
+  ix: MatchIndexes,
+  knownPerson: Set<string>,
+): PayerDecision {
+  if (id.yourId && knownPerson.has(id.yourId)) {
+    return { personId: id.yourId, status: "matched", source: "your_id", candidates: null };
+  }
+  const dec = id.first || id.last
+    ? decideMatch(id.first, id.last, id.identity.email, id.identity.phone, ix)
+    : { personId: null, status: "unmatched", candidates: null as string[] | null };
+  const candidates = dec.candidates && dec.candidates.length ? dec.candidates : null;
+  if (dec.personId) return { personId: dec.personId, status: "matched", source: "donor_match", candidates };
+  return { personId: null, status: candidates ? "ambiguous" : "unmatched", source: "unmatched", candidates };
+}
+
+/** A hand match is never overwritten — that is the whole point of storing it
+ *  against a stable id. The one exception is a hand match naming a person who
+ *  has since left pco_people: it cannot be honoured, and leaving it would put
+ *  the profile and its gifts on a person the app no longer has, so the giver
+ *  falls back to automatic matching. (pco_people keeps people PCO merged away,
+ *  and the junk filter spares anyone this table names, so this should not
+ *  happen.) */
+function applyStoredHandMatch(
+  stored: StoredPayerDecision | undefined,
+  auto: PayerDecision,
+  knownPerson: Set<string>,
+): PayerDecision {
+  if (!stored || stored.status !== "manual" || !stored.personId) return auto;
+  if (!knownPerson.has(stored.personId)) return auto;
+  return {
+    personId: stored.personId,
+    status: "manual",
+    source: "payer_manual",
+    candidates: stored.candidates ?? auto.candidates,
+  };
+}
+
 export interface TransactionImportResult {
   total: number;
   inserted: number;
   byYourId: number;
-  /** A payer with no usable Your ID who is a donor matched by hand on the All
+  /** Gifts placed by a hand match on the giver's own PushPay profile
+   *  (match_source 'payer_manual'). Keyed by Payer ID, so the decision is
+   *  recognised outright rather than guessed at (0100). */
+  byPayerManual: number;
+  /** A giver with no usable Your ID who is a donor matched by hand on the All
    *  Donors list (match_source 'donor_manual'). */
   byDonorManual: number;
   byDonorMatch: number;
   unmatched: number;
   firstDate: string | null;
   lastDate: string | null;
+  /** Givers in the file whose identity this import stored (0100): every payer
+   *  it saw. The review queue can only list a giver it has a name for. */
+  payersStored: number;
+  /** Of those, the ones still waiting for a person — what the queue will show. */
+  payersToPlace: number;
+  /** Gifts the file did NOT contain whose person changed anyway, because the
+   *  giver they belong to resolved differently this time. Reported rather than
+   *  done silently: an import can move — or drop — giving from windows nobody
+   *  was looking at. `earlierGiftsUnlinked` is the direction that loses a link. */
+  earlierGiftsRelinked: number;
+  earlierGiftsUnlinked: number;
 }
 
 /** Does this CSV look like the Transactions export rather than All Donors? */
@@ -1069,36 +1365,59 @@ export function isTransactionsExport(csvText: string): boolean {
 
 /** Import the PushPay Transactions export — one row per gift.
  *
- *  Person resolution, in order:
- *    1. "Your ID" is the church's own id on the payer record, and it IS the PCO
- *       person id: 1,113 of 1,140 distinct values in the September 2026 export
- *       resolve against pco_people. That is a direct link and beats name
- *       matching, so it is tried first.
- *    2. Otherwise, a donor someone matched by hand on the All Donors list, when
- *       the payer is that same donor by the rule a re-upload uses to carry
+ *  Resolution happens ONCE PER GIVER, keyed by PushPay's Payer ID, and every
+ *  one of that giver's gifts takes the answer. The order:
+ *    1. A hand match already stored against that Payer ID (0100). A human
+ *       decision is never overwritten, and because the Payer ID is stable it
+ *       survives every future upload with no guessing at all — unlike the All
+ *       Donors list, which had to recognise a donor again from a name, an
+ *       email and a phone and sent them back to review when it could not.
+ *       match_source 'payer_manual'.
+ *    2. "Your ID" is the church's own id on the giver's PushPay record, and it
+ *       IS the PCO person id: 1,113 of 1,140 distinct values in the September
+ *       2026 export resolve against pco_people. A direct link beats a guess.
+ *    3. Otherwise, a donor someone matched by hand on the All Donors list, when
+ *       the giver is that same donor by the rule a re-upload uses to carry
  *       hand matches over (sameDonor / planHandMatches: the same name, Jr or
  *       Sr included, plus the same email or phone, or the name alone when
  *       neither has either and it is on one payer and one donor only), every
  *       hand match they could be names the same person, that person is still
- *       in pco_people, and nothing casts doubt on it: a payer whose email or
- *       phone differ from the donor's needs no other payer with that name
+ *       in pco_people, and nothing casts doubt on it: a giver whose email or
+ *       phone differ from the donor's needs no other giver with that name
  *       who could be the donor instead, and no other person with that name
  *       holding more of that email and phone. match_source 'donor_manual'.
- *    3. Otherwise the same name/email/phone matching the donor import uses
- *       (decideMatch): 'donor_match', or 'unmatched'.
+ *       (Nothing can reach this today: pushpay_donors is empty. It is kept so
+ *       the All Donors path still works if that export is ever loaded again.)
+ *    4. Otherwise the same name/email/phone matching the donor import uses
+ *       (decideMatch), under Dan's rules — name agreement mandatory with
+ *       nickname variants, inactive not disqualifying, duplicate PCO records
+ *       interchangeable, anything genuinely ambiguous left for a human with
+ *       its candidates: 'donor_match', or 'unmatched'/'ambiguous'.
+ *
+ *  THE IDENTITY IS KEPT. Every giver the file carries gets a pushpay_payers
+ *  row holding their name, email and phone encrypted, their match hashes, the
+ *  decision above and its candidates, so the review queue has something to
+ *  show and a person to show it about. The gifts themselves still store no
+ *  identity at all (0087).
  *
  *  Upsert rather than replace: the export is a window (the sample covers
  *  January to September 2026), so re-importing a later window must add to the
  *  history rather than delete everything outside it. Transaction ID is stable,
- *  so a gift seen twice updates in place. */
+ *  so a gift seen twice updates in place — and re-uploading a file already
+ *  loaded is therefore safe, which is exactly how an operator fills in
+ *  identities for gifts imported before this code existed. */
 export function importPushpayTransactions(
   orgId: number,
   fileName: string,
   csvText: string,
 ): TransactionImportResult {
-  const rows = parseCsv(csvText).filter((r) => r.some((c) => c.trim()));
+  let rows = parseCsv(csvText).filter((r) => r.some((c) => c.trim()));
   if (rows.length < 2) {
-    return { total: 0, inserted: 0, byYourId: 0, byDonorManual: 0, byDonorMatch: 0, unmatched: 0, firstDate: null, lastDate: null };
+    return {
+      total: 0, inserted: 0, byYourId: 0, byPayerManual: 0, byDonorManual: 0, byDonorMatch: 0,
+      unmatched: 0, firstDate: null, lastDate: null, payersStored: 0, payersToPlace: 0,
+      earlierGiftsRelinked: 0, earlierGiftsUnlinked: 0,
+    };
   }
   const header = rows[0].map((h) => h.trim().toLowerCase());
   const col = (...names: string[]) => {
@@ -1112,25 +1431,82 @@ export function importPushpayTransactions(
   if (iTx < 0 || iDate < 0) throw new Error("CSV is missing Transaction ID / Received On columns.");
 
   const db = getDb();
+
+  // ── What this file is allowed to re-decide ────────────────────────────────
+  //
+  // PushPay's export builder lets you choose the columns, and the import
+  // resolves a giver from the columns it finds: "Your ID" (the PCO person id
+  // the church put on the giver's PushPay record), then the name, email and
+  // phone. Every one of that giver's gifts then takes the answer — including
+  // gifts from windows this file does not contain, because the queue, the
+  // rollup and the Give lane have to agree about who a giver is.
+  //
+  // That is why a file's column set matters far beyond its own rows. A file
+  // that cannot identify anyone would not just import 1,000 unmatched gifts,
+  // it would UNLINK the whole history of every giver it lists. Measured on a
+  // copy of production: a September-only export with the "Your ID" column
+  // left out took gifts with no person from 2,948 to 13,862 and unlinked
+  // givers from 548 to 1,143, silently, in 1.1 seconds. So the two cases
+  // where the file cannot say who gave are refused before anything is read
+  // or written, with the export to run instead.
+  if (iYour < 0 && iF < 0 && iL < 0) {
+    throw new Error(
+      "That export has no Your ID column and no name columns, so it cannot say who gave — " +
+        "importing it would unlink the gifts already matched. Re-export the Transactions " +
+        "report from PushPay with Your ID, First Name and Last Name included.",
+    );
+  }
+  if (iYour < 0) {
+    const linked = (db
+      .prepare(`SELECT COUNT(*) AS n FROM pushpay_transactions WHERE org_id = ? AND match_source = 'your_id'`)
+      .get(orgId) as { n: number }).n;
+    if (linked > 0) {
+      throw new Error(
+        `That export has no Your ID column, and ${linked.toLocaleString()} gifts here are matched to a person by it — ` +
+          "importing this file would re-decide those givers from their names alone and unlink the ones it could not " +
+          "place. Re-export the Transactions report from PushPay with the Your ID column included.",
+      );
+    }
+  }
+
   const ix = buildMatchIndexes(orgId);
   const knownPerson = knownPeople(orgId);
 
   const out: TransactionImportResult = {
-    total: 0, inserted: 0, byYourId: 0, byDonorManual: 0, byDonorMatch: 0, unmatched: 0, firstDate: null, lastDate: null,
+    total: 0, inserted: 0, byYourId: 0, byPayerManual: 0, byDonorManual: 0, byDonorMatch: 0,
+    unmatched: 0, firstDate: null, lastDate: null, payersStored: 0, payersToPlace: 0,
+    earlierGiftsRelinked: 0, earlierGiftsUnlinked: 0,
   };
-  // Payer -> person decided once per payer, not once per gift: a donor with 40
-  // gifts should cost one matching decision, and every one of their rows must
-  // land on the same person. A payer is known by the details on their first gift.
-  const payers = new Map<string, { yourId: string; first: string; last: string; identity: DonorIdentity }>();
+  // Giver -> person decided once per PAYER ID, not once per gift: a giver with
+  // 40 gifts should cost one matching decision, and every one of their rows
+  // must land on the same person. A giver is known by the details on their
+  // first gift in the file — PushPay writes one name and one email per payer.
+  const payers = new Map<string, {
+    yourId: string; first: string; last: string; email: string; phone: string; identity: DonorIdentity;
+  }>();
   const gifts: Array<{
     txId: string; date: string; status: string | null; source: string | null;
     payer: string | null; payerKey: string; fundName: string | null; fundCode: string | null;
   }> = [];
 
-  for (const r of rows.slice(1)) {
+  // Rows whose "Received On" we cannot read, and the first such value, so the
+  // file can be refused by name rather than importing as an empty dataset.
+  let skippedNoDate = 0;
+  let unreadableDate: string | null = null;
+
+  for (let ri = 1; ri < rows.length; ri++) {
+    const r = rows[ri];
     const txId = (r[iTx] ?? "").trim();
     const date = parseDate(r[iDate] ?? "");
-    if (!txId || !date) continue;
+    if (!txId) continue;
+    if (!date) {
+      // Keep the unreadable value to name it in the error below: a file whose
+      // dates we cannot read must fail loudly, not import as an empty dataset
+      // and reset the "last import" card to zeros.
+      if (unreadableDate === null) unreadableDate = (r[iDate] ?? "").trim();
+      skippedNoDate++;
+      continue;
+    }
     out.total++;
     if (!out.firstDate || date < out.firstDate) out.firstDate = date;
     if (!out.lastDate || date > out.lastDate) out.lastDate = date;
@@ -1144,7 +1520,7 @@ export function importPushpayTransactions(
       const phone = iP >= 0 ? (r[iP] ?? "").trim() : "";
       payers.set(payerKey, {
         yourId: iYour >= 0 ? (r[iYour] ?? "").trim() : "",
-        first, last, identity: donorIdentity(first, last, email, phone),
+        first, last, email, phone, identity: donorIdentity(first, last, email, phone),
       });
     }
     gifts.push({
@@ -1155,6 +1531,40 @@ export function importPushpayTransactions(
       fundName: iFundName >= 0 ? (r[iFundName] ?? "").trim() || null : null,
       fundCode: iFundCode >= 0 ? (r[iFundCode] ?? "").trim() || null : null,
     });
+  }
+
+  // A Transactions file we cannot read a single date from is a format we do not
+  // understand, not an empty export: PushPay writes "31-Aug-26" on one export
+  // and "9/16/2026" on another. Refuse it, naming the value, instead of
+  // recording a 0-gift dataset and blanking the last-import card.
+  if (out.total === 0 && skippedNoDate > 0) {
+    throw new Error(
+      `Could not read any gift date in this file (${skippedNoDate.toLocaleString()} rows, first value ${JSON.stringify(unreadableDate)}). ` +
+        `Expected a date like 9/16/2026 or 16-Sep-26. Nothing was imported.`,
+    );
+  }
+
+  // The parsed cells are now in `payers` and `gifts`; on the real export that
+  // is 16,574 rows of 19 strings kept alive for no reason on a process capped
+  // at 150 MB. Let them go before the matching starts.
+  rows = [];
+
+  // A column this file leaves out must not erase what an earlier one supplied
+  // (see the refusals above: the two cases where nothing is left to go on are
+  // refused outright, and this is the same principle applied field by field).
+  // Only paid for when something really is missing.
+  if (iYour < 0 || (iF < 0 && iL < 0) || iE < 0 || iP < 0) {
+    const stored = readStoredPayerIdentities(orgId);
+    for (const [k, p] of payers) {
+      const st = stored.get(k);
+      if (!st) continue;
+      const was = payerIdentityOf(st.enc);
+      if (iYour < 0 && st.yourId) p.yourId = st.yourId;
+      if (iF < 0 && iL < 0) { p.first = was.first; p.last = was.last; }
+      if (iE < 0 && was.email) p.email = was.email;
+      if (iP < 0 && was.phone) p.phone = was.phone;
+      p.identity = donorIdentity(p.first, p.last, p.email, p.phone);
+    }
   }
 
   // Hand matches on the All Donors list, recognised by the rule a re-upload
@@ -1173,29 +1583,33 @@ export function importPushpayTransactions(
       },
     },
   );
-  const decided = new Map<string, { personId: string | null; how: string }>();
+  // The automatic answer for every giver, decided outside the transaction
+  // (decideMatch walks the match indexes, and the write lock should not be
+  // held for that). A stored hand match overrides it inside the transaction,
+  // where it is read — so a match someone makes while the file is being
+  // matched is not lost between the read and the write.
+  const auto = new Map<string, PayerDecision>();
   payerKeys.forEach((k, i) => {
     const p = payers.get(k)!;
     const handMatch = hand.outcome[i];
     if (p.yourId && knownPerson.has(p.yourId)) {
-      decided.set(k, { personId: p.yourId, how: "your_id" });
+      auto.set(k, { personId: p.yourId, status: "matched", source: "your_id", candidates: null });
     } else if (handMatch?.kind === "keep") {
-      decided.set(k, { personId: handMatch.personId, how: "donor_manual" });
+      // Carried from the All Donors list: a human decision too, so it is
+      // stored as 'manual' and nothing automatic overwrites it later either.
+      auto.set(k, { personId: handMatch.personId, status: "manual", source: "donor_manual", candidates: null });
     } else {
-      const dec = p.first || p.last
-        ? decideMatch(p.first, p.last, p.identity.email, p.identity.phone, ix)
-        : { personId: null, status: "unmatched" as const, candidates: null };
-      decided.set(k, { personId: dec.personId, how: dec.personId ? "donor_match" : "unmatched" });
+      const dec = resolvePayerAutomatically(p, ix, knownPerson);
+      // A donor the All Donors carry could not place still names the people it
+      // was torn between: offer them in review alongside the matcher's own.
+      const review = handMatch?.kind === "review" ? handMatch.personIds : [];
+      const candidates = [...new Set([...review, ...(dec.candidates ?? [])])];
+      auto.set(k, {
+        ...dec,
+        status: dec.personId ? dec.status : candidates.length ? "ambiguous" : "unmatched",
+        candidates: candidates.length ? candidates : null,
+      });
     }
-  });
-
-  const parsed = gifts.map((g) => {
-    const d = decided.get(g.payerKey)!;
-    if (d.how === "your_id") out.byYourId++;
-    else if (d.how === "donor_manual") out.byDonorManual++;
-    else if (d.how === "donor_match") out.byDonorMatch++;
-    else out.unmatched++;
-    return { ...g, personId: d.personId, how: d.how };
   });
 
   // One transaction: the upload's record, its gifts, and the rollup rebuilt
@@ -1205,10 +1619,36 @@ export function importPushpayTransactions(
   const run = db.transaction(() => {
     const countRows = db.prepare(`SELECT COUNT(*) AS n FROM pushpay_transactions WHERE org_id = ?`);
     const before = (countRows.get(orgId) as { n: number }).n;
-    const matched = out.byYourId + out.byDonorManual + out.byDonorMatch;
+
+    // A hand match stored against the Payer ID wins over everything above.
+    // Read here, inside the write lock, so one made while the file was being
+    // matched is not lost between the read and the write.
+    const stored = readPayerDecisions(orgId);
+    const decided = new Map<string, PayerDecision>();
+    for (const k of payerKeys) {
+      decided.set(k, applyStoredHandMatch(stored.get(k), auto.get(k)!, knownPerson));
+    }
+
+    // Counted per GIFT, the way the upload history has always counted, but off
+    // the giver's one decision. Counted in place rather than into a second
+    // array of 16,574 objects — the numbers are needed before the upload row
+    // is written, the rows themselves not until after it.
+    for (const g of gifts) {
+      const d = decided.get(g.payerKey)!;
+      if (d.source === "your_id") out.byYourId++;
+      else if (d.source === "payer_manual") out.byPayerManual++;
+      else if (d.source === "donor_manual") out.byDonorManual++;
+      else if (d.source === "donor_match") out.byDonorMatch++;
+      else out.unmatched++;
+    }
+    out.payersStored = payerKeys.length;
+    out.payersToPlace = payerKeys.filter((k) => decided.get(k)!.personId === null).length;
+
+    const matched = out.byYourId + out.byPayerManual + out.byDonorManual + out.byDonorMatch;
     const uploadId = recordUpload(orgId, "transactions", fileName, {
       total: out.total, inserted: 0, matched, ambiguous: 0, unmatched: out.unmatched,
-      byYourId: out.byYourId, byDonorManual: out.byDonorManual, byDonorMatch: out.byDonorMatch,
+      byYourId: out.byYourId, byPayerManual: out.byPayerManual,
+      byDonorManual: out.byDonorManual, byDonorMatch: out.byDonorMatch,
       firstGiftOn: out.firstDate, lastGiftOn: out.lastDate,
     });
     // first_upload_id is set only on insert, so it keeps naming the upload
@@ -1232,9 +1672,34 @@ export function importPushpayTransactions(
     const link = db.prepare(
       `INSERT OR IGNORE INTO pushpay_transaction_uploads (org_id, transaction_id, upload_id) VALUES (?,?,?)`,
     );
-    for (const p of parsed) {
-      ins.run(orgId, p.txId, p.date, p.status, p.source, p.payer, p.personId, p.how, p.fundName, p.fundCode, uploadId, uploadId);
-      link.run(orgId, p.txId, uploadId);
+    for (const g of gifts) {
+      const d = decided.get(g.payerKey)!;
+      ins.run(orgId, g.txId, g.date, g.status, g.source, g.payer, d.personId, d.source, g.fundName, g.fundCode, uploadId, uploadId);
+      link.run(orgId, g.txId, uploadId);
+    }
+    // The givers themselves: identity, hashes and the decision, one row per
+    // Payer ID. This is the only place a Transactions import stores a name.
+    const now = new Date().toISOString();
+    for (const k of payerKeys) upsertPayer(orgId, k, payers.get(k)!, decided.get(k)!, now);
+    // A giver's gifts from EARLIER windows are not in this file, so the insert
+    // above never touched them. Restamp them too, or the rollup — which takes
+    // the person from the payer's most recently imported gift that names
+    // anyone — could keep showing a person this import no longer resolves to,
+    // and the review queue and the Give lane would disagree. The statement
+    // skips rows that already agree, so the gifts just written cost nothing.
+    //
+    // Every row it changes is a gift this file did NOT carry: the gifts just
+    // written already hold the giver's answer, and the statement skips rows
+    // that agree. So its count is exactly "giving from earlier windows that
+    // moved", which the import result reports rather than leaving silent.
+    for (const k of payerKeys) {
+      const d = decided.get(k)!;
+      const moving = countPayerGiftsNotOn(orgId, k, d.personId);
+      stampPayerGifts(orgId, k, d.personId, d.source);
+      if (moving > 0) {
+        if (d.personId === null) out.earlierGiftsUnlinked += moving;
+        else out.earlierGiftsRelinked += moving;
+      }
     }
     // How many were NEW. An INSERT ... ON CONFLICT DO UPDATE reports one
     // change whether it inserted or updated, so the statement's own result
@@ -1254,38 +1719,6 @@ export function importPushpayTransactions(
   });
   run.immediate();
   return out;
-}
-
-export interface RematchResult extends PushpayImportResult { changed: number }
-
-/** Re-run matching on the already-imported donors (no re-upload) with the
- *  current rules + latest PCO people. Human assignments (match_status =
- *  'manual') are left untouched. Returns the new counts + how many rows moved. */
-export function rematchDonors(orgId: number): RematchResult {
-  const db = getDb();
-  const ix = buildMatchIndexes(orgId);
-  const rows = db.prepare(`SELECT donor_key, enc, match_status, person_id FROM pushpay_donors WHERE org_id = ?`).all(orgId) as Array<{ donor_key: string; enc: string; match_status: string; person_id: string | null }>;
-  const upd = db.prepare(`UPDATE pushpay_donors SET person_id = ?, match_status = ?, candidate_ids = ? WHERE org_id = ? AND donor_key = ?`);
-  let changed = 0;
-  const run = db.transaction(() => {
-    for (const r of rows) {
-      if (r.match_status === "manual") continue; // never clobber a human assignment
-      const d = decryptJson<DonorPII>(r.enc);
-      const eh = d?.email ? hmac(d.email.trim().toLowerCase()) : null;
-      const np = normPhone(d?.phone ?? null);
-      const phh = np ? hmac(np) : null;
-      const dec = decideMatch(d?.firstName ?? "", d?.lastName ?? "", eh, phh, ix);
-      if (dec.status !== r.match_status || dec.personId !== r.person_id) changed++;
-      upd.run(dec.personId, dec.status, dec.candidates ? JSON.stringify(dec.candidates) : null, orgId, r.donor_key);
-    }
-  });
-  run();
-  const c = countDonorsByStatus(orgId);
-  const matched = c.matched + c.manual;
-  const total = matched + c.ambiguous + c.unmatched;
-  db.prepare(`UPDATE pushpay_import SET matched = ?, ambiguous = ?, unmatched = ? WHERE org_id = ?`)
-    .run(matched, c.ambiguous, c.unmatched, orgId);
-  return { total, matched, ambiguous: c.ambiguous, unmatched: c.unmatched, changed };
 }
 
 export interface PushpayImportMeta {
@@ -1309,13 +1742,6 @@ export function getPushpayImport(orgId: number): PushpayImportMeta | null {
   const r = getDb().prepare(`SELECT file_name, total, matched, ambiguous, unmatched, imported_at, kind FROM pushpay_import WHERE org_id = ?`).get(orgId) as
     | { file_name: string | null; total: number; matched: number; ambiguous: number; unmatched: number; imported_at: string; kind: string | null } | undefined;
   return r ? { fileName: r.file_name, total: r.total, matched: r.matched, ambiguous: r.ambiguous, unmatched: r.unmatched, importedAt: r.imported_at, kind: r.kind } : null;
-}
-
-export interface DonorRow {
-  donorKey: string; fullName: string; email: string; phone: string;
-  stage: string | null; channel: string | null; lastGiftDate: string | null; fund: string | null;
-  status: string; personId: string | null; assignedName: string | null;
-  candidates: Array<{ pcoId: string; name: string; sharesEmail: boolean; sharesPhone: boolean; active: boolean }>;
 }
 
 /** Per-candidate context for the reconcile UI — since PCO email/phone are only
@@ -1354,11 +1780,6 @@ function personLabel(first: string | null, last: string | null, enc: string | nu
   return [f, l].filter(Boolean).join(" ").trim() || `#${pcoId}`;
 }
 
-const donorName = (enc: string): { fullName: string; email: string; phone: string } => {
-  const p = decryptJson<DonorPII>(enc);
-  return { fullName: [p?.firstName, p?.lastName].filter(Boolean).join(" ") || "—", email: p?.email ?? "", phone: p?.phone ?? "" };
-};
-
 /** Person names, for resolving ambiguous candidates. Names live in plaintext
  *  columns; enc_pii is only a fallback for rows predating that move — reading
  *  enc_pii alone renders anyone already on the plaintext columns as a bare
@@ -1371,34 +1792,6 @@ function personNames(orgId: number, ids: string[]): Map<string, string> {
     out.set(r.pco_id, personLabel(r.first_name, r.last_name, r.enc_pii, r.pco_id));
   }
   return out;
-}
-
-/** Donors in a match state (for the audit reconciliation UI). */
-export function listDonorsByStatus(orgId: number, status: string, limit = 500): DonorRow[] {
-  const rows = getDb().prepare(
-    `SELECT donor_key, enc, donor_stage, giving_channel, last_gift_on, last_gift_fund, match_status, person_id, candidate_ids
-       FROM pushpay_donors WHERE org_id = ? AND match_status = ? ORDER BY donor_key LIMIT ?`,
-  ).all(orgId, status, limit) as Array<{ donor_key: string; enc: string; donor_stage: string | null; giving_channel: string | null; last_gift_on: string | null; last_gift_fund: string | null; match_status: string; person_id: string | null; candidate_ids: string | null }>;
-  const wanted = Array.from(new Set([
-    ...rows.flatMap((r) => (r.candidate_ids ? (JSON.parse(r.candidate_ids) as string[]) : [])),
-    ...rows.map((r) => r.person_id).filter((x): x is string => !!x),
-  ]));
-  const names = personNames(orgId, wanted);
-  const ctx = candidateContext(orgId, wanted);
-  return rows.map((r) => {
-    const n = donorName(r.enc);
-    const deh = n.email ? hmac(n.email.trim().toLowerCase()) : null;
-    const np = normPhone(n.phone);
-    const dph = np ? hmac(np) : null;
-    const cand = (r.candidate_ids ? (JSON.parse(r.candidate_ids) as string[]) : []).map((id) => ({
-      pcoId: id,
-      name: names.get(id) ?? `#${id}`,
-      sharesEmail: !!deh && (ctx.emails.get(id)?.has(deh) ?? false),
-      sharesPhone: !!dph && (ctx.phones.get(id)?.has(dph) ?? false),
-      active: ctx.active.has(id),
-    }));
-    return { donorKey: r.donor_key, ...n, stage: r.donor_stage, channel: r.giving_channel, lastGiftDate: r.last_gift_on, fund: r.last_gift_fund, status: r.match_status, personId: r.person_id, assignedName: r.person_id ? names.get(r.person_id) ?? `#${r.person_id}` : null, candidates: cand };
-  });
 }
 
 /** Distinct people tied to at least one imported gift — the "has given"
@@ -1415,24 +1808,355 @@ export function countGivers(orgId: number): number {
   return r?.n ?? 0;
 }
 
-/** Live counts per match_status (reflects manual reconciliation, unlike the
- *  import snapshot). Cheap GROUP BY, no decryption. */
-export function countDonorsByStatus(orgId: number): { matched: number; manual: number; ambiguous: number; unmatched: number } {
-  const rows = getDb()
-    .prepare(`SELECT match_status, COUNT(*) AS n FROM pushpay_donors WHERE org_id = ? GROUP BY match_status`)
-    .all(orgId) as Array<{ match_status: string; n: number }>;
+// ── The review queue ────────────────────────────────────────────────────────
+//
+// What /audit/pushpay reads and writes. It works on pushpay_payers, the giver
+// profiles the import stores, and joins each one to its giving in the loaded
+// window from pushpay_payer_summary — so a row shows who the giver is AND what
+// placing them would attach to a person.
+//
+// THE COUNTS AGREE WITH THE GIVING PAGE BY CONSTRUCTION. A profile holds a
+// person or it does not: 'matched' and 'manual' hold one, 'ambiguous' and
+// 'unmatched' do not. So needs-review plus unmatched is exactly the giving
+// page's "Unlinked givers" — for every giver an import has actually seen.
+// getPayerIdentityCoverage is what says whether that qualifier bites.
+
+/** How much of the gift data has a giver profile behind it. Identity only
+ *  exists for givers an import running this code has seen, so before the next
+ *  upload the queue can be empty while the giving page counts hundreds
+ *  unlinked. The page says so rather than showing an empty list that looks
+ *  like "nothing to do". */
+export interface PayerIdentityCoverage {
+  /** Giver profiles behind the loaded gifts (pushpay_payer_summary). */
+  payers: number;
+  /** Of those, how many have a NAME stored and so can be listed. A profile
+   *  with a row but no name (an export that carried Your ID and no name
+   *  columns) is not listable and must not count here, or the honest empty
+   *  state below would be replaced by a list of nameless rows. */
+  withIdentity: number;
+  /** Profiles with no person attached — the giving page's "Unlinked givers". */
+  unlinked: number;
+  /** Of those, the ones the queue can actually show. The rest need a re-upload. */
+  unlinkedWithIdentity: number;
+}
+
+export function getPayerIdentityCoverage(orgId: number): PayerIdentityCoverage {
+  const r = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS payers,
+              COALESCE(SUM(CASE WHEN p.name_hash IS NULL THEN 0 ELSE 1 END), 0) AS withIdentity,
+              COALESCE(SUM(CASE WHEN s.person_id IS NULL THEN 1 ELSE 0 END), 0) AS unlinked,
+              COALESCE(SUM(CASE WHEN s.person_id IS NULL AND p.name_hash IS NOT NULL THEN 1 ELSE 0 END), 0) AS unlinkedWithIdentity
+         FROM pushpay_payer_summary s
+         LEFT JOIN pushpay_payers p ON p.org_id = s.org_id AND p.payer_id = s.payer_id
+        WHERE s.org_id = ?`,
+    )
+    .get(orgId) as { payers: number; withIdentity: number; unlinked: number; unlinkedWithIdentity: number };
+  return r;
+}
+
+/** Live counts per match status, over the givers who still have gifts.
+ *
+ *  The join is what keeps the tabs honest against the giving page. A profile
+ *  can outlive its gifts — a gift re-supplied WITH a Payer ID leaves the
+ *  'tx:<id>' profile it used to key behind, and removing a dataset can delete
+ *  a giver's last gift — and counting those would put a number on the tab that
+ *  the "Unlinked givers" stat, which counts the gift rollup, cannot match.
+ *  There is nothing to place on such a giver anyway: no gift would move.
+ *  listPayersByStatus joins the same way, so a tab's count is exactly what it
+ *  lists.
+ *
+ *  `name_hash IS NOT NULL` for the same reason. A profile with no name — an
+ *  export that carried Your ID and no name columns — cannot be shown to
+ *  anyone as a row they could judge, so it is not counted as work either.
+ *  getPayerIdentityCoverage is what reports those separately, and the page
+ *  tells the reader how many of the giving page's total are in that state. */
+export function countPayersByStatus(orgId: number): {
+  matched: number;
+  manual: number;
+  ambiguous: number;
+  unmatched: number;
+} {
   const out = { matched: 0, manual: 0, ambiguous: 0, unmatched: 0 };
-  for (const r of rows) if (r.match_status in out) (out as Record<string, number>)[r.match_status] = r.n;
+  for (const r of getDb()
+    .prepare(
+      `SELECT p.match_status, COUNT(*) AS n
+         FROM pushpay_payers p
+         JOIN pushpay_payer_summary s ON s.org_id = p.org_id AND s.payer_id = p.payer_id
+        WHERE p.org_id = ? AND p.name_hash IS NOT NULL GROUP BY p.match_status`,
+    )
+    .all(orgId) as Array<{ match_status: string; n: number }>) {
+    if (r.match_status in out) (out as Record<string, number>)[r.match_status] = r.n;
+  }
   return out;
 }
 
-export function assignDonor(orgId: number, donorKey: string, personId: string): void {
-  getDb().prepare(`UPDATE pushpay_donors SET person_id = ?, match_status = 'manual' WHERE org_id = ? AND donor_key = ?`).run(personId, orgId, donorKey);
+export interface PayerReviewRow {
+  payerId: string;
+  /** The giver as their PushPay profile spells them, decrypted from `enc`. */
+  fullName: string;
+  email: string;
+  phone: string;
+  status: string;
+  matchSource: string | null;
+  personId: string | null;
+  assignedName: string | null;
+  /** Their giving in the loaded window. Counts of gifts — never an amount. */
+  gifts: number;
+  firstGiftOn: string | null;
+  lastGiftOn: string | null;
+  /** Recurring schedule / Not on a schedule / Lapsed — our words (giving-sql). */
+  pattern: string | null;
+  /** Online / Check or cash / Both. */
+  method: string | null;
+  /** The funds they have given to, comma-separated. */
+  funds: string | null;
+  /** The imports that first and last carried this giver. */
+  firstSeenAt: string;
+  lastSeenAt: string;
+  candidates: Array<{ pcoId: string; name: string; sharesEmail: boolean; sharesPhone: boolean; active: boolean }>;
 }
 
-/** Clear a match → back to ambiguous (if it had candidates) or unmatched. */
-export function clearDonorMatch(orgId: number, donorKey: string): void {
-  getDb().prepare(
-    `UPDATE pushpay_donors SET person_id = NULL, match_status = CASE WHEN candidate_ids IS NOT NULL THEN 'ambiguous' ELSE 'unmatched' END WHERE org_id = ? AND donor_key = ?`,
-  ).run(orgId, donorKey);
+/** Givers in one match state, biggest givers first — placing someone with 40
+ *  gifts is worth more than placing someone with one.
+ *
+ *  Joined to the gift rollup, not left-joined: a profile whose gifts have all
+ *  gone is not work — placing it would move nothing — and counting it would
+ *  break the agreement between these tabs and the giving page's stat.
+ *
+ *  `method` is read per giver with the payer id, never with
+ *  `COALESCE(payer_id, 'tx:' || transaction_id)`: that expression cannot use
+ *  pushpay_tx_payer, and 500 scans of 16k gifts is not a page render. A 'tx:'
+ *  key is one gift, found by the primary key. */
+export function listPayersByStatus(orgId: number, status: string, limit = 500): PayerReviewRow[] {
+  const db = getDb();
+  const method = (where: string) =>
+    `(SELECT ${givingMethodCase(
+      `MAX(CASE WHEN t.source = 'Batch Entry' THEN 1 ELSE 0 END)`,
+      `MAX(CASE WHEN t.source IS NULL OR t.source <> 'Batch Entry' THEN 1 ELSE 0 END)`,
+    )} FROM pushpay_transactions t WHERE t.org_id = p.org_id AND ${where})`;
+  const rows = db
+    .prepare(
+      `SELECT p.payer_id, p.enc, p.person_id, p.match_status, p.match_source, p.candidate_ids,
+              p.first_seen_at, p.last_seen_at,
+              s.gifts, s.recurring_gifts, s.first_gift_on, s.last_gift_on, s.funds,
+              CASE WHEN p.payer_id LIKE 'tx:%'
+                   THEN ${method(`t.transaction_id = substr(p.payer_id, 4) AND t.payer_id IS NULL`)}
+                   ELSE ${method(`t.payer_id = p.payer_id`)} END AS method
+         FROM pushpay_payers p
+         JOIN pushpay_payer_summary s ON s.org_id = p.org_id AND s.payer_id = p.payer_id
+        WHERE p.org_id = ? AND p.match_status = ? AND p.name_hash IS NOT NULL
+        ORDER BY s.gifts DESC, s.last_gift_on DESC, p.payer_id
+        LIMIT ?`,
+    )
+    .all(orgId, status, limit) as Array<{
+    payer_id: string;
+    enc: string | null;
+    person_id: string | null;
+    match_status: string;
+    match_source: string | null;
+    candidate_ids: string | null;
+    first_seen_at: string;
+    last_seen_at: string;
+    gifts: number | null;
+    recurring_gifts: number | null;
+    first_gift_on: string | null;
+    last_gift_on: string | null;
+    funds: string | null;
+    method: string | null;
+  }>;
+
+  const wanted = Array.from(
+    new Set([
+      ...rows.flatMap((r) => parseIds(r.candidate_ids) ?? []),
+      ...rows.map((r) => r.person_id).filter((x): x is string => !!x),
+    ]),
+  );
+  const names = personNames(orgId, wanted);
+  const ctx = candidateContext(orgId, wanted);
+  const cutoff = (db.prepare(`SELECT ${lapseCutoff("?")} AS cutoff`).get(orgId) as { cutoff: string | null }).cutoff;
+
+  return rows.map((r) => {
+    const id = payerIdentityOf(r.enc);
+    const cand = (parseIds(r.candidate_ids) ?? []).map((pid) => ({
+      pcoId: pid,
+      name: names.get(pid) ?? `#${pid}`,
+      // PCO emails and phones are stored only as one-way hashes, so we cannot
+      // show the values — but we can say whether a candidate holds the same
+      // hash as the giver, which is what makes a candidate obviously right.
+      sharesEmail: !!id.identity.email && (ctx.emails.get(pid)?.has(id.identity.email) ?? false),
+      sharesPhone: !!id.identity.phone && (ctx.phones.get(pid)?.has(id.identity.phone) ?? false),
+      active: ctx.active.has(pid),
+    }));
+    return {
+      payerId: r.payer_id,
+      fullName: [id.first, id.last].filter(Boolean).join(" ").trim() || "(no name in the export)",
+      email: id.email,
+      phone: id.phone,
+      status: r.match_status,
+      matchSource: r.match_source,
+      personId: r.person_id,
+      assignedName: r.person_id ? names.get(r.person_id) ?? `#${r.person_id}` : null,
+      gifts: r.gifts ?? 0,
+      firstGiftOn: r.first_gift_on,
+      lastGiftOn: r.last_gift_on,
+      pattern: r.gifts ? givingPattern(r.last_gift_on, r.recurring_gifts ?? 0, cutoff) : null,
+      method: r.method,
+      funds: fundsLabel(r.funds),
+      firstSeenAt: r.first_seen_at,
+      lastSeenAt: r.last_seen_at,
+      candidates: cand,
+    };
+  });
+}
+
+/** `pushpay_payer_summary.funds` is a sorted JSON array of fund names. */
+function fundsLabel(json: string | null): string | null {
+  const v = parseIds(json);
+  return v && v.length ? v.join(", ") : null;
+}
+
+/** Place a giver on a person by hand.
+ *
+ *  One transaction: the profile, every one of that giver's gifts, and the
+ *  rollups the giving page and the Give lane read. They cannot be left
+ *  disagreeing, and the page the operator returns to is right immediately.
+ *  IMMEDIATE because it reads the person and the profile before it writes. */
+export function assignPayer(orgId: number, payerId: string, personId: string): void {
+  const db = getDb();
+  db.transaction(() => {
+    const person = db
+      .prepare(`SELECT 1 AS ok FROM pco_people WHERE org_id = ? AND pco_id = ?`)
+      .get(orgId, personId) as { ok: number } | undefined;
+    if (!person) throw new Error("That person is no longer in Planning Center's people — pick another record.");
+    const r = db
+      .prepare(
+        `UPDATE pushpay_payers
+            SET person_id = ?, match_status = 'manual', match_source = 'payer_manual'
+          WHERE org_id = ? AND payer_id = ?`,
+      )
+      .run(personId, orgId, payerId);
+    if (r.changes === 0) {
+      throw new Error("That giver is not in the review queue any more — reload the page.");
+    }
+    stampPayerGifts(orgId, payerId, personId, "payer_manual");
+    refreshPushpayGiving(orgId);
+  }).immediate();
+}
+
+/** Hand a giver back to automatic matching: "Your ID" if their PushPay record
+ *  carries one that resolves, otherwise name / email / phone matching. So
+ *  Unassign is an undo of the hand match, not a blanket "nobody" — if the
+ *  export already said who they are, that is what comes back. Same
+ *  transaction, same rollup rebuild, so nothing is left half-changed. */
+export function clearPayerMatch(orgId: number, payerId: string): void {
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT enc, your_id FROM pushpay_payers WHERE org_id = ? AND payer_id = ?`)
+    .get(orgId, payerId) as { enc: string | null; your_id: string | null } | undefined;
+  if (!row) throw new Error("That giver is not in the review queue any more — reload the page.");
+  const id = { ...payerIdentityOf(row.enc), yourId: row.your_id ?? "" };
+
+  // "Your ID" needs one row, not the whole match index — and building that
+  // index reads every person, email and phone in the org on a process capped
+  // at 150 MB. Only pay for it when the name is the only thing left to go on.
+  const yourIdPerson =
+    id.yourId &&
+    (db.prepare(`SELECT 1 AS ok FROM pco_people WHERE org_id = ? AND pco_id = ?`).get(orgId, id.yourId) as
+      | { ok: number }
+      | undefined)
+      ? id.yourId
+      : null;
+  const decision: PayerDecision = yourIdPerson
+    ? { personId: yourIdPerson, status: "matched", source: "your_id", candidates: null }
+    : resolvePayerAutomatically(id, buildMatchIndexes(orgId), knownPeople(orgId));
+
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE pushpay_payers
+          SET person_id = ?, match_status = ?, match_source = ?, candidate_ids = ?
+        WHERE org_id = ? AND payer_id = ?`,
+    ).run(
+      decision.personId,
+      decision.status,
+      decision.source,
+      decision.candidates && decision.candidates.length ? JSON.stringify(decision.candidates) : null,
+      orgId,
+      payerId,
+    );
+    stampPayerGifts(orgId, payerId, decision.personId, decision.source);
+    refreshPushpayGiving(orgId);
+  }).immediate();
+}
+
+export interface PayerRematchResult {
+  total: number;
+  matched: number;
+  manual: number;
+  ambiguous: number;
+  unmatched: number;
+  /** Profiles whose person or status moved. */
+  changed: number;
+}
+
+/** Re-run matching over the stored giver profiles with the current rules and
+ *  the latest PCO people — no re-upload. Hand matches are left exactly as they
+ *  are, which is the whole reason they are stored against a stable id.
+ *
+ *  Gifts are restamped and the rollups rebuilt for every profile that moved,
+ *  in the same transaction, so nothing can be left describing a link that is
+ *  no longer there. */
+export function rematchPayers(orgId: number): PayerRematchResult {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT payer_id, enc, your_id, person_id, match_status
+         FROM pushpay_payers WHERE org_id = ? AND match_status <> 'manual'`,
+    )
+    .all(orgId) as Array<{
+    payer_id: string;
+    enc: string | null;
+    your_id: string | null;
+    person_id: string | null;
+    match_status: string;
+  }>;
+  const ix = buildMatchIndexes(orgId);
+  const known = knownPeople(orgId);
+  const decisions = rows.map((r) => ({
+    payerId: r.payer_id,
+    was: { personId: r.person_id, status: r.match_status },
+    now: resolvePayerAutomatically({ ...payerIdentityOf(r.enc), yourId: r.your_id ?? "" }, ix, known),
+  }));
+
+  let changed = 0;
+  db.transaction(() => {
+    const upd = db.prepare(
+      `UPDATE pushpay_payers
+          SET person_id = ?, match_status = ?, match_source = ?, candidate_ids = ?
+        WHERE org_id = ? AND payer_id = ?`,
+    );
+    for (const d of decisions) {
+      if (d.now.personId !== d.was.personId || d.now.status !== d.was.status) changed++;
+      upd.run(
+        d.now.personId,
+        d.now.status,
+        d.now.source,
+        d.now.candidates && d.now.candidates.length ? JSON.stringify(d.now.candidates) : null,
+        orgId,
+        d.payerId,
+      );
+      stampPayerGifts(orgId, d.payerId, d.now.personId, d.now.source);
+    }
+    refreshPushpayGiving(orgId);
+  }).immediate();
+
+  const c = countPayersByStatus(orgId);
+  return {
+    total: c.matched + c.manual + c.ambiguous + c.unmatched,
+    matched: c.matched,
+    manual: c.manual,
+    ambiguous: c.ambiguous,
+    unmatched: c.unmatched,
+    changed,
+  };
 }

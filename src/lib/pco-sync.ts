@@ -1093,8 +1093,9 @@ function refreshLastActivity(orgId: number) {
  *  human decision, and a giver is not junk). No sync can bring these back.
  *  (The first Ministry Impact Reports' leads and teams were here too, until
  *  0096 dropped those empty tables.) The first four tables also carry
- *  foreign keys to pco_people ON DELETE RESTRICT (0094), so deleting such a
- *  person would fail the whole pass rather than lose them. */
+ *  foreign keys to pco_people ON DELETE RESTRICT (0094), and so does
+ *  pushpay_payers (0100), so deleting such a person would fail the whole pass
+ *  rather than lose them. */
 const HAS_OWNED_DATA_SQL = `SELECT
      EXISTS (SELECT 1 FROM care_assignments WHERE org_id = @org AND person_id = @id)
   OR EXISTS (SELECT 1 FROM care_assignments WHERE org_id = @org AND shepherd_person_id = @id)
@@ -1104,6 +1105,7 @@ const HAS_OWNED_DATA_SQL = `SELECT
   OR EXISTS (SELECT 1 FROM shepherd_assignments WHERE org_id = @org AND target_kind = 'person' AND target_id = @id)
   OR EXISTS (SELECT 1 FROM org_wide_access WHERE org_id = @org AND person_id = @id)
   OR EXISTS (SELECT 1 FROM pushpay_donors WHERE org_id = @org AND person_id = @id)
+  OR EXISTS (SELECT 1 FROM pushpay_payers WHERE org_id = @org AND person_id = @id)
   OR EXISTS (SELECT 1 FROM pushpay_transactions WHERE org_id = @org AND person_id = @id) AS owned`;
 
 /** The person's own rows mirrored from PCO, the per-person rows computed from

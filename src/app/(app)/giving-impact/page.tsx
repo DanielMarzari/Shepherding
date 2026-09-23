@@ -523,7 +523,7 @@ export default async function GivingImpactPage() {
                 </p>
                 <p>
                   <span className="text-fg font-medium">Gifts are not people.</span> A distinct-giver count
-                  counts PushPay payers, and a household can hold two payer ids, so a weekly giver count runs a
+                  counts PushPay giver profiles, and a household can hold two, so a weekly giver count runs a
                   little above the number of households giving.
                 </p>
               </div>

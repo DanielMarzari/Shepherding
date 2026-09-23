@@ -24,8 +24,18 @@ export interface GiveLaneStats {
   lapsed: number;
   /** Givers whose FIRST gift in the window is in its last LAPSE_DAYS days. */
   firstSeen: number;
-  /** PushPay payer ids with no person behind them yet. */
+  /** PushPay giver profiles with no person behind them yet. A profile is not
+   *  a person: one household can hold two. */
   unlinkedPayers: number;
+  /** Of those, how many can actually be placed on /audit/pushpay — i.e. how
+   *  many an import has stored a name for. Identity is only kept from the
+   *  version of the import that added pushpay_payers (0100), so this can be 0
+   *  while unlinkedPayers is in the hundreds, and the card has to say so
+   *  rather than send someone to an empty queue. "Stored a name" is the test
+   *  the queue itself uses (name_hash), not merely "has a profile row": an
+   *  export can carry Your ID and no name columns, and a giver with no name
+   *  cannot be shown to anyone as a row they could judge. */
+  unlinkedReviewable: number;
   /** Gifts in the window. A count of gifts — never an amount. */
   gifts: number;
   /** First and last gift date the loaded export covers, or null before any
@@ -82,7 +92,11 @@ export function getGiveLaneStats(orgId: number): GiveLaneStats {
     .prepare(
       `SELECT s.gifts AS gifts, s.first_gift_on AS windowStart, s.last_gift_on AS windowEnd,
               (SELECT COUNT(*) FROM pushpay_payer_summary
-                WHERE org_id = s.org_id AND person_id IS NULL) AS unlinkedPayers
+                WHERE org_id = s.org_id AND person_id IS NULL) AS unlinkedPayers,
+              (SELECT COUNT(*) FROM pushpay_payer_summary u
+                 JOIN pushpay_payers p ON p.org_id = u.org_id AND p.payer_id = u.payer_id
+                WHERE u.org_id = s.org_id AND u.person_id IS NULL
+                  AND p.name_hash IS NOT NULL) AS unlinkedReviewable
          FROM pushpay_giving_snapshot s WHERE s.org_id = ?`,
     )
     .get(orgId) as
@@ -91,6 +105,7 @@ export function getGiveLaneStats(orgId: number): GiveLaneStats {
         windowStart: string | null;
         windowEnd: string | null;
         unlinkedPayers: number;
+        unlinkedReviewable: number;
       }
     | undefined;
   return {
@@ -99,6 +114,7 @@ export function getGiveLaneStats(orgId: number): GiveLaneStats {
     lapsed: r.lapsed ?? 0,
     firstSeen: r.firstSeen ?? 0,
     unlinkedPayers: w?.unlinkedPayers ?? 0,
+    unlinkedReviewable: w?.unlinkedReviewable ?? 0,
     gifts: w?.gifts ?? 0,
     windowStart: w?.windowStart ?? null,
     windowEnd: w?.windowEnd ?? null,

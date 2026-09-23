@@ -4,15 +4,15 @@ import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { searchPeopleAction } from "@/app/actions/search";
 import type { SearchHit } from "@/lib/people-read";
-import type { DonorRow } from "@/lib/pushpay-import";
+import type { PayerReviewRow } from "@/lib/pushpay-import";
 import {
-  assignDonorAction,
-  clearDonorMatchAction,
-  rematchDonorsAction,
+  assignPayerAction,
+  clearPayerMatchAction,
+  rematchPayersAction,
 } from "@/app/(app)/pushpay/actions";
 
-/** Re-run matching on the imported donors with the current rules + latest PCO
- *  data (incl. phone numbers). No re-upload; manual assignments are kept. */
+/** Re-run matching over the stored giver profiles with the current rules and
+ *  the latest PCO people. No re-upload; hand matches are kept. */
 export function RematchButton() {
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -21,125 +21,163 @@ export function RematchButton() {
       <button
         type="button"
         disabled={pending}
-        onClick={() => start(async () => { const r = await rematchDonorsAction(); setMsg(r.message); })}
+        onClick={() =>
+          start(async () => {
+            const r = await rematchPayersAction();
+            setMsg(r.message);
+          })
+        }
         className="text-xs px-3 py-1.5 rounded-lg border border-accent text-accent hover:bg-accent hover:text-bg disabled:opacity-50 cursor-pointer transition-colors"
       >
-        {pending ? "Re-matching…" : "Re-match with phone + latest data"}
+        {pending ? "Matching…" : "Match again with the latest PCO data"}
       </button>
       {msg && <span className="text-xs text-muted">{msg}</span>}
     </div>
   );
 }
 
-export function ReconcileList({
-  donors,
+export function ReviewList({
+  givers,
   status,
 }: {
-  donors: DonorRow[];
+  givers: PayerReviewRow[];
   status: string;
 }) {
-  if (donors.length === 0) {
+  if (givers.length === 0) {
     return (
       <div className="rounded-xl border border-border-soft px-5 py-10 text-center">
         <p className="text-sm text-muted">
           {status === "ambiguous"
-            ? "Nothing ambiguous to review — every multi-candidate donor has been assigned."
+            ? "Nothing to review — every giver whose details fitted more than one person has been placed."
             : status === "unmatched"
-              ? "No unmatched donors. Everyone in the export lined up with a person."
-              : "No donors here yet."}
+              ? "No unplaced givers. Everyone in the export lined up with a person."
+              : status === "matched"
+                ? "No giver has been matched automatically yet."
+                : "No giver has been placed by hand yet."}
         </p>
       </div>
     );
   }
   return (
     <ul className="space-y-3">
-      {donors.map((d) => (
-        <DonorCard key={d.donorKey} donor={d} />
+      {givers.map((g) => (
+        <GiverCard key={g.payerId} giver={g} />
       ))}
     </ul>
   );
 }
 
-function DonorCard({ donor }: { donor: DonorRow }) {
+function GiverCard({ giver }: { giver: PayerReviewRow }) {
   const [pending, start] = useTransition();
-  const [showPicker, setShowPicker] = useState(donor.status === "unmatched");
+  const [error, setError] = useState<string | null>(null);
+  const [showPicker, setShowPicker] = useState(giver.status === "unmatched");
 
   function assign(personId: string) {
     const fd = new FormData();
-    fd.set("donorKey", donor.donorKey);
+    fd.set("payerId", giver.payerId);
     fd.set("personId", personId);
-    start(() => assignDonorAction(fd));
+    start(async () => {
+      const r = await assignPayerAction(fd);
+      setError(r.ok ? null : r.message ?? "Could not place that giver.");
+    });
   }
   function clearMatch() {
     const fd = new FormData();
-    fd.set("donorKey", donor.donorKey);
-    start(() => clearDonorMatchAction(fd));
+    fd.set("payerId", giver.payerId);
+    start(async () => {
+      const r = await clearPayerMatchAction(fd);
+      setError(r.ok ? null : r.message ?? "Could not unassign that giver.");
+    });
   }
 
-  const assigned = donor.status === "matched" || donor.status === "manual";
+  const assigned = giver.personId !== null;
+  const byHand = giver.status === "manual";
+  // Unassign hands a giver back to automatic matching, which for anyone the
+  // export's "Your ID" placed just puts the same person back. So a placed
+  // giver also needs a way to be moved to a DIFFERENT person — otherwise a
+  // wrong match is visible here and uncorrectable.
+  const [showMove, setShowMove] = useState(false);
 
   return (
-    <li
-      className={`rounded-xl border border-border-soft p-4 ${pending ? "opacity-50" : ""}`}
-    >
+    <li className={`rounded-xl border border-border-soft p-4 ${pending ? "opacity-50" : ""}`}>
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        {/* Donor identity */}
+        {/* Who the giver is, and what they give */}
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold">{donor.fullName}</span>
-            {donor.stage && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold">{giver.fullName}</span>
+            {byHand && (
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-accent-soft-bg text-accent-soft-fg">
+                placed by hand
+              </span>
+            )}
+            {giver.pattern && (
               <span className="text-[11px] px-1.5 py-0.5 rounded bg-bg-elev-2 text-muted">
-                {donor.stage}
+                {giver.pattern}
               </span>
             )}
           </div>
           <div className="mt-1 text-xs text-muted space-y-0.5">
-            {donor.email && <div className="truncate">{donor.email}</div>}
-            {donor.phone && <div>{donor.phone}</div>}
+            {giver.email && <div className="truncate">{giver.email}</div>}
+            {giver.phone && <div>{giver.phone}</div>}
             <div className="text-subtle">
-              {donor.lastGiftDate ? `Last gift ${donor.lastGiftDate}` : "No gift date"}
-              {donor.fund ? ` · ${donor.fund}` : ""}
-              {donor.channel ? ` · ${donor.channel}` : ""}
+              {giver.gifts > 0 ? (
+                <>
+                  {giver.gifts.toLocaleString()} gift{giver.gifts === 1 ? "" : "s"}
+                  {giver.firstGiftOn && giver.lastGiftOn
+                    ? `, ${giver.firstGiftOn} to ${giver.lastGiftOn}`
+                    : ""}
+                  {giver.method ? ` · ${giver.method}` : ""}
+                </>
+              ) : (
+                "no gifts in the loaded window"
+              )}
             </div>
+            {giver.funds && <div className="text-subtle truncate">{giver.funds}</div>}
           </div>
         </div>
 
-        {/* Action area */}
+        {/* What to do about them */}
         <div className="min-w-0 w-full sm:w-auto sm:max-w-md sm:flex-1">
           {assigned ? (
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-border-softer bg-bg-elev px-3 py-2">
-              <span className="text-xs text-muted min-w-0">
-                <span className="text-good-soft-fg font-medium">✓ Assigned</span>{" "}
-                to{" "}
-                {donor.personId ? (
-                  <Link
-                    href={`/people/${donor.personId}`}
-                    className="text-accent hover:underline"
-                  >
-                    {donor.assignedName ?? `PCO #${donor.personId}`}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border-softer bg-bg-elev px-3 py-2">
+                <span className="text-xs text-muted min-w-0">
+                  <span className="text-good-soft-fg font-medium">✓ Their gifts go to</span>{" "}
+                  <Link href={`/people/${giver.personId}`} className="text-accent hover:underline">
+                    {giver.assignedName ?? `PCO #${giver.personId}`}
                   </Link>
-                ) : (
-                  "—"
-                )}
-              </span>
-              <button
-                type="button"
-                onClick={clearMatch}
-                disabled={pending}
-                className="text-xs text-subtle hover:text-warn-soft-fg shrink-0 cursor-pointer disabled:opacity-50"
-              >
-                Unassign
-              </button>
+                </span>
+                <button
+                  type="button"
+                  onClick={clearMatch}
+                  disabled={pending}
+                  title="Hand this giver back to automatic matching"
+                  className="text-xs text-subtle hover:text-warn-soft-fg shrink-0 cursor-pointer disabled:opacity-50"
+                >
+                  Unassign
+                </button>
+              </div>
+              {showMove ? (
+                <PersonPicker onPick={(id) => assign(id)} disabled={pending} />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowMove(true)}
+                  className="text-xs text-accent hover:underline cursor-pointer"
+                >
+                  Wrong person? Place them with someone else →
+                </button>
+              )}
             </div>
           ) : (
             <div className="space-y-2">
-              {donor.candidates.length > 0 && (
+              {giver.candidates.length > 0 && (
                 <div>
                   <div className="text-[11px] uppercase tracking-wider text-subtle mb-1">
-                    Likely the same person — click a name to assign
+                    Could be one of these — click a name to place them
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    {donor.candidates.map((c) => (
+                    {giver.candidates.map((c) => (
                       <div
                         key={c.pcoId}
                         className="flex items-center gap-2 flex-wrap rounded-lg border border-border-soft px-2.5 py-1.5"
@@ -184,21 +222,19 @@ function DonorCard({ donor }: { donor: DonorRow }) {
               )}
 
               {showPicker ? (
-                <PersonPicker
-                  onPick={(id) => assign(id)}
-                  disabled={pending}
-                />
+                <PersonPicker onPick={(id) => assign(id)} disabled={pending} />
               ) : (
                 <button
                   type="button"
                   onClick={() => setShowPicker(true)}
                   className="text-xs text-accent hover:underline cursor-pointer"
                 >
-                  Assign to someone else →
+                  Place with someone else →
                 </button>
               )}
             </div>
           )}
+          {error && <p className="mt-2 text-xs text-warn-soft-fg">{error}</p>}
         </div>
       </div>
     </li>

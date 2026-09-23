@@ -2087,18 +2087,20 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
       // 2026-09-22 (see giving-sql.ts).
       stat("Gift window", "the dates the loaded PushPay export covers - no figure on this page reaches outside them, and none of them is an amount",
         givingWindowLabel(), { span: 12 }),
-      // Payers, not people: the id PushPay puts on a gift. "People who gave"
-      // below counts the ones that resolve to a PCO record, which is the
-      // smaller number and the one to quote about the congregation.
-      stat("Payers on record", "PushPay payer ids with a gift in the window, whether or not we can name the person behind them",
+      // Giver profiles, not people: the id PushPay puts on a gift. "People who
+      // gave" below counts the ones that resolve to a PCO record, which is the
+      // smaller number and the one to quote about the congregation. Dan's word
+      // for a person who gives is "giver", so the column stays payer_id and the
+      // reader is told about profiles.
+      stat("Giver profiles on record", "PushPay giver profiles with a gift in the window, whether or not we can name the person behind them",
         `SELECT COALESCE((SELECT payers FROM pushpay_giving_snapshot WHERE org_id = :orgId), 0)`,
         { color: "highlight" }),
       // Not "in the last year": the window is shorter than a year, so the
       // nearest honest question is the trailing quarter of what we hold.
-      stat("Gave in the last 90 days", "payers with a gift in the last 90 days of the window",
+      stat("Gave in the last 90 days", "giver profiles with a gift in the last 90 days of the window",
         `SELECT COUNT(*) FROM pushpay_payer_summary
           WHERE org_id = :orgId AND last_gift_on >= ${lapseCutoff()}`),
-      stat("Payers giving on a schedule", "payers with at least one Recurring gift - a schedule set up in advance, which cannot respond to a given Sunday. Payers, not people: the /giving page counts the same schedules per person and reads lower",
+      stat("Giver profiles giving on a schedule", "giver profiles with at least one Recurring gift - a schedule set up in advance, which cannot respond to a given Sunday. Giver profiles, not people: the /giving page counts the same schedules per person and reads lower",
         `SELECT COUNT(*) FROM pushpay_payer_summary
           WHERE org_id = :orgId AND recurring_gifts > 0`),
       stat("Giving households reached", "distinct households with a giver in the window",
@@ -2142,30 +2144,31 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
                 COUNT(DISTINCT person_id) AS "People"
            FROM (${GIFTS}) GROUP BY 1 ORDER BY 2 DESC`),
       chart("Giving pattern", "worked out from the gifts themselves - PushPay's own donor stages came with the All Donors export, which is no longer loaded",
-        `SELECT ${givingPatternCase("s")} AS "Pattern", COUNT(*) AS "Payers"
+        `SELECT ${givingPatternCase("s")} AS "Pattern", COUNT(*) AS "Giver profiles"
            FROM pushpay_payer_summary s WHERE s.org_id = :orgId
           GROUP BY 1 ORDER BY 2 DESC`, "bar", { colorByCategory: true }),
       // The old donor export gave each donor one "Giving Channel"; the gifts
-      // give a payer as many as they used, so these count a PAYER once and say
+      // give a giver profile as many as they used, so these count a PROFILE once and say
       // "Both" where they used both. Check or cash is PushPay's Batch Entry -
       // a gift keyed in afterwards, which is how plate giving is recorded. The
       // pair is the trailing quarter against the whole window, which is as far
       // apart as the loaded data can put them.
       //
-      // PAYERS, NOT PEOPLE, and the titles say so. payerMethodFlags keys on
-      // the PushPay payer id: the whole-window split totals 1,669, which is
-      // the "Payers on record" stat above and NOT the 1,113 people "People who
-      // gave" counts. Aggregating to person_id instead would drop the 548
-      // payers with no PCO id - people who really do give by one method or the
-      // other - so the page keeps every payer and labels the axis honestly.
-      chart("How payers give", "payers with a gift in the last 90 days of the window, by method - payer ids, so a household with two of them counts twice",
+      // GIVER PROFILES, NOT PEOPLE, and the titles say so. payerMethodFlags
+      // keys on the PushPay payer id: the whole-window split totals 1,669,
+      // which is the "Giver profiles on record" stat above and NOT the 1,113
+      // people "People who gave" counts. Aggregating to person_id instead would
+      // drop the 548 profiles with no PCO id - people who really do give by one
+      // method or the other - so the page keeps every profile and labels the
+      // axis honestly.
+      chart("How givers give", "giver profiles with a gift in the last 90 days of the window, by method - PushPay profiles, so a household with two of them counts twice",
         `SELECT ${givingMethodCase("pm.offline_gifts", "pm.online_gifts")} AS "How they gave",
-                COUNT(*) AS "Payers"
+                COUNT(*) AS "Giver profiles"
            FROM (${payerMethodFlags(":orgId", ` AND received_on >= ${lapseCutoff()}`)}) pm
           GROUP BY 1 ORDER BY 2 DESC`, "donut"),
-      chart("How payers give, whole window", "every payer with a gift anywhere in the window, by method - these total the Payers on record above, not the people behind them",
+      chart("How givers give, whole window", "every giver profile with a gift anywhere in the window, by method - these total the Giver profiles on record above, not the people behind them",
         `SELECT ${givingMethodCase("pm.offline_gifts", "pm.online_gifts")} AS "How they gave",
-                COUNT(*) AS "Payers"
+                COUNT(*) AS "Giver profiles"
            FROM (${payerMethodFlags()}) pm
           GROUP BY 1 ORDER BY 2 DESC`, "bar"),
     ],
@@ -2177,14 +2180,14 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
         "**NO AMOUNTS, BY DESIGN AND BY DATA.** The Transactions export carries no dollar figure at all, which matches the instruction that these reports show giving without money. Nothing on this page is a financial total, and no total could be derived from it.",
         "**THE WINDOW IS THE WHOLE STORY.** Everything here is bounded by the gift window printed at the top — 1 Jan to 16 Sep 2026 today. There is no longer an all-time layer beneath it: the All Donors export, which carried PushPay's own donor stages over its full history, was emptied on 22 September 2026 because it has no stable donor id to re-match on. So nobody who stopped giving before January 2026 appears anywhere on this page, \"gone quiet\" means quiet inside the window, and no year-over-year comparison is possible until an export covering earlier years is loaded.",
         "**\"Recurring\", \"lapsed\" and \"first seen\" are our words, not PushPay's.** They are derived from the gifts: a Recurring source on a gift, 90 days of silence before the window's last gift, and a first gift inside those same 90 days. PushPay's own stage names are deliberately not reused, because the thresholds behind them were not ours.",
-        "**82% of gifts are linked to a person.** 13,626 of 16,574 resolve to a PCO record through the “Your ID” field, which carries the PCO person id. The remaining 2,948 belong to payers with no id on their PushPay record; filling that field in PushPay and uploading the export again is what places them.",
+        "**82% of gifts are linked to a person.** 13,626 of 16,574 resolve to a PCO record through the “Your ID” field, which carries the PCO person id. The remaining 2,948 belong to giver profiles with no id on their PushPay record; filling that field in PushPay and uploading the export again is what places them.",
         "**“Check or cash” means keyed in afterwards.** It is PushPay’s Batch Entry channel, which is how plate giving is recorded, so its date lags the Sunday it was given on. A Kiosk gift happens on campus but is an electronic transaction and counts as online.",
-        "**Two counts of a gift, 0.7% apart.** The gift-level blocks count only Status = Success (16,451); the payer rollup behind the people-level blocks counts every row, including the 123 still processing (16,574).",
-        "**A payer is not a person.** Blocks titled “payers” count PushPay payer ids — 1,669 of them — and blocks titled “people” count the 1,113 PCO records those ids resolve to. The gap is the 548 payers with no “Your ID” plus the households that hold two ids, so the two never agree and neither is wrong; check the title before quoting either.",
+        "**Two counts of a gift, 0.7% apart.** The gift-level blocks count only Status = Success (16,451); the giver rollup behind the people-level blocks counts every row, including the 123 still processing (16,574).",
+        "**A giver profile is not a person.** Blocks titled “giver profiles” count PushPay payer ids — 1,669 of them — and blocks titled “people” count the 1,113 PCO records those ids resolve to. The gap is the 548 giver profiles with no “Your ID” plus the households that hold two ids, so the two never agree and neither is wrong; check the title before quoting either.",
         "**Budget performance, expense ratios and designated-fund balances** live in the accounting system, which is not synced.",
       ],
       footer:
-        "_Of the 1,113 people this window can put a name to, 185 gave exactly once and 177 gave 27 times or more — a spread the donor-summary import could not see at all. Counting every payer including the unlinked, it is 422 giving once against 194 giving 27+. Measured on the 22 September 2026 export; these five are written out rather than queried, so re-read them off the page's own blocks after the next import._",
+        "_Of the 1,113 people this window can put a name to, 185 gave exactly once and 177 gave 27 times or more — a spread the donor-summary import could not see at all. Counting every giver profile including the unlinked, it is 422 giving once against 194 giving 27+. Measured on the 22 September 2026 export; these five are written out rather than queried, so re-read them off the page's own blocks after the next import._",
     },
   },
 

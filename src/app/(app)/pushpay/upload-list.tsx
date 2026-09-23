@@ -146,7 +146,8 @@ export function PushpayUploadList({ uploads, isAdmin }: { uploads: UploadView[];
 
               {u.kind === "transactions" && (
                 <div className="text-[11px] text-subtle tnum">
-                  {n(u.byYourId)} matched by PCO id · {n(u.byDonorManual)} by a hand match ·{" "}
+                  {n(u.byYourId)} matched by PCO id ·{" "}
+                  {n(u.byPayerManual + u.byDonorManual)} by a hand match ·{" "}
                   {n(u.byDonorMatch)} by name · {n(u.unmatched)} unmatched
                 </div>
               )}
