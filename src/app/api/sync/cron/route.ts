@@ -37,6 +37,7 @@ export async function GET(req: Request) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
+  const force = new URL(req.url).searchParams.get("force") === "1";
 
   // List all organizations with PCO settings on file. (One row per org.)
   const orgs = getDb()
@@ -126,7 +127,11 @@ export async function GET(req: Request) {
       });
       continue;
     }
-    if (!isSyncDue(id, settings)) {
+    // ?force=1 runs now regardless of the schedule. Behind the same auth as
+    // the rest of this route (localhost or CRON_SECRET), and needed because the
+    // only other way to run a sync on demand was to wait for the window —
+    // which makes verifying a change to the sync itself nearly impossible.
+    if (!force && !isSyncDue(id, settings)) {
       results.push({
         orgId: id,
         skipped: true,
