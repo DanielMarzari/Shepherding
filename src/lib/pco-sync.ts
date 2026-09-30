@@ -19,6 +19,7 @@ import {
 } from "./pco";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 import { refreshLastCheckIn, syncCheckinsAll } from "./pco-sync-checkins";
+import { syncHeadcountsAll } from "./pco-sync-headcounts";
 import { refreshLastAttended, syncGroupsAll } from "./pco-sync-groups";
 import { syncCalendarAll } from "./pco-sync-calendar";
 import { syncRegistrationsAll } from "./pco-sync-registrations";
@@ -55,6 +56,7 @@ export interface SyncDetails {
   checkinEvents: { fetched: number; upserted: number };
   checkinLocations: { fetched: number; upserted: number };
   checkIns: { fetched: number; upserted: number };
+  headcounts: { fetched: number; upserted: number };
   serviceTypes: { fetched: number; upserted: number };
   teams: { fetched: number; upserted: number };
   teamPositions: { fetched: number; upserted: number };
@@ -156,6 +158,7 @@ export async function runSync(
     checkinEvents: { fetched: 0, upserted: 0 },
     checkinLocations: { fetched: 0, upserted: 0 },
     checkIns: { fetched: 0, upserted: 0 },
+    headcounts: { fetched: 0, upserted: 0 },
     serviceTypes: { fetched: 0, upserted: 0 },
     teams: { fetched: 0, upserted: 0 },
     teamPositions: { fetched: 0, upserted: 0 },
@@ -254,6 +257,28 @@ export async function runSync(
         warning = appendWarning(
           warning,
           `Registrations: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
+    }
+
+    // ── Check-in HEADCOUNTS (aggregate attendance per service per venue) ─
+    // The upstream source of the attendance spreadsheet. Folded into
+    // attendance_weekly / attendance_service by the sync itself, so every
+    // surface that already reads those tables gets live numbers.
+    if (enabled.check_ins) {
+      try {
+        const hc = await syncHeadcountsAll(client, orgId);
+        details.headcounts = { fetched: hc.fetched, upserted: hc.upserted };
+        if (hc.weeksProjected) {
+          warning = appendWarning(
+            warning,
+            `Headcounts: filled ${hc.columnsFilled} figures across ${hc.weeksProjected} Sundays`,
+          );
+        }
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Headcounts: ${e instanceof Error ? e.message : "failed"}`,
         );
       }
     }
