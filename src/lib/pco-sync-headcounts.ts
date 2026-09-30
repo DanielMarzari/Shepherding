@@ -325,6 +325,22 @@ export function projectHeadcountsToAttendance(orgId: number): { weeks: number; c
       .map((r) => [String(r.sunday_on), r]),
   );
 
+  // DO NOT INVENT A PREHISTORY. Kids check-ins reach back to 2016 while the
+  // spreadsheet starts in 2020, so an unbounded projection happily created 166
+  // Sundays of 2016-2019 rows carrying nothing but kids_total. Every attendance
+  // chart's x-axis silently grew four years of near-empty weeks — a change
+  // nobody asked for, off data whose early quality is unknown (kids jumps from
+  // 102 to 402 within a fortnight of the first record).
+  //
+  // So a NEW row is only created from the era the spreadsheet already covers.
+  // Existing rows are still filled wherever they have a gap, at any date, and
+  // the raw figures for the earlier years remain in pco_event_periods for
+  // anything that deliberately wants them.
+  const sheetStart = (db.prepare(
+    `SELECT MIN(sunday_on) AS d FROM attendance_weekly
+      WHERE org_id = ? AND COALESCE(source_file,'') <> 'PCO Check-Ins'`,
+  ).get(orgId) as { d: string | null } | undefined)?.d ?? null;
+
   // A Sunday may have kids/students without any headcount at all, so the set of
   // days to consider is the union of both sources.
   const allDays = new Set<string>([
@@ -367,6 +383,7 @@ export function projectHeadcountsToAttendance(orgId: number): { weeks: number; c
       ];
       const row = existing.get(day);
       if (!row) {
+        if (sheetStart && day < sheetStart) continue;   // see sheetStart above
         const vals = Object.fromEntries(cand);
         const filled = cand.filter(([, val]) => val != null).map(([c]) => c);
         if (filled.length === 0) continue;
