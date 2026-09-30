@@ -28,6 +28,25 @@ const ROOM_OF: Record<string, string> = {
   "W-Loft": "loft",
 };
 
+/** Kids attendance comes from this one check-in event's daily total. */
+export const KIDS_EVENT = "Sunday AM Kids";
+/** Students are spread across three Sunday services that ALTERNATE — some
+ *  Sundays use Afternoon, others PM, never both. Confirmed with the ministry
+ *  lead. All three are summed. */
+export const STUDENT_EVENTS = [
+  "Sunday AM Students",
+  "Sunday Afternoon Students",
+  "Sunday PM Students",
+] as const;
+
+/** A week is treated as a coverage dropout, not a low week, when its total
+ *  falls below this share of the median week. Student check-in coverage
+ *  collapses occasionally — 2025-02-02 reads 2 against a spreadsheet figure of
+ *  91 — and publishing a 2 as attendance would be worse than publishing
+ *  nothing. A quarter of the median clears the genuine low weeks (Christmas
+ *  2025 kids was 110 against a median near 300) while catching the dropouts. */
+const DROPOUT_FRACTION = 0.25;
+
 export interface HeadcountSyncResult {
   fetched: number;
   upserted: number;
@@ -35,6 +54,8 @@ export interface HeadcountSyncResult {
   lastDate: string | null;
   weeksProjected: number;
   columnsFilled: number;
+  periodsFetched: number;
+  periodsUpserted: number;
 }
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", {
@@ -62,7 +83,7 @@ export async function syncHeadcountsAll(
   const db = getDb();
   const out: HeadcountSyncResult = {
     fetched: 0, upserted: 0, firstDate: null, lastDate: null,
-    weeksProjected: 0, columnsFilled: 0,
+    weeksProjected: 0, columnsFilled: 0, periodsFetched: 0, periodsUpserted: 0,
   };
 
   // Newest-updated first, stopping at the newest one already held. A first run
@@ -148,9 +169,78 @@ export async function syncHeadcountsAll(
     if (caughtUp) break;
   }
 
+  const ep = await syncEventPeriods(client, orgId);
+  out.periodsFetched = ep.fetched;
+  out.periodsUpserted = ep.upserted;
+
   const p = projectHeadcountsToAttendance(orgId);
   out.weeksProjected = p.weeks;
   out.columnsFilled = p.columns;
+  return out;
+}
+
+/** Every check-in event's daily periods, with the counts PCO totals itself.
+ *
+ *  There is no top-level /event_periods collection — it 404s — so this walks
+ *  each event. 100 events, 5,090 periods, about 150 requests, which is cheap
+ *  enough to take whole rather than track a cursor per event. Syncing them all
+ *  rather than only the kids and student events means Monday Care Kids, MomCo
+ *  and the Women's Bible Study are there when something needs them. */
+async function syncEventPeriods(
+  client: PCOClient,
+  orgId: number,
+): Promise<{ fetched: number; upserted: number }> {
+  const db = getDb();
+  const out = { fetched: 0, upserted: 0 };
+  const events: Array<{ id: string; name: string }> = [];
+  for await (const { page } of client.paginate<PCOResource>("/check-ins/v2/events?per_page=100")) {
+    const arr = Array.isArray(page.data) ? page.data : [page.data];
+    for (const e of arr) {
+      events.push({ id: e.id, name: ((e.attributes ?? {}) as Record<string, unknown>).name as string ?? "" });
+    }
+  }
+  const up = db.prepare(
+    `INSERT INTO pco_event_periods
+       (org_id, pco_id, event_id, event_name, starts_at, ends_at, local_date,
+        regular_count, guest_count, volunteer_count, note,
+        pco_created_at, pco_updated_at, synced_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id, pco_id) DO UPDATE SET
+       event_id = excluded.event_id, event_name = excluded.event_name,
+       starts_at = excluded.starts_at, ends_at = excluded.ends_at,
+       local_date = excluded.local_date,
+       regular_count = excluded.regular_count, guest_count = excluded.guest_count,
+       volunteer_count = excluded.volunteer_count, note = excluded.note,
+       pco_created_at = excluded.pco_created_at, pco_updated_at = excluded.pco_updated_at,
+       synced_at = excluded.synced_at`,
+  );
+  for (const ev of events) {
+    for await (const { page } of client.paginate<PCOResource>(
+      `/check-ins/v2/events/${ev.id}/event_periods?per_page=100&order=-starts_at`,
+    )) {
+      const arr = Array.isArray(page.data) ? page.data : [page.data];
+      const tx = db.transaction(() => {
+        for (const p of arr) {
+          const a = (p.attributes ?? {}) as Record<string, unknown>;
+          const startsAt = (a.starts_at as string | undefined) ?? null;
+          up.run(
+            orgId, p.id, ev.id, ev.name, startsAt,
+            (a.ends_at as string | undefined) ?? null,
+            startsAt ? local(startsAt).date : null,
+            typeof a.regular_count === "number" ? a.regular_count : null,
+            typeof a.guest_count === "number" ? a.guest_count : null,
+            typeof a.volunteer_count === "number" ? a.volunteer_count : null,
+            (a.note as string | undefined) ?? null,
+            (a.created_at as string | undefined) ?? null,
+            (a.updated_at as string | undefined) ?? null,
+          );
+          out.upserted++;
+        }
+      });
+      tx();
+      out.fetched += arr.length;
+    }
+  }
   return out;
 }
 
@@ -194,25 +284,67 @@ export function projectHeadcountsToAttendance(orgId: number): { weeks: number; c
       ORDER BY local_date`,
   ).all(orgId) as Array<Record<string, number | string | null>>;
 
+  // Kids and students, from PCO's own daily totals on the event period. A week
+  // below DROPOUT_FRACTION of the median is treated as missing rather than low
+  // — see the constant for why.
+  const evRow = (names: readonly string[]) =>
+    db.prepare(
+      `SELECT local_date AS day,
+              SUM(COALESCE(regular_count,0) + COALESCE(guest_count,0)
+                  + COALESCE(volunteer_count,0)) AS total
+         FROM pco_event_periods
+        WHERE org_id = ? AND local_date IS NOT NULL
+          AND event_name IN (${names.map(() => "?").join(",")})
+          AND strftime('%w', local_date) = '0'
+        GROUP BY local_date
+        HAVING total > 0`,
+    ).all(orgId, ...names) as Array<{ day: string; total: number }>;
+
+  const withFloor = (rows: Array<{ day: string; total: number }>) => {
+    const sorted = rows.map((r) => r.total).sort((a, b) => a - b);
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+    const floor = median * DROPOUT_FRACTION;
+    const kept = new Map<string, number>();
+    let dropped = 0;
+    for (const r of rows) {
+      if (r.total < floor) { dropped++; continue; }
+      kept.set(r.day, r.total);
+    }
+    return { kept, median, floor, dropped };
+  };
+
+  const kids = withFloor(evRow([KIDS_EVENT]));
+  const students = withFloor(evRow(STUDENT_EVENTS));
+
   const existing = new Map(
     (db.prepare(
       `SELECT sunday_on, adult_total, center_total, chapel_total, online_live,
-              online_on_demand, abfs FROM attendance_weekly WHERE org_id = ?`,
+              online_on_demand, abfs, kids_total, student_total
+         FROM attendance_weekly WHERE org_id = ?`,
     ).all(orgId) as Array<Record<string, number | string | null>>)
       .map((r) => [String(r.sunday_on), r]),
   );
+
+  // A Sunday may have kids/students without any headcount at all, so the set of
+  // days to consider is the union of both sources.
+  const allDays = new Set<string>([
+    ...perDay.map((r) => String(r.day)),
+    ...kids.kept.keys(),
+    ...students.kept.keys(),
+  ]);
+  const headcountByDay = new Map(perDay.map((r) => [String(r.day), r]));
 
   let weeks = 0, columns = 0;
   const insertRow = db.prepare(
     `INSERT INTO attendance_weekly
        (org_id, sunday_on, adult_total, center_total, chapel_total, online_live,
-        online_on_demand, abfs, source_file, pco_filled)
-     VALUES (?,?,?,?,?,?,?,?, 'PCO Check-Ins', ?)`,
+        online_on_demand, abfs, kids_total, student_total, source_file, pco_filled)
+     VALUES (?,?,?,?,?,?,?,?,?,?, 'PCO Check-Ins', ?)`,
   );
 
   const tx = db.transaction(() => {
-    for (const r of perDay) {
-      const day = String(r.day);
+    for (const day of [...allDays].sort()) {
+      const r = headcountByDay.get(day) ?? {};
       const v = (k: string) => (r[k] as number | null);
       const has = (k: string) => Number(r[k]) === 1;
       // A ZERO IS NOT A MEASUREMENT. A headcount row exists for plenty of
@@ -230,6 +362,8 @@ export function projectHeadcountsToAttendance(orgId: number): { weeks: number; c
         ["online_live", pos("live", "hasLive")],
         ["online_on_demand", pos("demand", "hasDemand")],
         ["abfs", pos("abf", "hasAbf")],
+        ["kids_total", kids.kept.get(day) ?? null],
+        ["student_total", students.kept.get(day) ?? null],
       ];
       const row = existing.get(day);
       if (!row) {
@@ -238,7 +372,8 @@ export function projectHeadcountsToAttendance(orgId: number): { weeks: number; c
         if (filled.length === 0) continue;
         insertRow.run(
           orgId, day, vals.adult_total, vals.center_total, vals.chapel_total,
-          vals.online_live, vals.online_on_demand, vals.abfs, JSON.stringify(filled),
+          vals.online_live, vals.online_on_demand, vals.abfs,
+          vals.kids_total, vals.student_total, JSON.stringify(filled),
         );
         weeks++; columns += filled.length;
         continue;
