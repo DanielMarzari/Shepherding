@@ -29,12 +29,32 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Ship the runtime env file
+        # This repo's ENCRYPTION_KEY secret is the only surviving copy of the
+        # key: it is not in the pm2 ecosystem config and cannot be recovered
+        # from the database. Without it every decrypt silently returns null
+        # and the app renders "(unknown #id)" for every person, so write the
+        # file on every deploy and run this step first — if it fails, nothing
+        # has been shipped and the running app is untouched.
+        run: |
+          if [ -z "${{ secrets.ENCRYPTION_KEY }}" ]; then
+            echo "::error::ENCRYPTION_KEY secret is empty — refusing to deploy an app that cannot read its own data."
+            exit 1
+          fi
+          umask 077
+          printf 'ENCRYPTION_KEY=%s\nOSRM_URL=http://localhost:5000\n' '${{ secrets.ENCRYPTION_KEY }}' > env.production.staged
+          rsync -avzO --no-times --chmod=F600 \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            env.production.staged \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:.env.production
+          rm -f env.production.staged
+
       - name: Deploy
         run: |
           # Scoped deploy user — rrsync chdirs us to /var/www/apps/shepherdly,
           # the key is command-restricted to this one dir and three verbs
-          # (rsync / migrate / restart). .env.production is kept on the server
-          # (never shipped from CI) so --exclude it from --delete.
+          # (rsync / migrate / restart). .env.production is written by the step
+          # above and must survive --delete, so keep it excluded.
           rsync -avzO --no-perms --no-times --mkpath --delete \
             --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' \
             --exclude='.env.production' \
