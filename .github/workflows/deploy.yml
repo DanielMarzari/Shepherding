@@ -43,7 +43,14 @@ jobs:
           fi
           umask 077
           printf 'ENCRYPTION_KEY=%s\nOSRM_URL=http://localhost:5000\n' '${{ secrets.ENCRYPTION_KEY }}' > env.production.staged
-          rsync -avzO --no-times --chmod=F600 \
+          # F660, not F600. /var/www/apps/shepherdly carries a default ACL
+          # granting user:ubuntu (which pm2 runs the app as) while the files
+          # are owned by the deploy user. On a file with an extended ACL the
+          # group bits ARE the ACL mask, so 600 masks that grant down to
+          # #effective:--- and the app cannot read its own key — the same
+          # outage as having no file at all. 660 leaves the mask at rw- and
+          # still denies everyone else.
+          rsync -avzO --no-times --chmod=F660 \
             -e "ssh -i ~/.ssh/deploy_key" \
             env.production.staged \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:.env.production
