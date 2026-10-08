@@ -10,6 +10,27 @@ interface PIIBlob {
   address?: string | null;
 }
 
+/** A person's display name. Names live in the plaintext first_name /
+ *  last_name columns since 0074; enc_pii is only a fallback for rows that
+ *  predate that move. Reading enc_pii first looks harmless until the
+ *  ENCRYPTION_KEY goes missing: decryptJson swallows the failure, returns
+ *  null, and every row renders as "(unknown #id)" — which the junk-name
+ *  flag below then counts as a bad name. Start from the columns. */
+function nameOf(
+  plainFirst: string | null | undefined,
+  plainLast: string | null | undefined,
+  encPii: string | null | undefined,
+): { first: string | null; last: string | null } {
+  const first = plainFirst?.trim() || null;
+  const last = plainLast?.trim() || null;
+  if (first || last) return { first, last };
+  const pii = encPii ? decryptJson<PIIBlob>(encPii) : null;
+  return {
+    first: pii?.first_name?.trim() ?? null,
+    last: pii?.last_name?.trim() ?? null,
+  };
+}
+
 export type AuditFlag =
   | "deceased"
   | "inactive"
@@ -88,6 +109,8 @@ export function auditMembershipType(
        SELECT
          p.pco_id           AS pcoId,
          p.enc_pii          AS encPii,
+         p.first_name       AS firstName,
+         p.last_name        AS lastName,
          p.membership_type  AS membershipType,
          p.status           AS status,
          p.is_minor         AS isMinor,
@@ -108,6 +131,8 @@ export function auditMembershipType(
     .all(orgId, orgId, orgId, recentCheckinCutoff, orgId, membershipType) as Array<{
     pcoId: string;
     encPii: string | null;
+    firstName: string | null;
+    lastName: string | null;
     membershipType: string | null;
     status: string | null;
     isMinor: number;
@@ -122,15 +147,7 @@ export function auditMembershipType(
   // First pass — decrypt + collect; second pass for duplicate detection.
   const piiById = new Map<string, { first: string | null; last: string | null }>();
   for (const r of rawRows) {
-    if (r.encPii) {
-      const pii = decryptJson<PIIBlob>(r.encPii);
-      piiById.set(r.pcoId, {
-        first: pii?.first_name?.trim() ?? null,
-        last: pii?.last_name?.trim() ?? null,
-      });
-    } else {
-      piiById.set(r.pcoId, { first: null, last: null });
-    }
+    piiById.set(r.pcoId, nameOf(r.firstName, r.lastName, r.encPii));
   }
 
   // Possible-duplicate index: lower-case "first last".
@@ -405,7 +422,8 @@ function loadDupPeople(orgId: number): DupPerson[] {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT pco_id, enc_pii, gender, status, inactivated_at, birth_year
+      `SELECT pco_id, enc_pii, first_name, last_name, gender, status,
+              inactivated_at, birth_year
          FROM pco_people
         WHERE org_id = ?
           AND (membership_type IS NULL
@@ -415,20 +433,25 @@ function loadDupPeople(orgId: number): DupPerson[] {
     .all(orgId) as Array<{
     pco_id: string;
     enc_pii: string | null;
+    first_name: string | null;
+    last_name: string | null;
     gender: string | null;
     status: string | null;
     inactivated_at: string | null;
     birth_year: number | null;
   }>;
   return rows.map((r) => {
+    // Still decrypted here for birthdate + address, which have no
+    // plaintext column; the name comes from the columns.
     const pii = r.enc_pii ? decryptJson<PIIBlob>(r.enc_pii) : null;
     const bd = pii?.birthdate?.trim() || null;
     const inactive =
       (r.status ?? "").toLowerCase() === "inactive" || !!r.inactivated_at;
+    const { first, last } = nameOf(r.first_name, r.last_name, r.enc_pii);
     return {
       pcoId: r.pco_id,
-      first: pii?.first_name?.trim() ?? null,
-      last: pii?.last_name?.trim() ?? null,
+      first,
+      last,
       birthdate: bd,
       birthYear: r.birth_year ?? (bd ? Number(bd.slice(0, 4)) || null : null),
       addr: normAddr(pii?.address),
@@ -729,20 +752,20 @@ export function listDuplicatePairs(
   const ph = idList.map(() => "?").join(",");
   const peopleRows = db
     .prepare(
-      `SELECT pco_id, enc_pii, status, inactivated_at
+      `SELECT pco_id, enc_pii, first_name, last_name, status, inactivated_at
          FROM pco_people WHERE org_id = ? AND pco_id IN (${ph})`,
     )
     .all(orgId, ...idList) as Array<{
     pco_id: string;
     enc_pii: string | null;
+    first_name: string | null;
+    last_name: string | null;
     status: string | null;
     inactivated_at: string | null;
   }>;
   const view = new Map<string, DupPersonView>();
   for (const r of peopleRows) {
-    const pii = r.enc_pii ? decryptJson<PIIBlob>(r.enc_pii) : null;
-    const first = pii?.first_name?.trim() ?? null;
-    const last = pii?.last_name?.trim() ?? null;
+    const { first, last } = nameOf(r.first_name, r.last_name, r.enc_pii);
     view.set(r.pco_id, {
       pcoId: r.pco_id,
       fullName:
@@ -853,20 +876,14 @@ function loadAllPeopleForAudit(orgId: number): AuditScanRow[] {
   return rawRows.map((r) => {
     // Prefer the plaintext name columns (0074); decrypt only as a fallback for
     // rows not yet backfilled, so a full name audit no longer decrypts 33k rows.
-    let first = r.first_name;
-    let last = r.last_name;
-    if (first == null && last == null && r.enc_pii) {
-      const pii = decryptJson<PIIBlob>(r.enc_pii);
-      first = pii?.first_name ?? null;
-      last = pii?.last_name ?? null;
-    }
+    const { first, last } = nameOf(r.first_name, r.last_name, r.enc_pii);
     return {
       pcoId: r.pco_id,
       membershipType: r.membership_type,
       status: r.status,
       inactivatedAt: r.inactivated_at,
-      _first: first?.trim() ?? null,
-      _last: last?.trim() ?? null,
+      _first: first,
+      _last: last,
     };
   });
 }
