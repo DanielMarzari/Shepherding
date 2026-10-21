@@ -12,6 +12,8 @@ import {
   getMembershipTypeStats,
   getOutreachGroupTypes,
   getOutreachServiceTypes,
+  getOutreachTags,
+  getPersonTagStats,
   getServiceTypeStats,
   getAdultCheckinEvents,
   getExcludedCheckinEvents,
@@ -64,6 +66,8 @@ export default async function FiltersPage({
 
   const outreachServiceTypes = getOutreachServiceTypes(session.orgId);
   const outreachGroupTypes = getOutreachGroupTypes(session.orgId);
+  const outreachTags = getOutreachTags(session.orgId);
+  const tagStats = getPersonTagStats(session.orgId);
 
   const checkinStats = getCheckinEventStats(session.orgId);
   const excludedCheckin = getExcludedCheckinEvents(session.orgId);
@@ -165,8 +169,10 @@ export default async function FiltersPage({
             <OutreachLaneForm
               teamStats={teamStats}
               groupStats={groupStats}
+              tagStats={tagStats}
               initialServiceTypes={outreachServiceTypes}
               initialGroupTypes={outreachGroupTypes}
+              initialTags={outreachTags}
               isAdmin={session.role === "admin"}
             />
           </Card>

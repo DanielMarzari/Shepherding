@@ -25,6 +25,7 @@ import { syncCalendarAll } from "./pco-sync-calendar";
 import { syncRegistrationsAll } from "./pco-sync-registrations";
 import { refreshIsParent, syncHouseholdsAll } from "./pco-sync-households";
 import { syncListsAll } from "./pco-sync-lists";
+import { syncTagsAll } from "./pco-sync-tags";
 import { refreshLastServed, syncServicesAll } from "./pco-sync-services";
 
 // Forms the user explicitly asked to track (from the prompt).
@@ -65,6 +66,9 @@ export interface SyncDetails {
   planPeople: { fetched: number; upserted: number };
   planItems: { fetched: number; upserted: number };
   personFields: { fetched: number; upserted: number };
+  tagGroups: { fetched: number; upserted: number };
+  tags: { fetched: number; upserted: number };
+  personTags: { fetched: number; upserted: number };
   registrationSignups: { fetched: number; upserted: number };
   registrationAttendees: { fetched: number; upserted: number };
   calendarEvents: { fetched: number; upserted: number };
@@ -167,6 +171,9 @@ export async function runSync(
     planPeople: { fetched: 0, upserted: 0 },
     planItems: { fetched: 0, upserted: 0 },
     personFields: { fetched: 0, upserted: 0 },
+    tagGroups: { fetched: 0, upserted: 0 },
+    tags: { fetched: 0, upserted: 0 },
+    personTags: { fetched: 0, upserted: 0 },
     registrationSignups: { fetched: 0, upserted: 0 },
     registrationAttendees: { fetched: 0, upserted: 0 },
     calendarEvents: { fetched: 0, upserted: 0 },
@@ -228,6 +235,21 @@ export async function runSync(
         warning = appendWarning(
           warning,
           `Lists: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
+
+      // Services person tags. Small (3.5k Services people, ~35 pages) and
+      // the Outreach lane's main source — outreach involvement here is
+      // recorded as a tag on a person, not as a whole team.
+      try {
+        const tg = await syncTagsAll(client, orgId);
+        details.tagGroups = tg.tagGroups;
+        details.tags = tg.tags;
+        details.personTags = tg.personTags;
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Services tags: ${e instanceof Error ? e.message : "failed"}`,
         );
       }
 

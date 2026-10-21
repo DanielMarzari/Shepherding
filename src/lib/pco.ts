@@ -949,6 +949,51 @@ export function saveOutreachGroupTypes(orgId: number, ids: string[]) {
   writeIdList(orgId, "outreach_group_types", ids);
 }
 
+/** Individual Services person tags that count as outreach. The finest of
+ *  the three grains and the one Faith Church actually uses — "ESL
+ *  Volunteer" names the people who do that, where tagging the whole
+ *  service type would sweep in everyone rostered to it. */
+export const getOutreachTags = cache(getOutreachTagsImpl);
+function getOutreachTagsImpl(orgId: number): string[] {
+  return readIdList(orgId, "outreach_tags");
+}
+export function saveOutreachTags(orgId: number, ids: string[]) {
+  writeIdList(orgId, "outreach_tags", ids);
+}
+
+export interface TagStat {
+  tagId: string;
+  tagName: string | null;
+  groupId: string;
+  groupName: string | null;
+  people: number;
+}
+
+/** Every Services person tag with how many synced people hold it, grouped
+ *  by tag group. Drives the Outreach picker. Tags nobody holds are kept —
+ *  a brand-new tag with 0 people is exactly the one an admin wants to tick
+ *  before the volunteers are assigned. */
+export function getPersonTagStats(orgId: number): TagStat[] {
+  return getDb()
+    .prepare(
+      `SELECT t.pco_id      AS tagId,
+              t.name        AS tagName,
+              g.pco_id      AS groupId,
+              g.name        AS groupName,
+              COUNT(pt.person_id) AS people
+         FROM pco_tags t
+         JOIN pco_tag_groups g
+           ON g.org_id = t.org_id AND g.pco_id = t.tag_group_id
+         LEFT JOIN pco_person_tags pt
+           ON pt.org_id = t.org_id AND pt.tag_id = t.pco_id
+        WHERE t.org_id = ?
+          AND lower(coalesce(g.tags_for, '')) = 'person'
+        GROUP BY t.pco_id, t.name, g.pco_id, g.name
+        ORDER BY g.name COLLATE NOCASE, t.name COLLATE NOCASE`,
+    )
+    .all(orgId) as TagStat[];
+}
+
 export function getServiceTypeStats(
   orgId: number,
 ): {

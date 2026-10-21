@@ -12,6 +12,7 @@ import {
   saveKidCheckinEvents,
   saveOutreachGroupTypes,
   saveOutreachServiceTypes,
+  saveOutreachTags,
   saveSundayCheckinEvents,
 } from "@/lib/pco";
 
@@ -180,12 +181,16 @@ export async function saveOutreachLaneAction(
   const groupTypes = formData
     .getAll("outreach_group_type")
     .filter((v) => typeof v === "string") as string[];
+  const tags = formData
+    .getAll("outreach_tag")
+    .filter((v) => typeof v === "string") as string[];
   saveOutreachServiceTypes(s.orgId, serviceTypes);
   saveOutreachGroupTypes(s.orgId, groupTypes);
+  saveOutreachTags(s.orgId, tags);
   revalidatePath("/pco/filters");
   revalidatePath("/audit");
   revalidatePath("/lanes");
-  const total = serviceTypes.length + groupTypes.length;
+  const total = serviceTypes.length + groupTypes.length + tags.length;
   return {
     status: "saved",
     message:

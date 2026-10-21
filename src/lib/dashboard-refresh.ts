@@ -4,6 +4,7 @@ import {
   getExcludedMembershipTypes,
   getOutreachGroupTypes,
   getOutreachServiceTypes,
+  getOutreachTags,
   getSyncSettings,
 } from "./pco";
 import { populateShepherdedTempTable } from "./people-read";
@@ -517,13 +518,22 @@ function buildLaneTempTables(
   ).run(orgId, cutoffActivity);
   db.exec(`CREATE UNIQUE INDEX _pa_give_pid ON _pa_give(person_id);`);
 
+  // Three grains, unioned: whole service types, whole group types, and
+  // individual Services person tags. Tags are the one Faith Church
+  // actually uses — "ESL Volunteer" names the people who do that, where
+  // the service type would sweep in everyone rostered to it. UNION
+  // de-duplicates, so a person carrying all three counts once.
   const svcTypes = getOutreachServiceTypes(orgId);
   const grpTypes = getOutreachGroupTypes(orgId);
+  const tagIds = getOutreachTags(orgId);
   const svcIn = svcTypes.length
     ? `t.service_type_id IN (${svcTypes.map(() => "?").join(",")})`
     : "0";
   const grpIn = grpTypes.length
     ? `g.group_type_id IN (${grpTypes.map(() => "?").join(",")})`
+    : "0";
+  const tagIn = tagIds.length
+    ? `pt.tag_id IN (${tagIds.map(() => "?").join(",")})`
     : "0";
   db.prepare(
     `CREATE TEMP TABLE _pa_outreach AS
@@ -537,8 +547,12 @@ function buildLaneTempTables(
          FROM pco_group_memberships gm
          JOIN pco_groups g ON g.org_id = gm.org_id AND g.pco_id = gm.group_id
         WHERE gm.org_id = ? AND gm.archived_at IS NULL
-          AND g.archived_at IS NULL AND ${grpIn}`,
-  ).run(orgId, ...svcTypes, orgId, ...grpTypes);
+          AND g.archived_at IS NULL AND ${grpIn}
+       UNION
+       SELECT DISTINCT pt.person_id
+         FROM pco_person_tags pt
+        WHERE pt.org_id = ? AND pt.person_id != '' AND ${tagIn}`,
+  ).run(orgId, ...svcTypes, orgId, ...grpTypes, orgId, ...tagIds);
   db.exec(`CREATE UNIQUE INDEX _pa_outreach_pid ON _pa_outreach(person_id);`);
 }
 

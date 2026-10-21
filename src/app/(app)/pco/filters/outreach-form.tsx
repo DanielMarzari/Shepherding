@@ -13,6 +13,14 @@ interface TeamStat {
   lastEventAt: string | null;
 }
 
+interface TagStat {
+  tagId: string;
+  tagName: string | null;
+  groupId: string;
+  groupName: string | null;
+  people: number;
+}
+
 interface GroupStat {
   groupTypeId: string | null;
   name: string | null;
@@ -35,18 +43,23 @@ interface GroupStat {
 export function OutreachLaneForm({
   teamStats,
   groupStats,
+  tagStats,
   initialServiceTypes,
   initialGroupTypes,
+  initialTags,
   isAdmin,
 }: {
   teamStats: TeamStat[];
   groupStats: GroupStat[];
+  tagStats: TagStat[];
   initialServiceTypes: string[];
   initialGroupTypes: string[];
+  initialTags: string[];
   isAdmin: boolean;
 }) {
   const [svc, setSvc] = useState<Set<string>>(new Set(initialServiceTypes));
   const [grp, setGrp] = useState<Set<string>>(new Set(initialGroupTypes));
+  const [tags, setTags] = useState<Set<string>>(new Set(initialTags));
   const [showArchived, setShowArchived] = useState(false);
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
     saveOutreachLaneAction,
@@ -65,7 +78,19 @@ export function OutreachLaneForm({
     teamStats.filter((s) => s.archivedAt).length +
     groupStats.filter((s) => s.allArchived).length;
 
-  const picked = svc.size + grp.size;
+  // Tags arrive already ordered by group then name; fold them into their
+  // groups so the picker reads the way Services presents them.
+  const tagGroups = useMemo(() => {
+    const out: Array<{ id: string; name: string; tags: TagStat[] }> = [];
+    for (const t of tagStats) {
+      const last = out[out.length - 1];
+      if (last && last.id === t.groupId) last.tags.push(t);
+      else out.push({ id: t.groupId, name: t.groupName ?? "(unnamed group)", tags: [t] });
+    }
+    return out;
+  }, [tagStats]);
+
+  const picked = svc.size + grp.size + tags.size;
 
   function toggle(
     set: Set<string>,
@@ -82,7 +107,8 @@ export function OutreachLaneForm({
     <form action={action}>
       <div className="px-5 py-4 border-b border-border-soft">
         <p className="text-sm text-muted leading-relaxed max-w-3xl">
-          Tick everything that counts as outreach.{" "}
+          Tick everything that counts as outreach — individual serving tags,
+          whole serving teams, or whole group types.{" "}
           <strong className="text-fg font-medium">
             These are the ones to include
           </strong>{" "}
@@ -91,10 +117,16 @@ export function OutreachLaneForm({
           in the Outreach lane on the next snapshot refresh.
         </p>
         <p className="text-sm text-muted leading-relaxed max-w-3xl mt-2">
-          Tick nothing and the lane stays empty for everyone, which is what it
-          does today. That is deliberate: an empty lane the audit can explain
-          beats one guessed from team names, which would break the first time
-          somebody renames a team.
+          Serving tags are the finest grain and usually the right one:
+          ticking <em>ESL Volunteer</em> names the people who do that, where
+          ticking its whole service type would sweep in everyone rostered to
+          it. The three lists are combined, and nobody is counted twice.
+        </p>
+        <p className="text-sm text-muted leading-relaxed max-w-3xl mt-2">
+          Tick nothing and the lane stays empty for everyone. That is
+          deliberate: an empty lane the audit can explain beats one guessed
+          from team names, which would break the first time somebody renames
+          a team.
         </p>
       </div>
 
@@ -113,6 +145,59 @@ export function OutreachLaneForm({
       )}
 
       <div className="px-5 py-2.5 bg-bg-elev border-b border-border-soft">
+        <h3 className="text-xs uppercase tracking-wider text-subtle font-medium">
+          Serving tags
+        </h3>
+      </div>
+      {tagGroups.length === 0 ? (
+        <div className="px-5 py-8 text-center text-sm text-muted">
+          No Services tags synced yet — they arrive with the next sync.
+        </div>
+      ) : (
+        tagGroups.map((g) => (
+          <div key={g.id}>
+            <div className="px-5 py-2 bg-bg-elev/40 border-b border-border-softer">
+              <span className="text-xs text-muted font-medium">{g.name}</span>
+            </div>
+            <ul className="divide-y divide-border-softer">
+              {g.tags.map((t) => {
+                const on = tags.has(t.tagId);
+                return (
+                  <li
+                    key={t.tagId}
+                    className={`px-5 py-2.5 flex items-center justify-between gap-4 transition-colors ${
+                      on ? "bg-accent-soft-bg/20" : ""
+                    }`}
+                  >
+                    <label
+                      className={`flex items-center gap-3 flex-1 min-w-0 ${
+                        isAdmin ? "cursor-pointer" : ""
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        name="outreach_tag"
+                        value={t.tagId}
+                        checked={on}
+                        onChange={() => toggle(tags, setTags, t.tagId)}
+                        disabled={!isAdmin}
+                        className="accent-[var(--accent)] w-4 h-4 shrink-0"
+                      />
+                      <span className="truncate">{t.tagName ?? "(unnamed)"}</span>
+                    </label>
+                    <div className="flex items-center gap-3 text-xs text-muted shrink-0 tnum">
+                      <span>{t.people.toLocaleString()} tagged</span>
+                      {on && <span className="text-accent font-medium">outreach</span>}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))
+      )}
+
+      <div className="px-5 py-2.5 bg-bg-elev border-y border-border-soft">
         <h3 className="text-xs uppercase tracking-wider text-subtle font-medium">
           Serving teams
         </h3>
