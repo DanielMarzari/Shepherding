@@ -180,63 +180,67 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
         {/* Coverage strip. Read-only on purpose: it is a picture of the
             shape, and the "Lanes active" dropdown is the filter. Making it
             both meant a click could silently narrow the table while you
-            were only trying to read it. Every band is named in the key
-            underneath — the narrow ones (all five is 2.8% of the width)
-            can hold no label at all, so a tooltip was the only thing
-            identifying them. */}
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-[10px] uppercase tracking-wider text-subtle shrink-0">
-              Lanes per member
-            </span>
-            <div
-              role="img"
-              aria-label={audit.bandTotals
-                .map((n, i) =>
-                  n === 0 ? null : `${n} in ${bandName(i)}`,
-                )
-                .filter(Boolean)
-                .join(", ")}
-              className="flex h-7 flex-1 min-w-[320px] rounded-md overflow-hidden border border-border-soft"
-            >
-              {audit.bandTotals.map((n, i) => {
-                if (n === 0) return null;
-                const pct = (n / Math.max(1, audit.total)) * 100;
-                const st = BAND_STYLE[i];
-                return (
-                  <div
-                    key={i}
-                    style={{ width: `${pct}%`, background: st.bg, color: st.fg }}
-                    className="flex items-center justify-center text-[10px] font-bold tnum overflow-hidden"
-                  >
-                    {pct >= 7 ? n.toLocaleString() : ""}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+            were only trying to read it.
 
-          {/* The key. Says outright what each band is, so nothing depends
-              on hovering or on reading width. */}
-          <div className="flex flex-wrap gap-x-4 gap-y-1">
-            {audit.bandTotals.map((n, i) =>
-              n === 0 ? null : (
-                <span
-                  key={i}
-                  className="flex items-center gap-1.5 text-[11px] text-muted"
-                >
+            Each band is named directly above itself. The right-hand bands
+            are too narrow to sit a label over — 5 lanes is 30 of 1,078,
+            about 24px — so those labels lift slightly and drop a leader
+            line onto their band rather than tilting to fit. */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-subtle mb-1.5">
+            Lanes per member
+          </div>
+          <div className="relative h-10">
+            {(() => {
+              let acc = 0;
+              return audit.bandTotals.map((n, i) => {
+                if (n === 0) return null;
+                const w = (n / Math.max(1, audit.total)) * 100;
+                const mid = acc + w / 2;
+                acc += w;
+                const tight = w < 9;
+                return (
                   <span
-                    aria-hidden="true"
-                    className="w-2.5 h-2.5 rounded-sm shrink-0 border border-border-soft"
-                    style={{ background: BAND_STYLE[i].bg }}
-                  />
-                  <span>{bandName(i)}</span>
-                  <span className="tnum font-semibold text-fg">
-                    {n.toLocaleString()}
+                    key={i}
+                    style={{ left: `${mid}%` }}
+                    className="absolute bottom-0 -translate-x-1/2 flex flex-col items-center"
+                  >
+                    <span className="text-[11px] font-medium text-muted whitespace-nowrap">
+                      {bandName(i)}
+                    </span>
+                    {tight && (
+                      <span
+                        aria-hidden="true"
+                        className="w-px h-3 bg-border-soft"
+                      />
+                    )}
                   </span>
-                </span>
-              ),
-            )}
+                );
+              });
+            })()}
+          </div>
+          <div
+            role="img"
+            aria-label={audit.bandTotals
+              .map((n, i) => (n === 0 ? null : `${n} ${bandName(i)}`))
+              .filter(Boolean)
+              .join(", ")}
+            className="flex h-8 rounded-md overflow-hidden border border-border-soft"
+          >
+            {audit.bandTotals.map((n, i) => {
+              if (n === 0) return null;
+              const w = (n / Math.max(1, audit.total)) * 100;
+              const st = BAND_STYLE[i];
+              return (
+                <div
+                  key={i}
+                  style={{ width: `${w}%`, background: st.bg, color: st.fg }}
+                  className="flex items-center justify-center text-[11px] font-bold tnum overflow-hidden"
+                >
+                  {w >= 5 ? n.toLocaleString() : ""}
+                </div>
+              );
+            })}
           </div>
         </div>
 
