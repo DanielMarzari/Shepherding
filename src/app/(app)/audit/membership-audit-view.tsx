@@ -42,8 +42,11 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   // the filter card and the table rather than floating over it: both are
   // things you read while looking at the numbers, not menus you dismiss.
   const [panel, setPanel] = useState<"bylane" | "legend" | null>(null);
-  const [sort, setSort] = useState<SortKey>("days");
-  const [dir, setDir] = useState<"asc" | "desc">("desc");
+  // Opens sorted by name. Longest-silence-first is the better worklist
+  // order, but it made the page look like a list of problems before you
+  // had asked it anything; the column header is one click away.
+  const [sort, setSort] = useState<SortKey>("name");
+  const [dir, setDir] = useState<"asc" | "desc">("asc");
   // "count" = commonest first; "lanes" = W S C G O bit order, so every
   // combination containing Worship groups together, then Serve, and so on.
   const [comboSort, setComboSort] = useState<"count" | "lanes">("count");
