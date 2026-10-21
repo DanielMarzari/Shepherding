@@ -43,17 +43,6 @@ export default async function AuditPage() {
             <h1 className="text-2xl font-semibold tracking-tight mt-1">
               Membership
             </h1>
-            <p className="text-muted text-sm mt-1.5 max-w-2xl leading-relaxed">
-              Every member and the lanes they actually show up in. Click a band
-              to filter; the one you picked stays outlined.{" "}
-              <Link
-                href="/audit/membership-fit"
-                className="text-accent hover:underline"
-              >
-                Whether people are in the right membership type is a separate
-                audit &rarr;
-              </Link>
-            </p>
           </div>
         </div>
 

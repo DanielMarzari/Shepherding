@@ -38,6 +38,10 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   const [warnings, setWarnings] = useState<Set<string>>(new Set());
   const [activity, setActivity] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string | null>(null);
+  // Exactly one of the two reference panels can be open. They sit between
+  // the filter card and the table rather than floating over it: both are
+  // things you read while looking at the numbers, not menus you dismiss.
+  const [panel, setPanel] = useState<"bylane" | "legend" | null>(null);
   const [sort, setSort] = useState<SortKey>("days");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
   // "count" = commonest first; "lanes" = W S C G O bit order, so every
@@ -162,7 +166,13 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   })();
 
   return (
-    <div className="space-y-4" onClick={() => setOpen(null)}>
+    <div
+      className="space-y-4"
+      onClick={() => {
+        setOpen(null);
+        setPanel(null);
+      }}
+    >
       <div className="rounded-lg border border-border-soft bg-bg-elev px-5 py-4 space-y-3">
         {/* Coverage strip — click a band to filter by it */}
         <div className="flex flex-wrap items-center gap-3">
@@ -294,111 +304,17 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
             onToggle={(id) => setConnections(toggled(connections, id))}
           />
 
-          {/* See by lane — the combination breakdown, on the right */}
-          <div
-            className="ml-auto relative"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              type="button"
-              onClick={() => setOpen(open === "bylane" ? null : "bylane")}
-              aria-expanded={open === "bylane"}
-              className="flex items-center gap-2 rounded-md border border-border-soft bg-bg px-3 py-1.5 text-[13px] text-accent hover:bg-bg-elev-2"
-            >
-              See by lane
-              <span className="text-subtle text-xs">▾</span>
-            </button>
-            {open === "bylane" && (
-              <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[460px] rounded-lg border border-border-soft bg-bg-elev p-4 shadow-xl">
-                <div className="text-[10px] uppercase tracking-wider text-subtle mb-2.5">
-                  Members in each lane
-                </div>
-                <div className="flex flex-col gap-1.5 mb-4">
-                  {LANE_KEYS.map((k) => (
-                    <button
-                      key={k}
-                      type="button"
-                      onClick={() => setLanes(toggled(lanes, k))}
-                      className="flex items-center gap-2.5 w-full text-left rounded px-1 py-0.5 hover:bg-bg-elev-2"
-                    >
-                      <span className="text-xs w-[72px] shrink-0 text-muted">
-                        {LANE_LABELS[k]}
-                      </span>
-                      <span
-                        className="h-2.5 rounded-full shrink-0 bg-accent"
-                        style={{
-                          width: `${Math.max(
-                            6,
-                            (audit.laneTotals[k] /
-                              Math.max(1, Math.max(...Object.values(audit.laneTotals)))) *
-                              190,
-                          )}px`,
-                        }}
-                      />
-                      <span className="text-xs font-semibold tnum">
-                        {audit.laneTotals[k].toLocaleString()}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <div className="flex items-baseline justify-between gap-3 mb-2 pt-3 border-t border-border-soft">
-                  <span className="text-[10px] uppercase tracking-wider text-subtle">
-                    Combinations that occur ({audit.combos.length})
-                  </span>
-                  <span className="flex items-center gap-1 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() => setComboSort("count")}
-                      className={
-                        comboSort === "count"
-                          ? "text-accent font-semibold"
-                          : "text-subtle hover:text-fg"
-                      }
-                    >
-                      by number
-                    </button>
-                    <span className="text-subtle">·</span>
-                    <button
-                      type="button"
-                      onClick={() => setComboSort("lanes")}
-                      className={
-                        comboSort === "lanes"
-                          ? "text-accent font-semibold"
-                          : "text-subtle hover:text-fg"
-                      }
-                    >
-                      by lane
-                    </button>
-                  </span>
-                </div>
-                <div className="flex flex-col gap-0.5 max-h-[220px] overflow-y-auto">
-                  {sortedCombos.map((c) => (
-                    <button
-                      key={c.key || "none"}
-                      type="button"
-                      onClick={() => applyCombo(c.key)}
-                      className="flex items-center gap-2.5 w-full text-left rounded px-1 py-1 hover:bg-bg-elev-2"
-                    >
-                      <span className="flex gap-1 shrink-0" aria-hidden="true">
-                        <LaneTiles keys={c.key} size={15} />
-                      </span>
-                      <span
-                        className={`text-xs flex-1 min-w-0 truncate ${
-                          c.key === "" ? "text-warn-soft-fg font-medium" : "text-muted"
-                        }`}
-                      >
-                        {c.key === ""
-                          ? "No lane at all"
-                          : [...c.key].map((k) => LANE_LABELS[k as LaneKey]).join(" + ")}
-                      </span>
-                      <span className="text-xs font-semibold tnum w-[40px] text-right">
-                        {c.count.toLocaleString()}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+          <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            <PanelButton
+              label="See by lane"
+              active={panel === "bylane"}
+              onClick={() => setPanel(panel === "bylane" ? null : "bylane")}
+            />
+            <PanelButton
+              label="How is activity measured?"
+              active={panel === "legend"}
+              onClick={() => setPanel(panel === "legend" ? null : "legend")}
+            />
           </div>
         </div>
 
@@ -450,6 +366,28 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
         </div>
       </div>
 
+      {/* One expanding reference block, between the filters and the table */}
+      {panel !== null && (
+        <div
+          className="rounded-lg border border-accent/40 bg-bg-elev px-5 py-4"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {panel === "bylane" ? (
+            <ByLanePanel
+              audit={audit}
+              comboSort={comboSort}
+              setComboSort={setComboSort}
+              sortedCombos={sortedCombos}
+              lanes={lanes}
+              onToggleLane={(k) => setLanes(toggled(lanes, k))}
+              onPickCombo={applyCombo}
+            />
+          ) : (
+            <LaneLegend activityMonths={audit.activityMonths} />
+          )}
+        </div>
+      )}
+
       {/* Roster */}
       <div className="rounded-lg border border-border-soft bg-bg-elev overflow-hidden">
         <div className="overflow-x-auto">
@@ -485,8 +423,6 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
           Click any column header to sort · click it again to reverse
         </div>
       </div>
-
-      <LaneLegend activityMonths={audit.activityMonths} />
     </div>
   );
 }
@@ -520,7 +456,7 @@ function LaneLegend({ activityMonths }: { activityMonths: number }) {
     },
   ];
   return (
-    <div className="rounded-lg border border-border-soft bg-bg-elev px-5 py-4">
+    <div>
       <h2 className="text-[11px] uppercase tracking-wider text-subtle font-medium mb-3">
         What lights up each lane
       </h2>
@@ -774,6 +710,161 @@ function Dropdown({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** A toggle for one of the two reference panels. Reads as pressed while
+ *  its panel is open, so it is obvious which button opened the block. */
+function PanelButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={active}
+      className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] transition-colors ${
+        active
+          ? "border-accent bg-accent-soft-bg text-accent font-medium"
+          : "border-border-soft bg-bg text-accent hover:bg-bg-elev-2"
+      }`}
+    >
+      {label}
+      <span className="text-subtle text-xs" aria-hidden="true">
+        {active ? "\u25B4" : "\u25BE"}
+      </span>
+    </button>
+  );
+}
+
+/** Per-lane totals and every combination that occurs. Laid out in two
+ *  columns because as a single list it ran past the fold on a laptop. */
+function ByLanePanel({
+  audit,
+  comboSort,
+  setComboSort,
+  sortedCombos,
+  lanes,
+  onToggleLane,
+  onPickCombo,
+}: {
+  audit: MembershipAudit;
+  comboSort: "count" | "lanes";
+  setComboSort: (v: "count" | "lanes") => void;
+  sortedCombos: { key: string; count: number }[];
+  lanes: Set<LaneKey>;
+  onToggleLane: (k: LaneKey) => void;
+  onPickCombo: (key: string) => void;
+}) {
+  const widest = Math.max(1, ...Object.values(audit.laneTotals));
+  const commonest = Math.max(1, ...sortedCombos.map((c) => c.count));
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-x-10 gap-y-4">
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-subtle mb-2.5">
+          Members in each lane
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {LANE_KEYS.map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => onToggleLane(k)}
+              aria-pressed={lanes.has(k)}
+              className={`flex items-center gap-2.5 w-full text-left rounded px-1 py-0.5 hover:bg-bg-elev-2 ${
+                lanes.has(k) ? "text-accent font-medium" : ""
+              }`}
+            >
+              <span className="text-xs w-[72px] shrink-0 text-muted">
+                {LANE_LABELS[k]}
+              </span>
+              <span
+                className="h-2.5 rounded-full shrink-0 bg-accent"
+                style={{
+                  width: `${Math.max(6, (audit.laneTotals[k] / widest) * 120)}px`,
+                }}
+              />
+              <span className="text-xs font-semibold tnum">
+                {audit.laneTotals[k].toLocaleString()}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="min-w-0">
+        <div className="flex items-baseline justify-between gap-3 mb-2">
+          <span className="text-[10px] uppercase tracking-wider text-subtle">
+            Combinations that occur ({audit.combos.length})
+          </span>
+          <span className="flex items-center gap-1 text-[11px]">
+            <button
+              type="button"
+              onClick={() => setComboSort("count")}
+              className={
+                comboSort === "count"
+                  ? "text-accent font-semibold"
+                  : "text-subtle hover:text-fg"
+              }
+            >
+              by number
+            </button>
+            <span className="text-subtle">·</span>
+            <button
+              type="button"
+              onClick={() => setComboSort("lanes")}
+              className={
+                comboSort === "lanes"
+                  ? "text-accent font-semibold"
+                  : "text-subtle hover:text-fg"
+              }
+            >
+              by lane
+            </button>
+          </span>
+        </div>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-x-6 gap-y-0.5 max-h-[260px] overflow-y-auto">
+          {sortedCombos.map((c) => (
+            <button
+              key={c.key || "none"}
+              type="button"
+              onClick={() => onPickCombo(c.key)}
+              className="flex items-center gap-2.5 w-full text-left rounded px-1 py-1 hover:bg-bg-elev-2"
+            >
+              <span className="flex gap-1 shrink-0" aria-hidden="true">
+                <LaneTiles keys={c.key} size={15} />
+              </span>
+              <span
+                className={`text-xs flex-1 min-w-0 truncate ${
+                  c.key === "" ? "text-warn-soft-fg font-medium" : "text-muted"
+                }`}
+              >
+                {c.key === ""
+                  ? "No lane at all"
+                  : [...c.key].map((k) => LANE_LABELS[k as LaneKey]).join(" + ")}
+              </span>
+              <span
+                className="h-1.5 rounded-full shrink-0"
+                style={{
+                  width: `${Math.max(6, (c.count / commonest) * 56)}px`,
+                  background:
+                    c.key === "" ? "var(--warn-soft-fg)" : "var(--accent)",
+                }}
+              />
+              <span className="text-xs font-semibold tnum w-[40px] text-right">
+                {c.count.toLocaleString()}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
