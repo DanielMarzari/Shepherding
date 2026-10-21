@@ -62,9 +62,14 @@ jobs:
           # the key is command-restricted to this one dir and three verbs
           # (rsync / migrate / restart). .env.production is written by the step
           # above and must survive --delete, so keep it excluded.
+          # .next/cache is the RUNNING app's state, not build output: Next
+          # writes its fetch/ISR cache there as the pm2 user (ubuntu) while
+          # the deploy user owns the directory tree. --delete therefore tries
+          # to unlink files it has no permission to touch and the whole rsync
+          # exits 23, before migrate and restart. Leave the cache alone.
           rsync -avzO --no-perms --no-times --mkpath --delete \
             --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' \
-            --exclude='.env.production' \
+            --exclude='.env.production' --exclude='.next/cache/' \
             -e "ssh -i ~/.ssh/deploy_key" \
             .next/standalone/ \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:
