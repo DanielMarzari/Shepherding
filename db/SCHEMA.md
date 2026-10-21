@@ -147,6 +147,9 @@ schedule in `pco_sync_settings`, covering the entities enabled in
 | `pco_teams` | 153 | A serving team. |
 | `pco_team_positions` | 715 | A position on a team. |
 | `pco_team_memberships` | 5,803 | A *current* member of a team roster, replaced per team like group memberships. `last_served_at` is computed (`refreshLastServed`) and can be in the future (§3). |
+| `pco_tag_groups` | 89 | A Services tag group. `tags_for` is `person` / `song` / …; only the 81 person groups are synced further or shown anywhere. |
+| `pco_tags` | 368 | One tag inside a person tag group — "ESL Volunteer", "Meal Deliverer", "Prayer Captain". |
+| `pco_person_tags` | 5,404 | A person holds a tag (1,942 people). Replaced wholesale each sync, not upserted: a tag being REMOVED is the change that matters, and "Former Local Outreach Volunteer" exists as its own tag, so people do move. No FK on `person_id` — a tag can arrive for somebody the people sync filtered out. |
 | `pco_calendar_events` | 6,260 | A Calendar event. Has no date. `owner_id` is a person. |
 | `pco_calendar_event_instances` | 33,412 | One dated occurrence of an event: what the facilities reports count. |
 | `pco_calendar_resources` | 90 | A room or piece of equipment. |
@@ -192,7 +195,7 @@ admin presses Refresh (`launchRefresh`), and whenever the cron's self-heal
 
 | Table | Rows | Built by | A row is |
 |---|--:|---|---|
-| `person_activity` | 34,668 | `rebuildPersonActivity`, `classifyPersonActivity` | One per person: latest activity of each kind, active group and team counts, `in_worship_lane` / `in_community_lane` / `in_serving_lane`, and `classification` (shepherded / active / present / inactive) under `pco_sync_settings.activity_months`. |
+| `person_activity` | 34,668 | `rebuildPersonActivity`, `classifyPersonActivity` | One per person: latest activity of each kind, active group and team counts, `in_worship_lane` / `in_community_lane` / `in_serving_lane` / `in_giving_lane` / `in_outreach_lane` (the last two added 0103; giving is windowed, outreach is whatever `pco_sync_settings.outreach_service_types` + `outreach_group_types` + `outreach_tags` name — nothing tagged means an empty lane, by design), and `classification` (shepherded / active / present / inactive) under `pco_sync_settings.activity_months`. |
 | `group_summary` | 112 | `rebuildGroupSummary` | One per active (non-archived) group: members, leaders, 30-day joins and leaves, attendance %, `state` (growing / steady / paused). |
 | `org_snapshot` | 1 | `rebuildOrgSnapshot` | Org-wide counts by classification and lane. `activity_months` records which window built them. |
 | `lane_transitions` | 4 | `rebuildLaneTransitions` | Lane moves (`from_state` → `to_state`) replayed over every person's history, so one person can count more than once. |
