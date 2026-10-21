@@ -21,12 +21,12 @@ const PCO_PERSON = "https://people.planningcenteronline.com/people/";
  *  "no lane" band is the one warm colour on the page, so the shape reads
  *  without relying on hue — amber vs blues differ in lightness too. */
 const BAND_STYLE = [
-  { bg: "var(--warn-soft-bg)", fg: "var(--warn-soft-fg)", label: "no lane" },
-  { bg: "color-mix(in srgb, var(--accent) 14%, transparent)", fg: "var(--fg)", label: "one" },
-  { bg: "color-mix(in srgb, var(--accent) 30%, transparent)", fg: "var(--fg)", label: "two" },
-  { bg: "color-mix(in srgb, var(--accent) 48%, transparent)", fg: "var(--fg)", label: "three" },
-  { bg: "color-mix(in srgb, var(--accent) 70%, transparent)", fg: "var(--accent-fg)", label: "four" },
-  { bg: "var(--accent)", fg: "var(--accent-fg)", label: "all five" },
+  { bg: "var(--warn-soft-bg)", fg: "var(--warn-soft-fg)" },
+  { bg: "color-mix(in srgb, var(--accent) 14%, transparent)", fg: "var(--fg)" },
+  { bg: "color-mix(in srgb, var(--accent) 30%, transparent)", fg: "var(--fg)" },
+  { bg: "color-mix(in srgb, var(--accent) 48%, transparent)", fg: "var(--fg)" },
+  { bg: "color-mix(in srgb, var(--accent) 70%, transparent)", fg: "var(--accent-fg)" },
+  { bg: "var(--accent)", fg: "var(--accent-fg)" },
 ];
 
 type SortKey = "name" | "lanes" | "days" | "connection" | "flags";
@@ -177,36 +177,66 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       }}
     >
       <div className="rounded-lg border border-border-soft bg-bg-elev px-5 py-4 space-y-3">
-        {/* Coverage strip — click a band to filter by it */}
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-[10px] uppercase tracking-wider text-subtle shrink-0">
-            Lanes per member
-          </span>
-          <div className="flex h-9 flex-1 min-w-[320px] rounded-md overflow-hidden border border-border-soft">
-            {audit.bandTotals.map((n, i) => {
-              if (n === 0) return null;
-              const on = bands.has(i);
-              const st = BAND_STYLE[i];
-              return (
-                <button
+        {/* Coverage strip. Read-only on purpose: it is a picture of the
+            shape, and the "Lanes active" dropdown is the filter. Making it
+            both meant a click could silently narrow the table while you
+            were only trying to read it. Every band is named in the key
+            underneath — the narrow ones (all five is 2.8% of the width)
+            can hold no label at all, so a tooltip was the only thing
+            identifying them. */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-[10px] uppercase tracking-wider text-subtle shrink-0">
+              Lanes per member
+            </span>
+            <div
+              role="img"
+              aria-label={audit.bandTotals
+                .map((n, i) =>
+                  n === 0 ? null : `${n} in ${bandName(i)}`,
+                )
+                .filter(Boolean)
+                .join(", ")}
+              className="flex h-7 flex-1 min-w-[320px] rounded-md overflow-hidden border border-border-soft"
+            >
+              {audit.bandTotals.map((n, i) => {
+                if (n === 0) return null;
+                const pct = (n / Math.max(1, audit.total)) * 100;
+                const st = BAND_STYLE[i];
+                return (
+                  <div
+                    key={i}
+                    style={{ width: `${pct}%`, background: st.bg, color: st.fg }}
+                    className="flex items-center justify-center text-[10px] font-bold tnum overflow-hidden"
+                  >
+                    {pct >= 7 ? n.toLocaleString() : ""}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* The key. Says outright what each band is, so nothing depends
+              on hovering or on reading width. */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {audit.bandTotals.map((n, i) =>
+              n === 0 ? null : (
+                <span
                   key={i}
-                  type="button"
-                  onClick={() => setBands(toggled(bands, i))}
-                  aria-pressed={on}
-                  title={`${n} members in ${st.label}`}
-                  style={{
-                    width: `${(n / Math.max(1, audit.total)) * 100}%`,
-                    background: st.bg,
-                    color: st.fg,
-                    boxShadow: on ? "inset 0 0 0 2px var(--fg)" : undefined,
-                  }}
-                  className="flex items-center justify-center text-[10px] font-bold tnum transition-[filter] hover:brightness-95"
+                  className="flex items-center gap-1.5 text-[11px] text-muted"
                 >
-                  {n}
-                  <span className="sr-only"> members in {st.label}</span>
-                </button>
-              );
-            })}
+                  <span
+                    aria-hidden="true"
+                    className="w-2.5 h-2.5 rounded-sm shrink-0 border border-border-soft"
+                    style={{ background: BAND_STYLE[i].bg }}
+                  />
+                  <span>{bandName(i)}</span>
+                  <span className="tnum font-semibold text-fg">
+                    {n.toLocaleString()}
+                  </span>
+                </span>
+              ),
+            )}
           </div>
         </div>
 
@@ -1011,6 +1041,13 @@ function exportRows(rows: AuditPersonRow[], membershipType: string) {
 
 function csvCell(v: string): string {
   return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+/** "In no lane", "1 lane", "2 lanes"… Spelled out in the key rather than
+ *  left to a tooltip, because the narrow bands cannot carry a label. */
+function bandName(i: number): string {
+  if (i === 0) return "In no lane";
+  return `${i} lane${i === 1 ? "" : "s"}`;
 }
 
 function laneSummary(r: AuditPersonRow): string {
