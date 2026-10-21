@@ -1,6 +1,11 @@
 import "server-only";
 import { getDb, prepareCached } from "./db";
-import { getExcludedMembershipTypes, getSyncSettings } from "./pco";
+import {
+  getExcludedMembershipTypes,
+  getOutreachGroupTypes,
+  getOutreachServiceTypes,
+  getSyncSettings,
+} from "./pco";
 import { populateShepherdedTempTable } from "./people-read";
 import { rebuildDuplicatePairs } from "./audit-read";
 import { refreshRetentionReturns } from "./retention-read";
@@ -482,6 +487,61 @@ export function getRefreshRunStatus(runId: number): RefreshRunStatus | null {
  *  used to take long enough to wedge the entire server — interleaves
  *  with normal page-render requests. The actual SQL is the same as
  *  the sync version below; only the choreography differs. */
+/** The two lane flags that are not derivable from a roster count.
+ *
+ *  Giving: a person is in the lane when they have a gift inside the org's
+ *  activity window. The PushPay import currently only covers 2026, so in
+ *  practice every recorded gift is inside it — that will stop being true
+ *  once older exports are loaded, which is exactly why this is windowed
+ *  rather than "has ever given".
+ *
+ *  Outreach: there is no PCO field for it. The lane is whatever service
+ *  types and group types the admin tagged in /pco/filters. Nothing tagged
+ *  means nobody is in the lane — an empty lane the page can explain, rather
+ *  than one guessed from team names that breaks when a team is renamed. */
+function buildLaneTempTables(
+  db: ReturnType<typeof getDb>,
+  orgId: number,
+  cutoffActivity: string,
+): void {
+  db.exec(`
+    DROP TABLE IF EXISTS _pa_give;
+    DROP TABLE IF EXISTS _pa_outreach;
+  `);
+  db.prepare(
+    `CREATE TEMP TABLE _pa_give AS
+       SELECT DISTINCT person_id FROM pushpay_payer_summary
+        WHERE org_id = ? AND person_id IS NOT NULL
+          AND last_gift_on IS NOT NULL
+          AND last_gift_on >= substr(?, 1, 10)`,
+  ).run(orgId, cutoffActivity);
+  db.exec(`CREATE UNIQUE INDEX _pa_give_pid ON _pa_give(person_id);`);
+
+  const svcTypes = getOutreachServiceTypes(orgId);
+  const grpTypes = getOutreachGroupTypes(orgId);
+  const svcIn = svcTypes.length
+    ? `t.service_type_id IN (${svcTypes.map(() => "?").join(",")})`
+    : "0";
+  const grpIn = grpTypes.length
+    ? `g.group_type_id IN (${grpTypes.map(() => "?").join(",")})`
+    : "0";
+  db.prepare(
+    `CREATE TEMP TABLE _pa_outreach AS
+       SELECT DISTINCT tm.person_id AS person_id
+         FROM pco_team_memberships tm
+         JOIN pco_teams t ON t.org_id = tm.org_id AND t.pco_id = tm.team_id
+        WHERE tm.org_id = ? AND tm.archived_at IS NULL AND tm.person_id != ''
+          AND t.archived_at IS NULL AND ${svcIn}
+       UNION
+       SELECT DISTINCT gm.person_id
+         FROM pco_group_memberships gm
+         JOIN pco_groups g ON g.org_id = gm.org_id AND g.pco_id = gm.group_id
+        WHERE gm.org_id = ? AND gm.archived_at IS NULL
+          AND g.archived_at IS NULL AND ${grpIn}`,
+  ).run(orgId, ...svcTypes, orgId, ...grpTypes);
+  db.exec(`CREATE UNIQUE INDEX _pa_outreach_pid ON _pa_outreach(person_id);`);
+}
+
 async function rebuildPersonActivityAsync(
   orgId: number,
   cutoffActivity: string,
@@ -507,6 +567,8 @@ async function rebuildPersonActivityAsync(
       DROP TABLE IF EXISTS _pa_first_serv;
       DROP TABLE IF EXISTS _pa_wors_grp;
       DROP TABLE IF EXISTS _pa_wors_plan;
+      DROP TABLE IF EXISTS _pa_give;
+      DROP TABLE IF EXISTS _pa_outreach;
       DROP TABLE IF EXISTS _pa_new;
     `);
   drop();
@@ -610,6 +672,7 @@ async function rebuildPersonActivityAsync(
           AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')`,
   ).run(orgId, cutoffActivity);
   db.exec(`CREATE UNIQUE INDEX _pa_wors_plan_pid ON _pa_wors_plan(person_id);`);
+  buildLaneTempTables(db, orgId, cutoffActivity);
   await yieldTick();
 
   // Build the whole rebuilt snapshot into a TEMP staging table first
@@ -641,6 +704,8 @@ async function rebuildPersonActivityAsync(
             THEN 1 ELSE 0 END AS in_worship_lane,
        CASE WHEN coalesce(gc.n, 0) > 0 THEN 1 ELSE 0 END AS in_community_lane,
        CASE WHEN coalesce(tc.n, 0) > 0 THEN 1 ELSE 0 END AS in_serving_lane,
+       CASE WHEN gv.person_id IS NOT NULL THEN 1 ELSE 0 END AS in_giving_lane,
+       CASE WHEN ou.person_id IS NOT NULL THEN 1 ELSE 0 END AS in_outreach_lane,
        fc.at AS first_comm_at,
        fs.at AS first_serv_at
      FROM pco_people p
@@ -652,6 +717,8 @@ async function rebuildPersonActivityAsync(
      LEFT JOIN _pa_first_serv  fs ON fs.person_id = p.pco_id
      LEFT JOIN _pa_wors_grp    wg ON wg.person_id = p.pco_id
      LEFT JOIN _pa_wors_plan   wp ON wp.person_id = p.pco_id
+     LEFT JOIN _pa_give        gv ON gv.person_id = p.pco_id
+     LEFT JOIN _pa_outreach    ou ON ou.person_id = p.pco_id
      WHERE p.org_id = ? ${excludedMemClause}`,
   ).run(nowIso, nowIso, nowIso, orgId, ...excludedMem);
   await yieldTick();
@@ -668,12 +735,14 @@ async function rebuildPersonActivityAsync(
           last_pco_updated_at, last_activity_at,
           active_group_count, active_team_count,
           in_worship_lane, in_community_lane, in_serving_lane,
+          in_giving_lane, in_outreach_lane,
           first_comm_at, first_serv_at, classification)
        SELECT org_id, person_id,
               last_form_submission_at, last_check_in_at, last_attended_at, last_served_at,
               last_pco_updated_at, last_activity_at,
               active_group_count, active_team_count,
               in_worship_lane, in_community_lane, in_serving_lane,
+              in_giving_lane, in_outreach_lane,
               first_comm_at, first_serv_at, NULL
          FROM _pa_new`,
     ).run();
@@ -804,6 +873,8 @@ function rebuildPersonActivity(
     DROP TABLE IF EXISTS _pa_first_serv;
     DROP TABLE IF EXISTS _pa_wors_grp;
     DROP TABLE IF EXISTS _pa_wors_plan;
+    DROP TABLE IF EXISTS _pa_give;
+    DROP TABLE IF EXISTS _pa_outreach;
   `);
   db.prepare(
     `CREATE TEMP TABLE _pa_max_att AS
@@ -892,6 +963,7 @@ function rebuildPersonActivity(
           AND lower(coalesce(pp.status,'c')) NOT IN ('d','declined')`,
   ).run(orgId, cutoffActivity);
   db.exec(`CREATE UNIQUE INDEX _pa_wors_plan_pid ON _pa_wors_plan(person_id);`);
+  buildLaneTempTables(db, orgId, cutoffActivity);
 
   // Single INSERT — every per-person value comes from a LEFT JOIN
   // against one of the temp tables above. last_activity_at is the
@@ -906,6 +978,7 @@ function rebuildPersonActivity(
         last_pco_updated_at, last_activity_at,
         active_group_count, active_team_count,
         in_worship_lane, in_community_lane, in_serving_lane,
+        in_giving_lane, in_outreach_lane,
         first_comm_at, first_serv_at,
         classification)
      SELECT
@@ -932,6 +1005,8 @@ function rebuildPersonActivity(
             THEN 1 ELSE 0 END,
        CASE WHEN coalesce(gc.n, 0) > 0 THEN 1 ELSE 0 END,
        CASE WHEN coalesce(tc.n, 0) > 0 THEN 1 ELSE 0 END,
+       CASE WHEN gv.person_id IS NOT NULL THEN 1 ELSE 0 END,
+       CASE WHEN ou.person_id IS NOT NULL THEN 1 ELSE 0 END,
        fc.at,
        fs.at,
        NULL
@@ -944,6 +1019,8 @@ function rebuildPersonActivity(
      LEFT JOIN _pa_first_serv  fs ON fs.person_id = p.pco_id
      LEFT JOIN _pa_wors_grp    wg ON wg.person_id = p.pco_id
      LEFT JOIN _pa_wors_plan   wp ON wp.person_id = p.pco_id
+     LEFT JOIN _pa_give        gv ON gv.person_id = p.pco_id
+     LEFT JOIN _pa_outreach    ou ON ou.person_id = p.pco_id
      WHERE p.org_id = ?`,
   ).run(nowIso, nowIso, nowIso, orgId);
 
@@ -966,6 +1043,8 @@ function rebuildPersonActivity(
     DROP TABLE IF EXISTS _pa_first_serv;
     DROP TABLE IF EXISTS _pa_wors_grp;
     DROP TABLE IF EXISTS _pa_wors_plan;
+    DROP TABLE IF EXISTS _pa_give;
+    DROP TABLE IF EXISTS _pa_outreach;
   `);
 }
 

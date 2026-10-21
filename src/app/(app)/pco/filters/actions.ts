@@ -10,6 +10,8 @@ import {
   saveExcludedTeamPositions,
   saveExcludedTeamTypes,
   saveKidCheckinEvents,
+  saveOutreachGroupTypes,
+  saveOutreachServiceTypes,
   saveSundayCheckinEvents,
 } from "@/lib/pco";
 
@@ -156,5 +158,39 @@ export async function saveGroupTypeFiltersAction(
       excluded.length === 0
         ? "All group types now count for Shepherded."
         : `Excluding ${excluded.length} group type${excluded.length === 1 ? "" : "s"} from Shepherded.`,
+  };
+}
+
+/** The Outreach lane's definition. Include lists, not exclude lists — the
+ *  only tab on this page that works that way, because outreach has no
+ *  derivable signal to subtract from. Saving changes nothing until the next
+ *  snapshot refresh, so the message says so rather than implying the lane
+ *  repopulates on submit. */
+export async function saveOutreachLaneAction(
+  _prev: FilterSaveState | null,
+  formData: FormData,
+): Promise<FilterSaveState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") {
+    return { status: "error", message: "Only admins can change filters." };
+  }
+  const serviceTypes = formData
+    .getAll("outreach_service_type")
+    .filter((v) => typeof v === "string") as string[];
+  const groupTypes = formData
+    .getAll("outreach_group_type")
+    .filter((v) => typeof v === "string") as string[];
+  saveOutreachServiceTypes(s.orgId, serviceTypes);
+  saveOutreachGroupTypes(s.orgId, groupTypes);
+  revalidatePath("/pco/filters");
+  revalidatePath("/audit");
+  revalidatePath("/lanes");
+  const total = serviceTypes.length + groupTypes.length;
+  return {
+    status: "saved",
+    message:
+      total === 0
+        ? "Nothing counts as outreach — the lane will be empty for everyone."
+        : `${total} type${total === 1 ? "" : "s"} saved. The Outreach lane fills on the next snapshot refresh.`,
   };
 }

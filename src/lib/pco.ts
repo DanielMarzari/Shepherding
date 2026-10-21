@@ -890,6 +890,65 @@ export function saveExcludedTeamTypes(orgId: number, ids: string[]) {
     .run(json, orgId);
 }
 
+// ─── Outreach lane ────────────────────────────────────────────────────
+//
+// The other four lanes are derived — a group membership IS community, a
+// team membership IS serving. Outreach has no equivalent: PCO has no field
+// for it, and the ministries that count are local (ELM, the prayer teams,
+// ESL, Foster/Adopt, On Mission Sports, Community Partners). So it is
+// configured rather than inferred, as two lists of pco ids picked in
+// /pco/filters. Empty means the lane is empty for everyone, which is the
+// honest default — better than guessing from team names, which breaks
+// silently the first time somebody renames a team.
+
+/** Read a JSON string-array settings column, tolerating NULL and junk. */
+function readIdList(orgId: number, column: string): string[] {
+  const row = getDb()
+    .prepare(`SELECT ${column} AS ids FROM pco_sync_settings WHERE org_id = ?`)
+    .get(orgId) as { ids: string | null } | undefined;
+  if (!row?.ids) return [];
+  try {
+    const parsed = JSON.parse(row.ids);
+    return Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Write a JSON string-array settings column. Empty list stores NULL so
+ *  "never configured" and "configured to nothing" read the same way. */
+function writeIdList(orgId: number, column: string, ids: string[]): void {
+  const cleaned = Array.from(new Set(ids.filter(Boolean)));
+  const json = cleaned.length === 0 ? null : JSON.stringify(cleaned);
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) saveSyncSettings(orgId, getSyncSettings(orgId));
+  getDb()
+    .prepare(
+      `UPDATE pco_sync_settings SET ${column} = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id = ?`,
+    )
+    .run(json, orgId);
+}
+
+/** Service types (the UI calls them team types) whose teams are outreach. */
+export const getOutreachServiceTypes = cache(getOutreachServiceTypesImpl);
+function getOutreachServiceTypesImpl(orgId: number): string[] {
+  return readIdList(orgId, "outreach_service_types");
+}
+export function saveOutreachServiceTypes(orgId: number, ids: string[]) {
+  writeIdList(orgId, "outreach_service_types", ids);
+}
+
+/** Group types whose groups are outreach. */
+export const getOutreachGroupTypes = cache(getOutreachGroupTypesImpl);
+function getOutreachGroupTypesImpl(orgId: number): string[] {
+  return readIdList(orgId, "outreach_group_types");
+}
+export function saveOutreachGroupTypes(orgId: number, ids: string[]) {
+  writeIdList(orgId, "outreach_group_types", ids);
+}
+
 export function getServiceTypeStats(
   orgId: number,
 ): {

@@ -10,6 +10,8 @@ import {
   getExcludedTeamTypes,
   getGroupTypeStats,
   getMembershipTypeStats,
+  getOutreachGroupTypes,
+  getOutreachServiceTypes,
   getServiceTypeStats,
   getAdultCheckinEvents,
   getExcludedCheckinEvents,
@@ -20,6 +22,7 @@ import {
 import { CheckinEventsForm } from "./checkin-events-form";
 import { FiltersForm } from "./form";
 import { GroupTypeFiltersForm } from "./group-types-form";
+import { OutreachLaneForm } from "./outreach-form";
 import { TeamTypeFiltersForm } from "./team-types-form";
 
 const TABS = [
@@ -27,6 +30,7 @@ const TABS = [
   { key: "groups", label: "Group types" },
   { key: "teams", label: "Team types" },
   { key: "checkins", label: "Check-in events" },
+  { key: "outreach", label: "Outreach lane" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -57,6 +61,9 @@ export default async function FiltersPage({
   const teamExcluded = new Set(getExcludedTeamTypes(session.orgId));
   const positionStats = getTeamPositionStats(session.orgId);
   const positionExcluded = getExcludedTeamPositions(session.orgId);
+
+  const outreachServiceTypes = getOutreachServiceTypes(session.orgId);
+  const outreachGroupTypes = getOutreachGroupTypes(session.orgId);
 
   const checkinStats = getCheckinEventStats(session.orgId);
   const excludedCheckin = getExcludedCheckinEvents(session.orgId);
@@ -142,7 +149,28 @@ export default async function FiltersPage({
           </nav>
         </div>
 
-        {tab === "checkins" ? (
+        {tab === "outreach" ? (
+          <Card>
+            <CardHeader
+              title="Outreach lane"
+              badge={
+                session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
+              }
+              right={
+                <span className="text-xs text-muted">
+                  ticked types COUNT as outreach — the reverse of the other tabs
+                </span>
+              }
+            />
+            <OutreachLaneForm
+              teamStats={teamStats}
+              groupStats={groupStats}
+              initialServiceTypes={outreachServiceTypes}
+              initialGroupTypes={outreachGroupTypes}
+              isAdmin={session.role === "admin"}
+            />
+          </Card>
+        ) : tab === "checkins" ? (
           <Card>
             <CardHeader
               title="Check-in events"
