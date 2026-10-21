@@ -199,24 +199,36 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
 
         {/* Controls */}
         <div className="flex flex-wrap items-center gap-2">
-          <Dropdown
-            id="lanes"
-            label="Lanes"
-            value={
-              lanes.size
-                ? [...lanes].map((k) => LANE_LABELS[k]).join(" + ")
-                : "any"
-            }
-            open={open === "lanes"}
-            setOpen={setOpen}
-            items={LANE_KEYS.map((k) => ({
-              id: k,
-              label: LANE_LABELS[k],
-              count: audit.laneTotals[k],
-              checked: lanes.has(k),
-            }))}
-            onToggle={(id) => setLanes(toggled(lanes, id as LaneKey))}
-          />
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-wider text-subtle">
+              Lanes
+            </span>
+            <div className="flex gap-1">
+              {LANE_KEYS.map((k) => {
+                const on = lanes.has(k);
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setLanes(toggled(lanes, k))}
+                    aria-pressed={on}
+                    title={`${LANE_LABELS[k]} — ${audit.laneTotals[k].toLocaleString()} members`}
+                    className={`w-7 h-7 rounded font-bold text-[11px] flex items-center justify-center border transition-colors ${
+                      on
+                        ? "bg-accent text-[var(--accent-fg)] border-accent"
+                        : "border-dashed border-border-soft text-subtle hover:text-fg hover:border-fg/40"
+                    }`}
+                  >
+                    {k.toUpperCase()}
+                    <span className="sr-only">
+                      {" "}
+                      {LANE_LABELS[k]}, {audit.laneTotals[k]} members
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <Dropdown
             id="bands"
             label="Lanes active"
@@ -473,6 +485,77 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
           Click any column header to sort · click it again to reverse
         </div>
       </div>
+
+      <LaneLegend activityMonths={audit.activityMonths} />
+    </div>
+  );
+}
+
+/** What actually lights each lane. Written out because "Worship" sounds
+ *  like Sunday attendance and is not — adults rarely check in, so the lane
+ *  leans on event attendance and serving. Anyone reading a number off this
+ *  page deserves to know what it counts before they act on it. */
+function LaneLegend({ activityMonths }: { activityMonths: number }) {
+  const rows: { k: LaneKey; what: string }[] = [
+    {
+      k: "w",
+      what:
+        "Attended a group meeting or event that was marked attended, or was scheduled (and did not decline) on a service plan.",
+    },
+    {
+      k: "s",
+      what:
+        "Currently on a serving team roster in PCO Services. Archived teams do not count; team types you excluded in Filters do not either.",
+    },
+    {
+      k: "c",
+      what:
+        "Currently a member of a group that is still running. A membership in an archived group is history, not community.",
+    },
+    { k: "g", what: "Has a gift on record in the PushPay import." },
+    {
+      k: "o",
+      what:
+        "Holds a Services tag, is on a team, or is in a group that you marked as outreach in Filters. Nothing else infers it.",
+    },
+  ];
+  return (
+    <div className="rounded-lg border border-border-soft bg-bg-elev px-5 py-4">
+      <h2 className="text-[11px] uppercase tracking-wider text-subtle font-medium mb-3">
+        What lights up each lane
+      </h2>
+      <dl className="space-y-2.5">
+        {rows.map((r) => (
+          <div key={r.k} className="flex gap-3 items-baseline">
+            <dt className="shrink-0 flex items-center gap-2 w-[112px]">
+              <span
+                aria-hidden="true"
+                className="w-5 h-5 rounded bg-accent text-[var(--accent-fg)] text-[9px] font-bold flex items-center justify-center"
+              >
+                {r.k.toUpperCase()}
+              </span>
+              <span className="text-[13px] font-medium">{LANE_LABELS[r.k]}</span>
+            </dt>
+            <dd className="text-[13px] text-muted leading-relaxed">{r.what}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-xs text-subtle mt-4 pt-3 border-t border-border-soft leading-relaxed">
+        All five look back over your activity window of{" "}
+        <strong className="text-muted">{activityMonths} months</strong>, set in{" "}
+        <a href="/pco" className="text-accent hover:underline">
+          Sync settings
+        </a>
+        . <strong className="text-muted">Last activity</strong> is the most
+        recent of: group or event attendance, serving on a plan, a check-in, a
+        form submission, a gift, or an edit to the PCO record itself.
+      </p>
+      <p className="text-xs text-subtle mt-2 leading-relaxed">
+        Two caveats worth holding onto. Adults rarely check themselves in, so
+        Worship under-counts Sunday attendance badly — it is not a headcount.
+        And the gift history currently loaded only covers 2026, so Give cannot
+        yet tell a lapsed giver from a new one.
+      </p>
     </div>
   );
 }
@@ -536,7 +619,15 @@ function Row({ r }: { r: AuditPersonRow }) {
       <td className="px-4 py-2 text-xs">
         {r.flags.length ? (
           <span className="inline-flex items-center gap-1.5 text-subtle">
-            <span className="truncate">{r.flags.join(" · ")}</span>
+            <span className="truncate">
+              {r.flags
+                .map((f) =>
+                  f === "Possible duplicate" && r.duplicateOf.length
+                    ? `Duplicate of ${r.duplicateOf.map((d) => d.name).join(", ")}`
+                    : f,
+                )
+                .join(" · ")}
+            </span>
             <a
               href={`${PCO_PERSON}${r.pcoId}`}
               target="_blank"

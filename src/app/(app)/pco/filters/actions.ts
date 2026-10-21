@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
+import { recomputeOutreachLane } from "@/lib/dashboard-refresh";
 import {
   saveAdultCheckinEvents,
   saveExcludedCheckinEvents,
@@ -187,6 +188,15 @@ export async function saveOutreachLaneAction(
   saveOutreachServiceTypes(s.orgId, serviceTypes);
   saveOutreachGroupTypes(s.orgId, groupTypes);
   saveOutreachTags(s.orgId, tags);
+  // Land it now. This is a settings edit — no PCO data changed — so making
+  // the admin wait for the nightly refresh (or sit through a sync) to see
+  // their own tick take effect would be absurd.
+  let inLane: number | null = null;
+  try {
+    inLane = recomputeOutreachLane(s.orgId);
+  } catch {
+    inLane = null;
+  }
   revalidatePath("/pco/filters");
   revalidatePath("/audit");
   revalidatePath("/lanes");
@@ -195,7 +205,11 @@ export async function saveOutreachLaneAction(
     status: "saved",
     message:
       total === 0
-        ? "Nothing counts as outreach — the lane will be empty for everyone."
-        : `${total} type${total === 1 ? "" : "s"} saved. The Outreach lane fills on the next snapshot refresh.`,
+        ? "Nothing counts as outreach — the lane is now empty for everyone."
+        : `${total} saved.${
+            inLane === null
+              ? " The Outreach lane fills on the next snapshot refresh."
+              : ` ${inLane.toLocaleString()} people are in the Outreach lane.`
+          }`,
   };
 }

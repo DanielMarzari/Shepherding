@@ -67,6 +67,10 @@ export interface AuditPersonRow {
   /** Data-hygiene notes. Deliberately separate from the lanes: these are
    *  records to fix in PCO, not people to pastor. */
   flags: string[];
+  /** Who this person is a possible duplicate OF. Shown beside the flag so
+   *  the pair can be judged without opening two tabs. High-confidence
+   *  pairs only, and a person can be in more than one. */
+  duplicateOf: { pcoId: string; name: string }[];
 }
 
 export interface MembershipAudit {
@@ -81,6 +85,8 @@ export interface MembershipAudit {
   connectionTotals: Record<string, number>;
   flaggedTotal: number;
   refreshedAt: string | null;
+  /** The org's activity window, in months — what every lane looks back over. */
+  activityMonths: number;
 }
 
 /** "3 days", "14 months", "2 yr 1 mo" — the column is scanned, not read,

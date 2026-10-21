@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { getDb } from "./db";
+import { getSyncSettings } from "./pco";
 import {
   LANE_KEYS,
   type AuditPersonRow,
@@ -105,6 +106,40 @@ function getMembershipAuditImpl(
     )
     .all(orgId, orgId, orgId, membershipType) as RawRow[];
 
+  // Who each person pairs with, resolved to names in one pass. The column
+  // showing "Possible duplicate" without saying duplicate of WHOM made the
+  // flag unactionable: you had to go to /audit/duplicates to find out.
+  const pairRows = db
+    .prepare(
+      `SELECT dp.person_a AS a, dp.person_b AS b,
+              pa.first_name AS aFirst, pa.last_name AS aLast,
+              pb.first_name AS bFirst, pb.last_name AS bLast
+         FROM duplicate_pairs dp
+         LEFT JOIN pco_people pa ON pa.org_id = dp.org_id AND pa.pco_id = dp.person_a
+         LEFT JOIN pco_people pb ON pb.org_id = dp.org_id AND pb.pco_id = dp.person_b
+        WHERE dp.org_id = ? AND dp.confidence = 'high'`,
+    )
+    .all(orgId) as Array<{
+    a: string;
+    b: string;
+    aFirst: string | null;
+    aLast: string | null;
+    bFirst: string | null;
+    bLast: string | null;
+  }>;
+
+  const partners = new Map<string, { pcoId: string; name: string }[]>();
+  const nameOf = (f: string | null, l: string | null, id: string) =>
+    [f?.trim(), l?.trim()].filter(Boolean).join(" ") || `(unknown #${id})`;
+  for (const pr of pairRows) {
+    const aName = nameOf(pr.aFirst, pr.aLast, pr.a);
+    const bName = nameOf(pr.bFirst, pr.bLast, pr.b);
+    if (!partners.has(pr.a)) partners.set(pr.a, []);
+    if (!partners.has(pr.b)) partners.set(pr.b, []);
+    partners.get(pr.a)!.push({ pcoId: pr.b, name: bName });
+    partners.get(pr.b)!.push({ pcoId: pr.a, name: aName });
+  }
+
   const refreshed = db
     .prepare(
       `SELECT MAX(refreshed_at) AS at FROM person_activity WHERE org_id = ?`,
@@ -154,7 +189,8 @@ function getMembershipAuditImpl(
     if (statusLower === "inactive" || r.inactivatedAt) flags.push("Inactive in PCO");
     if (!first && !last) flags.push("No name on record");
     else if (isJunkName(first) || isJunkName(last)) flags.push("Name looks wrong");
-    if (r.dupPairs > 0) flags.push("Possible duplicate");
+    const duplicateOf = partners.get(r.pcoId) ?? [];
+    if (duplicateOf.length > 0) flags.push("Possible duplicate");
     if (flags.length) flaggedTotal++;
 
     const daysSince = r.lastActivityAt
@@ -172,6 +208,7 @@ function getMembershipAuditImpl(
       daysSince,
       connection: cls,
       flags,
+      duplicateOf,
     };
   });
 
@@ -189,5 +226,6 @@ function getMembershipAuditImpl(
     connectionTotals,
     flaggedTotal,
     refreshedAt: refreshed?.at ?? null,
+    activityMonths: getSyncSettings(orgId).activityMonths,
   };
 }

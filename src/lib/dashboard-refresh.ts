@@ -507,6 +507,7 @@ function buildLaneTempTables(
 ): void {
   db.exec(`
     DROP TABLE IF EXISTS _pa_give;
+    DROP TABLE IF EXISTS _pa_max_give;
     DROP TABLE IF EXISTS _pa_outreach;
   `);
   db.prepare(
@@ -517,6 +518,23 @@ function buildLaneTempTables(
           AND last_gift_on >= substr(?, 1, 10)`,
   ).run(orgId, cutoffActivity);
   db.exec(`CREATE UNIQUE INDEX _pa_give_pid ON _pa_give(person_id);`);
+
+  // A gift is activity. last_activity_at used to ignore giving entirely,
+  // so 76 members who gave within the year still read as silent for it and
+  // 138 had a gift newer than their recorded last activity — someone who
+  // gives monthly but does not attend looked like they had vanished.
+  // Dates here are YYYY-MM-DD where the rest are ISO instants; padded so
+  // MAX() compares like with like.
+  db.exec(`DROP TABLE IF EXISTS _pa_max_give;`);
+  db.prepare(
+    `CREATE TEMP TABLE _pa_max_give AS
+       SELECT person_id, MAX(last_gift_on) || 'T00:00:00.000Z' AS last_at
+         FROM pushpay_payer_summary
+        WHERE org_id = ? AND person_id IS NOT NULL
+          AND last_gift_on IS NOT NULL AND last_gift_on <= substr(?, 1, 10)
+        GROUP BY person_id`,
+  ).run(orgId, new Date().toISOString());
+  db.exec(`CREATE UNIQUE INDEX _pa_max_give_pid ON _pa_max_give(person_id);`);
 
   // Three grains, unioned: whole service types, whole group types, and
   // individual Services person tags. Tags are the one Faith Church
@@ -556,6 +574,50 @@ function buildLaneTempTables(
   db.exec(`CREATE UNIQUE INDEX _pa_outreach_pid ON _pa_outreach(person_id);`);
 }
 
+/** Recompute ONLY in_outreach_lane, in place.
+ *
+ *  Changing what counts as outreach changes no PCO data, so a full
+ *  snapshot rebuild (let alone the sync in front of it) is the wrong price
+ *  — this is a settings edit and should land immediately. Everything else
+ *  in person_activity is left exactly as the last real refresh wrote it,
+ *  and the next one recomputes this column identically.
+ */
+export function recomputeOutreachLane(orgId: number): number {
+  const db = getDb();
+  const settings = getSyncSettings(orgId);
+  const cutoff = new Date(
+    Date.now() - settings.activityMonths * MS_PER_MONTH,
+  ).toISOString();
+  buildLaneTempTables(db, orgId, cutoff);
+  const changed = db.transaction(() => {
+    db.prepare(
+      `UPDATE person_activity SET in_outreach_lane = 0
+        WHERE org_id = ? AND in_outreach_lane = 1
+          AND person_id NOT IN (SELECT person_id FROM _pa_outreach)`,
+    ).run(orgId);
+    const res = db
+      .prepare(
+        `UPDATE person_activity SET in_outreach_lane = 1
+          WHERE org_id = ? AND in_outreach_lane = 0
+            AND person_id IN (SELECT person_id FROM _pa_outreach)`,
+      )
+      .run(orgId);
+    return res.changes;
+  })();
+  db.exec(`
+    DROP TABLE IF EXISTS _pa_give;
+    DROP TABLE IF EXISTS _pa_max_give;
+    DROP TABLE IF EXISTS _pa_outreach;
+  `);
+  return (
+    (db
+      .prepare(
+        `SELECT SUM(in_outreach_lane) AS n FROM person_activity WHERE org_id = ?`,
+      )
+      .get(orgId) as { n: number | null }).n ?? changed
+  );
+}
+
 async function rebuildPersonActivityAsync(
   orgId: number,
   cutoffActivity: string,
@@ -582,6 +644,7 @@ async function rebuildPersonActivityAsync(
       DROP TABLE IF EXISTS _pa_wors_grp;
       DROP TABLE IF EXISTS _pa_wors_plan;
       DROP TABLE IF EXISTS _pa_give;
+      DROP TABLE IF EXISTS _pa_max_give;
       DROP TABLE IF EXISTS _pa_outreach;
       DROP TABLE IF EXISTS _pa_new;
     `);
@@ -710,7 +773,8 @@ async function rebuildPersonActivityAsync(
          coalesce(CASE WHEN p.pco_updated_at <= ?
                        THEN p.pco_updated_at END, ''),
          coalesce(ma.last_at, ''),
-         coalesce(ms.last_at, '')
+         coalesce(ms.last_at, ''),
+         coalesce(mg.last_at, '')
        ), '') AS last_activity_at,
        coalesce(gc.n, 0) AS active_group_count,
        coalesce(tc.n, 0) AS active_team_count,
@@ -732,6 +796,7 @@ async function rebuildPersonActivityAsync(
      LEFT JOIN _pa_wors_grp    wg ON wg.person_id = p.pco_id
      LEFT JOIN _pa_wors_plan   wp ON wp.person_id = p.pco_id
      LEFT JOIN _pa_give        gv ON gv.person_id = p.pco_id
+     LEFT JOIN _pa_max_give    mg ON mg.person_id = p.pco_id
      LEFT JOIN _pa_outreach    ou ON ou.person_id = p.pco_id
      WHERE p.org_id = ? ${excludedMemClause}`,
   ).run(nowIso, nowIso, nowIso, orgId, ...excludedMem);
@@ -888,6 +953,7 @@ function rebuildPersonActivity(
     DROP TABLE IF EXISTS _pa_wors_grp;
     DROP TABLE IF EXISTS _pa_wors_plan;
     DROP TABLE IF EXISTS _pa_give;
+    DROP TABLE IF EXISTS _pa_max_give;
     DROP TABLE IF EXISTS _pa_outreach;
   `);
   db.prepare(
@@ -1011,7 +1077,8 @@ function rebuildPersonActivity(
          coalesce(CASE WHEN p.pco_updated_at <= ?
                        THEN p.pco_updated_at END, ''),
          coalesce(ma.last_at, ''),
-         coalesce(ms.last_at, '')
+         coalesce(ms.last_at, ''),
+         coalesce(mg.last_at, '')
        ),
        coalesce(gc.n, 0),
        coalesce(tc.n, 0),
@@ -1034,6 +1101,7 @@ function rebuildPersonActivity(
      LEFT JOIN _pa_wors_grp    wg ON wg.person_id = p.pco_id
      LEFT JOIN _pa_wors_plan   wp ON wp.person_id = p.pco_id
      LEFT JOIN _pa_give        gv ON gv.person_id = p.pco_id
+     LEFT JOIN _pa_max_give    mg ON mg.person_id = p.pco_id
      LEFT JOIN _pa_outreach    ou ON ou.person_id = p.pco_id
      WHERE p.org_id = ?`,
   ).run(nowIso, nowIso, nowIso, orgId);
@@ -1058,6 +1126,7 @@ function rebuildPersonActivity(
     DROP TABLE IF EXISTS _pa_wors_grp;
     DROP TABLE IF EXISTS _pa_wors_plan;
     DROP TABLE IF EXISTS _pa_give;
+    DROP TABLE IF EXISTS _pa_max_give;
     DROP TABLE IF EXISTS _pa_outreach;
   `);
 }
