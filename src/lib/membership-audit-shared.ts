@@ -26,6 +26,35 @@ export const CONNECTION_LABELS: Record<string, string> = {
 };
 export const CONNECTION_ORDER = ["shepherded", "active", "present", "inactive"];
 
+/** Every warning the audit can raise, in the order the dropdown lists
+ *  them. These strings ARE the values stored on a row's `flags`, so the
+ *  list and the producer cannot drift. */
+export const FLAG_TYPES = [
+  "Deceased",
+  "Inactive in PCO",
+  "Possible duplicate",
+  "Name looks wrong",
+  "No name on record",
+] as const;
+export type FlagType = (typeof FLAG_TYPES)[number];
+
+/** Last-activity buckets. Open-ended at both ends: `maxDays: null` means
+ *  "and older", and `never` catches people the snapshot has no activity
+ *  date for at all — which is not the same as "a very long time ago" and
+ *  should not sort in with it. */
+export const ACTIVITY_BUCKETS: {
+  id: string;
+  label: string;
+  minDays: number;
+  maxDays: number | null;
+}[] = [
+  { id: "30", label: "Last 30 days", minDays: 0, maxDays: 30 },
+  { id: "90", label: "30 to 90 days", minDays: 30, maxDays: 90 },
+  { id: "365", label: "90 days to a year", minDays: 90, maxDays: 365 },
+  { id: "old", label: "Over a year", minDays: 365, maxDays: null },
+];
+export const NEVER_BUCKET = "never";
+
 export interface AuditPersonRow {
   pcoId: string;
   fullName: string;

@@ -2,10 +2,13 @@
 
 import { useMemo, useState } from "react";
 import {
+  ACTIVITY_BUCKETS,
   CONNECTION_LABELS,
   CONNECTION_ORDER,
+  FLAG_TYPES,
   LANE_KEYS,
   LANE_LABELS,
+  NEVER_BUCKET,
   type AuditPersonRow,
   type LaneKey,
   type MembershipAudit,
@@ -32,13 +35,39 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   const [lanes, setLanes] = useState<Set<LaneKey>>(new Set());
   const [bands, setBands] = useState<Set<number>>(new Set());
   const [connections, setConnections] = useState<Set<string>>(new Set());
-  const [onlyFlagged, setOnlyFlagged] = useState(false);
+  const [warnings, setWarnings] = useState<Set<string>>(new Set());
+  const [activity, setActivity] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>("days");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
+  // "count" = commonest first; "lanes" = W S C G O bit order, so every
+  // combination containing Worship groups together, then Serve, and so on.
+  const [comboSort, setComboSort] = useState<"count" | "lanes">("count");
 
   const anyFilter =
-    lanes.size > 0 || bands.size > 0 || connections.size > 0 || onlyFlagged;
+    lanes.size > 0 ||
+    bands.size > 0 ||
+    connections.size > 0 ||
+    warnings.size > 0 ||
+    activity.size > 0;
+
+  /** How many rows carry each warning, and how many fall in each activity
+   *  bucket. Computed off the unfiltered roster so the dropdown counts stay
+   *  put while you narrow — a count that moves as you filter reads as a bug. */
+  const warningTotals = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const r of audit.rows) for (const f of r.flags) out[f] = (out[f] ?? 0) + 1;
+    return out;
+  }, [audit.rows]);
+
+  const activityTotals = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const r of audit.rows) {
+      const id = bucketOf(r.daysSince);
+      out[id] = (out[id] ?? 0) + 1;
+    }
+    return out;
+  }, [audit.rows]);
 
   const visible = useMemo(() => {
     const out = audit.rows.filter((r) => {
@@ -47,7 +76,8 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       if (connections.size && !(r.connection && connections.has(r.connection))) {
         return false;
       }
-      if (onlyFlagged && r.flags.length === 0) return false;
+      if (warnings.size && !r.flags.some((f) => warnings.has(f))) return false;
+      if (activity.size && !activity.has(bucketOf(r.daysSince))) return false;
       return true;
     });
     const sign = dir === "asc" ? 1 : -1;
@@ -72,7 +102,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
         }
       }
     });
-  }, [audit.rows, lanes, bands, connections, onlyFlagged, sort, dir]);
+  }, [audit.rows, lanes, bands, connections, warnings, activity, sort, dir]);
 
   function toggleSort(k: SortKey) {
     if (sort === k) setDir(dir === "asc" ? "desc" : "asc");
@@ -86,7 +116,8 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
     setLanes(new Set());
     setBands(new Set());
     setConnections(new Set());
-    setOnlyFlagged(false);
+    setWarnings(new Set());
+    setActivity(new Set());
   }
 
   function applyCombo(key: string) {
@@ -97,6 +128,20 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
     setOpen(null);
   }
 
+  const sortedCombos = useMemo(() => {
+    const list = audit.combos.slice();
+    if (comboSort === "count") return list;
+    // Bit order with Worship highest, so sorting descending groups every
+    // W combination first, then S, and so on — 10000, 01000, 00100…
+    const mask = (k: string) =>
+      LANE_KEYS.reduce(
+        (acc, lane, i) =>
+          acc + (k.includes(lane) ? 1 << (LANE_KEYS.length - 1 - i) : 0),
+        0,
+      );
+    return list.sort((a, b) => mask(b.key) - mask(a.key));
+  }, [audit.combos, comboSort]);
+
   const readout = (() => {
     const bits: string[] = [];
     if (bands.size) bits.push(`in ${phraseBands(bands)}`);
@@ -106,7 +151,13 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       );
     if (connections.size)
       bits.push([...connections].map((c) => CONNECTION_LABELS[c] ?? c).join(" or "));
-    if (onlyFlagged) bits.push("needing cleaning");
+    if (warnings.size) bits.push([...warnings].join(" or ").toLowerCase());
+    if (activity.size)
+      bits.push(
+        [...activity]
+          .map((id) => labelForBucket(id).toLowerCase())
+          .join(" or "),
+      );
     return bits.length ? bits.join(" · ") : "everything";
   })();
 
@@ -165,6 +216,50 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
               checked: lanes.has(k),
             }))}
             onToggle={(id) => setLanes(toggled(lanes, id as LaneKey))}
+          />
+          <Dropdown
+            id="bands"
+            label="Lanes active"
+            value={bands.size ? phraseBands(bands) : "any"}
+            open={open === "bands"}
+            setOpen={setOpen}
+            items={audit.bandTotals
+              .map((n, i) => ({ n, i }))
+              .filter((b) => b.n > 0)
+              .map((b) => ({
+                id: String(b.i),
+                label:
+                  b.i === 0 ? "In no lane" : `${b.i} lane${b.i === 1 ? "" : "s"}`,
+                count: b.n,
+                checked: bands.has(b.i),
+              }))}
+            onToggle={(id) => setBands(toggled(bands, Number(id)))}
+          />
+          <Dropdown
+            id="activity"
+            label="Last activity"
+            value={
+              activity.size
+                ? [...activity].map(labelForBucket).join(" or ")
+                : "any"
+            }
+            open={open === "activity"}
+            setOpen={setOpen}
+            items={[
+              ...ACTIVITY_BUCKETS.map((b) => ({
+                id: b.id,
+                label: b.label,
+                count: activityTotals[b.id] ?? 0,
+                checked: activity.has(b.id),
+              })),
+              {
+                id: NEVER_BUCKET,
+                label: "Never active",
+                count: activityTotals[NEVER_BUCKET] ?? 0,
+                checked: activity.has(NEVER_BUCKET),
+              },
+            ].filter((i) => i.count > 0)}
+            onToggle={(id) => setActivity(toggled(activity, id))}
           />
           <Dropdown
             id="connection"
@@ -234,11 +329,38 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
                     </button>
                   ))}
                 </div>
-                <div className="text-[10px] uppercase tracking-wider text-subtle mb-2 pt-3 border-t border-border-soft">
-                  Combinations that occur ({audit.combos.length})
+                <div className="flex items-baseline justify-between gap-3 mb-2 pt-3 border-t border-border-soft">
+                  <span className="text-[10px] uppercase tracking-wider text-subtle">
+                    Combinations that occur ({audit.combos.length})
+                  </span>
+                  <span className="flex items-center gap-1 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setComboSort("count")}
+                      className={
+                        comboSort === "count"
+                          ? "text-accent font-semibold"
+                          : "text-subtle hover:text-fg"
+                      }
+                    >
+                      by number
+                    </button>
+                    <span className="text-subtle">·</span>
+                    <button
+                      type="button"
+                      onClick={() => setComboSort("lanes")}
+                      className={
+                        comboSort === "lanes"
+                          ? "text-accent font-semibold"
+                          : "text-subtle hover:text-fg"
+                      }
+                    >
+                      by lane
+                    </button>
+                  </span>
                 </div>
                 <div className="flex flex-col gap-0.5 max-h-[220px] overflow-y-auto">
-                  {audit.combos.map((c) => (
+                  {sortedCombos.map((c) => (
                     <button
                       key={c.key || "none"}
                       type="button"
@@ -283,31 +405,36 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
               Clear
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setOnlyFlagged(!onlyFlagged)}
-            aria-pressed={onlyFlagged}
-            className={`ml-auto flex items-center gap-2 rounded-md px-3 py-1.5 text-[13px] border transition-colors ${
-              onlyFlagged
-                ? "bg-warn-soft-fg text-bg border-warn-soft-fg font-semibold"
-                : "bg-bg border-warn-soft-fg/40 text-warn-soft-fg hover:bg-warn-soft-bg/30"
-            }`}
-          >
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              aria-hidden="true"
+          <div className="ml-auto flex items-center gap-2">
+            <WarningsDropdown
+              open={open === "warnings"}
+              setOpen={setOpen}
+              totals={warningTotals}
+              selected={warnings}
+              onToggle={(f) => setWarnings(toggled(warnings, f))}
+              anyTotal={audit.flaggedTotal}
+            />
+            <button
+              type="button"
+              onClick={() => exportRows(visible, audit.membershipType)}
+              className="flex items-center gap-2 rounded-md border border-border-soft bg-bg px-3 py-1.5 text-[13px] hover:bg-bg-elev-2"
+              title="Downloads exactly the rows showing now, with the filters applied"
             >
-              <path d="M12 9v4M12 17v.01" />
-              <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
-            </svg>
-            Needs cleaning
-            <span className="tnum font-semibold">{audit.flaggedTotal}</span>
-          </button>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden="true"
+              >
+                <path d="M12 3v12M7 11l5 5 5-5M5 21h14" />
+              </svg>
+              Export
+              <span className="tnum text-subtle">{visible.length.toLocaleString()}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -558,6 +685,147 @@ function Dropdown({
       )}
     </div>
   );
+}
+
+/** The warnings filter. Styled apart from the other dropdowns because it
+ *  is a different kind of question — records to fix in PCO, not people to
+ *  pastor — and it keeps the amber it had as a button. */
+function WarningsDropdown({
+  open,
+  setOpen,
+  totals,
+  selected,
+  onToggle,
+  anyTotal,
+}: {
+  open: boolean;
+  setOpen: (v: string | null) => void;
+  totals: Record<string, number>;
+  selected: Set<string>;
+  onToggle: (f: string) => void;
+  anyTotal: number;
+}) {
+  const present = FLAG_TYPES.filter((f) => (totals[f] ?? 0) > 0);
+  const isSet = selected.size > 0;
+  return (
+    <div className="relative" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => setOpen(open ? null : "warnings")}
+        aria-expanded={open}
+        className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-[13px] border transition-colors ${
+          isSet
+            ? "bg-warn-soft-fg text-bg border-warn-soft-fg font-semibold"
+            : "bg-bg border-warn-soft-fg/40 text-warn-soft-fg hover:bg-warn-soft-bg/30"
+        }`}
+      >
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden="true"
+        >
+          <path d="M12 9v4M12 17v.01" />
+          <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+        </svg>
+        Worth a look
+        <span className="tnum font-semibold">
+          {isSet ? selected.size : anyTotal}
+        </span>
+        <span className="text-xs opacity-70">▾</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-[calc(100%+6px)] z-30 min-w-[250px] rounded-lg border border-border-soft bg-bg-elev p-1.5 shadow-xl">
+          {present.length === 0 ? (
+            <div className="px-2 py-3 text-xs text-muted text-center">
+              No records need cleaning.
+            </div>
+          ) : (
+            present.map((f) => (
+              <label
+                key={f}
+                className="flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer hover:bg-bg-elev-2"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(f)}
+                  onChange={() => onToggle(f)}
+                  className="accent-[var(--accent)] w-3.5 h-3.5"
+                />
+                <span className="text-[13px] flex-1">{f}</span>
+                <span className="text-[11px] text-subtle tnum">
+                  {(totals[f] ?? 0).toLocaleString()}
+                </span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Which activity bucket a row falls in. One place, so the dropdown counts
+ *  and the filter can never disagree. */
+function bucketOf(days: number | null): string {
+  if (days === null) return NEVER_BUCKET;
+  for (const b of ACTIVITY_BUCKETS) {
+    if (days >= b.minDays && (b.maxDays === null || days < b.maxDays)) return b.id;
+  }
+  return ACTIVITY_BUCKETS[ACTIVITY_BUCKETS.length - 1].id;
+}
+
+function labelForBucket(id: string): string {
+  if (id === NEVER_BUCKET) return "Never active";
+  return ACTIVITY_BUCKETS.find((b) => b.id === id)?.label ?? id;
+}
+
+/** Export exactly what is on screen, filters and sort order included —
+ *  the point of the button is to hand someone the list you are looking at,
+ *  not the whole roster again. */
+function exportRows(rows: AuditPersonRow[], membershipType: string) {
+  const header = [
+    "Name",
+    ...LANE_KEYS.map((k) => LANE_LABELS[k]),
+    "Lanes active",
+    "Last activity",
+    "Connection",
+    "Worth a look",
+    "PCO link",
+  ];
+  const lines = [header.map(csvCell).join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        r.fullName,
+        ...LANE_KEYS.map((k) => (r.lanes[k] ? "yes" : "")),
+        String(r.laneCount),
+        agoLabel(r.daysSince),
+        r.connection ? (CONNECTION_LABELS[r.connection] ?? r.connection) : "",
+        r.flags.join("; "),
+        `${PCO_PERSON}${r.pcoId}`,
+      ]
+        .map(csvCell)
+        .join(","),
+    );
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = `membership-audit-${membershipType.toLowerCase().replace(/\s+/g, "-")}-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(href);
+}
+
+function csvCell(v: string): string {
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
 function laneSummary(r: AuditPersonRow): string {

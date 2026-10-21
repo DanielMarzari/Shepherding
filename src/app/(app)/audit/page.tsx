@@ -1,14 +1,8 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { requireOrg } from "@/lib/auth";
-import { getMembershipTypeStats } from "@/lib/pco";
 import { getMembershipAudit } from "@/lib/membership-audit";
-import { DownloadCsvButton } from "./download-csv";
 import { MembershipAuditView } from "./membership-audit-view";
-
-interface SearchParams {
-  type?: string;
-}
 
 /** Membership audit.
  *
@@ -18,20 +12,15 @@ interface SearchParams {
  *  is as of the last snapshot refresh, which the page states rather than
  *  implying it is live.
  */
-export default async function AuditPage({
-  searchParams,
-}: {
-  searchParams: Promise<SearchParams>;
-}) {
-  const session = await requireOrg();
-  const params = await searchParams;
-  const memTypes = getMembershipTypeStats(session.orgId);
-  const requested = params.type ?? "Member";
-  const validType =
-    memTypes.find((t) => t.membershipType === requested)?.membershipType ??
-    memTypes[0]?.membershipType ??
-    "Member";
+/** Members only, deliberately. This page asks whether the people who have
+ *  committed to membership are actually in a lane; the same question of a
+ *  visitor or a contributor-only record means something different, and
+ *  /audit/membership-fit is where type-vs-behaviour belongs. */
+const MEMBERSHIP_TYPE = "Member";
 
+export default async function AuditPage() {
+  const session = await requireOrg();
+  const validType = MEMBERSHIP_TYPE;
   const audit = getMembershipAudit(session.orgId, validType);
 
   const refreshed = audit.refreshedAt
@@ -65,41 +54,6 @@ export default async function AuditPage({
                 audit &rarr;
               </Link>
             </p>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <form action="/audit" method="get" className="flex items-center gap-2">
-              <label htmlFor="type" className="text-xs text-muted">
-                Type
-              </label>
-              <select
-                id="type"
-                name="type"
-                defaultValue={validType}
-                className="bg-bg-elev border border-border-soft rounded-md px-2.5 py-1.5 text-[13px] text-fg cursor-pointer"
-              >
-                {memTypes.map((t) => (
-                  <option
-                    key={t.membershipType ?? "__null__"}
-                    value={t.membershipType ?? ""}
-                  >
-                    {t.membershipType ?? "(none)"} ({t.count.toLocaleString()})
-                  </option>
-                ))}
-              </select>
-              <button
-                type="submit"
-                className="px-2.5 py-1.5 rounded-md border border-border-soft text-muted hover:text-fg text-[13px]"
-              >
-                Go
-              </button>
-            </form>
-            <DownloadCsvButton
-              rows={audit.rows.map((r) => ({
-                pcoId: r.pcoId,
-                fullName: r.fullName,
-              }))}
-              filename={`membership-audit-${validType.replace(/\s+/g, "-").toLowerCase()}.csv`}
-            />
           </div>
         </div>
 
