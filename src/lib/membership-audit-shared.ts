@@ -30,7 +30,7 @@ export const CONNECTION_ORDER = ["shepherded", "active", "present", "inactive"];
  *  them. These strings ARE the values stored on a row's `flags`, so the
  *  list and the producer cannot drift. */
 export const FLAG_TYPES = [
-  "Deceased",
+  "Deceased, still a member",
   "Inactive in PCO",
   "Possible duplicate",
   "Name looks wrong",

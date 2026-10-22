@@ -1470,9 +1470,16 @@ export function getSyncedCounts(orgId: number): SyncedDataCounts {
 
 /** The custom fields worth storing, by their PCO name. Deliberately an
  *  allowlist, not "every date field": the Membership and Assimilation tab also
- *  holds Date of Death and Date Widowed, and a table nobody asked for is a
- *  liability. Add a name here when something in the app needs it. */
-const PERSON_FIELD_ALLOWLIST = new Set(["Baptism"]);
+ *  holds Date Widowed, and a table nobody asked for is a liability. Add a name
+ *  here when something in the app needs it.
+ *
+ *  Date of Death earns its place: it is the ONLY record anywhere in PCO that
+ *  someone has died — there is no deceased status, no deceased membership type,
+ *  nothing in the name. Without it the membership audit cannot tell that a
+ *  person on the member roster has passed away, which is the one row on that
+ *  page nobody should have to discover by accident. Four people have it; one
+ *  is still typed Member. */
+const PERSON_FIELD_ALLOWLIST = new Set(["Baptism", "Date of Death"]);
 
 /** PCO returns a date field as the admin typed it — "06/29/2003" — which sorts
  *  and groups as nonsense. Normalize once, here, so every query downstream can

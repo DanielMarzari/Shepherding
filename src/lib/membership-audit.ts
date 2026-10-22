@@ -38,6 +38,7 @@ interface RawRow {
   o: number;
   lastActivityAt: string | null;
   classification: string | null;
+  diedOn: string | null;
   dupPairs: number;
 }
 
@@ -97,11 +98,15 @@ function getMembershipAuditImpl(
          COALESCE(pa.in_outreach_lane, 0)  AS o,
          pa.last_activity_at   AS lastActivityAt,
          pa.classification     AS classification,
+         dod.value_on          AS diedOn,
          (d.pid IS NOT NULL) AS dupPairs
        FROM pco_people p
        LEFT JOIN person_activity pa
          ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
        LEFT JOIN dups d ON d.pid = p.pco_id
+       LEFT JOIN pco_person_fields dod
+         ON dod.org_id = p.org_id AND dod.person_id = p.pco_id
+        AND dod.field_name = 'Date of Death'
       WHERE p.org_id = ? AND p.membership_type = ?`,
     )
     .all(orgId, orgId, orgId, membershipType) as RawRow[];
@@ -182,10 +187,14 @@ function getMembershipAuditImpl(
 
     const flags: string[] = [];
     const statusLower = (r.status ?? "").toLowerCase();
-    const nameLower = `${first ?? ""} ${last ?? ""}`.toLowerCase();
-    if (statusLower.includes("deceased") || nameLower.includes("deceased")) {
-      flags.push("Deceased");
-    }
+    // PCO has no deceased status and no deceased membership type — the
+    // "Date of Death" custom field is the only record that someone has
+    // died. Since this page is Members only, holding one AT ALL means the
+    // roster still counts them as a member, which is the point of the flag.
+    // Exactly the string in FLAG_TYPES, with no date appended: the
+    // warnings dropdown matches flags by equality, so a variable suffix
+    // would quietly make this one unfilterable.
+    if (r.diedOn) flags.push("Deceased, still a member");
     if (statusLower === "inactive" || r.inactivatedAt) flags.push("Inactive in PCO");
     if (!first && !last) flags.push("No name on record");
     else if (isJunkName(first) || isJunkName(last)) flags.push("Name looks wrong");
