@@ -12,7 +12,10 @@ interface PIIBlob {
 /** Active = recent form submission or check-in. Present = no recent
  *  activity but the PCO record itself was touched in-window. Both are
  *  "not shepherded" by construction on this page. */
-export type CareClassification = "active" | "present";
+/** The care queue only cares whether we can see this person at all, so it
+ *  collapses the vocabulary to two. Shepherded people are handled by their
+ *  group or team leader and never reach this list. */
+export type CareClassification = "known" | "unknown";
 
 export interface CareCandidate {
   personId: string;
@@ -164,18 +167,18 @@ export function listCareCandidates(
     const { fullName, initials } = nameParts(r.enc_pii);
     // Prefer the snapshot's stored classification; fall back to the
     // timestamp-derived split on the cold-start path.
-    const classification: "active" | "present" =
-      r.classification === "present"
-        ? "present"
-        : r.classification === "active"
-          ? "active"
+    const classification: CareClassification =
+      r.classification === "unknown"
+        ? "unknown"
+        : r.classification === "known"
+          ? "known"
           : liveCutoff &&
               ((r.last_form_submission_at !== null &&
                 r.last_form_submission_at >= liveCutoff) ||
                 (r.last_check_in_at !== null &&
                   r.last_check_in_at >= liveCutoff))
-            ? "active"
-            : "present";
+            ? "known"
+            : "unknown";
     return {
       personId: r.pco_id,
       fullName,
@@ -302,7 +305,7 @@ export function countActiveNotShepherded(orgId: number): number {
            JOIN pco_people p
              ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
           WHERE pa.org_id = ?
-            AND pa.classification IN ('active','present')
+            AND pa.classification = 'known'
             AND p.is_minor = 0
             ${excludeSql}`,
       )

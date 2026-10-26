@@ -285,7 +285,7 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
     .map(([label, lo, hi]) => {
       const sub = pts.filter((p) => p.travelMin >= lo && p.travelMin < hi);
       const shep = sub.filter((p) => p.classification === "shepherded").length;
-      const eng = sub.filter((p) => p.classification !== "inactive").length;
+      const eng = sub.filter((p) => p.classification !== "unknown").length;
       return {
         label,
         midMinutes: hi === Infinity ? 100 : (lo + hi) / 2,

@@ -48,7 +48,7 @@ export default async function CareMapPage({
     session.orgId,
     settings.activityMonths,
   );
-  const activeAdults = counts.active - counts.activeKids;
+  const activeAdults = counts.known - counts.knownKids;
 
   // "I know them" marks from the public /know intake page, keyed by
   // person → shepherd names. Surfaced on the assign panel so the admin

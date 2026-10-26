@@ -153,9 +153,9 @@ export function SearchBar() {
                     </span>
                     <span
                       className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                        hit.classification === "active"
+                        hit.classification === "known"
                           ? "bg-good-soft-bg text-good-soft-fg"
-                          : hit.classification === "present"
+                          : hit.classification === "unknown"
                             ? "bg-accent-soft-bg text-accent-soft-fg"
                             : hit.classification === "shepherded"
                               ? "bg-accent-soft-bg text-accent-soft-fg"

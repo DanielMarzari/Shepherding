@@ -148,7 +148,7 @@ export function CareAssignPanel({
                     </Pill>
                   </span>
                 )}
-                <Pill tone={c.classification === "active" ? "good" : "muted"}>
+                <Pill tone={c.classification === "known" ? "good" : "muted"}>
                   {c.classification}
                 </Pill>
                 {c.isMinor && <Pill tone="warn">kid</Pill>}

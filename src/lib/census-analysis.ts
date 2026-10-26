@@ -271,7 +271,7 @@ export function analyzeCensus(orgId: number): CensusAnalysis {
          JOIN person_activity pa
            ON pa.org_id = g.org_id AND pa.person_id = g.person_id
         WHERE g.org_id = ? AND g.status = 'ok' AND g.tract_geoid IS NOT NULL
-          AND pa.classification IN ('shepherded','active','present')
+          AND pa.classification IN ('shepherded','known')
         GROUP BY g.tract_geoid`,
     )
     .all(orgId) as Array<{ geoid: string; n: number }>;
@@ -388,7 +388,7 @@ export function analyzeCounties(orgId: number): CountyAnalysis {
     .prepare(
       `SELECT g.county_geoid AS geoid,
               COUNT(*) AS lifetime,
-              SUM(CASE WHEN pa.classification IN ('shepherded','active','present') THEN 1 ELSE 0 END) AS engaged
+              SUM(CASE WHEN pa.classification IN ('shepherded','known') THEN 1 ELSE 0 END) AS engaged
          FROM person_geo g
          LEFT JOIN person_activity pa
            ON pa.org_id = g.org_id AND pa.person_id = g.person_id

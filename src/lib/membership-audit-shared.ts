@@ -18,12 +18,12 @@ export const LANE_LABELS: Record<LaneKey, string> = {
  *  Unknown — while the row still carries the stored four-value
  *  classification. See classification.ts for why both exist. */
 export {
-  BAND_DESCRIPTION,
-  BAND_LABEL,
-  CONNECTION_BANDS,
-  bandLabel,
-  bandOf,
-  type ConnectionBand,
+  CLASSIFICATIONS,
+  CLASS_DESCRIPTION,
+  CLASS_LABEL,
+  classLabel,
+  classOf,
+  type Classification,
 } from "./classification";
 
 /** Every warning the audit can raise, in the order the dropdown lists

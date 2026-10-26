@@ -91,7 +91,7 @@ export function setKnownPresent(orgId: number, shepherdPersonId: string, personI
 }
 
 /** 'present' adults the person can mark — mirrors listIntakeCandidates but for
- *  classification = 'present' instead of 'active'. */
+ *  classification = 'unknown' instead of 'active'. */
 export function listPresentCandidates(orgId: number, viewerPersonId: string): IntakeCandidate[] {
   // Honor the Filters config — e.g. the "SYSTEM USE - Do Not Delete" membership
   // type — so system accounts never appear here.
@@ -110,7 +110,7 @@ export function listPresentCandidates(orgId: number, viewerPersonId: string): In
          LEFT JOIN shepherd_known_people k
            ON k.org_id = pa.org_id AND k.shepherd_person_id = ? AND k.person_id = pa.person_id AND k.source = 'present'
         WHERE pa.org_id = ?
-          AND pa.classification = 'present'
+          AND pa.classification = 'unknown'
           AND p.is_minor = 0
           AND p.pco_id != ?
           AND lower(coalesce(p.status,'')) != 'inactive'

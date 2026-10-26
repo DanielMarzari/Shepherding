@@ -50,7 +50,8 @@ export function getDashboardStats(
     // an honest "—" instead of a confident 0.
     const haveJoinData = hasMembershipTimestamps(orgId);
     return {
-      active: snap.activeCount + snap.shepherdedCount + snap.presentCount,
+      // "active" here means everyone we can see: Shepherded or Known.
+      active: snap.knownCount + snap.shepherdedCount,
       joinedMonth: haveJoinData ? snap.joined30d : null,
       departedMonth: haveJoinData ? snap.departed30d : null,
       unshepherded: snap.unshepherdedCount,
@@ -142,7 +143,7 @@ export function getFallingThroughCracks(
 
   // Snapshot fast path — person_activity carries last_attended_at +
   // last_served_at + active counts + classification pre-computed.
-  // The `classification != 'inactive'` filter is the key: an
+  // The `classification != 'unknown'` filter is the key: an
   // already-classified-inactive person isn't "falling" — they've
   // already gone. This list is the actionable middle: still on a
   // roster, still classified as engaged, but lapsed in attendance
@@ -159,7 +160,7 @@ export function getFallingThroughCracks(
          LEFT JOIN pco_people pp
            ON pp.org_id = pa.org_id AND pp.pco_id = pa.person_id
         WHERE pa.org_id = ?
-          AND pa.classification != 'inactive'
+          AND pa.classification != 'unknown'
           AND (
             (pa.active_group_count > 0
              AND pa.last_attended_at IS NOT NULL

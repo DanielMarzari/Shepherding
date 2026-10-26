@@ -39,7 +39,7 @@ const ENGAGED_ADULTS = `
     FROM pco_people p
     JOIN person_activity pa ON pa.person_id = p.pco_id AND pa.org_id = :orgId
    WHERE p.org_id = :orgId AND p.is_minor = 0
-     AND pa.classification IN ('shepherded','active','present')`;
+     AND pa.classification IN ('shepherded','known')`;
 
 /** The America/New_York calendar date of a UTC timestamp.
  *

@@ -1,54 +1,25 @@
-/** The congregation vocabulary, in one place.
+/** The congregation vocabulary. Three words, and they are the words the
+ *  database holds — there is no second set to translate from.
  *
- *  `person_activity.classification` stores four values. What the app SHOWS
- *  is three, because two of the stored four answer the same pastoral
- *  question:
+ *    Shepherded  in a group or team where somebody is responsible for them
+ *    Known       not shepherded, but active enough that we can see them
+ *    Unknown     nothing inside the activity window
  *
- *    shepherded  →  Shepherded   in a group or team context
- *    active      →  Known        not shepherded, but we can see them
- *    present     →  Unknown      the only trace is a staff edit to their record
- *    inactive    →  Unknown      nothing at all inside the activity window
- *
- *  The stored four are kept deliberately. "present" and "inactive" are the
- *  difference between "somebody touched this record" and "nothing has
- *  happened", which is diagnostic even though it is not worth a separate
- *  word on screen — and the falling-through-the-cracks list depends on it
- *  (`classification != 'inactive'` is what makes somebody still-on-a-roster
- *  but lapsed findable). Collapsing at the storage layer would throw that
- *  away for a cosmetic gain.
- *
- *  No file should hard-code these words again. Import from here.
+ *  Shepherded and Unknown are measured; Known is whatever is left, so it
+ *  needs no rule of its own. What counts as activity is configured per org
+ *  on /pco/filters — see KNOWN_SIGNALS below.
  */
 
-/** What is written to person_activity.classification. */
-export type Classification = "shepherded" | "active" | "present" | "inactive";
+export type Classification = "shepherded" | "known" | "unknown";
 
-/** What a person is called on screen. */
-export type ConnectionBand = "shepherded" | "known" | "unknown";
-
+/** Most connected first. */
 export const CLASSIFICATIONS: Classification[] = [
-  "shepherded",
-  "active",
-  "present",
-  "inactive",
-];
-
-/** Most connected first. Every band is reachable and the three together
- *  cover every stored value, so nobody falls outside the vocabulary. */
-export const CONNECTION_BANDS: ConnectionBand[] = [
   "shepherded",
   "known",
   "unknown",
 ];
 
-export const BAND_OF: Record<Classification, ConnectionBand> = {
-  shepherded: "shepherded",
-  active: "known",
-  present: "unknown",
-  inactive: "unknown",
-};
-
-export const BAND_LABEL: Record<ConnectionBand, string> = {
+export const CLASS_LABEL: Record<Classification, string> = {
   shepherded: "Shepherded",
   known: "Known",
   unknown: "Unknown",
@@ -56,7 +27,7 @@ export const BAND_LABEL: Record<ConnectionBand, string> = {
 
 /** One line each, for legends and tooltips. Written so a ministry leader
  *  reading it cold knows what the word is claiming. */
-export const BAND_DESCRIPTION: Record<ConnectionBand, string> = {
+export const CLASS_DESCRIPTION: Record<Classification, string> = {
   shepherded:
     "In a group or team where somebody is responsible for them — or a volunteer reporting to staff.",
   known:
@@ -65,34 +36,24 @@ export const BAND_DESCRIPTION: Record<ConnectionBand, string> = {
     "No activity inside the activity window, or activity below the threshold that counts as engagement.",
 };
 
-/** Band for a stored classification. Unrecognised or missing values read as
- *  unknown rather than throwing: a person with no snapshot row yet is
- *  genuinely unknown to us, which is the honest answer. */
-export function bandOf(cls: string | null | undefined): ConnectionBand {
-  if (!cls) return "unknown";
-  return BAND_OF[cls as Classification] ?? "unknown";
+/** Normalise an unrecognised or missing value to unknown. A person with no
+ *  snapshot row is genuinely unknown to us, which is the honest answer. */
+export function classOf(cls: string | null | undefined): Classification {
+  if (cls === "shepherded" || cls === "known" || cls === "unknown") return cls;
+  return "unknown";
 }
 
-export function bandLabel(cls: string | null | undefined): string {
-  return BAND_LABEL[bandOf(cls)];
+export function classLabel(cls: string | null | undefined): string {
+  return CLASS_LABEL[classOf(cls)];
 }
-
-/** Which stored values roll up into a band — for SQL `IN (…)` and for
- *  filtering a list that still carries the four-value field. */
-export const CLASSIFICATIONS_IN_BAND: Record<ConnectionBand, Classification[]> =
-  {
-    shepherded: ["shepherded"],
-    known: ["active"],
-    unknown: ["present", "inactive"],
-  };
-
 
 // ─── What counts as activity ──────────────────────────────────────────
 
 /** The signals that can make someone Known. Each is something the PERSON
- *  did. An edit to their PCO record is deliberately absent: that is
- *  activity ON them by a staff member, and counting it would let a data
- *  cleanup promote hundreds of people overnight. */
+ *  did. Planning Center's updated_at on the record is deliberately absent:
+ *  it moves whenever anything about that record changes, for any reason
+ *  including a sync writing to it, so it is never evidence the person did
+ *  something. */
 export const KNOWN_SIGNALS = [
   "checkin",
   "form",

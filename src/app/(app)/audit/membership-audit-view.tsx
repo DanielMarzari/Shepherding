@@ -3,16 +3,16 @@
 import { useMemo, useState } from "react";
 import {
   ACTIVITY_BUCKETS,
-  BAND_LABEL,
-  CONNECTION_BANDS,
-  bandOf,
+  CLASSIFICATIONS,
+  CLASS_LABEL,
+  classOf,
   FLAG_TYPES,
   LANE_KEYS,
   LANE_LABELS,
   NEVER_BUCKET,
   type AuditPersonRow,
   type LaneKey,
-  type ConnectionBand,
+  type Classification,
   type MembershipAudit,
   agoLabel,
 } from "@/lib/membership-audit-shared";
@@ -82,7 +82,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
     const out = audit.rows.filter((r) => {
       for (const k of lanes) if (!r.lanes[k]) return false;
       if (bands.size && !bands.has(r.laneCount)) return false;
-      if (connections.size && !connections.has(bandOf(r.connection))) return false;
+      if (connections.size && !connections.has(classOf(r.connection))) return false;
       if (warnings.size && !r.flags.some((f) => warnings.has(f))) return false;
       if (activity.size && !activity.has(bucketOf(r.daysSince))) return false;
       return true;
@@ -96,8 +96,8 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
           return (a.laneCount - b.laneCount) * sign;
         case "connection":
           return (
-            (CONNECTION_BANDS.indexOf(bandOf(a.connection)) -
-              CONNECTION_BANDS.indexOf(bandOf(b.connection))) * sign
+            (CLASSIFICATIONS.indexOf(classOf(a.connection)) -
+              CLASSIFICATIONS.indexOf(classOf(b.connection))) * sign
           );
         case "flags":
           return (a.flags.length - b.flags.length) * sign;
@@ -157,7 +157,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
         `including ${[...lanes].map((k) => LANE_LABELS[k]).join(" + ")}`,
       );
     if (connections.size)
-      bits.push([...connections].map((c) => BAND_LABEL[c as ConnectionBand]).join(" or "));
+      bits.push([...connections].map((c) => CLASS_LABEL[c as Classification]).join(" or "));
     if (warnings.size) bits.push([...warnings].join(" or ").toLowerCase());
     if (activity.size)
       bits.push(
@@ -325,16 +325,16 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
             label="Connection"
             value={
               connections.size
-                ? [...connections].map((c) => BAND_LABEL[c as ConnectionBand]).join(" or ")
+                ? [...connections].map((c) => CLASS_LABEL[c as Classification]).join(" or ")
                 : "any"
             }
             open={open === "connection"}
             setOpen={setOpen}
-            items={CONNECTION_BANDS.filter(
-              (b) => (audit.bandTotalsByName[b] ?? 0) > 0,
-            ).map((b) => ({
+            items={CLASSIFICATIONS.filter(
+              (b: Classification) => (audit.bandTotalsByName[b] ?? 0) > 0,
+            ).map((b: Classification) => ({
               id: b,
-              label: BAND_LABEL[b],
+              label: CLASS_LABEL[b],
               count: audit.bandTotalsByName[b] ?? 0,
               checked: connections.has(b),
             }))}
@@ -534,7 +534,7 @@ function LaneLegend({ activityMonths }: { activityMonths: number }) {
 }
 
 function Row({ r }: { r: AuditPersonRow }) {
-  const lapsed = bandOf(r.connection) === "unknown";
+  const lapsed = classOf(r.connection) === "unknown";
   return (
     <tr className="border-b border-border-softer hover:bg-bg-elev-2/50">
       <td className="px-4 py-2">
@@ -576,14 +576,14 @@ function Row({ r }: { r: AuditPersonRow }) {
         {r.connection ? (
           <span
             className={`inline-block text-[11px] font-semibold px-2 py-0.5 rounded border ${
-              bandOf(r.connection) === "unknown"
+              classOf(r.connection) === "unknown"
                 ? "bg-warn-soft-bg text-warn-soft-fg border-warn-soft-fg/30"
-                : bandOf(r.connection) === "shepherded"
+                : classOf(r.connection) === "shepherded"
                   ? "bg-accent-soft-bg text-accent border-accent/30"
                   : "bg-bg-elev-2 text-muted border-border-soft"
             }`}
           >
-            {BAND_LABEL[bandOf(r.connection)]}
+            {CLASS_LABEL[classOf(r.connection)]}
           </span>
         ) : (
           <span className="text-subtle">—</span>
@@ -1023,7 +1023,7 @@ function exportRows(rows: AuditPersonRow[], membershipType: string) {
         ...LANE_KEYS.map((k) => (r.lanes[k] ? "yes" : "")),
         String(r.laneCount),
         agoLabel(r.daysSince),
-        BAND_LABEL[bandOf(r.connection)],
+        CLASS_LABEL[classOf(r.connection)],
         r.flags.join("; "),
         `${PCO_PERSON}${r.pcoId}`,
       ]

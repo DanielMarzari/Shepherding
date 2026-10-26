@@ -95,8 +95,8 @@ export interface IntakeCoverage {
 export function getIntakeCoverage(orgId: number): IntakeCoverage {
   const db = getDb();
   const n = (sql: string, ...args: unknown[]) => (db.prepare(sql).get(...args) as { n: number }).n;
-  const activeTotal = n("SELECT COUNT(*) n FROM person_activity WHERE org_id = ? AND classification = 'active'", orgId);
-  const presentTotal = n("SELECT COUNT(*) n FROM person_activity WHERE org_id = ? AND classification = 'present'", orgId);
+  const activeTotal = n("SELECT COUNT(*) n FROM person_activity WHERE org_id = ? AND classification = 'known'", orgId);
+  const presentTotal = n("SELECT COUNT(*) n FROM person_activity WHERE org_id = ? AND classification = 'unknown'", orgId);
   const markedOf = (source: string, cls: string) => n(
     `SELECT COUNT(DISTINCT k.person_id) n FROM shepherd_known_people k
        JOIN person_activity pa ON pa.org_id = k.org_id AND pa.person_id = k.person_id

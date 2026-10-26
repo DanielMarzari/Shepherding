@@ -2,6 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { getOrgSnapshot } from "./dashboard-refresh";
 import { getDb } from "./db";
+import { type Classification, classOf } from "./classification";
 import { decryptJson, hmac } from "./encryption";
 import { normPhone } from "./phone";
 import {
@@ -19,7 +20,9 @@ import {
 //                / similar within threshold
 //   present    = NOT shepherded/active, has pco_updated_at within threshold
 //   inactive   = no measurable activity within threshold
-export type ActivityClassification = "shepherded" | "active" | "present" | "inactive";
+/** Re-exported so callers keep importing it from here, but there is only
+ *  one definition now — see classification.ts. */
+export type ActivityClassification = Classification;
 
 export type SortColumn =
   | "updated"
@@ -85,40 +88,23 @@ function cutoffIso(activityMonths: number): string {
   ).toISOString();
 }
 
-/** The band for one row.
+/** The band for one row, straight from the snapshot.
  *
- *  The snapshot wins when it has an answer. It is computed from all seven
- *  activity signals the church has configured — giving, email opens,
- *  registrations and the rest — which cannot be reproduced from the handful
- *  of columns this query selects. Recomputing here from forms and check-ins
- *  alone is what made /people disagree with /audit: the same person read as
- *  Active on one page and Inactive on the other.
+ *  There is no live fallback. The snapshot weighs every activity signal the
+ *  church has configured — giving, email opens, registrations and the rest
+ *  — which cannot be reproduced from the handful of columns this query
+ *  selects, and a second implementation of the rule is how /people and
+ *  /audit came to disagree about the same person in the first place.
  *
- *  The fallback below only runs for somebody the snapshot has not seen yet
- *  — a person synced since the last refresh. It is deliberately the old,
- *  narrow rule, because those are the only columns available here; it errs
- *  toward the lower band, which is the safer direction for a stranger. */
-function classify(
-  pcoUpdatedAt: string | null,
-  lastFormSubmissionAt: string | null,
-  lastCheckInAt: string | null,
-  isShepherded: boolean,
-  activityMonths: number,
-  snapshot?: string | null,
-): ActivityClassification {
-  if (snapshot === "shepherded" || snapshot === "active" ||
-      snapshot === "present" || snapshot === "inactive") {
-    return snapshot;
-  }
-  if (isShepherded) return "shepherded";
-  const cutoff = cutoffIso(activityMonths);
-  if (lastFormSubmissionAt && lastFormSubmissionAt >= cutoff) return "active";
-  if (lastCheckInAt && lastCheckInAt >= cutoff) return "active";
-  if (pcoUpdatedAt && pcoUpdatedAt >= cutoff) return "present";
-  return "inactive";
+ *  It is rebuilt at the end of every sync, so the only people it has not
+ *  seen are those added in the minutes between a sync finishing and the
+ *  next one starting. They read as unknown, which is exactly what they are
+ *  to us. */
+function classify(snapshot: string | null | undefined): ActivityClassification {
+  return classOf(snapshot);
 }
 
-function toRow(r: RawRow, activityMonths: number): SyncedPersonRow {
+function toRow(r: RawRow): SyncedPersonRow {
   const pii = decryptJson<PIIBlob>(r.enc_pii) ?? {};
   const firstName = pii.first_name ?? null;
   const lastName = pii.last_name ?? null;
@@ -140,14 +126,7 @@ function toRow(r: RawRow, activityMonths: number): SyncedPersonRow {
     pcoCreatedAt: r.pco_created_at,
     pcoUpdatedAt: r.pco_updated_at,
     lastFormSubmissionAt: r.last_form_submission_at,
-    classification: classify(
-      r.pco_updated_at,
-      r.last_form_submission_at,
-      r.last_check_in_at,
-      r.is_shepherded === 1,
-      activityMonths,
-      r.snapshot_classification,
-    ),
+    classification: classify(r.snapshot_classification),
     isMinor: r.is_minor === 1,
     birthYear: r.birth_year,
   };
@@ -346,7 +325,7 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
            ${whereSql}`,
       )
       .all(...whereArgs) as RawRow[];
-    const mapped = allRows.map((r) => toRow(r, opts.activityMonths));
+    const mapped = allRows.map((r) => toRow(r));
     const factor = opts.dir === "asc" ? 1 : -1;
     mapped.sort(
       (a, b) => a.fullName.localeCompare(b.fullName) * factor,
@@ -373,7 +352,7 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
     )
     .all(...whereArgs, opts.limit, opts.offset) as RawRow[];
   return {
-    rows: rows.map((r) => toRow(r, opts.activityMonths)),
+    rows: rows.map((r) => toRow(r)),
     total: totalRow.n,
     pageSize: opts.limit,
     page: Math.floor(opts.offset / opts.limit) + 1,
@@ -392,59 +371,15 @@ function buildWhere(
   const parts: string[] = ["pco_people.org_id = ?"];
   const args: (string | number)[] = [orgId];
 
-  // "active" = NOT shepherded AND has measurable activity (form submission,
-  //            check-in role) within the activity window.
-  // "present" = NOT shepherded, no recent activity, but PCO record edited
-  //             within window (someone touched their profile).
-  // "inactive" = nothing within the window.
-  const ACTIVE_PREDICATE =
-    `((last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
-      OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?))`;
-  const NOT_ACTIVE_PREDICATE =
-    `((last_form_submission_at IS NULL OR last_form_submission_at < ?)
-      AND (last_check_in_at IS NULL OR last_check_in_at < ?))`;
-
-  // Tabs filter on the SNAPSHOT's verdict, not on a second computation
-  // from the few columns in scope here. The snapshot weighs all seven
-  // configured signals; reproducing a subset of that logic is how the tab
-  // and the pill beside each name came to disagree.
-  //
-  // The fallback arm catches people synced since the last refresh, who have
-  // no snapshot row yet: for them the old narrow rule still applies, which
-  // is the best this query can do and errs toward the lower band.
-  if (tab === "shepherded") {
-    parts.push(
-      `(pa.classification = 'shepherded'
-        OR (pa.classification IS NULL AND s.person_id IS NOT NULL))`,
-    );
-  } else if (tab === "active") {
-    parts.push(
-      `(pa.classification = 'active'
-        OR (pa.classification IS NULL AND s.person_id IS NULL AND ${ACTIVE_PREDICATE}))`,
-    );
-    args.push(cutoff, cutoff);
-  } else if (tab === "present") {
-    parts.push(
-      `(pa.classification = 'present'
-        OR (pa.classification IS NULL AND s.person_id IS NULL AND ${NOT_ACTIVE_PREDICATE}
-            AND pco_updated_at IS NOT NULL AND pco_updated_at >= ?))`,
-    );
-    args.push(cutoff, cutoff, cutoff);
-  } else if (tab === "inactive") {
-    parts.push(
-      `(pa.classification = 'inactive'
-        OR (pa.classification IS NULL AND s.person_id IS NULL AND ${NOT_ACTIVE_PREDICATE}
-            AND (pco_updated_at IS NULL OR pco_updated_at < ?)))`,
-    );
-    args.push(cutoff, cutoff, cutoff);
+  // Tabs read the snapshot's verdict and nothing else. "all" means
+  // everybody we would show anywhere, which is Shepherded or Known — the
+  // Unknown tab is where the rest live, and all-incl-inactive is the
+  // escape hatch for seeing the whole database.
+  if (tab === "shepherded" || tab === "known" || tab === "unknown") {
+    parts.push("pa.classification = ?");
+    args.push(tab);
   } else if (tab === "all") {
-    parts.push(
-      `(s.person_id IS NOT NULL
-         OR (last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
-         OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?)
-         OR (pco_updated_at IS NOT NULL AND pco_updated_at >= ?))`,
-    );
-    args.push(cutoff, cutoff, cutoff);
+    parts.push("pa.classification IN ('shepherded','known')");
   }
 
   if (excludedTypes.length > 0) {
@@ -511,17 +446,15 @@ function buildOrderBy(sort: SortColumn, dir: SortDir, cutoff: string): string {
 export interface ClassificationCounts {
   total: number;
   shepherded: number;
-  active: number;
-  present: number;
-  inactive: number;
+  known: number;
+  unknown: number;
   /** Subset of each bucket that is currently a minor (is_minor=1). Lets
    *  the UI show "1500 (+200 kids)" so the adult-only number is the
    *  headline for outreach/next-steps work. */
   shepherdedKids: number;
-  activeKids: number;
-  presentKids: number;
-  inactiveKids: number;
-  /** Total minus inactive — what "All" shows by default. */
+  knownKids: number;
+  unknownKids: number;
+  /** Shepherded + Known — what "All" shows by default. */
   visibleByDefault: number;
 }
 
@@ -541,32 +474,24 @@ function getClassificationCountsImpl(
   // we always run the live CASE-laden SQL with the extra predicate.
   const snap = membershipType ? null : getOrgSnapshot(orgId);
   if (snap && snap.activityMonths === activityMonths) {
-    let { shepherdedKids, activeKids, presentKids, inactiveKids } = snap;
-    // Self-heal: when migration 0037 added the kid columns it
-    // backfilled them to 0 on the existing snapshot row, so the kid
-    // breakdown vanishes until the next full refresh runs. If all
-    // four are 0 but there ARE people, the columns are almost
-    // certainly stale (a real church has minors) — recompute them
-    // once from person_activity. This is a single indexed GROUP BY,
-    // cheap, and only fires until the next refresh persists real
-    // values.
+    let { shepherdedKids, knownKids, unknownKids } = snap;
+    // Self-heal: a migration that adds a kid column backfills it to 0, so
+    // the breakdown vanishes until the next full refresh. If all three are
+    // 0 but there ARE people, the columns are stale (a real church has
+    // minors) — recompute once from person_activity. One indexed GROUP BY,
+    // and it stops firing as soon as a refresh persists real values.
     const kidsAllZero =
-      shepherdedKids === 0 &&
-      activeKids === 0 &&
-      presentKids === 0 &&
-      inactiveKids === 0;
+      shepherdedKids === 0 && knownKids === 0 && unknownKids === 0;
     if (kidsAllZero && snap.totalPeople > 0) {
       const k = getDb()
         .prepare(
           `SELECT
              SUM(CASE WHEN pa.classification = 'shepherded'
                        AND p.is_minor = 1 THEN 1 ELSE 0 END) AS shepherdedKids,
-             SUM(CASE WHEN pa.classification = 'active'
-                       AND p.is_minor = 1 THEN 1 ELSE 0 END) AS activeKids,
-             SUM(CASE WHEN pa.classification = 'present'
-                       AND p.is_minor = 1 THEN 1 ELSE 0 END) AS presentKids,
-             SUM(CASE WHEN pa.classification = 'inactive'
-                       AND p.is_minor = 1 THEN 1 ELSE 0 END) AS inactiveKids
+             SUM(CASE WHEN pa.classification = 'known'
+                       AND p.is_minor = 1 THEN 1 ELSE 0 END) AS knownKids,
+             SUM(CASE WHEN pa.classification = 'unknown'
+                       AND p.is_minor = 1 THEN 1 ELSE 0 END) AS unknownKids
              FROM person_activity pa
              JOIN pco_people p
                ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
@@ -574,30 +499,24 @@ function getClassificationCountsImpl(
         )
         .get(orgId) as {
         shepherdedKids: number | null;
-        activeKids: number | null;
-        presentKids: number | null;
-        inactiveKids: number | null;
+        knownKids: number | null;
+        unknownKids: number | null;
       };
       shepherdedKids = k.shepherdedKids ?? 0;
-      activeKids = k.activeKids ?? 0;
-      presentKids = k.presentKids ?? 0;
-      inactiveKids = k.inactiveKids ?? 0;
+      knownKids = k.knownKids ?? 0;
+      unknownKids = k.unknownKids ?? 0;
     }
     return {
       total: snap.totalPeople,
       shepherded: snap.shepherdedCount,
-      active: snap.activeCount,
-      present: snap.presentCount,
-      inactive: snap.inactiveCount,
+      known: snap.knownCount,
+      unknown: snap.unknownCount,
       shepherdedKids,
-      activeKids,
-      presentKids,
-      inactiveKids,
-      visibleByDefault: snap.totalPeople - snap.inactiveCount,
+      knownKids,
+      unknownKids,
+      visibleByDefault: snap.shepherdedCount + snap.knownCount,
     };
   }
-  const db = getDb();
-  const cutoff = cutoffIso(activityMonths);
   const excluded = getExcludedMembershipTypes(orgId);
   const exclSql =
     excluded.length === 0
@@ -614,111 +533,56 @@ function getClassificationCountsImpl(
     memSql = " AND membership_type = ?";
     memArgs.push(membershipType);
   }
-  // Precompute shepherded set into a TEMP TABLE (with PRIMARY KEY) so the
-  // LEFT JOIN below is indexed instead of a full scan per pco_people row.
-  populateShepherdedTempTable(orgId);
-  // Hard rule: anyone PCO marks inactive is ALWAYS inactive in our
-  // system, regardless of groups/check-ins/forms — PCO owns membership
-  // status. This predicate wins over shepherded/active/present below
-  // and mirrors the snapshot override in
-  // dashboard-refresh.classifyPersonActivity, so the live and
-  // snapshot paths agree.
-  const pcoInactive =
-    "(lower(coalesce(pco_people.status,'')) = 'inactive' OR pco_people.inactivated_at IS NOT NULL)";
-  // "Active" = NOT shepherded AND (form submission OR check-in role) in window.
-  // "Present" = NOT shepherded, NOT active, but PCO record edited in window.
-  // "Inactive" = PCO-inactive, OR NOT shepherded AND nothing in window.
-  const row = db
+  // Counts come from the snapshot, same as everything else. This used to
+  // be a CASE-laden query that re-derived the classification from form
+  // submissions, check-ins and pco_updated_at — a second implementation of
+  // a rule that now weighs seven configurable signals, and which could
+  // therefore disagree with every other page in the app.
+  //
+  // It runs only when the org-wide snapshot cannot answer: a membership
+  // filter is set, or the snapshot was built against a different activity
+  // window. Both cases still read person_activity; only the filter differs.
+  const row = getDb()
     .prepare(
       `SELECT
          COUNT(*) AS total,
-         SUM(CASE WHEN s.person_id IS NOT NULL AND NOT ${pcoInactive} THEN 1 ELSE 0 END) AS shepherded,
-         SUM(CASE WHEN s.person_id IS NOT NULL AND NOT ${pcoInactive} AND is_minor = 1 THEN 1 ELSE 0 END) AS shepherdedKids,
-         SUM(CASE
-               WHEN s.person_id IS NULL
-                AND NOT ${pcoInactive}
-                AND ((last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
-                  OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?))
-               THEN 1 ELSE 0 END) AS active,
-         SUM(CASE
-               WHEN s.person_id IS NULL
-                AND NOT ${pcoInactive}
-                AND is_minor = 1
-                AND ((last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
-                  OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?))
-               THEN 1 ELSE 0 END) AS activeKids,
-         SUM(CASE
-               WHEN s.person_id IS NULL
-                AND NOT ${pcoInactive}
-                AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
-                AND (last_check_in_at IS NULL OR last_check_in_at < ?)
-                AND pco_updated_at IS NOT NULL
-                AND pco_updated_at >= ?
-               THEN 1 ELSE 0 END) AS present,
-         SUM(CASE
-               WHEN s.person_id IS NULL
-                AND NOT ${pcoInactive}
-                AND is_minor = 1
-                AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
-                AND (last_check_in_at IS NULL OR last_check_in_at < ?)
-                AND pco_updated_at IS NOT NULL
-                AND pco_updated_at >= ?
-               THEN 1 ELSE 0 END) AS presentKids,
-         SUM(CASE
-               WHEN ${pcoInactive} THEN 1
-               WHEN s.person_id IS NULL
-                AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
-                AND (last_check_in_at IS NULL OR last_check_in_at < ?)
-                AND (pco_updated_at IS NULL OR pco_updated_at < ?)
-               THEN 1 ELSE 0 END) AS inactive,
-         SUM(CASE
-               WHEN ${pcoInactive} AND is_minor = 1 THEN 1
-               WHEN s.person_id IS NULL
-                AND is_minor = 1
-                AND (last_form_submission_at IS NULL OR last_form_submission_at < ?)
-                AND (last_check_in_at IS NULL OR last_check_in_at < ?)
-                AND (pco_updated_at IS NULL OR pco_updated_at < ?)
-               THEN 1 ELSE 0 END) AS inactiveKids
+         SUM(CASE WHEN pa.classification = 'shepherded' THEN 1 ELSE 0 END) AS shepherded,
+         SUM(CASE WHEN pa.classification = 'shepherded'
+                   AND is_minor = 1 THEN 1 ELSE 0 END) AS shepherdedKids,
+         SUM(CASE WHEN pa.classification = 'known' THEN 1 ELSE 0 END) AS known,
+         SUM(CASE WHEN pa.classification = 'known'
+                   AND is_minor = 1 THEN 1 ELSE 0 END) AS knownKids,
+         -- NULL counts as unknown: somebody synced since the last refresh
+         -- genuinely is unknown to us.
+         SUM(CASE WHEN pa.classification IS NULL
+                    OR pa.classification = 'unknown' THEN 1 ELSE 0 END) AS unknown,
+         SUM(CASE WHEN (pa.classification IS NULL OR pa.classification = 'unknown')
+                   AND is_minor = 1 THEN 1 ELSE 0 END) AS unknownKids
        FROM pco_people
-       LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+       LEFT JOIN person_activity pa
+         ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
        WHERE pco_people.org_id = ?${exclSql}${memSql}`,
     )
-    .get(
-      cutoff, cutoff,            // active total
-      cutoff, cutoff,            // activeKids
-      cutoff, cutoff, cutoff,    // present total
-      cutoff, cutoff, cutoff,    // presentKids
-      cutoff, cutoff, cutoff,    // inactive total
-      cutoff, cutoff, cutoff,    // inactiveKids
-      orgId,
-      ...excluded,
-      ...memArgs,
-    ) as {
+    .get(orgId, ...excluded, ...memArgs) as {
     total: number;
     shepherded: number | null;
     shepherdedKids: number | null;
-    active: number | null;
-    activeKids: number | null;
-    present: number | null;
-    presentKids: number | null;
-    inactive: number | null;
-    inactiveKids: number | null;
+    known: number | null;
+    knownKids: number | null;
+    unknown: number | null;
+    unknownKids: number | null;
   };
   const shepherded = row.shepherded ?? 0;
-  const active = row.active ?? 0;
-  const present = row.present ?? 0;
-  const inactive = row.inactive ?? 0;
+  const known = row.known ?? 0;
   return {
     total: row.total,
     shepherded,
-    active,
-    present,
-    inactive,
+    known,
+    unknown: row.unknown ?? 0,
     shepherdedKids: row.shepherdedKids ?? 0,
-    activeKids: row.activeKids ?? 0,
-    presentKids: row.presentKids ?? 0,
-    inactiveKids: row.inactiveKids ?? 0,
-    visibleByDefault: row.total - inactive,
+    knownKids: row.knownKids ?? 0,
+    unknownKids: row.unknownKids ?? 0,
+    visibleByDefault: shepherded + known,
   };
 }
 
@@ -727,7 +591,6 @@ function getClassificationCountsImpl(
 export function getPersonByPcoId(
   orgId: number,
   pcoId: string,
-  activityMonths: number,
 ): SyncedPersonRow | null {
   const db = getDb();
   // Snapshot fast path: if person_activity has a row for this person
@@ -757,7 +620,7 @@ export function getPersonByPcoId(
       )
       .get(fast.isShepherded, orgId, pcoId) as RawRow | undefined;
     if (!row) return null;
-    return toRow(row, activityMonths);
+    return toRow(row);
   }
 
   // Cold-start fallback — no snapshot row for this person yet. Run
@@ -778,7 +641,7 @@ export function getPersonByPcoId(
     )
     .get(orgId, pcoId) as RawRow | undefined;
   if (!row) return null;
-  return toRow(row, activityMonths);
+  return toRow(row);
 }
 
 export interface PersonFormSubmission {
@@ -848,7 +711,7 @@ function hitsForIds(orgId: number, ids: string[], activityMonths: number, limit:
     )
     .all(orgId, ...capped) as RawRow[];
   return rows.map((r) => {
-    const p = toRow(r, activityMonths);
+    const p = toRow(r);
     return { pcoId: p.pcoId, fullName: p.fullName, initials: p.initials, classification: p.classification, membershipType: p.membershipType };
   });
 }
@@ -914,7 +777,7 @@ export function searchPeople(
     .all(orgId, like, like, like, limit) as RawRow[];
   if (fast.length > 0 || namesBackfilled(orgId)) {
     return fast.map((r) => {
-      const p = toRow(r, activityMonths);
+      const p = toRow(r);
       return { pcoId: p.pcoId, fullName: p.fullName, initials: p.initials, classification: p.classification, membershipType: p.membershipType };
     });
   }
@@ -944,7 +807,7 @@ export function searchPeople(
       haystack = `${pii.first_name ?? ""} ${pii.last_name ?? ""}`.toLowerCase();
     }
     if (haystack.includes(q)) {
-      const person = toRow(r, activityMonths);
+      const person = toRow(r);
       hits.push({ pcoId: person.pcoId, fullName: person.fullName, initials: person.initials, classification: person.classification, membershipType: person.membershipType });
       if (hits.length >= limit) break;
     }

@@ -36,7 +36,7 @@ export const DEFAULT_CONFIG: Record<BlockKind, BlockConfig> = {
   },
   progress: {
     title: "Goal progress",
-    sql: "SELECT COUNT(*) FROM person_activity WHERE classification IN ('shepherded','active')",
+    sql: "SELECT COUNT(*) FROM person_activity WHERE classification IN ('shepherded','known')",
     goal: 500,
     sub: "engaged people toward the goal",
     span: 4,

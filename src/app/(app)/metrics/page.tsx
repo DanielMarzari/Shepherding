@@ -35,7 +35,7 @@ export default async function MetricsPage() {
           </Card>
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Known</div>
-            <div className="tnum text-2xl font-semibold text-good-soft-fg">{counts.active}</div>
+            <div className="tnum text-2xl font-semibold text-good-soft-fg">{counts.known}</div>
             <div className="text-xs text-muted mt-1">
               activity in {settings.activityMonths}mo
             </div>
@@ -43,7 +43,7 @@ export default async function MetricsPage() {
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Unknown</div>
             <div className="tnum text-2xl font-semibold text-warn-soft-fg">
-              {counts.present + counts.inactive}
+              {counts.unknown}
             </div>
             <div className="text-xs text-muted mt-1">
               nothing in {settings.activityMonths}mo

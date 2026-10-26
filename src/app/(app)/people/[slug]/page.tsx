@@ -22,10 +22,9 @@ import {
 import { PersonTimeline, PersonTimelineSkeleton } from "./timeline";
 
 const TONE: Record<ActivityClassification, "good" | "accent" | "warn" | "muted"> = {
-  active: "good",
   shepherded: "accent",
-  present: "accent",
-  inactive: "warn",
+  known: "good",
+  unknown: "warn",
 };
 
 /** The page itself does ONE query — getPersonByPcoId — so the shell
@@ -40,7 +39,7 @@ export default async function PersonProfilePage({
   const session = await requireOrg();
   const settings = getSyncSettings(session.orgId);
   const { slug } = await params;
-  const person = getPersonByPcoId(session.orgId, slug, settings.activityMonths);
+  const person = getPersonByPcoId(session.orgId, slug);
   if (!person) notFound();
 
   const orgId = session.orgId;

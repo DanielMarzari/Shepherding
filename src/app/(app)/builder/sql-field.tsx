@@ -30,7 +30,7 @@ const SNIPPETS: Array<{ label: string; sql: string }> = [
   { label: "Adults only", sql: "is_minor = 0" },
   { label: "Exclude inactive", sql: "lower(coalesce(status,'')) != 'inactive' AND inactivated_at IS NULL" },
   { label: "Not archived", sql: "archived_at IS NULL" },
-  { label: "Engaged (shepherded / active / present)", sql: "classification IN ('shepherded','active','present')" },
+  { label: "Engaged (shepherded / active / present)", sql: "classification IN ('shepherded','known')" },
 ];
 
 // ── Syntax highlighting ──────────────────────────────────────────────

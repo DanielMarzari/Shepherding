@@ -71,7 +71,7 @@ export function populatePeopleInScope(
       db.prepare(
         `INSERT OR IGNORE INTO temp.${tableName} (person_id)
            SELECT person_id FROM person_activity
-            WHERE org_id = ? AND classification != 'inactive'`,
+            WHERE org_id = ? AND classification != 'unknown'`,
       ).run(orgId);
       break;
     case "groups":

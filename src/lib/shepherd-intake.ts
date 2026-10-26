@@ -178,7 +178,7 @@ export function listIntakeCandidates(
           -- JUST 'active' — matches the "Active" count on /people.
           -- Not 'present' (PCO record merely edited) and not
           -- 'shepherded' (already in a group/team).
-          AND pa.classification = 'active'
+          AND pa.classification = 'known'
           AND p.is_minor = 0
           AND p.pco_id != ?
           -- PCO-inactive is ALWAYS inactive for us. Checked directly

@@ -5,7 +5,7 @@ import { Suspense } from "react";
 import { AsyncDemographicCharts } from "@/components/AsyncChartSections";
 import { DemographicChartsSkeleton } from "@/components/ChartsLoading";
 import { requireOrg } from "@/lib/auth";
-import { bandLabel, bandOf } from "@/lib/classification";
+import { classLabel, classOf } from "@/lib/classification";
 import { getMembershipTypeStats, getSyncSettings } from "@/lib/pco";
 import {
   type ActivityClassification,
@@ -20,17 +20,16 @@ import { PageJump } from "./page-jump";
 
 const PAGE_SIZE = 50;
 
-type TabKey = "all" | "shepherded" | "active" | "present" | "inactive";
+type TabKey = "all" | "shepherded" | "known" | "unknown";
 
-/** Three tabs for four stored values: "present" and "inactive" both read as
- *  Unknown, so Unknown points at "inactive" — the larger of the two by an
- *  order of magnitude — and the Present tab is reachable only by URL for
- *  anyone who still wants to see the staff-edit-only slice on its own. */
+/** "All" is Shepherded + Known — everyone we can see. Unknown is its own
+ *  tab rather than being folded into All, because a list of 27,000 people
+ *  nobody has heard from is a different task from working the roster. */
 const TABS: { key: TabKey; label: string }[] = [
   { key: "all", label: "All" },
   { key: "shepherded", label: "Shepherded" },
-  { key: "active", label: "Known" },
-  { key: "inactive", label: "Unknown" },
+  { key: "known", label: "Known" },
+  { key: "unknown", label: "Unknown" },
 ];
 
 const VALID_SORTS: SortColumn[] = [
@@ -128,8 +127,8 @@ export default async function PeoplePage({
               // records. visibleByDefault = shepherded + active + present.
               const visibleKids =
                 counts.shepherdedKids +
-                counts.activeKids +
-                counts.presentKids;
+                counts.knownKids +
+                counts.unknownKids;
               const visibleAdults = counts.visibleByDefault - visibleKids;
               return (
                 <p className="text-muted text-sm mt-1">
@@ -145,7 +144,7 @@ export default async function PeoplePage({
                       </span>
                     </>
                   )}{" "}
-                  · {counts.inactive.toLocaleString()} inactive (hidden) ·
+                  · {counts.unknown.toLocaleString()} inactive (hidden) ·
                   activity threshold {settings.activityMonths}mo (set in
                   Metrics)
                 </p>
@@ -183,8 +182,8 @@ export default async function PeoplePage({
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Known</div>
             <AdultKidNumber
-              adults={counts.active - counts.activeKids}
-              kids={counts.activeKids}
+              adults={counts.known - counts.knownKids}
+              kids={counts.knownKids}
               tone="good"
             />
             <div className="text-xs text-muted mt-1">
@@ -195,15 +194,14 @@ export default async function PeoplePage({
             <div className="text-xs text-muted mb-1.5">Unknown</div>
             <AdultKidNumber
               adults={
-                counts.present + counts.inactive -
-                counts.presentKids - counts.inactiveKids
+                counts.unknown - counts.unknownKids
               }
-              kids={counts.presentKids + counts.inactiveKids}
+              kids={counts.unknownKids}
               tone="warn"
             />
             <div className="text-xs text-muted mt-1">
               nothing in {settings.activityMonths}mo ·{" "}
-              {counts.present.toLocaleString()} had a record edit only
+              {counts.unknown.toLocaleString()} had a record edit only
             </div>
           </Card>
         </div>
@@ -217,19 +215,15 @@ export default async function PeoplePage({
               const { total, kids } =
                 t.key === "all"
                   ? {
+                      // All = Shepherded + Known, so its kid count is too.
                       total: counts.visibleByDefault,
-                      kids:
-                        counts.shepherdedKids +
-                        counts.activeKids +
-                        counts.presentKids,
+                      kids: counts.shepherdedKids + counts.knownKids,
                     }
                   : t.key === "shepherded"
                     ? { total: counts.shepherded, kids: counts.shepherdedKids }
-                    : t.key === "active"
-                      ? { total: counts.active, kids: counts.activeKids }
-                      : t.key === "present"
-                        ? { total: counts.present, kids: counts.presentKids }
-                        : { total: counts.inactive, kids: counts.inactiveKids };
+                    : t.key === "known"
+                      ? { total: counts.known, kids: counts.knownKids }
+                      : { total: counts.unknown, kids: counts.unknownKids };
               const adults = total - kids;
               return (
                 <Link
@@ -481,7 +475,7 @@ function PersonRow({ p }: { p: SyncedPersonRow }) {
         <AgeBadge isMinor={p.isMinor} />
       </td>
       <td className="px-5 py-2.5">
-        <Pill tone={pillTone(p.classification)}>{bandLabel(p.classification)}</Pill>
+        <Pill tone={pillTone(p.classification)}>{classLabel(p.classification)}</Pill>
       </td>
       <td className="px-5 py-2.5 text-muted truncate">
         {p.membershipType ?? <span className="text-subtle">—</span>}
@@ -497,7 +491,7 @@ function PersonRow({ p }: { p: SyncedPersonRow }) {
 }
 
 function pillTone(c: ActivityClassification): "good" | "accent" | "warn" | "muted" {
-  const band = bandOf(c);
+  const band = classOf(c);
   if (band === "shepherded") return "accent";
   if (band === "known") return "good";
   return "warn";

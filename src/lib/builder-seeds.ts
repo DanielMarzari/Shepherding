@@ -142,7 +142,7 @@ const SCOPE_CTE = `WITH sp AS (
    WHERE org_id = :orgId AND :scope = 'all'
   UNION
   SELECT person_id FROM person_activity
-   WHERE org_id = :orgId AND classification != 'inactive' AND :scope = 'engaged'
+   WHERE org_id = :orgId AND classification != 'unknown' AND :scope = 'engaged'
   UNION
   SELECT DISTINCT m.person_id FROM pco_group_memberships m
     JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
@@ -650,24 +650,24 @@ const homeSeed: SeedPage = {
   blocks: [
     { kind: "stat", config: { title: "Engaged people", span: 4, sub: "adults, Shepherded or Known",
       sql: `SELECT COUNT(*) FROM person_activity pa JOIN pco_people p ON p.org_id=pa.org_id AND p.pco_id=pa.person_id
-             WHERE pa.org_id=:orgId AND pa.classification IN ('shepherded','active') AND p.is_minor=0` } },
+             WHERE pa.org_id=:orgId AND pa.classification IN ('shepherded','known') AND p.is_minor=0` } },
     { kind: "stat", config: { title: "Shepherded", span: 2, color: "success", sub: "in a group/team",
       sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='shepherded'` } },
     { kind: "stat", config: { title: "Known", span: 2, color: "warning", sub: "active, not on a roster",
-      sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='active'` } },
+      sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='known'` } },
     { kind: "stat", config: { title: "Unknown", span: 2, color: "low", sub: "nothing in the window",
-      sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification IN ('present','inactive')` } },
+      sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification = 'unknown'` } },
     { kind: "stat", config: { title: "Unshepherded", span: 2, color: "warning", sub: "Known adults, no roster",
       sql: `SELECT COUNT(*) FROM person_activity pa JOIN pco_people p ON p.org_id=pa.org_id AND p.pco_id=pa.person_id
-             WHERE pa.org_id=:orgId AND pa.classification = 'active' AND p.is_minor=0` } },
+             WHERE pa.org_id=:orgId AND pa.classification = 'known' AND p.is_minor=0` } },
     { kind: "table", config: { title: "Falling through the cracks", span: 8, density: "normal", source: "falling_through_cracks", limit: 8,
       columnColors: { Context: "low", "Last touch": "low" },
       columnThresholds: { "Days silent": { base: 200, band: 165, invert: true } },
       sub: "on a roster but lapsed past your thresholds · top 8" } },
     { kind: "chart", config: { title: "People mix", chartType: "donut", span: 4,
       sql: `SELECT classification AS "Mix", COUNT(*) AS "People" FROM person_activity
-             WHERE org_id=:orgId AND classification IN ('shepherded','active','present')
-             GROUP BY 1 ORDER BY CASE classification WHEN 'shepherded' THEN 1 WHEN 'active' THEN 2 ELSE 3 END` } },
+             WHERE org_id=:orgId AND classification IN ('shepherded','known')
+             GROUP BY 1 ORDER BY CASE classification WHEN 'shepherded' THEN 1 WHEN 'known' THEN 2 ELSE 3 END` } },
     { kind: "table", config: { title: "Recent movement · 14 days", span: 4, density: "normal", source: "recent_movement", sub: "joins & departures" } },
     { kind: "leaderboard", config: { title: "Shepherd workload", span: 4, source: "shepherd_workload", limit: 8, sub: "top shepherds by flock size" } },
     { kind: "table", config: { title: "Group health", span: 4, density: "normal",
@@ -685,8 +685,8 @@ const peopleSeed: SeedPage = {
   revision: 2,
   blocks: [
     { kind: "stat", config: { title: "Shepherded", span: 4, color: "success", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='shepherded'` } },
-    { kind: "stat", config: { title: "Known", span: 4, color: "warning", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='active'` } },
-    { kind: "stat", config: { title: "Unknown", span: 4, color: "low", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification IN ('present','inactive')` } },
+    { kind: "stat", config: { title: "Known", span: 4, color: "warning", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='known'` } },
+    { kind: "stat", config: { title: "Unknown", span: 4, color: "low", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification = 'unknown'` } },
     { kind: "filter", config: { title: "Show", span: 12, param: "classification", filterType: "tabs",
       sql: `SELECT value, label FROM (
               SELECT 1 AS o, 'shepherded' AS value, 'Shepherded' AS label
@@ -819,12 +819,12 @@ const memberMapSeed: SeedPage = {
     { kind: "stat", config: { title: "Mapped members", span: 4, sub: "geocoded to a home location",
       sql: `SELECT COUNT(*) FROM person_geo WHERE org_id=:orgId AND status='ok' AND lat IS NOT NULL` } },
     { kind: "chart", config: { title: "Mapped by engagement", chartType: "donut", span: 8,
-      sql: `SELECT COALESCE(pa.classification,'inactive') AS "Engagement", COUNT(*) AS "People"
+      sql: `SELECT COALESCE(pa.classification,'unknown') AS "Engagement", COUNT(*) AS "People"
               FROM person_geo g LEFT JOIN person_activity pa ON pa.org_id=g.org_id AND pa.person_id=g.person_id
              WHERE g.org_id=:orgId AND g.status='ok' AND g.lat IS NOT NULL
              GROUP BY 1 ORDER BY 2 DESC` } },
     { kind: "map", config: { title: "Members", span: 12, height: "double",
-      sql: `SELECT g.lat, g.lng, COALESCE(pa.classification,'inactive') AS "Engagement"
+      sql: `SELECT g.lat, g.lng, COALESCE(pa.classification,'unknown') AS "Engagement"
               FROM person_geo g LEFT JOIN person_activity pa ON pa.org_id=g.org_id AND pa.person_id=g.person_id
              WHERE g.org_id=:orgId AND g.status='ok' AND g.lat IS NOT NULL
              LIMIT 4000` } },

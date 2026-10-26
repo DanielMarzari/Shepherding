@@ -194,7 +194,7 @@ export function getCampaignTypePerf(orgId: number): Array<{ type: string; campai
 export function getReachGapPeople(orgId: number, limit = 20): PersonRow[] {
   const rows = getDb().prepare(
     `SELECT pa.person_id AS pid, pa.classification AS cls FROM person_activity pa
-      WHERE pa.org_id = ? AND pa.classification IN ('shepherded','active','present')
+      WHERE pa.org_id = ? AND pa.classification IN ('shepherded','known')
         AND pa.person_id NOT IN (SELECT person_id FROM constant_contact_contacts WHERE org_id = ? AND person_id IS NOT NULL)
       LIMIT ?`,
   ).all(orgId, orgId, limit) as Array<{ pid: string; cls: string }>;
@@ -206,7 +206,7 @@ export function getActiveNeverOpen(orgId: number, limit = 20): PersonRow[] {
   const rows = getDb().prepare(
     `SELECT DISTINCT cc.person_id AS pid, pa.classification AS cls FROM constant_contact_contacts cc
        JOIN person_activity pa ON pa.org_id = cc.org_id AND pa.person_id = cc.person_id
-      WHERE cc.org_id = ? AND cc.person_id IS NOT NULL AND pa.classification IN ('shepherded','active','present')
+      WHERE cc.org_id = ? AND cc.person_id IS NOT NULL AND pa.classification IN ('shepherded','known')
         AND cc.person_id NOT IN (
           SELECT c2.person_id FROM constant_contact_engagement e JOIN constant_contact_contacts c2 ON c2.org_id = e.org_id AND c2.contact_id = e.contact_id
            WHERE e.org_id = ? AND e.opens > 0 AND c2.person_id IS NOT NULL)
@@ -271,7 +271,7 @@ export function getEngagedCcCoverage(orgId: number): { data: Slice[]; inCc: numb
        FROM person_activity pa
        LEFT JOIN (SELECT DISTINCT person_id AS pid FROM constant_contact_contacts WHERE org_id = @org AND person_id IS NOT NULL) cc
          ON cc.pid = pa.person_id
-      WHERE pa.org_id = @org AND pa.classification IN ('shepherded','active','present')
+      WHERE pa.org_id = @org AND pa.classification IN ('shepherded','known')
       GROUP BY grp`,
   ).all({ org: orgId }) as Array<{ grp: string; n: number }>;
   const inCc = rows.find((r) => r.grp === "In Constant Contact")?.n ?? 0;

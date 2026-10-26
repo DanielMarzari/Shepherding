@@ -2,7 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { getDb } from "./db";
 import { getSyncSettings } from "./pco";
-import { bandOf } from "./classification";
+import { classOf } from "./classification";
 import {
   LANE_KEYS,
   type AuditPersonRow,
@@ -182,7 +182,7 @@ function getMembershipAuditImpl(
 
     const cls = r.classification;
     if (cls) connectionTotals[cls] = (connectionTotals[cls] ?? 0) + 1;
-    const band = bandOf(cls);
+    const band = classOf(cls);
     bandTotalsByName[band] = (bandTotalsByName[band] ?? 0) + 1;
 
     const first = r.firstName?.trim() || null;

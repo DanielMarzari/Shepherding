@@ -110,7 +110,7 @@ export function getRetention(orgId: number): RetentionSummary {
               re.first_activity_month_index AS firstMi,
               re.last_activity_month_index AS lastMi,
               CASE WHEN pa.classification IS NOT NULL
-                    AND pa.classification != 'inactive'
+                    AND pa.classification != 'unknown'
                    THEN 1 ELSE 0 END AS retained
          FROM pco_people p
          LEFT JOIN person_activity pa

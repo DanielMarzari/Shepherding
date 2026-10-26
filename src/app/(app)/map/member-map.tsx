@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { BAND_LABEL, bandOf, type ConnectionBand } from "@/lib/classification";
+import { CLASS_LABEL, classOf, type Classification } from "@/lib/classification";
 import type { MemberPoint } from "@/lib/geocode";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { RoadLine } from "@/lib/road-network";
@@ -241,7 +241,7 @@ export async function makeBasemapLayer(L: any, bm: Basemap): Promise<any> {
  *  said "present" while every other page said Unknown, and two shades of
  *  grey for the same band was a distinction without a difference. */
 const catOf = (p: any, mode: ColorBy) =>
-  mode === "membership" ? (p.isMember ? "member" : "non-member") : bandOf(p.classification);
+  mode === "membership" ? (p.isMember ? "member" : "non-member") : classOf(p.classification);
 const colorOfCat = (cat: string, mode: ColorBy) =>
   mode === "membership"
     ? cat === "member"
@@ -450,13 +450,13 @@ export function MemberMap({
     for (const p of points) {
       // In membership view, "non-member" excludes inactive people — they
       // aren't a non-member we're trying to reach, just gone quiet.
-      if (colorBy === "membership" && !p.isMember && bandOf(p.classification) === "unknown") continue;
+      if (colorBy === "membership" && !p.isMember && classOf(p.classification) === "unknown") continue;
       const cat = catOf(p, colorBy);
       if (hideSet.has(cat)) continue;
       const c = colorOfCat(cat, colorBy);
       L.circleMarker([p.lat, p.lng], {
         radius: 4, color: "#1f2937", weight: 0.6, fillColor: c, fillOpacity: 0.9,
-      }).bindTooltip(`${p.name} · ${colorBy === "membership" ? cat : BAND_LABEL[cat as ConnectionBand]}`).addTo(layer);
+      }).bindTooltip(`${p.name} · ${colorBy === "membership" ? cat : CLASS_LABEL[cat as Classification]}`).addTo(layer);
     }
     churchRef.current?.bringToFront();
     secondRef.current?.bringToFront();
@@ -675,7 +675,7 @@ export function MemberMap({
                     style={{ background: colorOfCat(cat, colorBy), opacity: on ? 1 : 0.3 }}
                   />
                   <span className={on ? "text-muted" : "text-subtle line-through"}>
-                    {colorBy === "membership" ? cat : BAND_LABEL[cat as ConnectionBand]}
+                    {colorBy === "membership" ? cat : CLASS_LABEL[cat as Classification]}
                   </span>
                 </button>
               );

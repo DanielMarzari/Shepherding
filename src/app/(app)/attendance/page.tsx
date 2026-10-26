@@ -91,7 +91,7 @@ export default async function AttendancePage() {
     (r) => r.kids_total != null || r.adult_total != null,
   );
 
-  const expected = counts.shepherded + counts.active + counts.present;
+  const expected = counts.shepherded + counts.known + counts.unknown;
   const ratio = weekly && expected > 0 ? expected / weekly : null;
   const distribution =
     weekly != null ? buildAttendanceDistribution(expected, weekly) : null;

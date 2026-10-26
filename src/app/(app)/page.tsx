@@ -146,14 +146,14 @@ async function PeopleMixPie({ orgId }: { orgId: number }) {
     },
     {
       label: "Known",
-      count: counts.active,
-      kids: counts.activeKids,
+      count: counts.known,
+      kids: counts.knownKids,
       color: "var(--warn-soft-fg)",
     },
     {
       label: "Unknown",
-      count: counts.present + counts.inactive,
-      kids: counts.presentKids + counts.inactiveKids,
+      count: counts.unknown,
+      kids: counts.unknownKids,
       color: "var(--fg-subtle, #94a3b8)",
     },
   ];
@@ -194,7 +194,7 @@ async function TopStats({ orgId }: { orgId: number }) {
   const stats = getDashboardStats(orgId, settings.activityMonths);
 
   const visibleKids =
-    counts.shepherdedKids + counts.activeKids + counts.presentKids;
+    counts.shepherdedKids + counts.knownKids + counts.unknownKids;
   const activeAdults = stats.active - visibleKids;
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
@@ -237,10 +237,10 @@ async function TopStats({ orgId }: { orgId: number }) {
         // means we deliberately drop the inactive bucket (people the
         // system has already classified as drifted away) and only
         // count active + present as the denominator.
-        const engagedTotal = counts.active + counts.present + counts.shepherded;
-        const unshepherdedKids = counts.activeKids + counts.presentKids;
+        const engagedTotal = counts.known + counts.unknown + counts.shepherded;
+        const unshepherdedKids = counts.knownKids + counts.unknownKids;
         const unshepherdedAdults =
-          counts.active + counts.present - unshepherdedKids;
+          counts.known + counts.unknown - unshepherdedKids;
         return (
           <Stat
             label="Unshepherded"
