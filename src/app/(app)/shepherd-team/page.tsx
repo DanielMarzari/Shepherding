@@ -34,7 +34,8 @@ export default async function ShepherdTeamPage() {
   return (
     <AppShell active="Shepherd team" breadcrumb="Shepherd team">
       <div className="px-5 md:px-7 py-7 space-y-6">
-        <div>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
           <h1 className="text-2xl font-semibold tracking-tight">
             Shepherd team
           </h1>
@@ -48,6 +49,13 @@ export default async function ShepherdTeamPage() {
             </Link>
             .
           </p>
+          </div>
+          <Link
+            href="/shepherd-team/assign"
+            className="shrink-0 px-3.5 py-2 rounded border border-border-soft text-[13px] hover:bg-bg-elev-2"
+          >
+            Assign everyone in Known &rarr;
+          </Link>
         </div>
 
         {!list ? (

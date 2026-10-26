@@ -29,6 +29,7 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   home: { href: "/", defaultLabel: "Home", activeAliases: ["Home"], description: "Dashboard widgets and every layer of the hub." },
   "care-queue": { href: "/care-queue", defaultLabel: "Care queue", activeAliases: ["Care queue"], badge: 17, description: "People flagged for follow-up — who needs a touch this week." },
   "shepherd-team": { href: "/shepherd-team", defaultLabel: "Shepherd team", activeAliases: ["Shepherd team"], description: "The shepherd team and who each member is caring for." },
+  "shepherd-assign": { href: "/shepherd-team/assign", defaultLabel: "Assignment", activeAliases: ["Assignment"], description: "Give everyone in Known a shepherd \u2014 bulk-assign the people exactly one shepherd already named, settle the ones several named, and spread the rest against each shepherd's own bandwidth." },
   shepherds: { href: "/shepherds", defaultLabel: "Shepherds", activeAliases: ["Shepherds"], description: "Everyone who leads a group or team, and who oversees them." },
   people: { href: "/people", defaultLabel: "People", activeAliases: ["People"], description: "Search and browse every synced person, with their engagement." },
   groups: { href: "/groups", defaultLabel: "Groups", activeAliases: ["Groups"], description: "Active groups, membership, health, and who's in them." },
@@ -154,7 +155,7 @@ export const DEFAULT_NAV_CONFIG: NavConfig = {
   version: NAV_CONFIG_VERSION,
   groups: [
     { id: "dashboard", label: "Dashboard", mode: "top", items: [P("home"), P("care-queue")] },
-    { id: "leadership", label: "Leadership", mode: "top", items: [P("shepherd-team"), P("shepherds")] },
+    { id: "leadership", label: "Leadership", mode: "top", items: [P("shepherd-team"), P("shepherd-assign"), P("shepherds")] },
     { id: "pco", label: "PCO data", mode: "top", collapsible: true, items: [P("people"), P("groups"), P("teams"), P("checkins")] },
     { id: "next-steps", label: "Next steps", mode: "top", items: [P("lanes-overview"), P("lanes-list"), P("announcement-impact"), P("giving-impact"), P("sermons"), P("service-plans")] },
     { id: "mappings", label: "Maps", mode: "top", collapsible: true, items: [P("shepherd-map"), P("care-map")] },
