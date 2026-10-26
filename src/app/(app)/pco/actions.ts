@@ -126,6 +126,9 @@ export async function saveSyncSettingsAction(
     shepherdedCheckinMinEvents: current.shepherdedCheckinMinEvents,
     shepherdedCheckinWindowMonths: current.shepherdedCheckinWindowMonths,
     servingInterestFormId: current.servingInterestFormId,
+    // Owned by the Known-definition settings, not this form.
+    knownSignals: current.knownSignals,
+    knownMinSignals: current.knownMinSignals,
   };
   saveSyncSettings(s.orgId, settings);
   revalidatePath("/pco");

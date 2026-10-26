@@ -85,3 +85,62 @@ export const CLASSIFICATIONS_IN_BAND: Record<ConnectionBand, Classification[]> =
     known: ["active"],
     unknown: ["present", "inactive"],
   };
+
+
+// ─── What counts as activity ──────────────────────────────────────────
+
+/** The signals that can make someone Known. Each is something the PERSON
+ *  did. An edit to their PCO record is deliberately absent: that is
+ *  activity ON them by a staff member, and counting it would let a data
+ *  cleanup promote hundreds of people overnight. */
+export const KNOWN_SIGNALS = [
+  "checkin",
+  "form",
+  "attendance",
+  "serving",
+  "giving",
+  "email",
+  "registration",
+] as const;
+export type KnownSignal = (typeof KNOWN_SIGNALS)[number];
+
+export const SIGNAL_LABEL: Record<KnownSignal, string> = {
+  checkin: "Checked in",
+  form: "Submitted a form",
+  attendance: "Attended a group or event",
+  serving: "Served on a plan",
+  giving: "Gave",
+  email: "Opened or clicked an email",
+  registration: "Registered for something",
+};
+
+export const SIGNAL_HELP: Record<KnownSignal, string> = {
+  checkin: "A Check-Ins record. Mostly children and volunteers — adults rarely check themselves in.",
+  form: "Submitted any PCO form.",
+  attendance: "Marked as attended at a group meeting or event.",
+  serving: "Scheduled on a service plan and did not decline.",
+  giving: "A gift on record in the PushPay import.",
+  email: "Opened or clicked a Constant Contact email. The single widest signal — on the member roster it reaches 243 people no other signal catches.",
+  registration: "Signed up through PCO Registrations.",
+};
+
+/** Used when an org has never configured the definition. Everything the
+ *  person can do, which is the honest default: the alternative is a
+ *  narrower bar nobody chose. */
+export const DEFAULT_KNOWN_SIGNALS: KnownSignal[] = [...KNOWN_SIGNALS];
+
+export function parseKnownSignals(raw: string | null | undefined): KnownSignal[] {
+  if (!raw) return DEFAULT_KNOWN_SIGNALS;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return DEFAULT_KNOWN_SIGNALS;
+    const kept = parsed.filter((v): v is KnownSignal =>
+      (KNOWN_SIGNALS as readonly string[]).includes(v),
+    );
+    // An empty list would mean nobody is ever Known, which is never what
+    // somebody meant to save — fall back rather than emptying the band.
+    return kept.length ? kept : DEFAULT_KNOWN_SIGNALS;
+  } catch {
+    return DEFAULT_KNOWN_SIGNALS;
+  }
+}

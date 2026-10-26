@@ -12,6 +12,7 @@ import {
   saveExcludedTeamTypes,
   saveKidCheckinEvents,
   saveOutreachGroupTypes,
+  saveKnownDefinition,
   saveOutreachServiceTypes,
   saveOutreachTags,
   saveSundayCheckinEvents,
@@ -211,5 +212,30 @@ export async function saveOutreachLaneAction(
               ? " The Outreach lane fills on the next snapshot refresh."
               : ` ${inLane.toLocaleString()} people are in the Outreach lane.`
           }`,
+  };
+}
+
+/** The Known definition. Changing it changes everybody's band, so the
+ *  message says plainly that it lands on the next refresh rather than
+ *  implying the roster has already moved. */
+export async function saveKnownDefinitionAction(
+  _prev: FilterSaveState | null,
+  formData: FormData,
+): Promise<FilterSaveState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") {
+    return { status: "error", message: "Only admins can change filters." };
+  }
+  const signals = formData
+    .getAll("signal")
+    .filter((v) => typeof v === "string") as string[];
+  const min = Number(formData.get("minSignals") ?? 1);
+  saveKnownDefinition(s.orgId, signals, Number.isFinite(min) ? min : 1);
+  revalidatePath("/pco/filters");
+  revalidatePath("/audit");
+  revalidatePath("/people");
+  return {
+    status: "saved",
+    message: `Saved. ${signals.length || "All"} signal${signals.length === 1 ? "" : "s"} count toward Known — applied on the next snapshot refresh.`,
   };
 }

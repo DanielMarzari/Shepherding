@@ -174,8 +174,16 @@ export interface SyncSettings {
   runAtDom: number;
   emailOnFailure: boolean;
   autoResolveConflicts: boolean;
-  /** Months window for "active" classification (default 18). */
+  /** Months window for "active" classification (default 18). Doubles as
+   *  the window for the Known definition — one window, so the audit, the
+   *  lanes and the classification can never drift apart. */
   activityMonths: number;
+  /** JSON array of the signals that make someone Known. NULL = never
+   *  configured, and the app falls back to every signal. See
+   *  classification.ts. */
+  knownSignals: string | null;
+  /** How many DISTINCT kinds of signal clear the bar (default 1). */
+  knownMinSignals: number;
   /** Always look back this many months on each sync, even with a newer
    *  cursor — catches retroactive PCO edits (default 3). */
   syncThresholdMonths: number;
@@ -225,7 +233,8 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
               lapsed_from_team_months, lapsed_from_team_events,
               shepherded_checkin_min_events,
               shepherded_checkin_window_months,
-              serving_interest_form_id
+              serving_interest_form_id,
+              known_signals, known_min_signals
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -247,6 +256,8 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
         shepherded_checkin_min_events: number | null;
         shepherded_checkin_window_months: number | null;
         serving_interest_form_id: string | null;
+        known_signals: string | null;
+        known_min_signals: number | null;
       }
     | undefined;
   if (!row) {
@@ -268,6 +279,8 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
       shepherdedCheckinMinEvents: 3,
       shepherdedCheckinWindowMonths: 12,
       servingInterestFormId: null,
+      knownSignals: null,
+      knownMinSignals: 1,
     };
   }
   const freq: SyncFrequency =
@@ -290,6 +303,8 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
     shepherdedCheckinMinEvents: row.shepherded_checkin_min_events ?? 3,
     shepherdedCheckinWindowMonths: row.shepherded_checkin_window_months ?? 12,
     servingInterestFormId: row.serving_interest_form_id ?? null,
+    knownSignals: row.known_signals ?? null,
+    knownMinSignals: row.known_min_signals ?? 1,
   };
 }
 
@@ -947,6 +962,33 @@ function getOutreachGroupTypesImpl(orgId: number): string[] {
 }
 export function saveOutreachGroupTypes(orgId: number, ids: string[]) {
   writeIdList(orgId, "outreach_group_types", ids);
+}
+
+/** The Known definition: which signals count, and how many kinds are
+ *  needed. Separate setters from saveSyncSettings so the settings page can
+ *  save this without rewriting the whole sync schedule. */
+export function saveKnownDefinition(
+  orgId: number,
+  signals: string[],
+  minSignals: number,
+): void {
+  const cleaned = Array.from(new Set(signals.filter(Boolean)));
+  const exists = getDb()
+    .prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?")
+    .get(orgId);
+  if (!exists) saveSyncSettings(orgId, getSyncSettings(orgId));
+  getDb()
+    .prepare(
+      `UPDATE pco_sync_settings
+          SET known_signals = ?, known_min_signals = ?,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE org_id = ?`,
+    )
+    .run(
+      cleaned.length ? JSON.stringify(cleaned) : null,
+      Math.max(1, Math.round(minSignals)),
+      orgId,
+    );
 }
 
 /** Individual Services person tags that count as outreach. The finest of

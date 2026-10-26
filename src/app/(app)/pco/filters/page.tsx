@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
+import { parseKnownSignals } from "@/lib/classification";
 import {
   getCheckinEventStats,
   getExcludedGroupTypes,
@@ -12,6 +13,7 @@ import {
   getMembershipTypeStats,
   getOutreachGroupTypes,
   getOutreachServiceTypes,
+  getSyncSettings,
   getOutreachTags,
   getPersonTagStats,
   getServiceTypeStats,
@@ -24,6 +26,7 @@ import {
 import { CheckinEventsForm } from "./checkin-events-form";
 import { FiltersForm } from "./form";
 import { GroupTypeFiltersForm } from "./group-types-form";
+import { KnownDefinitionForm } from "./known-form";
 import { OutreachLaneForm } from "./outreach-form";
 import { TeamTypeFiltersForm } from "./team-types-form";
 
@@ -33,6 +36,7 @@ const TABS = [
   { key: "teams", label: "Team types" },
   { key: "checkins", label: "Check-in events" },
   { key: "outreach", label: "Outreach lane" },
+  { key: "known", label: "What makes someone Known" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -67,6 +71,7 @@ export default async function FiltersPage({
   const outreachServiceTypes = getOutreachServiceTypes(session.orgId);
   const outreachGroupTypes = getOutreachGroupTypes(session.orgId);
   const outreachTags = getOutreachTags(session.orgId);
+  const syncSettings = getSyncSettings(session.orgId);
   const tagStats = getPersonTagStats(session.orgId);
 
   const checkinStats = getCheckinEventStats(session.orgId);
@@ -153,7 +158,27 @@ export default async function FiltersPage({
           </nav>
         </div>
 
-        {tab === "outreach" ? (
+        {tab === "known" ? (
+          <Card>
+            <CardHeader
+              title="What makes someone Known"
+              badge={
+                session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
+              }
+              right={
+                <span className="text-xs text-muted">
+                  Shepherded and Unknown are measured — Known is what is left
+                </span>
+              }
+            />
+            <KnownDefinitionForm
+              initialSignals={parseKnownSignals(syncSettings.knownSignals)}
+              initialMin={syncSettings.knownMinSignals}
+              activityMonths={syncSettings.activityMonths}
+              isAdmin={session.role === "admin"}
+            />
+          </Card>
+        ) : tab === "outreach" ? (
           <Card>
             <CardHeader
               title="Outreach lane"

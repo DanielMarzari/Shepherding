@@ -1,5 +1,6 @@
 import "server-only";
 import { getDb, prepareCached } from "./db";
+import { parseKnownSignals } from "./classification";
 import {
   getExcludedMembershipTypes,
   getOutreachGroupTypes,
@@ -1146,21 +1147,79 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
   // adults while /people (snapshot) showed 1,466. Using shep_set keeps
   // them identical.
   populateShepherdedTempTable(orgId);
+
+  // One row per (person, kind) for every signal the church has switched on.
+  // Counting DISTINCT kinds, not raw events: "3 email opens" and "3 gifts"
+  // are not the same unit and summing them would mean nothing.
+  //
+  // An edit to the PCO record is not in here and cannot be switched on. It
+  // is activity ON a person by a staff member, not BY them — a data cleanup
+  // would otherwise promote hundreds of people into Known overnight. It
+  // still produces 'present' below, which reads as Unknown.
+  const signals = parseKnownSignals(getSyncSettings(orgId).knownSignals);
+  const minSignals = Math.max(1, getSyncSettings(orgId).knownMinSignals ?? 1);
+  const cut = cutoffActivity;
+  const day = cut.slice(0, 10);
+
+  db.exec(`DROP TABLE IF EXISTS act_set;`);
+  db.exec(`CREATE TEMP TABLE act_set (person_id TEXT NOT NULL, kind TEXT NOT NULL);`);
+  const add = (kind: string, sql: string, params: unknown[]) => {
+    if (!signals.includes(kind as never)) return;
+    db.prepare(
+      `INSERT INTO act_set (person_id, kind) SELECT person_id, '${kind}' FROM (${sql})`,
+    ).run(...(params as []));
+  };
+
+  add("checkin", `SELECT person_id FROM person_activity
+                   WHERE org_id = ? AND last_check_in_at IS NOT NULL AND last_check_in_at >= ?`, [orgId, cut]);
+  add("form", `SELECT person_id FROM person_activity
+                WHERE org_id = ? AND last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?`, [orgId, cut]);
+  add("attendance", `SELECT person_id FROM person_activity
+                      WHERE org_id = ? AND last_attended_at IS NOT NULL AND last_attended_at >= ?`, [orgId, cut]);
+  add("serving", `SELECT person_id FROM person_activity
+                   WHERE org_id = ? AND last_served_at IS NOT NULL AND last_served_at >= ?`, [orgId, cut]);
+  add("giving", `SELECT DISTINCT person_id FROM pushpay_payer_summary
+                  WHERE org_id = ? AND person_id IS NOT NULL
+                    AND last_gift_on IS NOT NULL AND last_gift_on >= ?`, [orgId, day]);
+  // Opens and clicks both count, and a person can hold several contacts, so
+  // DISTINCT on the person rather than the contact.
+  add("email", `SELECT DISTINCT c.person_id AS person_id
+                  FROM constant_contact_activity a
+                  JOIN constant_contact_contacts c
+                    ON c.org_id = a.org_id AND c.contact_id = a.contact_id
+                 WHERE a.org_id = ? AND a.activity_type IN ('open','click')
+                   AND a.occurred_at >= ?
+                   AND c.person_id IS NOT NULL AND c.person_id != ''`, [orgId, cut]);
+  add("registration", `SELECT DISTINCT a.person_id AS person_id
+                         FROM pco_registration_attendees a
+                         JOIN pco_registration_signups s
+                           ON s.org_id = a.org_id AND s.pco_id = a.signup_id
+                        WHERE a.org_id = ? AND a.person_id IS NOT NULL
+                          AND COALESCE(s.pco_created_at,'') >= ?`, [orgId, cut]);
+
+  db.exec(`CREATE INDEX act_set_pid ON act_set(person_id);`);
+  db.exec(`DROP TABLE IF EXISTS known_set;`);
+  db.prepare(
+    `CREATE TEMP TABLE known_set AS
+       SELECT person_id FROM act_set
+        GROUP BY person_id HAVING COUNT(DISTINCT kind) >= ?`,
+  ).run(minSignals);
+  db.exec(`CREATE UNIQUE INDEX known_set_pid ON known_set(person_id);`);
+
   db.prepare(
     `UPDATE person_activity
         SET classification = CASE
               WHEN person_id IN (SELECT person_id FROM temp.shep_set)
                    THEN 'shepherded'
-              WHEN (last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?)
-                OR (last_check_in_at IS NOT NULL AND last_check_in_at >= ?)
+              WHEN person_id IN (SELECT person_id FROM temp.known_set)
                    THEN 'active'
-              WHEN (last_pco_updated_at IS NOT NULL AND last_pco_updated_at >= ?)
+              WHEN (last_pco_updated_at IS NOT NULL AND last_pco_updated_at >= :cut)
                    THEN 'present'
               ELSE 'inactive'
             END,
             refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-      WHERE org_id = ?`,
-  ).run(cutoffActivity, cutoffActivity, cutoffActivity, orgId);
+      WHERE org_id = :orgId`,
+  ).run({ cut: cutoffActivity, orgId });
 
   // Hard override: anyone PCO marks inactive is ALWAYS inactive in our
   // system, no matter what other signals say (groups, check-ins,
@@ -1180,6 +1239,11 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
                   OR inactivated_at IS NOT NULL)
         )`,
   ).run(orgId, orgId);
+
+  db.exec(`
+    DROP TABLE IF EXISTS act_set;
+    DROP TABLE IF EXISTS known_set;
+  `);
 }
 
 function rebuildGroupSummary(
