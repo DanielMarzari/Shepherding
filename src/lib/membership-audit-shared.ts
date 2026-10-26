@@ -14,17 +14,17 @@ export const LANE_LABELS: Record<LaneKey, string> = {
   o: "Outreach",
 };
 
-/** person_activity.classification, relabelled. The stored values are
- *  "shepherded" | "active" | "present" | "inactive"; these are the words
- *  the page shows. Changing the display here changes it everywhere,
- *  without a migration. */
-export const CONNECTION_LABELS: Record<string, string> = {
-  shepherded: "Connected",
-  active: "Active",
-  present: "Seen",
-  inactive: "Quiet",
-};
-export const CONNECTION_ORDER = ["shepherded", "active", "present", "inactive"];
+/** The audit shows the three-band vocabulary — Shepherded / Known /
+ *  Unknown — while the row still carries the stored four-value
+ *  classification. See classification.ts for why both exist. */
+export {
+  BAND_DESCRIPTION,
+  BAND_LABEL,
+  CONNECTION_BANDS,
+  bandLabel,
+  bandOf,
+  type ConnectionBand,
+} from "./classification";
 
 /** Every warning the audit can raise, in the order the dropdown lists
  *  them. These strings ARE the values stored on a row's `flags`, so the
@@ -83,6 +83,8 @@ export interface MembershipAudit {
   /** Every lane combination that actually occurs, commonest first. */
   combos: { key: string; count: number }[];
   connectionTotals: Record<string, number>;
+  /** Totals rolled up into the three shown bands. */
+  bandTotalsByName: Record<string, number>;
   flaggedTotal: number;
   refreshedAt: string | null;
   /** The org's activity window, in months — what every lane looks back over. */

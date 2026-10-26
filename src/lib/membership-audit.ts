@@ -2,6 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { getDb } from "./db";
 import { getSyncSettings } from "./pco";
+import { bandOf } from "./classification";
 import {
   LANE_KEYS,
   type AuditPersonRow,
@@ -156,6 +157,7 @@ function getMembershipAuditImpl(
   const bandTotals = [0, 0, 0, 0, 0, 0];
   const comboCounts = new Map<string, number>();
   const connectionTotals: Record<string, number> = {};
+  const bandTotalsByName: Record<string, number> = {};
   let flaggedTotal = 0;
 
   const rows: AuditPersonRow[] = raw.map((r) => {
@@ -180,6 +182,8 @@ function getMembershipAuditImpl(
 
     const cls = r.classification;
     if (cls) connectionTotals[cls] = (connectionTotals[cls] ?? 0) + 1;
+    const band = bandOf(cls);
+    bandTotalsByName[band] = (bandTotalsByName[band] ?? 0) + 1;
 
     const first = r.firstName?.trim() || null;
     const last = r.lastName?.trim() || null;
@@ -233,6 +237,7 @@ function getMembershipAuditImpl(
     bandTotals,
     combos,
     connectionTotals,
+    bandTotalsByName,
     flaggedTotal,
     refreshedAt: refreshed?.at ?? null,
     activityMonths: getSyncSettings(orgId).activityMonths,
