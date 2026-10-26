@@ -184,6 +184,8 @@ export interface SyncSettings {
   knownSignals: string | null;
   /** How many DISTINCT kinds of signal clear the bar (default 1). */
   knownMinSignals: number;
+  /** How many opens (or clicks) are needed before that signal counts. */
+  knownEmailMin: number;
   /** Always look back this many months on each sync, even with a newer
    *  cursor — catches retroactive PCO edits (default 3). */
   syncThresholdMonths: number;
@@ -234,7 +236,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
               shepherded_checkin_min_events,
               shepherded_checkin_window_months,
               serving_interest_form_id,
-              known_signals, known_min_signals
+              known_signals, known_min_signals, known_email_min
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -258,6 +260,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
         serving_interest_form_id: string | null;
         known_signals: string | null;
         known_min_signals: number | null;
+        known_email_min: number | null;
       }
     | undefined;
   if (!row) {
@@ -281,6 +284,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
       servingInterestFormId: null,
       knownSignals: null,
       knownMinSignals: 1,
+      knownEmailMin: 1,
     };
   }
   const freq: SyncFrequency =
@@ -305,6 +309,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
     servingInterestFormId: row.serving_interest_form_id ?? null,
     knownSignals: row.known_signals ?? null,
     knownMinSignals: row.known_min_signals ?? 1,
+    knownEmailMin: row.known_email_min ?? 1,
   };
 }
 
@@ -971,6 +976,7 @@ export function saveKnownDefinition(
   orgId: number,
   signals: string[],
   minSignals: number,
+  emailMin: number,
 ): void {
   const cleaned = Array.from(new Set(signals.filter(Boolean)));
   const exists = getDb()
@@ -980,13 +986,14 @@ export function saveKnownDefinition(
   getDb()
     .prepare(
       `UPDATE pco_sync_settings
-          SET known_signals = ?, known_min_signals = ?,
+          SET known_signals = ?, known_min_signals = ?, known_email_min = ?,
               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE org_id = ?`,
     )
     .run(
       cleaned.length ? JSON.stringify(cleaned) : null,
       Math.max(1, Math.round(minSignals)),
+      Math.max(1, Math.round(emailMin)),
       orgId,
     );
 }

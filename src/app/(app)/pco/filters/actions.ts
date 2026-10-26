@@ -230,7 +230,13 @@ export async function saveKnownDefinitionAction(
     .getAll("signal")
     .filter((v) => typeof v === "string") as string[];
   const min = Number(formData.get("minSignals") ?? 1);
-  saveKnownDefinition(s.orgId, signals, Number.isFinite(min) ? min : 1);
+  const emailMin = Number(formData.get("emailMin") ?? 1);
+  saveKnownDefinition(
+    s.orgId,
+    signals,
+    Number.isFinite(min) ? min : 1,
+    Number.isFinite(emailMin) ? emailMin : 1,
+  );
   revalidatePath("/pco/filters");
   revalidatePath("/audit");
   revalidatePath("/people");

@@ -60,7 +60,8 @@ export const KNOWN_SIGNALS = [
   "attendance",
   "serving",
   "giving",
-  "email",
+  "email_open",
+  "email_click",
   "registration",
 ] as const;
 export type KnownSignal = (typeof KNOWN_SIGNALS)[number];
@@ -71,7 +72,8 @@ export const SIGNAL_LABEL: Record<KnownSignal, string> = {
   attendance: "Attended a group or event",
   serving: "Served on a plan",
   giving: "Gave",
-  email: "Opened or clicked an email",
+  email_open: "Opened an email",
+  email_click: "Clicked a link in an email",
   registration: "Registered for something",
 };
 
@@ -81,23 +83,38 @@ export const SIGNAL_HELP: Record<KnownSignal, string> = {
   attendance: "Marked as attended at a group meeting or event.",
   serving: "Scheduled on a service plan and did not decline.",
   giving: "A gift on record in the PushPay import.",
-  email: "Opened or clicked a Constant Contact email. The single widest signal — on the member roster it reaches 243 people no other signal catches.",
+  email_open: "Opened a Constant Contact email. The widest signal there is — on the member roster it reaches 598 people, more than any other. Also the weakest: an open can be a preview pane.",
+  email_click: "Clicked a link in a Constant Contact email. Strictly stronger than an open — every member who clicked had also opened — and it reaches 437 rather than 598.",
   registration: "Signed up through PCO Registrations.",
 };
+
+/** Signals measured by counting events rather than by existence, so the
+ *  minimum below applies to them. */
+export const COUNTED_SIGNALS: KnownSignal[] = ["email_open", "email_click"];
 
 /** Used when an org has never configured the definition. Everything the
  *  person can do, which is the honest default: the alternative is a
  *  narrower bar nobody chose. */
 export const DEFAULT_KNOWN_SIGNALS: KnownSignal[] = [...KNOWN_SIGNALS];
 
+/** Anything stored before the open/click split asked for "email", which
+ *  meant either. Expand it to both so an old setting keeps behaving the
+ *  way it did. */
+function expandLegacy(v: string): string[] {
+  return v === "email" ? ["email_open", "email_click"] : [v];
+}
+
 export function parseKnownSignals(raw: string | null | undefined): KnownSignal[] {
   if (!raw) return DEFAULT_KNOWN_SIGNALS;
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return DEFAULT_KNOWN_SIGNALS;
-    const kept = parsed.filter((v): v is KnownSignal =>
-      (KNOWN_SIGNALS as readonly string[]).includes(v),
-    );
+    const kept = parsed
+      .filter((v: unknown): v is string => typeof v === "string")
+      .flatMap(expandLegacy)
+      .filter((v): v is KnownSignal =>
+        (KNOWN_SIGNALS as readonly string[]).includes(v),
+      );
     // An empty list would mean nobody is ever Known, which is never what
     // somebody meant to save — fall back rather than emptying the band.
     return kept.length ? kept : DEFAULT_KNOWN_SIGNALS;

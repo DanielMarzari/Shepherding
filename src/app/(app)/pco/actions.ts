@@ -129,6 +129,7 @@ export async function saveSyncSettingsAction(
     // Owned by the Known-definition settings, not this form.
     knownSignals: current.knownSignals,
     knownMinSignals: current.knownMinSignals,
+    knownEmailMin: current.knownEmailMin,
   };
   saveSyncSettings(s.orgId, settings);
   revalidatePath("/pco");

@@ -1158,6 +1158,7 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
   // still produces 'present' below, which reads as Unknown.
   const signals = parseKnownSignals(getSyncSettings(orgId).knownSignals);
   const minSignals = Math.max(1, getSyncSettings(orgId).knownMinSignals ?? 1);
+  const emailMin = Math.max(1, getSyncSettings(orgId).knownEmailMin ?? 1);
   const cut = cutoffActivity;
   const day = cut.slice(0, 10);
 
@@ -1181,15 +1182,26 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
   add("giving", `SELECT DISTINCT person_id FROM pushpay_payer_summary
                   WHERE org_id = ? AND person_id IS NOT NULL
                     AND last_gift_on IS NOT NULL AND last_gift_on >= ?`, [orgId, day]);
-  // Opens and clicks both count, and a person can hold several contacts, so
-  // DISTINCT on the person rather than the contact.
-  add("email", `SELECT DISTINCT c.person_id AS person_id
-                  FROM constant_contact_activity a
-                  JOIN constant_contact_contacts c
-                    ON c.org_id = a.org_id AND c.contact_id = a.contact_id
-                 WHERE a.org_id = ? AND a.activity_type IN ('open','click')
-                   AND a.occurred_at >= ?
-                   AND c.person_id IS NOT NULL AND c.person_id != ''`, [orgId, cut]);
+  // Opens and clicks are separate signals and separately configurable: a
+  // click is strictly stronger evidence — on the member roster every
+  // person who clicked had also opened — while an open can be a preview
+  // pane rendering images.
+  //
+  // These two are COUNTED rather than merely present, against
+  // known_email_min. A person can hold several contact records, so the
+  // count sums across them and the grouping is by person.
+  const emailSignal = (kind: string, type: string) =>
+    add(kind, `SELECT c.person_id AS person_id
+                 FROM constant_contact_activity a
+                 JOIN constant_contact_contacts c
+                   ON c.org_id = a.org_id AND c.contact_id = a.contact_id
+                WHERE a.org_id = ? AND a.activity_type = ?
+                  AND a.occurred_at >= ?
+                  AND c.person_id IS NOT NULL AND c.person_id != ''
+                GROUP BY c.person_id
+               HAVING COUNT(*) >= ?`, [orgId, type, cut, emailMin]);
+  emailSignal("email_open", "open");
+  emailSignal("email_click", "click");
   add("registration", `SELECT DISTINCT a.person_id AS person_id
                          FROM pco_registration_attendees a
                          JOIN pco_registration_signups s

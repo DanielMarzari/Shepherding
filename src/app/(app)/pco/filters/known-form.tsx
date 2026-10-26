@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from "react";
 import {
+  COUNTED_SIGNALS,
   KNOWN_SIGNALS,
   SIGNAL_HELP,
   SIGNAL_LABEL,
@@ -25,16 +26,19 @@ import { saveKnownDefinitionAction, type FilterSaveState } from "./actions";
 export function KnownDefinitionForm({
   initialSignals,
   initialMin,
+  initialEmailMin,
   activityMonths,
   isAdmin,
 }: {
   initialSignals: KnownSignal[];
   initialMin: number;
+  initialEmailMin: number;
   activityMonths: number;
   isAdmin: boolean;
 }) {
   const [signals, setSignals] = useState<Set<string>>(new Set(initialSignals));
   const [min, setMin] = useState(initialMin);
+  const [emailMin, setEmailMin] = useState(initialEmailMin);
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
     saveKnownDefinitionAction,
     null,
@@ -99,6 +103,39 @@ export function KnownDefinitionForm({
           );
         })}
       </ul>
+
+      <div className="px-5 py-4 border-t border-border-soft">
+        <div className="flex flex-wrap items-center gap-3">
+          <label htmlFor="emailMin" className="text-sm">
+            An email signal counts after
+          </label>
+          <select
+            id="emailMin"
+            name="emailMin"
+            value={emailMin}
+            onChange={(e) => setEmailMin(Number(e.target.value))}
+            disabled={!isAdmin || !COUNTED_SIGNALS.some((c) => signals.has(c))}
+            className="bg-bg border border-border-soft rounded-md px-2.5 py-1.5 text-[13px] text-fg disabled:opacity-50"
+          >
+            {[1, 2, 3, 5, 10].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          <span className="text-sm">
+            open{emailMin === 1 ? "" : "s"} — or {emailMin} click
+            {emailMin === 1 ? "" : "s"} — inside the window.
+          </span>
+        </div>
+        <p className="text-xs text-muted mt-2 leading-relaxed max-w-3xl">
+          Applies to each of the two separately, and only to those two —
+          everything else above counts the first time it happens. Measured on
+          the member roster: raising the open threshold barely filters
+          (598 people at one open, still 507 at ten — people who open, open
+          often). Requiring a <em>click</em> is the stronger move: 437.
+        </p>
+      </div>
 
       <div className="px-5 py-4 border-t border-border-soft bg-bg-elev">
         <div className="flex flex-wrap items-center gap-3">

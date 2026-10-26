@@ -174,6 +174,7 @@ export default async function FiltersPage({
             <KnownDefinitionForm
               initialSignals={parseKnownSignals(syncSettings.knownSignals)}
               initialMin={syncSettings.knownMinSignals}
+              initialEmailMin={syncSettings.knownEmailMin}
               activityMonths={syncSettings.activityMonths}
               isAdmin={session.role === "admin"}
             />
