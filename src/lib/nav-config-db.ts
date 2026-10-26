@@ -46,6 +46,11 @@ const SECTION_TO_GROUP: Record<string, string> = {
  *  somebody actually wants one of these gone. */
 const MANAGED_PAGES: Record<string, string> = {
   spotify: "settings-integration",
+  // The assignment page. Faith Church's saved nav has a "leadership" group
+  // (labelled "Shepherding") holding the shepherd team, so the page that
+  // assigns Known people to that team belongs beside it — without this it
+  // would exist only at its URL.
+  "shepherd-assign": "leadership",
   // Giving impact joins the two pages it shares a method with. Faith Church's
   // saved nav keeps Sermon impact and Announcement impact together in
   // "Next steps", so that is where this belongs for them too — without it the
