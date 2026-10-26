@@ -64,10 +64,11 @@ export default async function AssignPage() {
               Assignment
             </h1>
             <p className="text-muted text-sm mt-1.5 max-w-2xl leading-relaxed">
-              Everyone in <strong className="text-fg">Known</strong> should be
-              somebody&rsquo;s responsibility. This is where that gets decided.{" "}
+              Everyone who is{" "}
+              <strong className="text-fg">Known</strong>{" "}
+              should be assigned to someone on the shepherd team.{" "}
               <Link href="/shepherd-team" className="text-accent hover:underline">
-                The team itself is over here &rarr;
+                See shepherd team &rarr;
               </Link>
             </p>
           </div>

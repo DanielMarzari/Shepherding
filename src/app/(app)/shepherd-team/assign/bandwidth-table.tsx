@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import Link from "next/link";
+import { useActionState } from "react";
 import type { ShepherdRow } from "@/lib/shepherd-assign";
 import { saveBandwidthAction, type AssignState } from "./actions";
 
@@ -14,11 +15,16 @@ import { saveBandwidthAction, type AssignState } from "./actions";
 export function BandwidthTable({
   shepherds,
   isAdmin,
+  /** The bandwidth page itself opens straight into the inputs — on that
+   *  page setting bandwidth IS the task, so making someone press an edit
+   *  button first is a step that buys nothing. */
+  alwaysEditing = false,
 }: {
   shepherds: ShepherdRow[];
   isAdmin: boolean;
+  alwaysEditing?: boolean;
 }) {
-  const [editing, setEditing] = useState(false);
+  const editing = alwaysEditing;
   const [state, action, pending] = useActionState<AssignState | null, FormData>(
     saveBandwidthAction,
     null,
@@ -42,13 +48,12 @@ export function BandwidthTable({
                 {pending ? "Saving…" : "Save bandwidths"}
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={() => setEditing(true)}
+              <Link
+                href="/shepherd-team/bandwidth"
                 className="px-3 py-1 rounded border border-border-soft text-xs hover:bg-bg"
               >
-                Set bandwidths
-              </button>
+                Set bandwidths &rarr;
+              </Link>
             ))}
         </div>
       </div>

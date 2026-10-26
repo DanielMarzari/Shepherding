@@ -51,6 +51,7 @@ const MANAGED_PAGES: Record<string, string> = {
   // assigns Known people to that team belongs beside it — without this it
   // would exist only at its URL.
   "shepherd-assign": "leadership",
+  "shepherd-bandwidth": "leadership",
   // Giving impact joins the two pages it shares a method with. Faith Church's
   // saved nav keeps Sermon impact and Announcement impact together in
   // "Next steps", so that is where this belongs for them too — without it the
