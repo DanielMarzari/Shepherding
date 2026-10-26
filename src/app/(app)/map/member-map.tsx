@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { BAND_LABEL, bandOf, type ConnectionBand } from "@/lib/classification";
 import type { MemberPoint } from "@/lib/geocode";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { RoadLine } from "@/lib/road-network";
@@ -75,11 +76,12 @@ export const metricVal = (t: CensusTractView, m: CensusMetric): number =>
 
 const LEAFLET_VERSION = "1.9.4";
 // Colors tuned for a pale (muted) basemap.
+// Keyed by BAND. Yellow / blue / grey differ in lightness as well as hue,
+// so the three stay apart in greyscale and for red-green colourblindness.
 const CLASS_COLOR: Record<string, string> = {
   shepherded: "#eab308", // yellow
-  active: "#2563eb", // blue
-  present: "#9ca3af", // grey
-  inactive: "#64748b", // darker grey (distinct from "present")
+  known: "#2563eb", // blue
+  unknown: "#64748b", // grey
 };
 const MEMBER_COLOR = "#2563eb"; // blue
 const NONMEMBER_COLOR = "#f97316"; // orange — clearly distinct from member
@@ -149,7 +151,7 @@ const BASEMAPS: Basemap[] = [
 ];
 // The basemap is locked to OpenFreeMap "Outdoor"; the picker was removed.
 export const OUTDOOR_BASEMAP = BASEMAPS[0];
-const SHEP_CATS = ["shepherded", "active", "present", "inactive"];
+const SHEP_CATS = ["shepherded", "known", "unknown"];
 const MEM_CATS = ["member", "non-member"];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -235,14 +237,17 @@ export async function makeBasemapLayer(L: any, bm: Basemap): Promise<any> {
   });
 }
 
-const catOf = (p: MemberPoint, mode: ColorBy) =>
-  mode === "membership" ? (p.isMember ? "member" : "non-member") : p.classification;
+/** Markers are coloured by BAND, not by the stored classification: the map
+ *  said "present" while every other page said Unknown, and two shades of
+ *  grey for the same band was a distinction without a difference. */
+const catOf = (p: any, mode: ColorBy) =>
+  mode === "membership" ? (p.isMember ? "member" : "non-member") : bandOf(p.classification);
 const colorOfCat = (cat: string, mode: ColorBy) =>
   mode === "membership"
     ? cat === "member"
       ? MEMBER_COLOR
       : NONMEMBER_COLOR
-    : CLASS_COLOR[cat] ?? CLASS_COLOR.inactive;
+    : CLASS_COLOR[cat] ?? CLASS_COLOR.unknown;
 
 function lsGet(key: string, fallback: any) {
   try {
@@ -445,13 +450,13 @@ export function MemberMap({
     for (const p of points) {
       // In membership view, "non-member" excludes inactive people — they
       // aren't a non-member we're trying to reach, just gone quiet.
-      if (colorBy === "membership" && !p.isMember && p.classification === "inactive") continue;
+      if (colorBy === "membership" && !p.isMember && bandOf(p.classification) === "unknown") continue;
       const cat = catOf(p, colorBy);
       if (hideSet.has(cat)) continue;
       const c = colorOfCat(cat, colorBy);
       L.circleMarker([p.lat, p.lng], {
         radius: 4, color: "#1f2937", weight: 0.6, fillColor: c, fillOpacity: 0.9,
-      }).bindTooltip(`${p.name} · ${cat}`).addTo(layer);
+      }).bindTooltip(`${p.name} · ${colorBy === "membership" ? cat : BAND_LABEL[cat as ConnectionBand]}`).addTo(layer);
     }
     churchRef.current?.bringToFront();
     secondRef.current?.bringToFront();
@@ -669,7 +674,9 @@ export function MemberMap({
                     className="inline-block w-2.5 h-2.5 rounded-full"
                     style={{ background: colorOfCat(cat, colorBy), opacity: on ? 1 : 0.3 }}
                   />
-                  <span className={on ? "text-muted" : "text-subtle line-through"}>{cat}</span>
+                  <span className={on ? "text-muted" : "text-subtle line-through"}>
+                    {colorBy === "membership" ? cat : BAND_LABEL[cat as ConnectionBand]}
+                  </span>
                 </button>
               );
             })}

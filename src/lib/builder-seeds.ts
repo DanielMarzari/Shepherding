@@ -648,18 +648,18 @@ const homeSeed: SeedPage = {
   description: "Who's drifting, who's ready for a step forward, and how the flock is moving.",
   revision: 2,
   blocks: [
-    { kind: "stat", config: { title: "Engaged people", span: 4, sub: "adults, shepherded / active / present",
+    { kind: "stat", config: { title: "Engaged people", span: 4, sub: "adults, Shepherded or Known",
       sql: `SELECT COUNT(*) FROM person_activity pa JOIN pco_people p ON p.org_id=pa.org_id AND p.pco_id=pa.person_id
-             WHERE pa.org_id=:orgId AND pa.classification IN ('shepherded','active','present') AND p.is_minor=0` } },
+             WHERE pa.org_id=:orgId AND pa.classification IN ('shepherded','active') AND p.is_minor=0` } },
     { kind: "stat", config: { title: "Shepherded", span: 2, color: "success", sub: "in a group/team",
       sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='shepherded'` } },
-    { kind: "stat", config: { title: "Active", span: 2, color: "warning", sub: "not yet shepherded",
+    { kind: "stat", config: { title: "Known", span: 2, color: "warning", sub: "active, not on a roster",
       sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='active'` } },
-    { kind: "stat", config: { title: "Present", span: 2, color: "low", sub: "no engagement",
-      sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='present'` } },
-    { kind: "stat", config: { title: "Unshepherded", span: 2, color: "warning", sub: "active + present adults",
+    { kind: "stat", config: { title: "Unknown", span: 2, color: "low", sub: "nothing in the window",
+      sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification IN ('present','inactive')` } },
+    { kind: "stat", config: { title: "Unshepherded", span: 2, color: "warning", sub: "Known adults, no roster",
       sql: `SELECT COUNT(*) FROM person_activity pa JOIN pco_people p ON p.org_id=pa.org_id AND p.pco_id=pa.person_id
-             WHERE pa.org_id=:orgId AND pa.classification IN ('active','present') AND p.is_minor=0` } },
+             WHERE pa.org_id=:orgId AND pa.classification = 'active' AND p.is_minor=0` } },
     { kind: "table", config: { title: "Falling through the cracks", span: 8, density: "normal", source: "falling_through_cracks", limit: 8,
       columnColors: { Context: "low", "Last touch": "low" },
       columnThresholds: { "Days silent": { base: 200, band: 165, invert: true } },
@@ -684,10 +684,9 @@ const peopleSeed: SeedPage = {
   description: "The directory — everyone on file, their engagement classification, and where they're plugged in.",
   revision: 2,
   blocks: [
-    { kind: "stat", config: { title: "Shepherded", span: 3, color: "success", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='shepherded'` } },
-    { kind: "stat", config: { title: "Active", span: 3, color: "warning", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='active'` } },
-    { kind: "stat", config: { title: "Present", span: 3, color: "low", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='present'` } },
-    { kind: "stat", config: { title: "Inactive", span: 3, color: "low", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='inactive'` } },
+    { kind: "stat", config: { title: "Shepherded", span: 4, color: "success", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='shepherded'` } },
+    { kind: "stat", config: { title: "Known", span: 4, color: "warning", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification='active'` } },
+    { kind: "stat", config: { title: "Unknown", span: 4, color: "low", sql: `SELECT COUNT(*) FROM person_activity WHERE org_id=:orgId AND classification IN ('present','inactive')` } },
     { kind: "filter", config: { title: "Show", span: 12, param: "classification", filterType: "tabs",
       sql: `SELECT value, label FROM (
               SELECT 1 AS o, 'shepherded' AS value, 'Shepherded' AS label
@@ -875,7 +874,7 @@ const relationshipGraphSeed: SeedPage = {
     { kind: "stat", config: { title: "People on graph", span: 3, source: "relationship_graph_overview", valueColumn: 0, sub: "engaged + leadership" } },
     { kind: "stat", config: { title: "Connections", span: 3, color: "low", source: "relationship_graph_overview", valueColumn: 1, sub: "shared group/team + oversight" } },
     { kind: "stat", config: { title: "Shepherded", span: 3, color: "success", source: "relationship_graph_overview", valueColumn: 2, sub: "in a group or team" } },
-    { kind: "stat", config: { title: "Active", span: 3, color: "warning", source: "relationship_graph_overview", valueColumn: 3, sub: "engaging, not yet shepherded" } },
+    { kind: "stat", config: { title: "Known", span: 3, color: "warning", source: "relationship_graph_overview", valueColumn: 3, sub: "active, not on a roster" } },
     { kind: "chart", config: { title: "Relationship web", chartType: "network", span: 12, height: "triple", source: "relationship_graph",
       sub: "drag / zoom / hover · capped at 2,500 connections for responsiveness" } },
   ],

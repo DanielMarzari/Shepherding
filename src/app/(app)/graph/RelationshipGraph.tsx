@@ -517,8 +517,8 @@ export function RelationshipGraph({ data }: { data: GraphData }) {
         <LegendDot color={NODE_COLOR.lead_pastor} label="Lead pastor" />
         <LegendDot color={NODE_COLOR.shepherd_team} label="Shepherd team" />
         <LegendDot color={NODE_COLOR.shepherded} label="Shepherded" />
-        <LegendDot color={NODE_COLOR.active} label="Active" />
-        <LegendDot color={NODE_COLOR.present} label="Present" />
+        <LegendDot color={NODE_COLOR.active} label="Known" />
+        <LegendDot color={NODE_COLOR.present} label="Unknown" />
       </div>
       <div className="absolute bottom-3 left-3 text-[11px] text-[#7c879c] pointer-events-none select-none">
         Drag to pan · scroll to zoom · drag a node to pull it · click a node to

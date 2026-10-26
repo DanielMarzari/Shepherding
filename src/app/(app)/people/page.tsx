@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { AsyncDemographicCharts } from "@/components/AsyncChartSections";
 import { DemographicChartsSkeleton } from "@/components/ChartsLoading";
 import { requireOrg } from "@/lib/auth";
+import { bandLabel, bandOf } from "@/lib/classification";
 import { getMembershipTypeStats, getSyncSettings } from "@/lib/pco";
 import {
   type ActivityClassification,
@@ -21,12 +22,15 @@ const PAGE_SIZE = 50;
 
 type TabKey = "all" | "shepherded" | "active" | "present" | "inactive";
 
+/** Three tabs for four stored values: "present" and "inactive" both read as
+ *  Unknown, so Unknown points at "inactive" — the larger of the two by an
+ *  order of magnitude — and the Present tab is reachable only by URL for
+ *  anyone who still wants to see the staff-edit-only slice on its own. */
 const TABS: { key: TabKey; label: string }[] = [
   { key: "all", label: "All" },
   { key: "shepherded", label: "Shepherded" },
-  { key: "active", label: "Active" },
-  { key: "present", label: "Present" },
-  { key: "inactive", label: "Inactive" },
+  { key: "active", label: "Known" },
+  { key: "inactive", label: "Unknown" },
 ];
 
 const VALID_SORTS: SortColumn[] = [
@@ -161,8 +165,11 @@ export default async function PeoplePage({
           )}
         </div>
 
-        {/* Stat strip: Shepherded · Active · Present · Inactive */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* Stat strip: Shepherded · Known · Unknown. Three cards for four
+            stored values — Present and Inactive are both Unknown, so they
+            are added together and the split is given as a footnote for
+            anyone who needs it. */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Shepherded</div>
             <AdultKidNumber
@@ -174,33 +181,30 @@ export default async function PeoplePage({
             </div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Active</div>
+            <div className="text-xs text-muted mb-1.5">Known</div>
             <AdultKidNumber
               adults={counts.active - counts.activeKids}
               kids={counts.activeKids}
               tone="good"
             />
-            <div className="text-xs text-muted mt-1">forms · check-ins · etc.</div>
-          </Card>
-          <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Present</div>
-            <AdultKidNumber
-              adults={counts.present - counts.presentKids}
-              kids={counts.presentKids}
-              tone="accent"
-            />
             <div className="text-xs text-muted mt-1">
-              record edited in {settings.activityMonths}mo
+              active somewhere, not on a roster
             </div>
           </Card>
           <Card className="p-4">
-            <div className="text-xs text-muted mb-1.5">Inactive</div>
+            <div className="text-xs text-muted mb-1.5">Unknown</div>
             <AdultKidNumber
-              adults={counts.inactive - counts.inactiveKids}
-              kids={counts.inactiveKids}
+              adults={
+                counts.present + counts.inactive -
+                counts.presentKids - counts.inactiveKids
+              }
+              kids={counts.presentKids + counts.inactiveKids}
               tone="warn"
             />
-            <div className="text-xs text-muted mt-1">hidden from All — historical</div>
+            <div className="text-xs text-muted mt-1">
+              nothing in {settings.activityMonths}mo ·{" "}
+              {counts.present.toLocaleString()} had a record edit only
+            </div>
           </Card>
         </div>
 
@@ -477,7 +481,7 @@ function PersonRow({ p }: { p: SyncedPersonRow }) {
         <AgeBadge isMinor={p.isMinor} />
       </td>
       <td className="px-5 py-2.5">
-        <Pill tone={pillTone(p.classification)}>{p.classification}</Pill>
+        <Pill tone={pillTone(p.classification)}>{bandLabel(p.classification)}</Pill>
       </td>
       <td className="px-5 py-2.5 text-muted truncate">
         {p.membershipType ?? <span className="text-subtle">—</span>}
@@ -493,9 +497,9 @@ function PersonRow({ p }: { p: SyncedPersonRow }) {
 }
 
 function pillTone(c: ActivityClassification): "good" | "accent" | "warn" | "muted" {
-  if (c === "active") return "good";
-  if (c === "shepherded") return "accent";
-  if (c === "present") return "accent";
+  const band = bandOf(c);
+  if (band === "shepherded") return "accent";
+  if (band === "known") return "good";
   return "warn";
 }
 

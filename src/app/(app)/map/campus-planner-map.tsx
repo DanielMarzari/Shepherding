@@ -53,7 +53,10 @@ const DOT_BLUE = "#2563eb";
 const DRIVE_COLOR = "#2563eb"; // the selected drive-time isochrone
 const HOME_COLOR = "#ea580c"; // LVPC new-home developments (orange)
 
-const ENGAGED_CLASSES = new Set(["shepherded", "active", "present"]);
+// "engaged" means Shepherded or Known. 'present' used to count, which it
+// should not: a staff edit to somebody's record is not engagement, and the
+// vocabulary now calls that Unknown.
+const ENGAGED_CLASSES = new Set(["shepherded", "active"]);
 const LOOSE_CLASSES = new Set(["shepherded", "active"]);
 // A church plant opens with its sending core and grows into the community over
 // years — it does NOT reach the main campus's mature penetration on day one.

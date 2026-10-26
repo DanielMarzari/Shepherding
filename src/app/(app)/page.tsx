@@ -130,9 +130,13 @@ async function PeopleMixPie({ orgId }: { orgId: number }) {
   // pie. Falling-through-the-cracks already surfaces them next to
   // this card.
   // Color semantics:
-  //   Shepherded → green   (in a group/team — healthiest)
-  //   Active     → amber   (engaging in some way, but not yet shepherded)
-  //   Present    → grey    (on the books, no measurable engagement)
+  //   Shepherded → green  (in a group or team — healthiest)
+  //   Known      → amber  (active somewhere, not on a roster)
+  //   Unknown    → grey   (nothing inside the window)
+  //
+  // Unknown folds the stored 'present' and 'inactive' together: a staff
+  // edit to somebody's record is not that person doing anything, so it
+  // belongs in the same band as silence.
   const data = [
     {
       label: "Shepherded",
@@ -141,15 +145,15 @@ async function PeopleMixPie({ orgId }: { orgId: number }) {
       color: "var(--good-soft-fg)",
     },
     {
-      label: "Active",
+      label: "Known",
       count: counts.active,
       kids: counts.activeKids,
       color: "var(--warn-soft-fg)",
     },
     {
-      label: "Present",
-      count: counts.present,
-      kids: counts.presentKids,
+      label: "Unknown",
+      count: counts.present + counts.inactive,
+      kids: counts.presentKids + counts.inactiveKids,
       color: "var(--fg-subtle, #94a3b8)",
     },
   ];

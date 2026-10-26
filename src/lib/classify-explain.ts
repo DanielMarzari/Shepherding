@@ -286,9 +286,9 @@ export function explainClassification(
       `Last check-in role ${formatAgo(personRow.last_check_in_at)} (within ${activityMonths}mo).`,
     );
   }
-  // The pco_updated_at fallback only decides Present vs Inactive among
+  // The pco_updated_at fallback only decides which flavour of Unknown, among
   // people who AREN'T shepherded. For a shepherded person it's noise —
-  // Shepherded already wins — so don't claim it "drives Present".
+  // Shepherded already wins — so don't claim it promotes anybody.
   if (
     personRow?.pco_updated_at &&
     personRow.pco_updated_at >= cutoff &&
@@ -296,7 +296,7 @@ export function explainClassification(
     shepherdedReasons.length === 0
   ) {
     activitySignals.push(
-      `PCO record edited ${formatAgo(personRow.pco_updated_at)} — drives "Present", not "Active".`,
+      `PCO record edited ${formatAgo(personRow.pco_updated_at)} — an edit by staff, not activity by them, so it leaves them Unknown.`,
     );
   }
 

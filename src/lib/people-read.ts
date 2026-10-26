@@ -71,6 +71,10 @@ interface RawRow {
   last_form_submission_at: string | null;
   last_check_in_at: string | null;
   is_shepherded: number;
+  /** person_activity.classification. The snapshot is the single source of
+   *  truth for the band; the live computation below is only a fallback for
+   *  people the snapshot has not seen yet. */
+  snapshot_classification?: string | null;
   is_minor: number;
   birth_year: number | null;
 }
@@ -81,13 +85,31 @@ function cutoffIso(activityMonths: number): string {
   ).toISOString();
 }
 
+/** The band for one row.
+ *
+ *  The snapshot wins when it has an answer. It is computed from all seven
+ *  activity signals the church has configured — giving, email opens,
+ *  registrations and the rest — which cannot be reproduced from the handful
+ *  of columns this query selects. Recomputing here from forms and check-ins
+ *  alone is what made /people disagree with /audit: the same person read as
+ *  Active on one page and Inactive on the other.
+ *
+ *  The fallback below only runs for somebody the snapshot has not seen yet
+ *  — a person synced since the last refresh. It is deliberately the old,
+ *  narrow rule, because those are the only columns available here; it errs
+ *  toward the lower band, which is the safer direction for a stranger. */
 function classify(
   pcoUpdatedAt: string | null,
   lastFormSubmissionAt: string | null,
   lastCheckInAt: string | null,
   isShepherded: boolean,
   activityMonths: number,
+  snapshot?: string | null,
 ): ActivityClassification {
+  if (snapshot === "shepherded" || snapshot === "active" ||
+      snapshot === "present" || snapshot === "inactive") {
+    return snapshot;
+  }
   if (isShepherded) return "shepherded";
   const cutoff = cutoffIso(activityMonths);
   if (lastFormSubmissionAt && lastFormSubmissionAt >= cutoff) return "active";
@@ -124,6 +146,7 @@ function toRow(r: RawRow, activityMonths: number): SyncedPersonRow {
       r.last_check_in_at,
       r.is_shepherded === 1,
       activityMonths,
+      r.snapshot_classification,
     ),
     isMinor: r.is_minor === 1,
     birthYear: r.birth_year,
@@ -290,13 +313,16 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
   const selectCols = `pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
               is_minor, birth_year,
-              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded`;
+              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded,
+              pa.classification AS snapshot_classification`;
 
   const totalRow = db
     .prepare(
       `SELECT COUNT(*) AS n
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+         LEFT JOIN person_activity pa
+           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
          ${whereSql}`,
     )
     .get(...whereArgs) as { n: number };
@@ -313,6 +339,10 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
         `SELECT ${selectCols}
            FROM pco_people
            LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+           LEFT JOIN person_activity pa
+             ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
+         LEFT JOIN person_activity pa
+           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
            ${whereSql}`,
       )
       .all(...whereArgs) as RawRow[];
@@ -335,6 +365,8 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
       `SELECT ${selectCols}
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+         LEFT JOIN person_activity pa
+           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
          ${whereSql}
          ${orderSql}
          LIMIT ? OFFSET ?`,
@@ -372,21 +404,38 @@ function buildWhere(
     `((last_form_submission_at IS NULL OR last_form_submission_at < ?)
       AND (last_check_in_at IS NULL OR last_check_in_at < ?))`;
 
+  // Tabs filter on the SNAPSHOT's verdict, not on a second computation
+  // from the few columns in scope here. The snapshot weighs all seven
+  // configured signals; reproducing a subset of that logic is how the tab
+  // and the pill beside each name came to disagree.
+  //
+  // The fallback arm catches people synced since the last refresh, who have
+  // no snapshot row yet: for them the old narrow rule still applies, which
+  // is the best this query can do and errs toward the lower band.
   if (tab === "shepherded") {
-    parts.push("s.person_id IS NOT NULL");
+    parts.push(
+      `(pa.classification = 'shepherded'
+        OR (pa.classification IS NULL AND s.person_id IS NOT NULL))`,
+    );
   } else if (tab === "active") {
-    parts.push("s.person_id IS NULL");
-    parts.push(ACTIVE_PREDICATE);
+    parts.push(
+      `(pa.classification = 'active'
+        OR (pa.classification IS NULL AND s.person_id IS NULL AND ${ACTIVE_PREDICATE}))`,
+    );
     args.push(cutoff, cutoff);
   } else if (tab === "present") {
-    parts.push("s.person_id IS NULL");
-    parts.push(NOT_ACTIVE_PREDICATE);
-    parts.push("pco_updated_at IS NOT NULL AND pco_updated_at >= ?");
+    parts.push(
+      `(pa.classification = 'present'
+        OR (pa.classification IS NULL AND s.person_id IS NULL AND ${NOT_ACTIVE_PREDICATE}
+            AND pco_updated_at IS NOT NULL AND pco_updated_at >= ?))`,
+    );
     args.push(cutoff, cutoff, cutoff);
   } else if (tab === "inactive") {
-    parts.push("s.person_id IS NULL");
-    parts.push(NOT_ACTIVE_PREDICATE);
-    parts.push("(pco_updated_at IS NULL OR pco_updated_at < ?)");
+    parts.push(
+      `(pa.classification = 'inactive'
+        OR (pa.classification IS NULL AND s.person_id IS NULL AND ${NOT_ACTIVE_PREDICATE}
+            AND (pco_updated_at IS NULL OR pco_updated_at < ?)))`,
+    );
     args.push(cutoff, cutoff, cutoff);
   } else if (tab === "all") {
     parts.push(
@@ -723,6 +772,8 @@ export function getPersonByPcoId(
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+         LEFT JOIN person_activity pa
+           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
          WHERE pco_people.org_id = ? AND pco_people.pco_id = ?`,
     )
     .get(orgId, pcoId) as RawRow | undefined;
@@ -791,6 +842,8 @@ function hitsForIds(orgId: number, ids: string[], activityMonths: number, limit:
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+         LEFT JOIN person_activity pa
+           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
         WHERE pco_people.org_id = ? AND pco_people.pco_id IN (${ph})`,
     )
     .all(orgId, ...capped) as RawRow[];
@@ -850,6 +903,8 @@ export function searchPeople(
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+         LEFT JOIN person_activity pa
+           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
         WHERE pco_people.org_id = ?
           AND ( lower(first_name) LIKE ? ESCAPE '\\'
                 OR lower(last_name) LIKE ? ESCAPE '\\'
@@ -874,6 +929,8 @@ export function searchPeople(
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+         LEFT JOIN person_activity pa
+           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
          WHERE pco_people.org_id = ?`,
     )
     .all(orgId) as RawRow[];
