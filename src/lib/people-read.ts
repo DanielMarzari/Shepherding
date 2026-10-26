@@ -320,8 +320,6 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
            LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
            LEFT JOIN person_activity pa
              ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
-         LEFT JOIN person_activity pa
-           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
            ${whereSql}`,
       )
       .all(...whereArgs) as RawRow[];
@@ -338,7 +336,7 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
     };
   }
 
-  const orderSql = buildOrderBy(opts.sort, opts.dir, cutoff);
+  const orderSql = buildOrderBy(opts.sort, opts.dir);
   const rows = db
     .prepare(
       `SELECT ${selectCols}
@@ -401,7 +399,7 @@ function buildWhere(
   return { whereSql: `WHERE ${parts.join(" AND ")}`, whereArgs: args };
 }
 
-function buildOrderBy(sort: SortColumn, dir: SortDir, cutoff: string): string {
+function buildOrderBy(sort: SortColumn, dir: SortDir): string {
   const direction = dir === "asc" ? "ASC" : "DESC";
   const nulls = "NULLS LAST";
   switch (sort) {
@@ -412,16 +410,21 @@ function buildOrderBy(sort: SortColumn, dir: SortDir, cutoff: string): string {
     case "membership":
       return `ORDER BY membership_type ${direction} ${nulls}, pco_updated_at DESC`;
     case "status": {
-      // Active=2, Present=1, Inactive=0 (so DESC = active first, ASC = inactive first)
+      // Shepherded=2, Known=1, Unknown=0 (so DESC = shepherded first).
+      // Reads the snapshot column rather than re-deriving the bands from
+      // raw dates: the derivation lived here when there were four bands
+      // and it was already out of step with classifyPersonActivity. It
+      // also named columns that now exist on BOTH pco_people and
+      // person_activity, so the join made every status sort an
+      // "ambiguous column name" error rather than a wrong answer.
       const expr = `(
-        CASE
-          WHEN last_form_submission_at IS NOT NULL AND last_form_submission_at >= '${cutoff}' THEN 2
-          WHEN last_check_in_at IS NOT NULL AND last_check_in_at >= '${cutoff}' THEN 2
-          WHEN pco_updated_at IS NOT NULL AND pco_updated_at >= '${cutoff}' THEN 1
+        CASE pa.classification
+          WHEN 'shepherded' THEN 2
+          WHEN 'known' THEN 1
           ELSE 0
         END
       )`;
-      return `ORDER BY ${expr} ${direction}, pco_updated_at DESC`;
+      return `ORDER BY ${expr} ${direction}, pco_people.pco_updated_at DESC`;
     }
     case "age":
       // The Age column only shows a Kid / Adult badge (driven by
