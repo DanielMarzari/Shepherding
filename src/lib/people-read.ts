@@ -289,9 +289,15 @@ export function listPeople(opts: ListPeopleOptions): ListPeopleResult {
     excluded,
     opts.membershipType,
   );
-  const selectCols = `pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
-              pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
-              is_minor, birth_year,
+  // Every column is table-qualified on purpose. person_activity carries its
+  // own last_form_submission_at / last_check_in_at / last_activity_at, so an
+  // unqualified name here is an "ambiguous column name" error the moment the
+  // pa join is present — which it now always is.
+  const selectCols = `pco_people.pco_id, pco_people.enc_pii, pco_people.gender,
+              pco_people.membership_type, pco_people.marital_status,
+              pco_people.pco_created_at, pco_people.pco_updated_at,
+              pco_people.last_form_submission_at, pco_people.last_check_in_at,
+              pco_people.is_minor, pco_people.birth_year,
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded,
               pa.classification AS snapshot_classification`;
 
@@ -638,8 +644,6 @@ export function getPersonByPcoId(
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
-         LEFT JOIN person_activity pa
-           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
          WHERE pco_people.org_id = ? AND pco_people.pco_id = ?`,
     )
     .get(orgId, pcoId) as RawRow | undefined;
@@ -708,8 +712,6 @@ function hitsForIds(orgId: number, ids: string[], activityMonths: number, limit:
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
-         LEFT JOIN person_activity pa
-           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
         WHERE pco_people.org_id = ? AND pco_people.pco_id IN (${ph})`,
     )
     .all(orgId, ...capped) as RawRow[];
@@ -769,8 +771,6 @@ export function searchPeople(
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
-         LEFT JOIN person_activity pa
-           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
         WHERE pco_people.org_id = ?
           AND ( lower(first_name) LIKE ? ESCAPE '\\'
                 OR lower(last_name) LIKE ? ESCAPE '\\'
@@ -795,8 +795,6 @@ export function searchPeople(
               CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
-         LEFT JOIN person_activity pa
-           ON pa.org_id = pco_people.org_id AND pa.person_id = pco_people.pco_id
          WHERE pco_people.org_id = ?`,
     )
     .all(orgId) as RawRow[];
