@@ -126,6 +126,47 @@ async function geocodeAddress(
   return { coords: ok ? { lat: lat!, lng: lng! } : null, cached: false };
 }
 
+/** The five-digit ZIP inside a free-text address, or null. The map labels a
+ *  second-campus marker with it ("near 18104"); nothing else reads it. */
+export function zipOf(address: string | null | undefined): string | null {
+  return address?.match(/\b(\d{5})(?:-\d{4})?\b/)?.[1] ?? null;
+}
+
+/** Fill person_geo.zip for rows written before 0112 added the column.
+ *
+ *  This is the one place that decrypts to get a ZIP, it runs in the nightly
+ *  refresh, and after the first pass it matches no rows. The map used to do
+ *  this work for all 25,834 geocoded people on every single request.
+ */
+export function backfillGeoZips(orgId: number): number {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT g.person_id AS personId, p.enc_pii AS encPii
+         FROM person_geo g
+         JOIN pco_people p ON p.org_id = g.org_id AND p.pco_id = g.person_id
+        WHERE g.org_id = ? AND g.zip IS NULL AND g.status = 'ok'
+          AND p.enc_pii IS NOT NULL`,
+    )
+    .all(orgId) as Array<{ personId: string; encPii: string | null }>;
+  if (rows.length === 0) return 0;
+
+  const update = db.prepare(
+    `UPDATE person_geo SET zip = ? WHERE org_id = ? AND person_id = ?`,
+  );
+  let filled = 0;
+  db.transaction(() => {
+    for (const r of rows) {
+      const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
+      const zip = zipOf(pii?.address);
+      if (!zip) continue;
+      update.run(zip, orgId, r.personId);
+      filled++;
+    }
+  })();
+  return filled;
+}
+
 interface PendingRow {
   pco_id: string;
   enc_pii: string | null;
@@ -155,11 +196,12 @@ export async function geocodePending(
     .all(orgId, limit) as PendingRow[];
 
   const upsert = db.prepare(
-    `INSERT INTO person_geo (org_id, person_id, addr_hash, lat, lng, status, geocoded_at)
-     VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    `INSERT INTO person_geo (org_id, person_id, addr_hash, lat, lng, status, zip, geocoded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, person_id) DO UPDATE SET
        addr_hash = excluded.addr_hash, lat = excluded.lat, lng = excluded.lng,
-       status = excluded.status, geocoded_at = excluded.geocoded_at`,
+       status = excluded.status, zip = excluded.zip,
+       geocoded_at = excluded.geocoded_at`,
   );
 
   let matched = 0;
@@ -167,15 +209,18 @@ export async function geocodePending(
     const pii = r.enc_pii ? decryptJson<PIIBlob>(r.enc_pii) : null;
     const address = pii?.address?.trim() || null;
     if (!address) {
-      upsert.run(orgId, r.pco_id, null, null, null, "noaddr");
+      upsert.run(orgId, r.pco_id, null, null, null, "noaddr", null);
       continue;
     }
+    // Stored now, while the address is already decrypted in hand, so that
+    // reading the map later needs no key at all.
+    const zip = zipOf(address);
     const { coords, cached } = await geocodeAddress(address);
     if (coords) {
-      upsert.run(orgId, r.pco_id, hmac(normAddr(address)), coords.lat, coords.lng, "ok");
+      upsert.run(orgId, r.pco_id, hmac(normAddr(address)), coords.lat, coords.lng, "ok", zip);
       matched++;
     } else {
-      upsert.run(orgId, r.pco_id, hmac(normAddr(address)), null, null, "nomatch");
+      upsert.run(orgId, r.pco_id, hmac(normAddr(address)), null, null, "nomatch", zip);
     }
     if (!cached && delayMs > 0) await sleep(delayMs);
   }
@@ -206,6 +251,7 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
   const rows = getDb()
     .prepare(
       `SELECT g.lat, g.lng, p.enc_pii AS encPii, p.membership_type AS mt,
+              p.first_name AS firstName, p.last_name AS lastName,
               p.gender AS gender, p.birth_year AS birthYear, p.is_parent AS isParent,
               COALESCE(pa.classification, 'unknown') AS classification,
               COALESCE(pa.active_group_count, 0) AS groupCount,
@@ -226,6 +272,8 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
     lng: number;
     encPii: string | null;
     mt: string | null;
+    firstName: string | null;
+    lastName: string | null;
     classification: string;
     groupCount: number;
     teamCount: number;
@@ -235,13 +283,18 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
     isParent: number | null;
   }>;
   return rows.map((r) => {
-    const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
-    const name =
-      [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") || "Member";
+    // first_name / last_name are plaintext columns (0074). Only a record
+    // written before that backfill still needs the key, and there are none
+    // left on production — this used to decrypt all 25,834 every request.
+    let name = [r.firstName, r.lastName].filter(Boolean).join(" ");
+    if (!name && r.encPii) {
+      const pii = decryptJson<PIIBlob>(r.encPii);
+      name = [pii?.first_name, pii?.last_name].filter(Boolean).join(" ");
+    }
     return {
+      name: name || "Member",
       lat: r.lat,
       lng: r.lng,
-      name,
       classification: r.classification,
       isMember: isMemberType(r.mt),
       inGroup: r.groupCount > 0,

@@ -10,6 +10,7 @@ import {
 } from "./pco";
 import { populateShepherdedTempTable } from "./people-read";
 import { rebuildDuplicatePairs } from "./audit-read";
+import { backfillGeoZips } from "./geocode";
 import { refreshRetentionReturns } from "./retention-read";
 
 const MS_PER_DAY = 86_400_000;
@@ -56,6 +57,12 @@ const REFRESH_PHASES: Array<{
   {
     label: "Scanning for duplicate records",
     run: (orgId) => rebuildDuplicatePairs(orgId),
+  },
+  {
+    label: "Filling in home ZIPs",
+    run: (orgId) => {
+      backfillGeoZips(orgId);
+    },
   },
 ];
 

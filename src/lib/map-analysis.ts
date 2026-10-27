@@ -1,14 +1,10 @@
 import "server-only";
 import { getDb } from "./db";
-import { decryptJson } from "./encryption";
 import { CHURCH } from "./geocode";
 import { getDriveMap } from "./drive-routing";
 import { clampToValidArea } from "./lehigh-valley";
 import { propertyCostAt } from "./census-analysis";
 
-interface PIIBlob {
-  address?: string | null;
-}
 interface Pt {
   personId: string;
   lat: number;
@@ -100,7 +96,7 @@ export interface ReachAnalysis {
 function loadPoints(orgId: number): Pt[] {
   const rows = getDb()
     .prepare(
-      `SELECT g.person_id AS personId, g.lat, g.lng, p.enc_pii AS encPii,
+      `SELECT g.person_id AS personId, g.lat, g.lng, g.zip AS zip,
               COALESCE(pa.classification, 'unknown') AS classification
          FROM person_geo g
          JOIN pco_people p ON p.org_id = g.org_id AND p.pco_id = g.person_id
@@ -112,13 +108,16 @@ function loadPoints(orgId: number): Pt[] {
     personId: string;
     lat: number;
     lng: number;
-    encPii: string | null;
+    zip: string | null;
     classification: string;
   }>;
   const drive = getDriveMap(orgId);
+  // No decryption here on purpose. This used to open every one of the
+  // 25,834 geocoded people's PII blobs, on every request, for a ZIP that
+  // labels one marker. The ZIP now lives on person_geo (0112); a null is
+  // simply no label, which is what an unparseable address always gave.
   return rows.map((r) => {
-    const pii = r.encPii ? decryptJson<PIIBlob>(r.encPii) : null;
-    const zip = pii?.address?.match(/\b(\d{5})(?:-\d{4})?\b/)?.[1] ?? null;
+    const zip = r.zip;
     const d = drive.get(r.personId);
     const dFc = haversineMiles(CHURCH.lat, CHURCH.lng, r.lat, r.lng);
     return {
