@@ -26,11 +26,14 @@ export default async function CareMapPage({
 }) {
   const session = await requireOrg();
   const params = await searchParams;
-  const includePresent = params.scope === "present";
+  // ?scope=unknown widens the pool from Known to Known + Unknown. The old
+  // ?scope=present still works — bookmarks outlive a vocabulary.
+  const includeUnknown =
+    params.scope === "unknown" || params.scope === "present";
   const isAdmin = session.role === "admin";
 
   const shepherds = listShepherds(session.orgId);
-  const candidates = listCareCandidates(session.orgId, includePresent);
+  const candidates = listCareCandidates(session.orgId, includeUnknown);
   const rosters = listCareAssignments(session.orgId);
 
   const assignedCount = Array.from(rosters.values()).reduce(
@@ -82,13 +85,13 @@ export default async function CareMapPage({
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Stat
-            label={`Unassigned (${includePresent ? "active + present" : "active"})`}
+            label={`Unassigned (${includeUnknown ? "Known + Unknown" : "Known"})`}
             value={candidates.length.toLocaleString()}
             valueTone={candidates.length > 0 ? "warn" : "good"}
             delta={
               assignedCount > 0
-                ? `${activeAdults.toLocaleString()} active adults − ${assignedCount.toLocaleString()} assigned`
-                : `${activeAdults.toLocaleString()} active adults, none assigned yet`
+                ? `${activeAdults.toLocaleString()} Known adults − ${assignedCount.toLocaleString()} assigned`
+                : `${activeAdults.toLocaleString()} Known adults, none assigned yet`
             }
           />
           <Stat label="On a care roster" value={assignedCount.toLocaleString()} />
@@ -99,7 +102,7 @@ export default async function CareMapPage({
             delta={
               perShepherd === null
                 ? "no one on the shepherd team yet"
-                : `to cover all ${activeTotal.toLocaleString()} active people`
+                : `to cover all ${activeTotal.toLocaleString()} Known people`
             }
             highlight
           />
@@ -109,11 +112,11 @@ export default async function CareMapPage({
           <span className="text-subtle uppercase tracking-wider text-[10px] mr-1">
             Scope
           </span>
-          <ScopeChip label="Active only" href="/care-map" active={!includePresent} />
+          <ScopeChip label="Known only" href="/care-map" active={!includeUnknown} />
           <ScopeChip
-            label="Active + Present"
-            href="/care-map?scope=present"
-            active={includePresent}
+            label="Known + Unknown"
+            href="/care-map?scope=unknown"
+            active={includeUnknown}
           />
         </div>
 
@@ -146,9 +149,7 @@ export default async function CareMapPage({
         <Card className="p-5">
           <h2 className="text-sm font-semibold mb-1">Assign people</h2>
           <p className="text-xs text-muted mb-4">
-            {includePresent
-              ? "Active and present people"
-              : "Active people"}{" "}
+            {includeUnknown ? "Known and Unknown people" : "Known people"}{" "}
             with no carer yet. Tick names, pick a shepherd, assign.
           </p>
           {isAdmin ? (

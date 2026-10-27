@@ -47,7 +47,10 @@ export interface GraphData { nodes: GraphNode[]; links: Array<{ source: string; 
  *  anyone who marked someone; shepherd-team members are flagged for coloring. */
 export function getIntakeGraph(orgId: number, source: IntakeSource): GraphData {
   const db = getDb();
-  const cls = source === "know" ? "active" : "present";
+  // /know works the Known pool, /present the Unknown one. The routes kept
+  // their names when the vocabulary lost 'present' — the pools are the two
+  // bands nobody on the shepherd team is responsible for.
+  const cls = source === "know" ? "known" : "unknown";
   const excludedMem = getExcludedMembershipTypes(orgId);
   const memClause = excludedMem.length
     ? `AND (p.membership_type IS NULL OR p.membership_type NOT IN (${excludedMem.map(() => "?").join(",")}))`

@@ -184,7 +184,7 @@ function buildMatchIndexes(orgId: number): MatchIndexes {
     (phonesOf.get(ph.person_id) ?? phonesOf.set(ph.person_id, new Set()).get(ph.person_id)!).add(ph.phone_hash);
   }
   const active = new Set<string>();
-  for (const r of db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'inactive'`).iterate(orgId) as IterableIterator<{ person_id: string }>) {
+  for (const r of db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'unknown'`).iterate(orgId) as IterableIterator<{ person_id: string }>) {
     active.add(r.person_id);
   }
   return { byLast, byFullName, byOrg, email, phone, emailsOf, phonesOf, birthYear, active };
@@ -1761,7 +1761,7 @@ function candidateContext(orgId: number, ids: string[]): { emails: Map<string, S
   for (const r of db.prepare(`SELECT person_id, phone_hash FROM pco_person_phones WHERE org_id = ? AND person_id IN (${ph})`).all(orgId, ...ids) as Array<{ person_id: string; phone_hash: string }>) {
     (phones.get(r.person_id) ?? phones.set(r.person_id, new Set()).get(r.person_id)!).add(r.phone_hash);
   }
-  for (const r of db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'inactive' AND person_id IN (${ph})`).all(orgId, ...ids) as Array<{ person_id: string }>) {
+  for (const r of db.prepare(`SELECT person_id FROM person_activity WHERE org_id = ? AND classification <> 'unknown' AND person_id IN (${ph})`).all(orgId, ...ids) as Array<{ person_id: string }>) {
     active.add(r.person_id);
   }
   return { emails, phones, active };

@@ -690,9 +690,8 @@ const peopleSeed: SeedPage = {
     { kind: "filter", config: { title: "Show", span: 12, param: "classification", filterType: "tabs",
       sql: `SELECT value, label FROM (
               SELECT 1 AS o, 'shepherded' AS value, 'Shepherded' AS label
-              UNION ALL SELECT 2, 'active', 'Active'
-              UNION ALL SELECT 3, 'present', 'Present'
-              UNION ALL SELECT 4, 'inactive', 'Inactive'
+              UNION ALL SELECT 2, 'known', 'Known'
+              UNION ALL SELECT 3, 'unknown', 'Unknown'
             ) ORDER BY o` } },
     { kind: "table", config: { title: "Directory", span: 12, density: "normal", source: "people_directory", sortable: true, limit: 200,
       columnColors: { Membership: "low", Groups: "low", Teams: "low" },
@@ -884,13 +883,13 @@ const relationshipGraphSeed: SeedPage = {
 const whoKnowsWhoSeed: SeedPage = {
   slug: "who-knows-who",
   title: "Who knows who",
-  description: "The intake web — who on the shepherd team said they know each active / present person. Interactive force graph.",
+  description: "The intake web — who on the shepherd team said they know each Known / Unknown person. Interactive force graph.",
   revision: 1,
   blocks: [
     { kind: "filter", config: { title: "Pool", span: 12, param: "source", filterType: "tabs", defaultValue: "know",
       sql: `SELECT value, label FROM (
-              SELECT 1 AS o, 'know' AS value, 'Active pool (know)' AS label
-              UNION ALL SELECT 2, 'present', 'Present pool'
+              SELECT 1 AS o, 'know' AS value, 'Known pool' AS label
+              UNION ALL SELECT 2, 'present', 'Unknown pool'
             ) ORDER BY o` } },
     { kind: "chart", config: { title: "Who knows who", chartType: "network", span: 12, height: "triple", source: "intake_graph",
       sub: "shepherd → the person they marked · drag / zoom / hover" } },

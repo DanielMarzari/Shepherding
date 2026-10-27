@@ -13,7 +13,7 @@ interface Pt {
   personId: string;
   lat: number;
   lng: number;
-  classification: string; // shepherded | active | present | inactive
+  classification: string; // shepherded | known | unknown
   zip: string | null;
   driveMiles?: number;
   driveMinutes?: number;
@@ -52,7 +52,7 @@ function pearson(xs: number[], ys: number[]): number | null {
   return num / Math.sqrt(dx * dy);
 }
 
-export type Cohort = "all" | "shepherded" | "active" | "present" | "inactive";
+export type Cohort = "all" | "shepherded" | "known" | "unknown";
 
 export interface DistanceBand {
   label: string;
@@ -101,7 +101,7 @@ function loadPoints(orgId: number): Pt[] {
   const rows = getDb()
     .prepare(
       `SELECT g.person_id AS personId, g.lat, g.lng, p.enc_pii AS encPii,
-              COALESCE(pa.classification, 'inactive') AS classification
+              COALESCE(pa.classification, 'unknown') AS classification
          FROM person_geo g
          JOIN pco_people p ON p.org_id = g.org_id AND p.pco_id = g.person_id
          LEFT JOIN person_activity pa
@@ -161,7 +161,7 @@ function siteSecondCampus(
 ): SecondCampus | null {
   if (cohortPts.length < 10) return null;
   const weight =
-    cohort === "inactive" ? (p: Pt) => Math.max(0.5, p.dFc) : () => 1;
+    cohort === "unknown" ? (p: Pt) => Math.max(0.5, p.dFc) : () => 1;
   // Seed at the weighted median of the farther half so it doesn't collapse
   // onto Faith Church.
   const sortedFar = [...cohortPts].sort((a, b) => b.dFc - a.dFc);
@@ -231,7 +231,7 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
   // active / present, AND within the second-campus radius so far-flung
   // outliers don't skew the averages, correlation, or the curve.
   const maxMin = maxHours * 60;
-  const ENGAGED = new Set(["shepherded", "active", "present"]);
+  const ENGAGED = new Set(["shepherded", "known"]);
   const reachPts = pts.filter(
     (p) => ENGAGED.has(p.classification) && p.travelMin <= maxMin,
   );
@@ -298,7 +298,7 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
 
   // ── Second-campus siting per cohort, within the radius. ───────────
   const inRadius = pts.filter((p) => p.travelMin <= maxMin);
-  const cohorts: Cohort[] = ["all", "shepherded", "active", "present", "inactive"];
+  const cohorts: Cohort[] = ["all", "shepherded", "known", "unknown"];
   const secondCampuses: SecondCampus[] = [];
   for (const c of cohorts) {
     const cohortPts =
@@ -327,7 +327,7 @@ export function analyzeReach(orgId: number, maxHours: number): ReachAnalysis {
       tone: "neutral",
     });
   }
-  const inactiveSc = secondCampuses.find((s) => s.cohort === "inactive");
+  const inactiveSc = secondCampuses.find((s) => s.cohort === "unknown");
   if (inactiveSc) {
     insights.push({
       title: "Second campus could re-reach inactive folks",

@@ -136,13 +136,13 @@ const SOURCES: Record<string, SourceFn> = {
 
   people_directory: (orgId, params) => {
     // Optional :classification filter (from a tabs/dropdown filter). Empty =
-    // everyone except inactive; a value = exactly that classification.
+    // everyone except Unknown; a value = exactly that classification.
     const cls = (params.classification ?? "").trim().toLowerCase();
-    const clsArg = ["shepherded", "active", "present", "inactive"].includes(cls) ? cls : "";
+    const clsArg = ["shepherded", "known", "unknown"].includes(cls) ? cls : "";
     const rows = getDb()
       .prepare(
         `SELECT p.enc_pii AS enc,
-                COALESCE(pa.classification, 'inactive') AS cls,
+                COALESCE(pa.classification, 'unknown') AS cls,
                 p.membership_type AS mt,
                 COALESCE(pa.active_group_count, 0) AS gc,
                 COALESCE(pa.active_team_count, 0) AS tc
@@ -150,13 +150,13 @@ const SOURCES: Record<string, SourceFn> = {
            LEFT JOIN person_activity pa ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
           WHERE p.org_id = ? AND p.is_minor = 0
             AND (p.membership_type IS NULL OR lower(p.membership_type) NOT LIKE '%system use%')
-            AND ( (? = '' AND COALESCE(pa.classification,'inactive') != 'inactive')
-                  OR COALESCE(pa.classification,'inactive') = ? )
+            AND ( (? = '' AND COALESCE(pa.classification,'unknown') != 'unknown')
+                  OR COALESCE(pa.classification,'unknown') = ? )
           -- Tier, then most engaged within it, then name: without the tail,
           -- which people inside a tier made the 1,000 cut depended on the
           -- query plan, so the list changed whenever statistics did.
-          ORDER BY CASE COALESCE(pa.classification,'inactive')
-                     WHEN 'shepherded' THEN 0 WHEN 'active' THEN 1 WHEN 'present' THEN 2 ELSE 3 END,
+          ORDER BY CASE COALESCE(pa.classification,'unknown')
+                     WHEN 'shepherded' THEN 0 WHEN 'known' THEN 1 ELSE 2 END,
                    COALESCE(pa.active_group_count, 0) + COALESCE(pa.active_team_count, 0) DESC,
                    p.last_name COLLATE NOCASE, p.first_name COLLATE NOCASE, p.pco_id
           LIMIT 1000`,
@@ -310,11 +310,12 @@ const SOURCES: Record<string, SourceFn> = {
   relationship_graph_overview: (orgId) => {
     const g = relationshipGraph(orgId);
     const byCls = (c: string) => g.nodes.filter((n) => n.cls === c).length;
-    return R(["People", "Connections", "Shepherded", "Active"], [[g.nodes.length, g.edges.length, byCls("shepherded"), byCls("active")]]);
+    return R(["People", "Connections", "Shepherded", "Known"], [[g.nodes.length, g.edges.length, byCls("shepherded"), byCls("known")]]);
   },
 
-  // "Who knows who" from the intake marks. :source = know (active pool) or
-  // present (present pool). Edges are shepherd → the person they marked.
+  // "Who knows who" from the intake marks. :source = know (the Known pool)
+  // or present (the Unknown pool — the route kept its old name). Edges are
+  // shepherd → the person they marked.
   intake_graph: (orgId, params) => {
     const source = (params.source ?? "").trim() === "present" ? "present" : "know";
     const g = getIntakeGraph(orgId, source);
@@ -363,7 +364,7 @@ const SOURCES: Record<string, SourceFn> = {
   staff_directory: (orgId) => {
     const rows = getDb()
       .prepare(
-        `SELECT p.enc_pii AS enc, p.membership_type AS mt, COALESCE(pa.classification,'inactive') AS cls
+        `SELECT p.enc_pii AS enc, p.membership_type AS mt, COALESCE(pa.classification,'unknown') AS cls
            FROM pco_list_memberships lm
            JOIN pco_lists l ON l.org_id = lm.org_id AND l.pco_id = lm.list_id
            JOIN pco_people p ON p.org_id = lm.org_id AND p.pco_id = lm.person_id

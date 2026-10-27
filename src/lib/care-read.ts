@@ -40,8 +40,8 @@ export interface CareRosterPerson {
 export interface CareCoverage {
   unassigned: number;
   assigned: number;
-  /** Whether the present tier was included in `unassigned`. */
-  includesPresent: boolean;
+  /** Whether Unknown was included in `unassigned` as well as Known. */
+  includesUnknown: boolean;
 }
 
 function nameParts(encPii: string | null): {
@@ -79,12 +79,12 @@ interface CandidateRawRow {
 }
 
 /** People who need a carer: not shepherded, not already on anyone's
- *  care roster, and either Active (default) or Active-or-Present when
- *  `includePresent` is set. Excluded membership types are dropped to
+ *  care roster, and either Known (default) or Known-or-Unknown when
+ *  `includeUnknown` is set. Excluded membership types are dropped to
  *  match the rest of the app. */
 export function listCareCandidates(
   orgId: number,
-  includePresent: boolean,
+  includeUnknown: boolean,
 ): CareCandidate[] {
   const db = getDb();
   const excluded = getExcludedMembershipTypes(orgId);
@@ -98,10 +98,10 @@ export function listCareCandidates(
 
   // Source of truth = person_activity (the SAME canonical
   // classification /people shows). A candidate is an adult classified
-  // active (or present, when that scope is on), not yet on a care
-  // roster. Reading the shared snapshot — rather than recomputing
-  // "active" + "shepherded" with a separate live query — guarantees
-  // /people and /care-map can never disagree on who's active.
+  // Known — or Unknown too, when that scope is on — and not yet on a
+  // care roster. Reading the shared snapshot rather than recomputing the
+  // bands with a separate live query guarantees /people and /care-map
+  // can never disagree.
   const hasSnapshot =
     db
       .prepare(`SELECT 1 FROM person_activity WHERE org_id = ? LIMIT 1`)
@@ -109,7 +109,7 @@ export function listCareCandidates(
 
   let rows: Array<CandidateRawRow & { classification?: string }>;
   if (hasSnapshot) {
-    const classList = includePresent ? "('active','present')" : "('active')";
+    const classList = includeUnknown ? "('known','unknown')" : "('known')";
     rows = db
       .prepare(
         `SELECT p.pco_id, p.enc_pii, p.membership_type, p.is_minor,
@@ -138,7 +138,10 @@ export function listCareCandidates(
     let predicate = `((p.last_form_submission_at IS NOT NULL AND p.last_form_submission_at >= ?)
          OR (p.last_check_in_at IS NOT NULL AND p.last_check_in_at >= ?))`;
     args.push(cutoff, cutoff);
-    if (includePresent) {
+    if (includeUnknown) {
+      // Cold start has no snapshot to read a band from, so Unknown widens
+      // the predicate to anyone the window touched at all — including a
+      // record a staff member edited, which is the nearest live stand-in.
       predicate = `(${predicate}
          OR (p.pco_updated_at IS NOT NULL AND p.pco_updated_at >= ?))`;
       args.push(cutoff);
@@ -266,19 +269,19 @@ export function pruneShepherdedCareAssignments(orgId: number): void {
  *  it matches what the rosters actually show. */
 export function getCareCoverage(
   orgId: number,
-  includePresent: boolean,
+  includeUnknown: boolean,
 ): CareCoverage {
-  const candidates = listCareCandidates(orgId, includePresent);
+  const candidates = listCareCandidates(orgId, includeUnknown);
   let assigned = 0;
   for (const arr of listCareAssignments(orgId).values()) assigned += arr.length;
   return {
     unassigned: candidates.length,
     assigned,
-    includesPresent: includePresent,
+    includesUnknown: includeUnknown,
   };
 }
 
-/** Total non-shepherded engaged ADULTS — active + present, minus
+/** Total non-shepherded engaged ADULTS — Known, minus
  *  minors. Used as the "Even split per shepherd" denominator. Reads
  *  the shared person_activity snapshot (same classification /people
  *  shows) so it can't diverge from the candidate list / Active count.

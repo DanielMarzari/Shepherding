@@ -207,7 +207,7 @@ export function getMemberGeoPoints(orgId: number): MemberPoint[] {
     .prepare(
       `SELECT g.lat, g.lng, p.enc_pii AS encPii, p.membership_type AS mt,
               p.gender AS gender, p.birth_year AS birthYear, p.is_parent AS isParent,
-              COALESCE(pa.classification, 'inactive') AS classification,
+              COALESCE(pa.classification, 'unknown') AS classification,
               COALESCE(pa.active_group_count, 0) AS groupCount,
               COALESCE(pa.active_team_count, 0) AS teamCount,
               CASE WHEN EXISTS (

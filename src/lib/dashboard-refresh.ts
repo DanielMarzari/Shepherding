@@ -1155,7 +1155,7 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
   // An edit to the PCO record is not in here and cannot be switched on. It
   // is activity ON a person by a staff member, not BY them — a data cleanup
   // would otherwise promote hundreds of people into Known overnight. It
-  // still produces 'present' below, which reads as Unknown.
+  // leaves them Unknown, which is the honest answer.
   const signals = parseKnownSignals(getSyncSettings(orgId).knownSignals);
   const minSignals = Math.max(1, getSyncSettings(orgId).knownMinSignals ?? 1);
   const emailMin = Math.max(1, getSyncSettings(orgId).knownEmailMin ?? 1);
@@ -1220,14 +1220,19 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
 
   db.prepare(
     `UPDATE person_activity
+        -- Three bands, and these are the words the database holds. This
+        -- wrote the retired five ('active' / 'present' / 'inactive') until
+        -- 2026-10-27: migration 0107 renamed the stored values and every
+        -- reader with them, but not this UPDATE, so the first nightly
+        -- refresh after that deploy put the old words back and every page
+        -- filtering on 'known' went to zero. There is no 'present' band —
+        -- a staff edit to a record is not evidence the person did anything.
         SET classification = CASE
               WHEN person_id IN (SELECT person_id FROM temp.shep_set)
                    THEN 'shepherded'
               WHEN person_id IN (SELECT person_id FROM temp.known_set)
-                   THEN 'active'
-              WHEN (last_pco_updated_at IS NOT NULL AND last_pco_updated_at >= :cut)
-                   THEN 'present'
-              ELSE 'inactive'
+                   THEN 'known'
+              ELSE 'unknown'
             END,
             refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE org_id = :orgId`,

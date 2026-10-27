@@ -1091,7 +1091,7 @@ export const MIR_EXTRAS: Record<string, MirExtras> = {
             FROM person_activity pa
             LEFT JOIN sg ON sg.person_id = pa.person_id
            WHERE pa.org_id = :orgId
-             AND pa.classification <> 'inactive'
+             AND pa.classification <> 'unknown'
           UNION ALL
           SELECT '% of members',
                  ROUND(100.0 * COUNT(sg.person_id) / NULLIF(COUNT(*), 0), 1), 2

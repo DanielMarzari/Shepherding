@@ -15,7 +15,7 @@ const Q = 1e4; // quantize endpoints to 4 decimals (~11 m) for the dedupe key
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // The network is "your people's" roads: shepherded / active / present.
-const ENGAGED = "('shepherded','active','present')";
+const ENGAGED = "('shepherded','known')";
 
 export function isMeshConfigured(): boolean {
   return OSRM_URL.length > 0;

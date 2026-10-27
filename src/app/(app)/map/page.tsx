@@ -153,7 +153,7 @@ export default async function MapPage() {
                 value={reach.shepherdedCorr == null ? "—" : `r ${reach.shepherdedCorr.toFixed(2)}`}
                 sub="point-biserial"
               />
-              <Stat label="People analyzed" value={reach.count.toLocaleString()} sub={`shepherded/active/present · ≤${mapSettings.secondCampusMaxHours}h`} />
+              <Stat label="People analyzed" value={reach.count.toLocaleString()} sub={`Shepherded or Known · ≤${mapSettings.secondCampusMaxHours}h`} />
             </div>
 
             {reach.bands.length >= 2 && (
@@ -161,7 +161,7 @@ export default async function MapPage() {
                 <div className="text-xs text-muted mb-1.5">
                   Shepherded by distance{" "}
                   <span className="text-subtle">
-                    (of shepherded/active/present; avg {reach.shepherdedOfEngagedPct}%)
+                    (of Shepherded or Known; avg {reach.shepherdedOfEngagedPct}%)
                   </span>
                 </div>
                 <DistanceBandChart bands={reach.bands} avg={reach.shepherdedOfEngagedPct} />
@@ -214,7 +214,7 @@ export default async function MapPage() {
               </span>
             </div>
             <p className="text-xs text-muted max-w-2xl">
-              The network of roads your people (shepherded/active/present)
+              The network of roads your people (Shepherded or Known)
               drive to Faith Church — each road appears once; its presence
               means a household needs it to get here.
             </p>

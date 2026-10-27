@@ -56,8 +56,8 @@ const HOME_COLOR = "#ea580c"; // LVPC new-home developments (orange)
 // "engaged" means Shepherded or Known. 'present' used to count, which it
 // should not: a staff edit to somebody's record is not engagement, and the
 // vocabulary now calls that Unknown.
-const ENGAGED_CLASSES = new Set(["shepherded", "active"]);
-const LOOSE_CLASSES = new Set(["shepherded", "active"]);
+const ENGAGED_CLASSES = new Set(["shepherded", "known"]);
+const LOOSE_CLASSES = new Set(["shepherded", "known"]);
 // A church plant opens with its sending core and grows into the community over
 // years — it does NOT reach the main campus's mature penetration on day one.
 // The "starting out" community draw is a small fraction of that ceiling.
