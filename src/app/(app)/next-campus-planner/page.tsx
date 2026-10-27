@@ -2,7 +2,7 @@ import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { CHURCH, FAITH_CHURCH_PROFILE, getMemberGeoPointsCompact } from "@/lib/geocode";
-import { analyzeReach } from "@/lib/map-analysis";
+import { getReachAnalysis } from "@/lib/map-analysis";
 import { analyzeCensus, computeDrawModel, computeGrowth } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { countRoadMesh } from "@/lib/road-network";
@@ -18,7 +18,7 @@ export default async function NextCampusPlannerPage() {
   // who've drifted away.
   const points = getMemberGeoPointsCompact(session.orgId, { engagedOnly: true });
   const mapSettings = getMapSettings(session.orgId);
-  const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
+  const reach = getReachAnalysis(session.orgId, mapSettings.secondCampusMaxHours);
   const census = analyzeCensus(session.orgId);
   const meshTotal = countRoadMesh(session.orgId);
   const drawModel = computeDrawModel(census.tracts, census.ourMembers, reach.avgMiles);

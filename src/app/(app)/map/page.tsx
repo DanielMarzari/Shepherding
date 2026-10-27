@@ -3,7 +3,7 @@ import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { CHURCH, countPendingGeo, getMemberGeoPointsCompact } from "@/lib/geocode";
 import { countPoints } from "@/lib/map-points";
-import { analyzeReach } from "@/lib/map-analysis";
+import { getReachAnalysis } from "@/lib/map-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { countPendingDrive, isRoutingConfigured } from "@/lib/drive-routing";
 import { countPendingMesh, countRoadMesh } from "@/lib/road-network";
@@ -21,7 +21,7 @@ export default async function MapPage() {
   const points = getMemberGeoPointsCompact(session.orgId);
   const pending = countPendingGeo(session.orgId);
   const mapSettings = getMapSettings(session.orgId);
-  const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
+  const reach = getReachAnalysis(session.orgId, mapSettings.secondCampusMaxHours);
   const routingOn = isRoutingConfigured();
   const drivePending = routingOn ? countPendingDrive(session.orgId) : 0;
   const meshPending = routingOn ? countPendingMesh(session.orgId) : 0;

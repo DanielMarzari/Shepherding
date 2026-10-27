@@ -11,6 +11,8 @@ import {
 import { populateShepherdedTempTable } from "./people-read";
 import { rebuildDuplicatePairs } from "./audit-read";
 import { backfillGeoZips } from "./geocode";
+import { rebuildReachAnalysis } from "./map-analysis";
+import { getMapSettings } from "./map-settings";
 import { refreshRetentionReturns } from "./retention-read";
 
 const MS_PER_DAY = 86_400_000;
@@ -62,6 +64,14 @@ const REFRESH_PHASES: Array<{
     label: "Filling in home ZIPs",
     run: (orgId) => {
       backfillGeoZips(orgId);
+    },
+  },
+  {
+    label: "Siting the second campus",
+    run: (orgId) => {
+      // Keeps the map's cached answer warm for the radius the pages ask
+      // for, so nobody's page load has to compute it.
+      rebuildReachAnalysis(orgId, getMapSettings(orgId).secondCampusMaxHours);
     },
   },
 ];
