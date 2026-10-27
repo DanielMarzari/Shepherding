@@ -181,6 +181,47 @@ function weightedMedian(
   return { lat, lng };
 }
 
+/** Below this, the bearings are too evenly spread for a direction to mean
+ *  anything and the polar seed is skipped. Measured on this congregation:
+ *  0.649, strongly one way (south-west). */
+const CONCENTRATED = 0.35;
+
+/** Miles per degree of latitude — close enough over one valley. */
+const MI_PER_DEG = 69.0;
+
+/** A first guess at the campus, in polar coordinates around the church:
+ *  the median distance out, along the mean bearing. Returns null when the
+ *  homes ring the church too evenly for a bearing to describe them. */
+function polarSeed(
+  cohortPts: Pt[],
+  la: Float64Array,
+  ln: Float64Array,
+  dfc: Float64Array,
+  n: number,
+): { lat: number; lng: number } | null {
+  const cosLat = Math.cos((CHURCH.lat * Math.PI) / 180);
+  let sx = 0, sy = 0;
+  for (let i = 0; i < n; i++) {
+    const dy = la[i] - CHURCH.lat;
+    const dx = (ln[i] - CHURCH.lng) * cosLat;
+    const h = Math.sqrt(dx * dx + dy * dy);
+    if (h === 0) continue;
+    sx += dx / h;
+    sy += dy / h;
+  }
+  const resultant = Math.sqrt(sx * sx + sy * sy) / n;
+  if (resultant < CONCENTRATED) return null;
+
+  const radii = Float64Array.from(dfc.subarray(0, n));
+  radii.sort();
+  const rStar = radii[Math.floor(n / 2)];
+  const theta = Math.atan2(sy, sx);
+  return {
+    lat: CHURCH.lat + (rStar * Math.sin(theta)) / MI_PER_DEG,
+    lng: CHURCH.lng + (rStar * Math.cos(theta)) / (MI_PER_DEG * cosLat),
+  };
+}
+
 /** Site a second campus for one cohort, within the radius.
  *
  *  Seed at the geometric median of the farther half of the cohort, so the
@@ -208,20 +249,40 @@ function siteSecondCampus(
     wt[i] = cohort === "unknown" ? Math.max(0.5, p.dFc) : 1;
   }
 
-  // Seed: the farther half by distance from Faith Church.
-  const order = Array.from({ length: n }, (_, i) => i).sort(
-    (a, b) => dfc[b] - dfc[a],
-  );
-  const half = Math.ceil(n / 2);
-  const sLa = new Float64Array(half), sLn = new Float64Array(half);
-  const sWt = new Float64Array(half);
-  for (let i = 0; i < half; i++) {
-    const j = order[i];
-    sLa[i] = la[j];
-    sLn[i] = ln[j];
-    sWt[i] = wt[j];
+  // Seed in polar coordinates around the church: how far out, and which
+  // way. The distance is the median of everyone's distance — sort, take the
+  // middle. The direction is the circular mean of their bearings: sum the
+  // unit vectors and take the angle of the result. Both are one pass, and
+  // the seed lands about half a mile from where the walk below ends up, so
+  // the walk has little left to do.
+  //
+  // An eigenvector would give the axis people lie along, which cannot tell
+  // southwest from northeast; the resultant vector gives the direction.
+  //
+  // The length of that resultant says whether a direction means anything:
+  // near 1 the congregation lies one way, near 0 it rings the church evenly
+  // and no single bearing describes it. Below CONCENTRATED we fall back to
+  // the old seed — the median of the farther half — which assumes nothing
+  // about shape.
+  const seed = polarSeed(cohortPts, la, ln, dfc, n);
+  let c2: { lat: number; lng: number };
+  if (seed) {
+    c2 = seed;
+  } else {
+    const order = Array.from({ length: n }, (_, i) => i).sort(
+      (a, b) => dfc[b] - dfc[a],
+    );
+    const half = Math.ceil(n / 2);
+    const sLa = new Float64Array(half), sLn = new Float64Array(half);
+    const sWt = new Float64Array(half);
+    for (let i = 0; i < half; i++) {
+      const j = order[i];
+      sLa[i] = la[j];
+      sLn[i] = ln[j];
+      sWt[i] = wt[j];
+    }
+    c2 = weightedMedian(sLa, sLn, sWt, half);
   }
-  let c2 = weightedMedian(sLa, sLn, sWt, half);
 
   // Scratch buffers for "who this campus would serve", reused each round
   // rather than reallocated.
@@ -283,29 +344,50 @@ function siteSecondCampus(
   };
 }
 
-/** What the analysis was computed from. If none of this has moved, neither
- *  has the answer: the points, when they were last geocoded, how many have a
- *  real drive time, and when the activity snapshot was last rebuilt. */
+/** What the analysis was computed from — the content, not a timestamp.
+ *
+ *  Homes almost never move. The first version of this keyed on the activity
+ *  snapshot's refresh time, which changes every night whether or not anybody
+ *  moved, so it recomputed nightly for an answer that was already correct.
+ *  This is a fingerprint of the things the answer actually depends on: how
+ *  many homes sit in each cohort and where they are, plus the drive times
+ *  that decide who falls inside the radius. Rounded sums are enough to catch
+ *  a change; they are a fingerprint, not a checksum.
+ */
 function reachSignature(orgId: number): string {
   const db = getDb();
-  const g = db
+  const rows = db
     .prepare(
-      `SELECT COUNT(*) AS n, COALESCE(MAX(geocoded_at),'') AS newest
-         FROM person_geo WHERE org_id = ? AND status = 'ok' AND lat IS NOT NULL`,
+      `SELECT COALESCE(pa.classification,'unknown') AS cls,
+              COUNT(*) AS n,
+              CAST(SUM(g.lat) * 1000 AS INTEGER) AS sLat,
+              CAST(SUM(g.lng) * 1000 AS INTEGER) AS sLng
+         FROM person_geo g
+         LEFT JOIN person_activity pa
+           ON pa.org_id = g.org_id AND pa.person_id = g.person_id
+        WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL
+        GROUP BY cls ORDER BY cls`,
     )
-    .get(orgId) as { n: number; newest: string };
+    .all(orgId) as Array<{ cls: string; n: number; sLat: number; sLng: number }>;
   const d = db
     .prepare(
-      `SELECT COUNT(*) AS n FROM person_drive_from_church
+      `SELECT COUNT(*) AS n, CAST(COALESCE(SUM(minutes),0) AS INTEGER) AS mins
+         FROM person_drive_from_church
         WHERE org_id = ? AND status = 'ok' AND minutes IS NOT NULL`,
     )
-    .get(orgId) as { n: number };
-  const a = db
+    .get(orgId) as { n: number; mins: number };
+  const parts = rows.map((r) => `${r.cls}=${r.n}/${r.sLat}/${r.sLng}`);
+  return `${parts.join(",")}|${d.n}/${d.mins}`;
+}
+
+/** True when the cached answer is still the answer. */
+export function reachCacheFresh(orgId: number, maxHours: number): boolean {
+  const row = getDb()
     .prepare(
-      `SELECT COALESCE(MAX(refreshed_at),'') AS at FROM person_activity WHERE org_id = ?`,
+      `SELECT signature FROM map_reach_cache WHERE org_id = ? AND max_hours = ?`,
     )
-    .get(orgId) as { at: string };
-  return `${g.n}:${g.newest}:${d.n}:${a.at}`;
+    .get(orgId, maxHours) as { signature: string } | undefined;
+  return !!row && row.signature === reachSignature(orgId);
 }
 
 /** The reach analysis, from cache when its inputs haven't moved.

@@ -11,7 +11,7 @@ import {
 import { populateShepherdedTempTable } from "./people-read";
 import { rebuildDuplicatePairs } from "./audit-read";
 import { backfillGeoZips } from "./geocode";
-import { rebuildReachAnalysis } from "./map-analysis";
+import { reachCacheFresh, rebuildReachAnalysis } from "./map-analysis";
 import { getMapSettings } from "./map-settings";
 import { refreshRetentionReturns } from "./retention-read";
 
@@ -69,9 +69,11 @@ const REFRESH_PHASES: Array<{
   {
     label: "Siting the second campus",
     run: (orgId) => {
-      // Keeps the map's cached answer warm for the radius the pages ask
-      // for, so nobody's page load has to compute it.
-      rebuildReachAnalysis(orgId, getMapSettings(orgId).secondCampusMaxHours);
+      // Keeps the map's cached answer warm, and skips the work when nothing
+      // it depends on has moved — which is most nights, since houses stay
+      // where they are.
+      const hours = getMapSettings(orgId).secondCampusMaxHours;
+      if (!reachCacheFresh(orgId, hours)) rebuildReachAnalysis(orgId, hours);
     },
   },
 ];
