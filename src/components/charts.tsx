@@ -30,7 +30,7 @@ export interface ChartDatum {
   /** Optional override for slice / bar color. When unset, the chart
    *  picks from PALETTE by index. Use this when the categories have
    *  meaning attached to specific colors (e.g. Shepherded = green,
-   *  Active = yellow, Present = grey on the home people-mix pie). */
+   *  Known = yellow, Unknown = grey on the home people-mix pie). */
   color?: string;
   /** Optional minors-only sub-count. When >0, the pie legend renders
    *  the row as "{adults} + {kids} kids ({pct}%)" with the adults
@@ -123,7 +123,7 @@ export function PieChart({
   /** When true the slices render in the order the caller provided
    *  them. Default behavior sorts by count desc so the largest slice
    *  starts at 12-o'clock — but for ordered categories (Shepherded →
-   *  Active → Present), the caller's order is what the user expects. */
+   *  Known → Unknown), the caller's order is what the user expects. */
   preserveOrder?: boolean;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);

@@ -314,10 +314,9 @@ const SOURCES: Record<string, SourceFn> = {
   },
 
   // "Who knows who" from the intake marks. :source = know (the Known pool)
-  // or present (the Unknown pool — the route kept its old name). Edges are
-  // shepherd → the person they marked.
+  // or unknown (the Unknown pool). Edges are shepherd → the person they marked.
   intake_graph: (orgId, params) => {
-    const source = (params.source ?? "").trim() === "present" ? "present" : "know";
+    const source = (params.source ?? "").trim() === "unknown" ? "unknown" : "know";
     const g = getIntakeGraph(orgId, source);
     const label = labelMap(g.nodes);
     return R(

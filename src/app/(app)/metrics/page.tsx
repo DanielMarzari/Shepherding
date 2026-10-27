@@ -93,7 +93,7 @@ export default async function MetricsPage() {
               </div>
               <div>
                 <dt className="font-medium">
-                  <span className="text-accent">●</span> Present
+                  <span className="text-accent">●</span> Known
                 </dt>
                 <dd className="text-muted text-xs mt-0.5">
                   Created in PCO within the last{" "}
@@ -117,7 +117,7 @@ export default async function MetricsPage() {
                 </dt>
                 <dd className="text-muted text-xs mt-0.5">
                   Currently in at least one group, team, or Sunday program (kids /
-                  student check-in). Independent of active/present/
+                  student check-in). Independent of Shepherded / Known /
                   inactive — someone can be Active but not Shepherded (just attending Sundays).
                 </dd>
               </div>

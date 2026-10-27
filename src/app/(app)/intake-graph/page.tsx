@@ -63,10 +63,10 @@ function GraphSection({ title, blurb, data, markers }: {
 export default async function IntakeGraphPage() {
   const session = await requireOrg();
   const know = getIntakeGraph(session.orgId, "know");
-  const present = getIntakeGraph(session.orgId, "present");
+  const unknown = getIntakeGraph(session.orgId, "unknown");
   const cov = getIntakeCoverage(session.orgId);
   const knowMarkers = getTopMarkers(session.orgId, "know");
-  const presentMarkers = getTopMarkers(session.orgId, "present");
+  const unknownMarkers = getTopMarkers(session.orgId, "unknown");
 
   return (
     <AppShell active="See more" breadcrumb="See more › Who knows who">
@@ -80,23 +80,23 @@ export default async function IntakeGraphPage() {
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Kpi label="Active people known" value={pct(cov.knownActivePct)} sub={`${num(cov.activeMarked)} of ${num(cov.activeTotal)} active`} />
-          <Kpi label="Present people known" value={pct(cov.presentKnownPct)} sub={`${num(cov.presentMarked)} of ${num(cov.presentTotal)} present`} />
+          <Kpi label="Known people flagged" value={pct(cov.knownPct)} sub={`${num(cov.knownMarked)} of ${num(cov.knownTotal)} Known`} />
+          <Kpi label="Unknown people flagged" value={pct(cov.unknownPct)} sub={`${num(cov.unknownMarked)} of ${num(cov.unknownTotal)} Unknown`} />
           <Kpi label="/know marks" value={num(cov.knowMarks)} sub={`by ${num(cov.knowMarkers)} people`} />
-          <Kpi label="/present marks" value={num(cov.presentMarks)} sub={`by ${num(cov.presentMarkers)} people`} />
+          <Kpi label="/know/unknown marks" value={num(cov.unknownMarks)} sub={`by ${num(cov.unknownMarkers)} people`} />
         </div>
 
         <GraphSection
-          title="/know — active people"
-          blurb="Shepherd-team members flagging active people they personally know."
+          title="/know — the Known band"
+          blurb="Shepherd-team members flagging Known people they personally know."
           data={know}
           markers={knowMarkers}
         />
         <GraphSection
-          title="/present — present people"
-          blurb="The invite-only /present form: who knows people who show up but aren’t active yet."
-          data={present}
-          markers={presentMarkers}
+          title="/know/unknown — the Unknown band"
+          blurb="The invite-only form: who knows people who show up but we can’t see in anything yet."
+          data={unknown}
+          markers={unknownMarkers}
         />
       </div>
     </AppShell>

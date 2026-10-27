@@ -889,7 +889,7 @@ const whoKnowsWhoSeed: SeedPage = {
     { kind: "filter", config: { title: "Pool", span: 12, param: "source", filterType: "tabs", defaultValue: "know",
       sql: `SELECT value, label FROM (
               SELECT 1 AS o, 'know' AS value, 'Known pool' AS label
-              UNION ALL SELECT 2, 'present', 'Unknown pool'
+              UNION ALL SELECT 2, 'unknown', 'Unknown pool'
             ) ORDER BY o` } },
     { kind: "chart", config: { title: "Who knows who", chartType: "network", span: 12, height: "triple", source: "intake_graph",
       sub: "shepherd → the person they marked · drag / zoom / hover" } },

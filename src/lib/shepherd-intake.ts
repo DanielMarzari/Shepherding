@@ -221,7 +221,7 @@ export function setKnown(
   shepherdPersonId: string,
   personId: string,
   known: boolean,
-  source: "know" | "present" = "know",
+  source: "know" | "unknown" = "know",
 ): void {
   const db = getDb();
   if (known) {

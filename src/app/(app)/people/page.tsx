@@ -164,10 +164,9 @@ export default async function PeoplePage({
           )}
         </div>
 
-        {/* Stat strip: Shepherded · Known · Unknown. Three cards for four
-            stored values — Present and Inactive are both Unknown, so they
-            are added together and the split is given as a footnote for
-            anyone who needs it. */}
+        {/* Stat strip: Shepherded · Known · Unknown — one card per band the
+            database stores. It used to be three cards for four stored values;
+            the fourth went away when 'present' folded into Unknown. */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <Card className="p-4">
             <div className="text-xs text-muted mb-1.5">Shepherded</div>

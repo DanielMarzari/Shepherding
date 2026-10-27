@@ -5,7 +5,7 @@ import { getExcludedMembershipTypes } from "./pco";
 import { SHEPHERD_TEAM_LIST_NAME } from "./assignments-read";
 
 interface PII { first_name?: string | null; last_name?: string | null }
-export type IntakeSource = "know" | "present";
+export type IntakeSource = "know" | "unknown";
 
 function nameMap(orgId: number, ids: string[]): Map<string, string> {
   const m = new Map<string, string>();
@@ -36,7 +36,7 @@ export interface GraphNode {
   name: string;
   onTeam: boolean;
   degree: number;
-  /** Belongs to the classification pool this graph covers (active / present) —
+  /** Belongs to the classification pool this graph covers (Known / Unknown) —
    *  false for markers who aren't themselves in the pool. */
   inPool: boolean;
 }
@@ -47,9 +47,7 @@ export interface GraphData { nodes: GraphNode[]; links: Array<{ source: string; 
  *  anyone who marked someone; shepherd-team members are flagged for coloring. */
 export function getIntakeGraph(orgId: number, source: IntakeSource): GraphData {
   const db = getDb();
-  // /know works the Known pool, /present the Unknown one. The routes kept
-  // their names when the vocabulary lost 'present' — the pools are the two
-  // bands nobody on the shepherd team is responsible for.
+  // /know works the Known pool, /know/unknown the Unknown one.
   const cls = source === "know" ? "known" : "unknown";
   const excludedMem = getExcludedMembershipTypes(orgId);
   const memClause = excludedMem.length
@@ -90,29 +88,32 @@ export function getIntakeGraph(orgId: number, source: IntakeSource): GraphData {
 }
 
 export interface IntakeCoverage {
-  activeTotal: number; activeMarked: number; knownActivePct: number | null;
-  presentTotal: number; presentMarked: number; presentKnownPct: number | null;
-  knowMarks: number; knowMarkers: number; presentMarks: number; presentMarkers: number;
+  knownTotal: number; knownMarked: number; knownPct: number | null;
+  unknownTotal: number; unknownMarked: number; unknownPct: number | null;
+  knowMarks: number; knowMarkers: number; unknownMarks: number; unknownMarkers: number;
 }
 
 export function getIntakeCoverage(orgId: number): IntakeCoverage {
   const db = getDb();
   const n = (sql: string, ...args: unknown[]) => (db.prepare(sql).get(...args) as { n: number }).n;
-  const activeTotal = n("SELECT COUNT(*) n FROM person_activity WHERE org_id = ? AND classification = 'known'", orgId);
-  const presentTotal = n("SELECT COUNT(*) n FROM person_activity WHERE org_id = ? AND classification = 'unknown'", orgId);
+  const knownTotal = n("SELECT COUNT(*) n FROM person_activity WHERE org_id = ? AND classification = 'known'", orgId);
+  const unknownTotal = n("SELECT COUNT(*) n FROM person_activity WHERE org_id = ? AND classification = 'unknown'", orgId);
   const markedOf = (source: string, cls: string) => n(
     `SELECT COUNT(DISTINCT k.person_id) n FROM shepherd_known_people k
        JOIN person_activity pa ON pa.org_id = k.org_id AND pa.person_id = k.person_id
       WHERE k.org_id = ? AND k.source = ? AND pa.classification = ?`,
     orgId, source, cls);
-  const activeMarked = markedOf("know", "active");
-  const presentMarked = markedOf("present", "present");
+  // These two compared classification to 'active' and 'present' until
+  // 2026-10-27, so both coverage figures read 0% once the bands were renamed.
+  const knownMarked = markedOf("know", "known");
+  const unknownMarked = markedOf("unknown", "unknown");
   const marks = (source: string) => n("SELECT COUNT(*) n FROM shepherd_known_people WHERE org_id = ? AND source = ?", orgId, source);
   const markers = (source: string) => n("SELECT COUNT(DISTINCT shepherd_person_id) n FROM shepherd_known_people WHERE org_id = ? AND source = ?", orgId, source);
   return {
-    activeTotal, activeMarked, knownActivePct: activeTotal ? activeMarked / activeTotal : null,
-    presentTotal, presentMarked, presentKnownPct: presentTotal ? presentMarked / presentTotal : null,
-    knowMarks: marks("know"), knowMarkers: markers("know"), presentMarks: marks("present"), presentMarkers: markers("present"),
+    knownTotal, knownMarked, knownPct: knownTotal ? knownMarked / knownTotal : null,
+    unknownTotal, unknownMarked, unknownPct: unknownTotal ? unknownMarked / unknownTotal : null,
+    knowMarks: marks("know"), knowMarkers: markers("know"),
+    unknownMarks: marks("unknown"), unknownMarkers: markers("unknown"),
   };
 }
 

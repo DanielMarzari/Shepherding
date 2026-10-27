@@ -338,7 +338,7 @@ export async function ClassificationSection({
               >
                 {rationale.isShepherded
                   ? "Other activity on record — Shepherded already takes priority"
-                  : "Pulls them into Active / Present"}
+                  : "Pulls them into Known"}
               </div>
               <ul className="list-disc list-inside space-y-0.5 text-fg">
                 {rationale.activitySignals.map((r, i) => (

@@ -63,7 +63,7 @@ export default async function NextCampusPlannerPage() {
                 <div className="text-xs text-muted">{CHURCH.address} · {FAITH_CHURCH_PROFILE.denomination}</div>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Stat label="Engaged people" value={census.ourMembers.toLocaleString()} sub="shepherded/active/present (located)" />
+                <Stat label="Engaged people" value={census.ourMembers.toLocaleString()} sub="Shepherded or Known (located)" />
                 <Stat label="Building" value={`${FAITH_CHURCH_PROFILE.buildingSqft.toLocaleString()} ft²`} sub={FAITH_CHURCH_PROFILE.buildingNote} />
                 <Stat label="Lot size" value={FAITH_CHURCH_PROFILE.lotAcres != null ? `~${FAITH_CHURCH_PROFILE.lotAcres} ac` : "—"} sub={FAITH_CHURCH_PROFILE.lotNote ?? "see county records"} />
                 <Stat label="Est. market value" value={FAITH_CHURCH_PROFILE.estMarketValue != null ? usd(FAITH_CHURCH_PROFILE.estMarketValue) : "—"} sub="tax-exempt; see records" />

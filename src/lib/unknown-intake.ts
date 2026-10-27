@@ -5,12 +5,16 @@ import { decryptJson, hmac, sign, verifySigned } from "./encryption";
 import { getExcludedMembershipTypes } from "./pco";
 import { setKnown, type IntakeCandidate } from "./shepherd-intake";
 
-// A second, temporary shepherd-intake page — same flow as /know, but it lists
-// people classified 'present' (not 'active'), and only a hard-wired allowlist of
-// people may use it. Kept fully separate from /know (its own cookie).
+// The /know/unknown intake page — same flow as /know, but it lists the Unknown
+// band rather than the Known one, and only a hard-wired allowlist may use it.
+// Kept fully separate from /know (its own cookie).
+//
+// It was /present until 2026-10-27, after the word 'present' left the
+// vocabulary. The cookie name below is deliberately unchanged: it is invisible
+// to the people using the page, and renaming it would sign all of them out.
 
-const PRESENT_COOKIE = "present_intake";
-const PRESENT_DAYS = 30;
+const UNKNOWN_COOKIE = "present_intake";
+const UNKNOWN_DAYS = 30;
 
 interface PIIBlob { first_name?: string | null; last_name?: string | null }
 
@@ -33,7 +37,7 @@ function piiOf(orgId: number, personId: string): PIIBlob | null {
   return row?.enc_pii ? decryptJson<PIIBlob>(row.enc_pii) : null;
 }
 
-export function matchPresentByEmail(
+export function matchUnknownIntakeByEmail(
   email: string,
 ): { ok: true; orgId: number; personId: string } | { ok: false; reason: "none" | "not_allowed" | "ambiguous" } {
   const normalized = email.trim().toLowerCase();
@@ -53,26 +57,26 @@ export function matchPresentByEmail(
   return { ok: true, orgId: list[0].orgId, personId: list[0].personId };
 }
 
-export interface PresentSession { orgId: number; personId: string; fullName: string }
+export interface UnknownIntakeSession { orgId: number; personId: string; fullName: string }
 
-export async function createPresentSession(orgId: number, personId: string): Promise<void> {
-  const exp = Date.now() + PRESENT_DAYS * 24 * 60 * 60 * 1000;
+export async function createUnknownIntakeSession(orgId: number, personId: string): Promise<void> {
+  const exp = Date.now() + UNKNOWN_DAYS * 24 * 60 * 60 * 1000;
   const store = await cookies();
-  store.set(PRESENT_COOKIE, sign(`${orgId}:${personId}:${exp}`), {
+  store.set(UNKNOWN_COOKIE, sign(`${orgId}:${personId}:${exp}`), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: PRESENT_DAYS * 24 * 60 * 60,
+    maxAge: UNKNOWN_DAYS * 24 * 60 * 60,
   });
 }
 
-export async function destroyPresentSession(): Promise<void> {
-  (await cookies()).delete(PRESENT_COOKIE);
+export async function destroyUnknownIntakeSession(): Promise<void> {
+  (await cookies()).delete(UNKNOWN_COOKIE);
 }
 
-export async function getPresentSession(): Promise<PresentSession | null> {
-  const value = verifySigned((await cookies()).get(PRESENT_COOKIE)?.value);
+export async function getUnknownIntakeSession(): Promise<UnknownIntakeSession | null> {
+  const value = verifySigned((await cookies()).get(UNKNOWN_COOKIE)?.value);
   if (!value) return null;
   const parts = value.split(":");
   if (parts.length !== 3) return null;
@@ -85,14 +89,15 @@ export async function getPresentSession(): Promise<PresentSession | null> {
   return { orgId, personId, fullName: [pii?.first_name, pii?.last_name].filter(Boolean).join(" ") || `(#${personId})` };
 }
 
-/** Marks stored under the 'present' source so /know and /present stay separate. */
-export function setKnownPresent(orgId: number, shepherdPersonId: string, personId: string, known: boolean): void {
-  setKnown(orgId, shepherdPersonId, personId, known, "present");
+/** Marks stored under the 'unknown' source so the two pages stay separate.
+ *  Migration 0111 renamed the 478 rows written when this source was 'present'. */
+export function setKnownUnknownIntake(orgId: number, shepherdPersonId: string, personId: string, known: boolean): void {
+  setKnown(orgId, shepherdPersonId, personId, known, "unknown");
 }
 
-/** 'present' adults the person can mark — mirrors listIntakeCandidates but for
- *  classification = 'unknown' instead of 'active'. */
-export function listPresentCandidates(orgId: number, viewerPersonId: string): IntakeCandidate[] {
+/** Unknown adults the person can mark — mirrors listIntakeCandidates, which
+ *  does the same for the Known band. */
+export function listUnknownCandidates(orgId: number, viewerPersonId: string): IntakeCandidate[] {
   // Honor the Filters config — e.g. the "SYSTEM USE - Do Not Delete" membership
   // type — so system accounts never appear here.
   const excludedMem = getExcludedMembershipTypes(orgId);
@@ -108,7 +113,7 @@ export function listPresentCandidates(orgId: number, viewerPersonId: string): In
          FROM person_activity pa
          JOIN pco_people p ON p.org_id = pa.org_id AND p.pco_id = pa.person_id
          LEFT JOIN shepherd_known_people k
-           ON k.org_id = pa.org_id AND k.shepherd_person_id = ? AND k.person_id = pa.person_id AND k.source = 'present'
+           ON k.org_id = pa.org_id AND k.shepherd_person_id = ? AND k.person_id = pa.person_id AND k.source = 'unknown'
         WHERE pa.org_id = ?
           AND pa.classification = 'unknown'
           AND p.is_minor = 0
