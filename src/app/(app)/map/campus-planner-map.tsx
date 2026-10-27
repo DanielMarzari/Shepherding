@@ -242,7 +242,7 @@ export function CampusPlannerMap({
   church,
   points,
   tracts,
-  mesh,
+  hasMesh,
   initial,
   model,
   suggestions = [],
@@ -252,7 +252,9 @@ export function CampusPlannerMap({
   church: { lat: number; lng: number; name: string; address: string };
   points: MemberPoint[];
   tracts: PlannerTract[];
-  mesh?: { roads: RoadLine[] };
+  /** Whether a road web exists to fetch; the geometry itself comes from
+   *  /api/road-mesh when the roads box is ticked. */
+  hasMesh?: boolean;
   initial: { lat: number; lng: number };
   model: { radiusMi: number; captureRate: number };
   suggestions?: Array<{ label: string; lat: number; lng: number }>;
@@ -278,6 +280,9 @@ export function CampusPlannerMap({
   const [showDots, setShowDots] = useState(true);
   const [metric, setMetric] = useState<CensusMetric | "none">("need");
   const [showRoads, setShowRoads] = useState(false);
+  // The web is 5.5 MB of geometry and starts switched off, so it is fetched
+  // the first time somebody ticks the box rather than shipped with the page.
+  const [meshRoads, setMeshRoads] = useState<RoadLine[]>([]);
   const [showDrive, setShowDrive] = useState(false);
   const [driveMinutes, setDriveMinutes] = useState<number>(ISO_DEFAULT_MINUTES);
   const [showHomes, setShowHomes] = useState(false);
@@ -420,8 +425,8 @@ export function CampusPlannerMap({
       }).addTo(layer);
     }
 
-    if (showRoads && mesh && mesh.roads.length) {
-      L.polyline(mesh.roads.map((r) => r.coords), { color: "#1d4ed8", weight: 1.2, opacity: 0.5, interactive: false }).addTo(layer);
+    if (showRoads && meshRoads.length) {
+      L.polyline(meshRoads.map((r) => r.coords), { color: "#1d4ed8", weight: 1.2, opacity: 0.5, interactive: false }).addTo(layer);
     }
 
     if (showDots) {
@@ -541,7 +546,7 @@ export function CampusPlannerMap({
   useEffect(() => {
     if (mapReady) renderOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDots, metric, showRoads, showDrive, driveMinutes, showHomes, peopleFilter, mapReady, candPos]);
+  }, [showDots, metric, showRoads, meshRoads.length, showDrive, driveMinutes, showHomes, peopleFilter, mapReady, candPos]);
 
   function lockIn() {
     if (!stats) return;
@@ -575,6 +580,22 @@ export function CampusPlannerMap({
 
   function toggleDots() { const v = !showDots; setShowDots(v); lsSet("shepherdly.planner.dots", v); }
   function toggleRoads() { const v = !showRoads; setShowRoads(v); lsSet("shepherdly.planner.roads", v); }
+
+  useEffect(() => {
+    if (!showRoads || !hasMesh || meshRoads.length > 0) return;
+    let live = true;
+    fetch("/api/road-mesh")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((m: { roads?: RoadLine[] } | null) => {
+        if (live && m?.roads) setMeshRoads(m.roads);
+      })
+      .catch(() => {
+        /* the planner works without the web drawn */
+      });
+    return () => {
+      live = false;
+    };
+  }, [showRoads, hasMesh, meshRoads.length]);
   function toggleDrive() { const v = !showDrive; setShowDrive(v); lsSet("shepherdly.planner.driveBlob", v); }
   /** Changing the drive time moves the siting limit too, so the marker is
    *  re-clamped: narrowing to 15 minutes must not leave a candidate sitting
@@ -627,7 +648,7 @@ export function CampusPlannerMap({
               <span className="text-muted">Our people (dots)</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={showRoads} onChange={toggleRoads} disabled={!mesh?.roads.length} />
+              <input type="checkbox" checked={showRoads} onChange={toggleRoads} disabled={!hasMesh} />
               <span className="text-muted">Roads driven</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">

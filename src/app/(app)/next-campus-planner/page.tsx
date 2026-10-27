@@ -5,7 +5,7 @@ import { CHURCH, FAITH_CHURCH_PROFILE, getMemberGeoPoints } from "@/lib/geocode"
 import { analyzeReach } from "@/lib/map-analysis";
 import { analyzeCensus, computeDrawModel, computeGrowth } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
-import { getRoadMesh } from "@/lib/road-network";
+import { countRoadMesh } from "@/lib/road-network";
 import { CampusPlannerMap } from "../map/campus-planner-map";
 import { MiniMap } from "../map/mini-map";
 
@@ -20,7 +20,7 @@ export default async function NextCampusPlannerPage() {
   const mapSettings = getMapSettings(session.orgId);
   const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
   const census = analyzeCensus(session.orgId);
-  const mesh = getRoadMesh(session.orgId);
+  const meshTotal = countRoadMesh(session.orgId);
   const drawModel = computeDrawModel(census.tracts, census.ourMembers, reach.avgMiles);
   const growth = computeGrowth(census.tracts, reach.estDriveMin);
   const allCohort = reach.secondCampuses.find((s) => s.cohort === "all");
@@ -100,7 +100,7 @@ export default async function NextCampusPlannerPage() {
             church={CHURCH}
             points={points}
             tracts={census.tracts}
-            mesh={{ roads: mesh.roads }}
+            hasMesh={meshTotal > 0}
             initial={initialCampus}
             model={drawModel}
             suggestions={suggestions}

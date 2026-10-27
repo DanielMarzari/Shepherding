@@ -269,7 +269,7 @@ export function MemberMap({
   church,
   points,
   secondCampuses = [],
-  mesh,
+  fetchMesh,
   census,
   surroundingTracts,
   counties,
@@ -279,7 +279,10 @@ export function MemberMap({
   church: { lat: number; lng: number; name: string; address: string };
   points: MemberPoint[];
   secondCampuses?: SecondCampus[];
-  mesh?: { roads: RoadLine[] };
+  /** Fetch the road web from /api/road-mesh once the map is up. It is 5.5 MB
+   *  of geometry and pure decoration over the dots, so it must not be part of
+   *  what the page waits for. */
+  fetchMesh?: boolean;
   census?: { tracts: CensusTractView[]; needCampus?: { lat: number; lng: number } | null };
   /** Surrounding-county tracts (same shape) — merged into the choropleth. */
   surroundingTracts?: CensusTractView[];
@@ -373,8 +376,8 @@ export function MemberMap({
         try { map.fitBounds(fitTarget, { padding: [12, 12] }); } catch { /* noop */ }
 
         if (mode === "roads") {
+          // The layer is created empty; the fetch below fills it.
           meshRef.current = L.layerGroup().addTo(map);
-          drawMesh();
         }
         layerRef.current = L.layerGroup().addTo(map);
         draw();
@@ -415,14 +418,14 @@ export function MemberMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, church, mode]);
 
-  function drawMesh() {
+  function drawMesh(roads: RoadLine[]) {
     const L = LRef.current;
     const layer = meshRef.current;
-    if (!L || !layer || !mesh || mesh.roads.length === 0) return;
+    if (!L || !layer || roads.length === 0) return;
     layer.clearLayers();
     // Each road drawn once, uniform — presence is the signal, not weight.
     L.polyline(
-      mesh.roads.map((r) => r.coords),
+      roads.map((r) => r.coords),
       { color: MESH_COLOR, weight: 1.5, opacity: 0.7, interactive: false },
     ).addTo(layer);
     churchRef.current?.bringToFront();
@@ -548,12 +551,25 @@ export function MemberMap({
     if (ready && mode === "campus") drawSecond();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [secondCohort, secondCampuses.length, ready]);
-  // Redraw the web only when the mesh data actually changes (stable key),
-  // not on every render — keeps filter/basemap changes from rebuilding it.
+  // The web arrives after the map does. It is 5.5 MB of geometry that used
+  // to be rendered into the page, so the page could not be shown until it
+  // had been read, serialised and sent; now the dots draw first and the
+  // roads land on top of them a moment later.
   useEffect(() => {
-    if (ready && mode === "roads") drawMesh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesh?.roads.length, ready]);
+    if (!ready || mode !== "roads" || !fetchMesh) return;
+    let live = true;
+    fetch("/api/road-mesh")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((m: { roads?: RoadLine[] } | null) => {
+        if (live && m?.roads) drawMesh(m.roads);
+      })
+      .catch(() => {
+        /* the map is still usable without the web over it */
+      });
+    return () => {
+      live = false;
+    };
+  }, [ready, mode, fetchMesh]);
   useEffect(() => {
     if (ready && mode === "census") drawCensus();
     // eslint-disable-next-line react-hooks/exhaustive-deps

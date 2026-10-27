@@ -5,7 +5,7 @@ import { CHURCH, countPendingGeo, getMemberGeoPoints } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { countPendingDrive, isRoutingConfigured } from "@/lib/drive-routing";
-import { countPendingMesh, getRoadMesh } from "@/lib/road-network";
+import { countPendingMesh, countRoadMesh } from "@/lib/road-network";
 import { LV_CENSUS_META } from "@/lib/lv-census";
 import { getWeeklyAttendance } from "@/lib/attendance-read";
 import { MemberMap } from "./member-map";
@@ -24,7 +24,7 @@ export default async function MapPage() {
   const routingOn = isRoutingConfigured();
   const drivePending = routingOn ? countPendingDrive(session.orgId) : 0;
   const meshPending = routingOn ? countPendingMesh(session.orgId) : 0;
-  const mesh = getRoadMesh(session.orgId);
+  const meshTotal = countRoadMesh(session.orgId);
   const isAdmin = session.role === "admin";
 
   // ── Trends ──────────────────────────────────────────────────────────
@@ -205,8 +205,8 @@ export default async function MapPage() {
             <div className="flex items-baseline justify-between gap-3 flex-wrap">
               <h2 className="text-sm font-semibold">Roads driven to Faith Church</h2>
               <span className="text-xs text-subtle">
-                {mesh.total > 0
-                  ? `${mesh.total.toLocaleString()} roads`
+                {meshTotal > 0
+                  ? `${meshTotal.toLocaleString()} roads`
                   : "not built yet"}
                 {meshPending > 0 && (
                   <span> · {meshPending.toLocaleString()} homes not added</span>
@@ -218,11 +218,11 @@ export default async function MapPage() {
               drive to Faith Church — each road appears once; its presence
               means a household needs it to get here.
             </p>
-            {mesh.roads.length > 0 ? (
+            {meshTotal > 0 ? (
               <MemberMap
                 church={CHURCH}
                 points={points}
-                mesh={{ roads: mesh.roads }}
+                fetchMesh
                 mode="roads"
               />
             ) : (

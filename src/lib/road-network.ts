@@ -147,6 +147,16 @@ export interface RoadNetwork {
   capped: boolean;
 }
 
+/** How many roads the mesh holds, for the label beside the map. Reading the
+ *  geometry to count the rows meant parsing 5.5 MB to print one number. */
+export function countRoadMesh(orgId: number): number {
+  return (
+    getDb()
+      .prepare(`SELECT COUNT(*) AS n FROM road_network WHERE org_id = ?`)
+      .get(orgId) as { n: number }
+  ).n;
+}
+
 /** Read the road network for rendering. Each road is one polyline. */
 export function getRoadMesh(orgId: number, max = 40000): RoadNetwork {
   const db = getDb();
