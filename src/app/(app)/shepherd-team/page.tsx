@@ -43,11 +43,8 @@ export default async function ShepherdTeamPage() {
             Synced from the PCO list{" "}
             <span className="text-fg">{SHEPHERD_TEAM_LIST}</span>. Each row
             shows that shepherd&apos;s direct reach broken into four
-            non-overlapping buckets — set the underlying connections on the{" "}
-            <Link href="/shepherd-map" className="text-accent hover:underline">
-              Shepherd map
-            </Link>
-            .
+            non-overlapping buckets. Click a name to set who they oversee and
+            what they have agreed to carry.
           </p>
           </div>
           <Link

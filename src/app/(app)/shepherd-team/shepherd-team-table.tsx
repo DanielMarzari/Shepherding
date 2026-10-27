@@ -62,7 +62,7 @@ export function ShepherdTeamTable({ rows }: { rows: ShepherdRowData[] }) {
           <Avatar initials={r.initials} size="sm" />
           <div className="min-w-0">
             <Link
-              href={`/people/${r.personId}`}
+              href={`/shepherd-team/${r.personId}`}
               className="font-medium truncate hover:text-accent"
             >
               {r.fullName}

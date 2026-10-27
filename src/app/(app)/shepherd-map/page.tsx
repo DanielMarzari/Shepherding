@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Avatar, Card, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
@@ -63,6 +64,16 @@ export default async function ShepherdMapPage() {
             synced from the PCO list{" "}
             <span className="text-fg">REFERENCE - Shepherd Team</span>; edit
             that list in PCO to add or remove people.
+          </p>
+          <p className="text-muted text-sm mt-2 max-w-2xl">
+            This page edits every shepherd at once. One shepherd&apos;s own
+            page &mdash; reached by clicking their name on the{" "}
+            <Link href="/shepherd-team" className="text-accent hover:underline">
+              Shepherd team
+            </Link>{" "}
+            &mdash; shows the same connections with how many people each one
+            brings, and their bandwidth beside it. Both write the same
+            connections.
           </p>
           <p className="text-muted text-xs mt-2 max-w-2xl">
             Today every user sees the whole organization. Access scoping,

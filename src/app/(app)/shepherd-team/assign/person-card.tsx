@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useActionState, useState } from "react";
 import type { CandidatePerson, ShepherdRow } from "@/lib/shepherd-assign";
 import { assignOneAction, type AssignState } from "./actions";
@@ -118,9 +120,9 @@ export function PersonCard({
       {options.length === 0 ? (
         <p className="text-sm text-muted text-center py-6 leading-relaxed">
           Nobody has room. Set a bandwidth on the{" "}
-          <a href="/shepherd-team/assign" className="text-accent hover:underline">
+          <Link href="/shepherd-team/assign" className="text-accent hover:underline">
             assignment page
-          </a>{" "}
+          </Link>{" "}
           first — people are only placed against a bandwidth somebody has
           agreed to.
         </p>
