@@ -5,6 +5,8 @@ import { requireOrg } from "@/lib/auth";
 import {
   type DuplicatePairView,
   type DupPersonView,
+  countDuplicatePairs,
+  duplicatePairsStale,
   listDuplicatePairs,
 } from "@/lib/audit-read";
 import { DownloadPairsCsv } from "./download-pairs-csv";
@@ -12,7 +14,13 @@ import { DownloadPairsCsv } from "./download-pairs-csv";
 interface SearchParams {
   confidence?: string;
   returning?: string;
+  page?: string;
 }
+
+/** Pairs rendered at once. The whole table is 7,309 pairs; putting them all
+ *  in one response took about thirty seconds of rendering, and because the
+ *  server is single-threaded, every other page waited behind it. */
+const PER_PAGE = 100;
 
 export default async function DuplicateAuditPage({
   searchParams,
@@ -21,22 +29,38 @@ export default async function DuplicateAuditPage({
 }) {
   const session = await requireOrg();
   const params = await searchParams;
-  const all = listDuplicatePairs(session.orgId);
-
-  const highCount = all.filter((p) => p.confidence === "high").length;
-  const lowCount = all.filter((p) => p.confidence === "low").length;
-  const returningCount = all.filter((p) => p.oneActiveOneInactive).length;
+  const counts = countDuplicatePairs(session.orgId);
+  const stale = duplicatePairsStale(session.orgId);
 
   const conf =
     params.confidence === "high" || params.confidence === "low"
       ? params.confidence
       : null;
   const returningOnly = params.returning === "1";
-  const pairs = all.filter(
-    (p) =>
-      (!conf || p.confidence === conf) &&
-      (!returningOnly || p.oneActiveOneInactive),
-  );
+  const page = Math.max(1, Number(params.page) || 1);
+
+  const matching = returningOnly
+    ? counts.returning
+    : conf === "high"
+      ? counts.high
+      : conf === "low"
+        ? counts.low
+        : counts.total;
+  const pairs = listDuplicatePairs(session.orgId, {
+    confidence: conf ?? undefined,
+    returningOnly,
+    limit: PER_PAGE,
+    offset: (page - 1) * PER_PAGE,
+  });
+  const lastPage = Math.max(1, Math.ceil(matching / PER_PAGE));
+  const qs = (n: number) => {
+    const u = new URLSearchParams();
+    if (conf) u.set("confidence", conf);
+    if (returningOnly) u.set("returning", "1");
+    if (n > 1) u.set("page", String(n));
+    const q = u.toString();
+    return `/audit/duplicates${q ? `?${q}` : ""}`;
+  };
 
   return (
     <AppShell active="Duplicate audit" breadcrumb="Duplicate audit">
@@ -59,14 +83,27 @@ export default async function DuplicateAuditPage({
           </p>
         </div>
 
+        {stale && (
+          <Card className="p-3 text-xs text-muted">
+            These pairs were matched by an older version of the matcher. The
+            nightly refresh rebuilds them; this page shows what it has rather
+            than rebuilding now, which would read every person in the
+            organization and hold every other page while it ran.
+          </Card>
+        )}
+
         <div className="flex items-end justify-between gap-3 flex-wrap text-xs">
           <span className="text-muted">
-            {pairs.length.toLocaleString()} pair{pairs.length === 1 ? "" : "s"}
+            {matching === 0
+              ? "No pairs"
+              : `${(((page - 1) * PER_PAGE) + 1).toLocaleString()}–${Math.min(page * PER_PAGE, matching).toLocaleString()} of ${matching.toLocaleString()} pair${matching === 1 ? "" : "s"}`}
             {conf ? ` · ${conf} confidence` : ""}
             {returningOnly ? " · possibly returning" : ""}
           </span>
           <DownloadPairsCsv
-            pairs={pairs}
+            confidence={conf}
+            returningOnly={returningOnly}
+            count={matching}
             filename={`audit-duplicates${conf ? `-${conf}` : ""}${returningOnly ? "-returning" : ""}.csv`}
           />
         </div>
@@ -74,26 +111,26 @@ export default async function DuplicateAuditPage({
         <div className="flex flex-wrap gap-2 text-xs">
           <FilterChip
             label="All"
-            count={all.length}
+            count={counts.total}
             href="/audit/duplicates"
             active={!conf && !returningOnly}
           />
           <FilterChip
             label="High confidence"
-            count={highCount}
+            count={counts.high}
             href="/audit/duplicates?confidence=high"
             active={conf === "high" && !returningOnly}
             tone="warn"
           />
           <FilterChip
             label="Low confidence"
-            count={lowCount}
+            count={counts.low}
             href="/audit/duplicates?confidence=low"
             active={conf === "low" && !returningOnly}
           />
           <FilterChip
             label="Possibly returning"
-            count={returningCount}
+            count={counts.returning}
             href="/audit/duplicates?returning=1"
             active={returningOnly}
             tone="accent"
@@ -111,6 +148,28 @@ export default async function DuplicateAuditPage({
             {pairs.map((p) => (
               <PairCard key={`${p.a.pcoId}-${p.b.pcoId}`} p={p} />
             ))}
+          </div>
+        )}
+
+        {lastPage > 1 && (
+          <div className="flex items-center justify-between gap-3 text-xs">
+            {page > 1 ? (
+              <Link href={qs(page - 1)} className="text-accent hover:underline">
+                &larr; Previous
+              </Link>
+            ) : (
+              <span />
+            )}
+            <span className="text-subtle tnum">
+              Page {page.toLocaleString()} of {lastPage.toLocaleString()}
+            </span>
+            {page < lastPage ? (
+              <Link href={qs(page + 1)} className="text-accent hover:underline">
+                Next &rarr;
+              </Link>
+            ) : (
+              <span />
+            )}
           </div>
         )}
       </div>

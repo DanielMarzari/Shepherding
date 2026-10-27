@@ -721,75 +721,131 @@ export function ensureDuplicatePairs(orgId: number): void {
 
 /** Read materialized duplicate pairs, decrypting names only for the
  *  people that appear in a pair. */
+export interface DuplicateCounts {
+  total: number;
+  high: number;
+  low: number;
+  returning: number;
+}
+
+/** The header's four numbers, counted in SQLite rather than by filtering
+ *  7,309 objects in JavaScript. */
+export function countDuplicatePairs(orgId: number): DuplicateCounts {
+  const r = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(confidence = 'high') AS high,
+              SUM(confidence = 'low') AS low,
+              SUM(one_active_one_inactive) AS "returning"
+         FROM duplicate_pairs WHERE org_id = ?`,
+    )
+    .get(orgId) as {
+    total: number;
+    high: number | null;
+    low: number | null;
+    returning: number | null;
+  };
+  return {
+    total: r.total ?? 0,
+    high: r.high ?? 0,
+    low: r.low ?? 0,
+    returning: r.returning ?? 0,
+  };
+}
+
+/** True when the pair table was built by an older version of the matcher.
+ *  The rebuild belongs to the nightly refresh (dashboard-refresh runs it);
+ *  a page says so and shows what it has rather than rebuilding inline — that
+ *  rebuild reads every person in the org and, on a single-threaded server,
+ *  would hold every other request while it ran. */
+export function duplicatePairsStale(orgId: number): boolean {
+  const meta = getDb()
+    .prepare(`SELECT version FROM duplicate_pairs_meta WHERE org_id = ?`)
+    .get(orgId) as { version: number } | undefined;
+  return !meta || meta.version !== CURRENT_DUP_VERSION;
+}
+
+export interface DuplicatePageOptions {
+  confidence?: DuplicateConfidence;
+  returningOnly?: boolean;
+  /** Omit for every row — only the CSV export wants that. */
+  limit?: number;
+  offset?: number;
+}
+
+/** One page of pairs, with both people's names resolved in the same query.
+ *
+ *  This used to read every pair, then every person in them through an IN()
+ *  list of 7,388 ids, then build a view object for all 7,309 — about 190 ms
+ *  of SQL and thirty-odd seconds of JavaScript, all of it on the request
+ *  thread. The SQL was never the problem; the volume was.
+ */
 export function listDuplicatePairs(
   orgId: number,
-  confidence?: DuplicateConfidence,
+  opts: DuplicatePageOptions = {},
 ): DuplicatePairView[] {
-  ensureDuplicatePairs(orgId);
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT person_a, person_b, confidence, reasons, one_active_one_inactive
-         FROM duplicate_pairs
-        WHERE org_id = ?${confidence ? " AND confidence = ?" : ""}
-        ORDER BY (confidence = 'high') DESC, score DESC`,
-    )
-    .all(...(confidence ? [orgId, confidence] : [orgId])) as Array<{
-    person_a: string;
-    person_b: string;
-    confidence: DuplicateConfidence;
-    reasons: string;
-    one_active_one_inactive: number;
-  }>;
-  if (rows.length === 0) return [];
-
-  const ids = new Set<string>();
-  for (const r of rows) {
-    ids.add(r.person_a);
-    ids.add(r.person_b);
+  const where: string[] = ["d.org_id = ?"];
+  const args: (string | number)[] = [orgId];
+  if (opts.confidence) {
+    where.push("d.confidence = ?");
+    args.push(opts.confidence);
   }
-  const idList = [...ids];
-  const ph = idList.map(() => "?").join(",");
-  const peopleRows = db
+  if (opts.returningOnly) where.push("d.one_active_one_inactive = 1");
+
+  let tail = "";
+  if (opts.limit !== undefined) {
+    tail = " LIMIT ? OFFSET ?";
+    args.push(opts.limit, opts.offset ?? 0);
+  }
+
+  const rows = getDb()
     .prepare(
-      `SELECT pco_id, enc_pii, first_name, last_name, status, inactivated_at
-         FROM pco_people WHERE org_id = ? AND pco_id IN (${ph})`,
+      `SELECT d.person_a, d.person_b, d.confidence, d.reasons,
+              d.one_active_one_inactive AS bothWays,
+              a.first_name AS aFirst, a.last_name AS aLast, a.enc_pii AS aEnc,
+              a.status AS aStatus, a.inactivated_at AS aInactive,
+              b.first_name AS bFirst, b.last_name AS bLast, b.enc_pii AS bEnc,
+              b.status AS bStatus, b.inactivated_at AS bInactive
+         FROM duplicate_pairs d
+         JOIN pco_people a ON a.org_id = d.org_id AND a.pco_id = d.person_a
+         JOIN pco_people b ON b.org_id = d.org_id AND b.pco_id = d.person_b
+        WHERE ${where.join(" AND ")}
+        ORDER BY (d.confidence = 'high') DESC, d.score DESC${tail}`,
     )
-    .all(orgId, ...idList) as Array<{
-    pco_id: string;
-    enc_pii: string | null;
-    first_name: string | null;
-    last_name: string | null;
-    status: string | null;
-    inactivated_at: string | null;
-  }>;
-  const view = new Map<string, DupPersonView>();
-  for (const r of peopleRows) {
-    const { first, last } = nameOf(r.first_name, r.last_name, r.enc_pii);
-    view.set(r.pco_id, {
-      pcoId: r.pco_id,
+    .all(...args) as Array<Record<string, string | number | null>>;
+
+  const person = (
+    id: string,
+    first: string | null,
+    last: string | null,
+    enc: string | null,
+    status: string | null,
+    inactivatedAt: string | null,
+  ): DupPersonView => {
+    const n = nameOf(first, last, enc);
+    return {
+      pcoId: id,
       fullName:
-        [first, last].filter(Boolean).join(" ") || `(unknown #${r.pco_id})`,
-      initials: ((first?.[0] ?? "") + (last?.[0] ?? "")).toUpperCase() || "??",
+        [n.first, n.last].filter(Boolean).join(" ") || `(unknown #${id})`,
+      initials: ((n.first?.[0] ?? "") + (n.last?.[0] ?? "")).toUpperCase() || "??",
       inactive:
-        (r.status ?? "").toLowerCase() === "inactive" || !!r.inactivated_at,
-    });
-  }
+        (status ?? "").toLowerCase() === "inactive" || !!inactivatedAt,
+    };
+  };
 
-  const out: DuplicatePairView[] = [];
-  for (const r of rows) {
-    const a = view.get(r.person_a);
-    const b = view.get(r.person_b);
-    if (!a || !b) continue;
-    out.push({
-      confidence: r.confidence,
-      reasons: JSON.parse(r.reasons) as string[],
-      oneActiveOneInactive: r.one_active_one_inactive === 1,
-      a,
-      b,
-    });
-  }
-  return out;
+  return rows.map((r) => ({
+    confidence: r.confidence as DuplicateConfidence,
+    reasons: JSON.parse(String(r.reasons)) as string[],
+    oneActiveOneInactive: r.bothWays === 1,
+    a: person(
+      String(r.person_a), r.aFirst as string | null, r.aLast as string | null,
+      r.aEnc as string | null, r.aStatus as string | null, r.aInactive as string | null,
+    ),
+    b: person(
+      String(r.person_b), r.bFirst as string | null, r.bLast as string | null,
+      r.bEnc as string | null, r.bStatus as string | null, r.bInactive as string | null,
+    ),
+  }));
 }
 
 export type NameFlag = "junk-name" | "weird-name";
