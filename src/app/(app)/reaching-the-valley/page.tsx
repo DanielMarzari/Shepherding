@@ -38,7 +38,7 @@ export default async function ReachingTheValleyPage() {
           </div>
           <MemberMap
             church={CHURCH}
-            points={[]}
+            points={{ lat: [], lng: [], flags: [], birthYear: [], ids: [] }}
             mode="census"
             census={{ tracts: census.tracts, needCampus: census.needCampus }}
             surroundingTracts={census.surroundingTracts}

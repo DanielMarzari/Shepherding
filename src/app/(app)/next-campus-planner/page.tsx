@@ -1,7 +1,7 @@
 import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { CHURCH, FAITH_CHURCH_PROFILE, getMemberGeoPoints } from "@/lib/geocode";
+import { CHURCH, FAITH_CHURCH_PROFILE, getMemberGeoPointsCompact } from "@/lib/geocode";
 import { analyzeReach } from "@/lib/map-analysis";
 import { analyzeCensus, computeDrawModel, computeGrowth } from "@/lib/census-analysis";
 import { getMapSettings } from "@/lib/map-settings";
@@ -16,7 +16,7 @@ export default async function NextCampusPlannerPage() {
   // Planning is about who we're actually engaging — drop inactive people so
   // the seed, distances, and dots reflect the living congregation, not people
   // who've drifted away.
-  const points = getMemberGeoPoints(session.orgId).filter((p) => p.classification !== "unknown");
+  const points = getMemberGeoPointsCompact(session.orgId, { engagedOnly: true });
   const mapSettings = getMapSettings(session.orgId);
   const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
   const census = analyzeCensus(session.orgId);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MemberPoint } from "@/lib/geocode";
+import { type CompactPoints, type MapPoint, expandPoints } from "@/lib/map-points";
 import type { RoadLine } from "@/lib/road-network";
 import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
 import { LV_TRACTS } from "@/lib/lv-census";
@@ -72,7 +72,7 @@ const PEOPLE_FILTERS: Array<{ key: string; label: string }> = [
   { key: "engaged", label: "Engaged" },
   { key: "family", label: "Families" },
 ];
-function pointMatches(p: MemberPoint, key: string): boolean {
+function pointMatches(p: MapPoint, key: string): boolean {
   switch (key) {
     case "inGroup": return p.inGroup;
     case "inTeam": return p.inTeam;
@@ -154,7 +154,7 @@ export interface SeedDemo {
   parents: number; families: number; members: number;
 }
 const emptyDemo = (): SeedDemo => ({ count: 0, male: 0, female: 0, genderUnknown: 0, ages: [0, 0, 0, 0, 0, 0], parents: 0, families: 0, members: 0 });
-function addToDemo(d: SeedDemo, p: MemberPoint): void {
+function addToDemo(d: SeedDemo, p: MapPoint): void {
   d.count++;
   const g = (p.gender ?? "").trim().toLowerCase();
   if (g.startsWith("m")) d.male++; else if (g.startsWith("f")) d.female++; else d.genderUnknown++;
@@ -240,7 +240,7 @@ function lsSet(k: string, v: any) {
 
 export function CampusPlannerMap({
   church,
-  points,
+  points: compactPoints,
   tracts,
   hasMesh,
   initial,
@@ -250,7 +250,7 @@ export function CampusPlannerMap({
   height = "66vh",
 }: {
   church: { lat: number; lng: number; name: string; address: string };
-  points: MemberPoint[];
+  points: CompactPoints;
   tracts: PlannerTract[];
   /** Whether a road web exists to fetch; the geometry itself comes from
    *  /api/road-mesh when the roads box is ticked. */
@@ -279,6 +279,9 @@ export function CampusPlannerMap({
 
   const [showDots, setShowDots] = useState(true);
   const [metric, setMetric] = useState<CensusMetric | "none">("need");
+  // Parallel arrays in, objects out — the filtering and drawing below is
+  // unchanged. See map-points.ts.
+  const points = useMemo(() => expandPoints(compactPoints), [compactPoints]);
   const [showRoads, setShowRoads] = useState(false);
   // The web is 5.5 MB of geometry and starts switched off, so it is fetched
   // the first time somebody ticks the box rather than shipped with the page.

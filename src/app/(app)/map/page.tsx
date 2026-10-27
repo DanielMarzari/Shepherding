@@ -1,7 +1,8 @@
 import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { CHURCH, countPendingGeo, getMemberGeoPoints } from "@/lib/geocode";
+import { CHURCH, countPendingGeo, getMemberGeoPointsCompact } from "@/lib/geocode";
+import { countPoints } from "@/lib/map-points";
 import { analyzeReach } from "@/lib/map-analysis";
 import { getMapSettings } from "@/lib/map-settings";
 import { countPendingDrive, isRoutingConfigured } from "@/lib/drive-routing";
@@ -17,7 +18,7 @@ import { DistanceBandChart } from "./distance-band-chart";
 
 export default async function MapPage() {
   const session = await requireOrg();
-  const points = getMemberGeoPoints(session.orgId);
+  const points = getMemberGeoPointsCompact(session.orgId);
   const pending = countPendingGeo(session.orgId);
   const mapSettings = getMapSettings(session.orgId);
   const reach = analyzeReach(session.orgId, mapSettings.secondCampusMaxHours);
@@ -50,7 +51,7 @@ export default async function MapPage() {
 
         <div className="flex items-center justify-between gap-3 flex-wrap text-xs text-muted">
           <span>
-            {points.length.toLocaleString()} plotted
+            {countPoints(points).toLocaleString()} plotted
             {pending > 0 && (
               <span className="text-subtle"> · {pending.toLocaleString()} not geocoded yet</span>
             )}
@@ -65,7 +66,7 @@ export default async function MapPage() {
         {/* ── Map 1: where people live ───────────────────────────────── */}
         <Card className="p-5 space-y-3">
           <h2 className="text-sm font-semibold">Where your people live</h2>
-          {points.length === 0 ? (
+          {countPoints(points) === 0 ? (
             <div className="py-10 text-center text-sm text-muted">
               No addresses geocoded yet.{" "}
               {isAdmin

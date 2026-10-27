@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { CLASS_LABEL, classOf, type Classification } from "@/lib/classification";
-import type { MemberPoint } from "@/lib/geocode";
+import { type CompactPoints, expandPoints } from "@/lib/map-points";
 import type { SecondCampus, Cohort } from "@/lib/map-analysis";
 import type { RoadLine } from "@/lib/road-network";
 import { LEHIGH_VALLEY_REGION } from "@/lib/lehigh-valley";
@@ -87,6 +87,13 @@ const MEMBER_COLOR = "#2563eb"; // blue
 const NONMEMBER_COLOR = "#f97316"; // orange — clearly distinct from member
 const CHURCH_COLOR = "#dc2626";
 const SECOND_COLOR = "#9333ea";
+/** A person's name goes into a Leaflet popup as HTML, so it is escaped. */
+function escapeHtml(v: string): string {
+  return v.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c,
+  );
+}
+
 const MESH_COLOR = "#1d4ed8";
 
 type ColorBy = "shepherding" | "membership";
@@ -267,7 +274,7 @@ function lsSet(key: string, val: any) {
 
 export function MemberMap({
   church,
-  points,
+  points: compactPoints,
   secondCampuses = [],
   fetchMesh,
   census,
@@ -277,7 +284,7 @@ export function MemberMap({
   height = "62vh",
 }: {
   church: { lat: number; lng: number; name: string; address: string };
-  points: MemberPoint[];
+  points: CompactPoints;
   secondCampuses?: SecondCampus[];
   /** Fetch the road web from /api/road-mesh once the map is up. It is 5.5 MB
    *  of geometry and pure decoration over the dots, so it must not be part of
@@ -296,6 +303,9 @@ export function MemberMap({
   const LRef = useRef<any>(null);
   const layerRef = useRef<any>(null);
   const secondRef = useRef<any>(null);
+  // The dots arrive as parallel arrays and become objects once, here, so the
+  // drawing code below is unchanged. See map-points.ts for the shape.
+  const points = useMemo(() => expandPoints(compactPoints), [compactPoints]);
   const meshRef = useRef<any>(null);
   const tileRef = useRef<any>(null);
   const churchRef = useRef<any>(null);
@@ -457,9 +467,24 @@ export function MemberMap({
       const cat = catOf(p, colorBy);
       if (hideSet.has(cat)) continue;
       const c = colorOfCat(cat, colorBy);
-      L.circleMarker([p.lat, p.lng], {
+      const marker = L.circleMarker([p.lat, p.lng], {
         radius: 4, color: "#1f2937", weight: 0.6, fillColor: c, fillOpacity: 0.9,
-      }).bindTooltip(`${p.name} · ${colorBy === "membership" ? cat : CLASS_LABEL[cat as Classification]}`).addTo(layer);
+      });
+      const label = colorBy === "membership" ? cat : CLASS_LABEL[cat as Classification];
+      marker.bindTooltip(label);
+      // The name is not in the page — one click fetches the one you asked
+      // for. Bound once per marker; afterwards the popup just reopens.
+      marker.on("click", () => {
+        if (marker.getPopup()) return;
+        marker.bindPopup(`<b>Loading…</b><br>${label}`).openPopup();
+        fetch(`/api/person-name?id=${encodeURIComponent(p.personId)}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d: { name?: string } | null) => {
+            marker.setPopupContent(`<b>${escapeHtml(d?.name ?? "Member")}</b><br>${label}`);
+          })
+          .catch(() => marker.setPopupContent(`<b>Member</b><br>${label}`));
+      });
+      marker.addTo(layer);
     }
     churchRef.current?.bringToFront();
     secondRef.current?.bringToFront();

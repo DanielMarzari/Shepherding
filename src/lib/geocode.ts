@@ -1,4 +1,14 @@
 import "server-only";
+import {
+  type CompactPoints,
+  PT_CLASS_SHIFT,
+  PT_GENDER_SHIFT,
+  PT_HOUSEHOLD,
+  PT_IN_GROUP,
+  PT_IN_TEAM,
+  PT_MEMBER,
+  PT_PARENT,
+} from "./map-points";
 import { getDb } from "./db";
 import { decryptJson, hmac } from "./encryption";
 
@@ -247,6 +257,84 @@ export function countPendingGeo(orgId: number): number {
 
 /** All geocoded member points for the map (status 'ok'), with name +
  *  classification for the hover/legend. */
+/** The map's points, packed — see map-points.ts for why.
+ *
+ *  Reads the same rows getMemberGeoPoints does, but never builds a name and
+ *  never touches enc_pii: the dots carry ids, and /api/person-name resolves
+ *  one when somebody clicks it. `engagedOnly` drops Unknown, which the
+ *  campus planner did with a filter after the fact.
+ */
+export function getMemberGeoPointsCompact(
+  orgId: number,
+  opts: { engagedOnly?: boolean } = {},
+): CompactPoints {
+  const rows = getDb()
+    .prepare(
+      `SELECT g.person_id AS id, g.lat, g.lng, p.membership_type AS mt,
+              p.gender AS gender, p.birth_year AS birthYear,
+              p.is_parent AS isParent,
+              COALESCE(pa.classification, 'unknown') AS classification,
+              COALESCE(pa.active_group_count, 0) AS groupCount,
+              COALESCE(pa.active_team_count, 0) AS teamCount,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM pco_household_memberships hm
+                 WHERE hm.org_id = g.org_id AND hm.person_id = g.person_id
+              ) THEN 1 ELSE 0 END AS inHousehold
+         FROM person_geo g
+         JOIN pco_people p
+           ON p.org_id = g.org_id AND p.pco_id = g.person_id
+         LEFT JOIN person_activity pa
+           ON pa.org_id = g.org_id AND pa.person_id = g.person_id
+        WHERE g.org_id = ? AND g.status = 'ok' AND g.lat IS NOT NULL
+          ${opts.engagedOnly ? "AND COALESCE(pa.classification,'unknown') != 'unknown'" : ""}`,
+    )
+    .all(orgId) as Array<{
+    id: string;
+    lat: number;
+    lng: number;
+    mt: string | null;
+    gender: string | null;
+    birthYear: number | null;
+    isParent: number | null;
+    classification: string;
+    groupCount: number;
+    teamCount: number;
+    inHousehold: number;
+  }>;
+
+  const out: CompactPoints = {
+    lat: [], lng: [], flags: [], birthYear: [], ids: [],
+  };
+  const classCode = (c: string) =>
+    c === "shepherded" ? 2 : c === "known" ? 1 : 0;
+  const genderCode = (g: string | null) => {
+    const v = (g ?? "").trim().toLowerCase();
+    if (v.startsWith("m")) return 1;
+    if (v.startsWith("f")) return 2;
+    return v ? 3 : 0;
+  };
+  // Five decimals is about a metre — more than a dot on a city map needs,
+  // and it keeps every coordinate short in the payload.
+  const round5 = (n: number) => Math.round(n * 1e5) / 1e5;
+
+  for (const r of rows) {
+    let f = 0;
+    if (isMemberType(r.mt)) f |= PT_MEMBER;
+    if (r.groupCount > 0) f |= PT_IN_GROUP;
+    if (r.teamCount > 0) f |= PT_IN_TEAM;
+    if (r.inHousehold === 1) f |= PT_HOUSEHOLD;
+    if (r.isParent === 1) f |= PT_PARENT;
+    f |= classCode(r.classification) << PT_CLASS_SHIFT;
+    f |= genderCode(r.gender) << PT_GENDER_SHIFT;
+    out.lat.push(round5(r.lat));
+    out.lng.push(round5(r.lng));
+    out.flags.push(f);
+    out.birthYear.push(r.birthYear ?? 0);
+    out.ids.push(r.id);
+  }
+  return out;
+}
+
 export function getMemberGeoPoints(orgId: number): MemberPoint[] {
   const rows = getDb()
     .prepare(
