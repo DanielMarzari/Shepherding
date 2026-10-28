@@ -199,7 +199,7 @@ export async function saveOutreachLaneAction(
     inLane = null;
   }
   revalidatePath("/pco/filters");
-  revalidatePath("/audit");
+  revalidatePath("/membership-audit");
   revalidatePath("/lanes");
   const total = serviceTypes.length + groupTypes.length + tags.length;
   return {
@@ -238,7 +238,7 @@ export async function saveKnownDefinitionAction(
     Number.isFinite(emailMin) ? emailMin : 1,
   );
   revalidatePath("/pco/filters");
-  revalidatePath("/audit");
+  revalidatePath("/membership-audit");
   revalidatePath("/people");
   return {
     status: "saved",

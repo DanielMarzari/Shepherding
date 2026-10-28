@@ -7,7 +7,7 @@ import {
   type NameIssueRow,
   findNameIssuesAcrossOrg,
 } from "@/lib/audit-read";
-import { DownloadCsvButton } from "../download-csv";
+import { DownloadCsvButton } from "@/components/DownloadCsvButton";
 
 interface SearchParams {
   flag?: string;

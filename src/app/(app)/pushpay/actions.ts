@@ -55,7 +55,7 @@ export async function importPushpayCsvAction(
     if (isTransactionsExport(text)) {
       const t = importPushpayTransactions(s.orgId, file.name, text);
       revalidatePath("/pushpay");
-      revalidatePath("/audit");
+      revalidatePath("/membership-audit");
       revalidatePath("/lanes/give");
       revalidatePath("/audit/pushpay");
       revalidatePath("/giving");
@@ -98,7 +98,7 @@ export async function importPushpayCsvAction(
     }
     const r = importPushpay(s.orgId, file.name, text);
     revalidatePath("/pushpay");
-    revalidatePath("/audit");
+    revalidatePath("/membership-audit");
     revalidatePath("/audit/pushpay");
     revalidatePath("/lanes/give");
     return {
@@ -144,7 +144,7 @@ export async function removePushpayUploadAction(uploadId: number): Promise<Remov
   try {
     const r = removePushpayUpload(s.orgId, uploadId);
     revalidatePath("/pushpay");
-    revalidatePath("/audit");
+    revalidatePath("/membership-audit");
     revalidatePath("/audit/pushpay");
     revalidatePath("/lanes/give");
     revalidatePath("/giving");

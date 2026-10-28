@@ -54,7 +54,7 @@ export default async function MembershipFitPage({
             <span className="text-fg">Transactions</span> import, so it can
             only see gifts inside the window that import covers — never a
             dollar figure, which the export does not carry.{" "}
-            <Link href="/audit" className="text-accent hover:underline">
+            <Link href="/membership-audit" className="text-accent hover:underline">
               Data hygiene lives on the main audit →
             </Link>
           </p>
