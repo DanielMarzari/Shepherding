@@ -36,7 +36,10 @@ export interface OversightGaps {
   /** Live rosters of each sort, so the gaps read as "5 of 71". */
   liveGroups: number;
   liveTeams: number;
-  /** Distinct people on at least one unconnected roster. */
+  /** Distinct people on at least one unconnected roster, counting only
+   *  those still in pco_people — a membership row pointing at somebody
+   *  PCO no longer has is history, and we cannot name them either, so
+   *  including it would make this disagree with the list it links to. */
   peopleAffected: number;
 }
 
@@ -135,6 +138,17 @@ export function listOversightGaps(orgId: number): OversightGaps {
   const gIds = groups.map((g) => g.id);
   const tIds = teams.map((t) => t.id);
   const people = new Set<string>();
+  const known = (ids: string[]) =>
+    new Set(
+      (
+        db
+          .prepare(
+            `SELECT pco_id AS id FROM pco_people
+              WHERE org_id = ? AND pco_id IN (${ph(ids)})`,
+          )
+          .all(orgId, ...ids) as Array<{ id: string }>
+      ).map((r) => r.id),
+    );
   if (gIds.length) {
     for (const r of db
       .prepare(
@@ -156,6 +170,10 @@ export function listOversightGaps(orgId: number): OversightGaps {
       .all(orgId, ...tIds) as Array<{ id: string }>) {
       people.add(r.id);
     }
+  }
+  if (people.size) {
+    const live = known([...people]);
+    for (const id of [...people]) if (!live.has(id)) people.delete(id);
   }
 
   const shape = (kind: "group" | "team") =>
@@ -181,4 +199,96 @@ export function listOversightGaps(orgId: number): OversightGaps {
     liveTeams,
     peopleAffected: people.size,
   };
+}
+
+export interface UntracedPerson {
+  personId: string;
+  name: string;
+  classification: string;
+  /** The unconnected rosters they are on, named. */
+  rosters: string[];
+}
+
+/** The people behind the gap: everyone on a roster nobody is connected
+ *  to, with the rosters that put them there.
+ *
+ *  They are shepherded — somebody runs that team or group — so this is
+ *  not a care list. It is the list of people the system cannot name a
+ *  shepherd for, which is what makes it a structural gap rather than a
+ *  pastoral one, and it shrinks as connections are made on the map.
+ */
+export function listUntracedPeople(orgId: number): UntracedPerson[] {
+  const gaps = listOversightGaps(orgId);
+  const groupIds = gaps.groups.map((g) => g.id);
+  const teamIds = gaps.teams.map((t) => t.id);
+  if (groupIds.length === 0 && teamIds.length === 0) return [];
+
+  const db = getDb();
+  const ph = (xs: string[]) => xs.map(() => "?").join(",");
+  const rosters = new Map<string, string[]>();
+
+  const note = (pid: string, label: string) => {
+    const arr = rosters.get(pid) ?? [];
+    if (!arr.includes(label)) arr.push(label);
+    rosters.set(pid, arr);
+  };
+
+  if (groupIds.length) {
+    const byId = new Map(gaps.groups.map((g) => [g.id, g.name]));
+    for (const r of db
+      .prepare(
+        `SELECT DISTINCT person_id AS pid, group_id AS rid
+           FROM pco_group_memberships
+          WHERE org_id = ? AND archived_at IS NULL
+            AND group_id IN (${ph(groupIds)})`,
+      )
+      .all(orgId, ...groupIds) as Array<{ pid: string; rid: string }>) {
+      note(r.pid, byId.get(r.rid) ?? "(group)");
+    }
+  }
+  if (teamIds.length) {
+    const byId = new Map(gaps.teams.map((t) => [t.id, t.name]));
+    for (const r of db
+      .prepare(
+        `SELECT DISTINCT person_id AS pid, team_id AS rid
+           FROM pco_team_memberships
+          WHERE org_id = ? AND archived_at IS NULL AND person_id != ''
+            AND team_id IN (${ph(teamIds)})`,
+      )
+      .all(orgId, ...teamIds) as Array<{ pid: string; rid: string }>) {
+      note(r.pid, byId.get(r.rid) ?? "(team)");
+    }
+  }
+
+  const ids = [...rosters.keys()];
+  if (ids.length === 0) return [];
+
+  // Names are plaintext, so they come straight out of pco_people; nothing
+  // here touches the encrypted columns.
+  const people = db
+    .prepare(
+      `SELECT p.pco_id AS id, p.first_name AS f, p.last_name AS l,
+              COALESCE(pa.classification, 'unknown') AS cls
+         FROM pco_people p
+         LEFT JOIN person_activity pa
+           ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
+        WHERE p.org_id = ? AND p.pco_id IN (${ph(ids)})`,
+    )
+    .all(orgId, ...ids) as Array<{
+    id: string;
+    f: string | null;
+    l: string | null;
+    cls: string;
+  }>;
+
+  return people
+    .map((r) => ({
+      personId: r.id,
+      name:
+        [r.f?.trim(), r.l?.trim()].filter(Boolean).join(" ") ||
+        `(unknown #${r.id})`,
+      classification: r.cls,
+      rosters: rosters.get(r.id) ?? [],
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }

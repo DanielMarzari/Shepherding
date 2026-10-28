@@ -29,7 +29,6 @@ export async function addAssignmentAction(formData: FormData) {
   revalidatePath("/shepherd-map");
   revalidatePath("/shepherd-team");
   revalidatePath("/shepherd-team/assign");
-  revalidatePath("/shepherd-team/assign-inline");
   revalidatePath("/shepherd-team/bandwidth");
   revalidatePath(`/shepherd-team/${shepherdPersonId}`);
 }

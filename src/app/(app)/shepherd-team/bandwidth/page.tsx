@@ -6,7 +6,7 @@ import {
   getAssignCapacity,
   getAssignShepherds,
 } from "@/lib/shepherd-assign";
-import { BandwidthTable } from "../assign/bandwidth-table";
+import { BandwidthTable } from "./bandwidth-table";
 
 /** Setting bandwidth, on its own page.
  *
@@ -116,7 +116,7 @@ export default async function BandwidthPage() {
           </p>
         </div>
 
-        <BandwidthTable shepherds={shepherds} isAdmin={isAdmin} alwaysEditing />
+        <BandwidthTable shepherds={shepherds} isAdmin={isAdmin} />
       </div>
     </AppShell>
   );

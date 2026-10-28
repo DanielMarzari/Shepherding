@@ -3,28 +3,23 @@
 import Link from "next/link";
 import { useActionState } from "react";
 import type { ShepherdRow } from "@/lib/shepherd-assign";
-import { saveBandwidthAction, type AssignState } from "./actions";
+import { saveBandwidthAction, type AssignState } from "../assign/actions";
 
-/** Coverage by shepherd, and the only place bandwidth is set.
+/** Every shepherd's bandwidth, in one editable column.
  *
- *  Deliberately no "claim a group" action here. Recording what somebody
- *  already oversees through a group or team is a different job — it feeds
- *  the By role column, and a name in this table links straight to the page
- *  where that is done. This page assigns individuals.
+ *  The whole team at once, which is the one thing the assignment page
+ *  cannot do: there a row opens into that shepherd on their own, so
+ *  setting 25 figures would mean opening 25 rows. This page exists for
+ *  the pass where you set them all, so it opens straight into the inputs
+ *  rather than behind an edit button.
  */
 export function BandwidthTable({
   shepherds,
   isAdmin,
-  /** The bandwidth page itself opens straight into the inputs — on that
-   *  page setting bandwidth IS the task, so making someone press an edit
-   *  button first is a step that buys nothing. */
-  alwaysEditing = false,
 }: {
   shepherds: ShepherdRow[];
   isAdmin: boolean;
-  alwaysEditing?: boolean;
 }) {
-  const editing = alwaysEditing;
   const [state, action, pending] = useActionState<AssignState | null, FormData>(
     saveBandwidthAction,
     null,
@@ -38,23 +33,15 @@ export function BandwidthTable({
           <span className="text-xs text-subtle">
             by role = already oversees them through a group or team
           </span>
-          {isAdmin &&
-            (editing ? (
-              <button
-                type="submit"
-                disabled={pending}
-                className="px-3 py-1 rounded bg-accent text-[var(--accent-fg)] text-xs font-medium disabled:opacity-50"
-              >
-                {pending ? "Saving…" : "Save bandwidths"}
-              </button>
-            ) : (
-              <Link
-                href="/shepherd-team/bandwidth"
-                className="px-3 py-1 rounded border border-border-soft text-xs hover:bg-bg"
-              >
-                Set bandwidths &rarr;
-              </Link>
-            ))}
+          {isAdmin && (
+            <button
+              type="submit"
+              disabled={pending}
+              className="px-3 py-1 rounded bg-accent text-[var(--accent-fg)] text-xs font-medium disabled:opacity-50 cursor-pointer"
+            >
+              {pending ? "Saving…" : "Save bandwidths"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -82,7 +69,7 @@ export function BandwidthTable({
           </thead>
           <tbody>
             {shepherds.map((s) => (
-              <Row key={s.personId} s={s} editing={editing} />
+              <Row key={s.personId} s={s} />
             ))}
           </tbody>
         </table>
@@ -91,7 +78,7 @@ export function BandwidthTable({
   );
 }
 
-function Row({ s, editing }: { s: ShepherdRow; editing: boolean }) {
+function Row({ s }: { s: ShepherdRow }) {
   const used = s.byRole + s.assigned;
   const max = s.bandwidth;
   const room = max - used;
@@ -137,20 +124,15 @@ function Row({ s, editing }: { s: ShepherdRow; editing: boolean }) {
       </td>
       <td className="px-4 py-2.5 text-right tnum">{s.assigned}</td>
       <td className="px-4 py-2.5 text-right">
-        {editing ? (
-          <input
-            type="number"
-            min={0}
-            name={`bw_${s.personId}`}
-            defaultValue={max}
-            placeholder={String(max)}
-            className="w-[92px] bg-bg border border-border-soft rounded px-2 py-1 text-[13px] text-right tnum"
-          />
-        ) : (
-          <span className="tnum">
-            {used} / {max}
-          </span>
-        )}
+        <input
+          type="number"
+          min={0}
+          name={`bw_${s.personId}`}
+          defaultValue={max}
+          placeholder={String(max)}
+          aria-label={`Bandwidth for ${s.name}`}
+          className="w-[92px] bg-bg border border-border-soft rounded px-2 py-1 text-[13px] text-right tnum"
+        />
       </td>
       <td className="px-4 py-2.5 text-right">
         {room <= 0 ? (

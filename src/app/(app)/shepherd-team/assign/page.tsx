@@ -11,7 +11,7 @@ import {
   NoTeamYet,
   WhatNeedsDeciding,
 } from "./assign-overview";
-import { BandwidthTable } from "./bandwidth-table";
+import { ExpandingTable } from "./expanding-table";
 
 /** The assignment page.
  *
@@ -52,7 +52,9 @@ export default async function AssignPage() {
             <p className="text-muted text-sm mt-1.5 max-w-2xl leading-relaxed">
               Everyone who is{" "}
               <strong className="text-fg">Known</strong>{" "}
-              should be assigned to someone on the shepherd team.
+              should be assigned to someone on the shepherd team. Click a
+              shepherd&rsquo;s name in the table below to open what they
+              oversee underneath it.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -68,18 +70,12 @@ export default async function AssignPage() {
             >
               Set bandwidths &rarr;
             </Link>
-            <Link
-              href="/shepherd-team/assign-inline"
-              className="shrink-0 px-3.5 py-2 rounded border border-dashed border-border-soft text-[13px] text-muted hover:bg-bg-elev-2"
-            >
-              Try the expanding version &rarr;
-            </Link>
           </div>
         </div>
 
         <CapacityCard cap={cap} />
         <WhatNeedsDeciding buckets={buckets} isAdmin={isAdmin} />
-        <BandwidthTable shepherds={shepherds} isAdmin={isAdmin} />
+        <ExpandingTable shepherds={shepherds} isAdmin={isAdmin} />
       </div>
     </AppShell>
   );

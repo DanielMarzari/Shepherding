@@ -6,7 +6,7 @@ import type { ShepherdRow } from "@/lib/shepherd-assign";
 import { AddConnection } from "../[personId]/add-connection";
 import { BandwidthField } from "../[personId]/bandwidth-field";
 import { OversightGrid } from "../[personId]/oversight-grid";
-import { loadRowAction, type RowDetail } from "./actions";
+import { loadRowAction, type RowDetail } from "./row-actions";
 
 /** Coverage by shepherd, with a shepherd's own page folded into the row.
  *

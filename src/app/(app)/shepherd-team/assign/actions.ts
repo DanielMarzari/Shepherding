@@ -17,7 +17,7 @@ export interface AssignState {
   message?: string;
 }
 
-const PATHS = ["/shepherd-team/assign", "/shepherd-team/assign-inline", "/shepherd-team/assign/contested", "/shepherd-team/assign/pool", "/shepherd-team"];
+const PATHS = ["/shepherd-team/assign", "/shepherd-team/assign/contested", "/shepherd-team/assign/pool", "/shepherd-team"];
 const revalidateAll = () => PATHS.forEach((p) => revalidatePath(p));
 
 async function admin() {

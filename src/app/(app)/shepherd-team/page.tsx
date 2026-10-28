@@ -7,6 +7,7 @@ import {
   listAssignments,
 } from "@/lib/assignments-read";
 import { getListByName, listReferenceListNames } from "@/lib/lists-read";
+import { listOversightGaps } from "@/lib/oversight-gaps";
 import { getShepherdTeamBreakdown } from "@/lib/shepherd-team-read";
 import { ShepherdTeamTable } from "./shepherd-team-table";
 
@@ -17,6 +18,7 @@ export default async function ShepherdTeamPage() {
   const list = getListByName(session.orgId, SHEPHERD_TEAM_LIST);
   const synced = listReferenceListNames(session.orgId);
   const assignments = listAssignments(session.orgId);
+  const gaps = listOversightGaps(session.orgId);
 
   const byShepherd = new Map<string, Assignment[]>();
   for (const a of assignments) {
@@ -79,6 +81,55 @@ export default async function ShepherdTeamPage() {
           </Card>
         ) : (
           <>
+            {gaps.peopleAffected > 0 && (
+              <div className="rounded-lg border border-warn-soft-fg/40 bg-bg-elev p-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+                <div>
+                  <div className="text-2xl font-semibold tnum text-warn-soft-fg">
+                    {gaps.peopleAffected.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-subtle leading-snug">
+                    people we cannot name a shepherd for
+                  </div>
+                </div>
+                <div>
+                  <div className="text-2xl font-semibold tnum">
+                    {gaps.teams.length}
+                  </div>
+                  <div className="text-[11px] text-subtle leading-snug">
+                    teams with nobody connected, of {gaps.liveTeams}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-2xl font-semibold tnum">
+                    {gaps.groups.length}
+                  </div>
+                  <div className="text-[11px] text-subtle leading-snug">
+                    groups with nobody connected, of {gaps.liveGroups}
+                  </div>
+                </div>
+                <p className="text-xs text-muted leading-relaxed flex-1 min-w-[260px]">
+                  They are on a live team or group, so somebody is shepherding
+                  them &mdash; we just have not recorded who, so a question
+                  about them routes to nobody. A hole in the structure, not in
+                  the care.
+                </p>
+                <div className="flex gap-2 shrink-0">
+                  <Link
+                    href="/shepherd-team/gaps"
+                    className="px-3 py-1.5 rounded border border-border-soft text-xs hover:bg-bg-elev-2"
+                  >
+                    See who &rarr;
+                  </Link>
+                  <Link
+                    href="/shepherd-map"
+                    className="px-3 py-1.5 rounded bg-accent text-[var(--accent-fg)] text-xs font-medium"
+                  >
+                    Connect them &rarr;
+                  </Link>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3 max-w-md">
               <Card className="p-4">
                 <div className="text-xs text-muted mb-1.5">Team members</div>
