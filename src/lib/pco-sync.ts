@@ -751,21 +751,23 @@ async function syncPeople(
  *  ago, that is never. This pages the inactive people once, which is the
  *  only cohort that has a reason at all.
  *
- *  Guarded on the column being entirely empty, so it runs on the first sync
- *  after 0114 and is a single cheap COUNT on every sync after that.
+ *  Guarded on a recorded marker, not on the column looking empty: the
+ *  incremental pass above writes reasons for everyone who changed, so by
+ *  the time this runs there are always some rows, and an "is it empty"
+ *  check skips the backfill forever on the very first sync.
  */
 async function backfillInactiveReasons(
   client: PCOClient,
   orgId: number,
 ): Promise<void> {
   const db = getDb();
-  const already = db
+  const done = db
     .prepare(
-      `SELECT 1 FROM pco_people
-        WHERE org_id = ? AND inactive_reason IS NOT NULL LIMIT 1`,
+      `SELECT inactive_reason_backfilled_at AS at
+         FROM pco_sync_settings WHERE org_id = ?`,
     )
-    .get(orgId);
-  if (already) return;
+    .get(orgId) as { at: string | null } | undefined;
+  if (done?.at) return;
 
   const upd = db.prepare(
     `UPDATE pco_people SET inactive_reason = ? WHERE org_id = ? AND pco_id = ?`,
@@ -791,6 +793,15 @@ async function backfillInactiveReasons(
     });
     write();
   }
+
+  // Only once the whole cohort has been walked, so an interrupted run
+  // retries rather than leaving most of the column null forever.
+  db.prepare(
+    `INSERT INTO pco_sync_settings (org_id, inactive_reason_backfilled_at)
+     VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT(org_id) DO UPDATE SET
+       inactive_reason_backfilled_at = excluded.inactive_reason_backfilled_at`,
+  ).run(orgId);
 }
 
 /** Replace the stored email hashes for one person. Cheap delete+insert
