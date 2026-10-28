@@ -969,6 +969,65 @@ export function saveOutreachGroupTypes(orgId: number, ids: string[]) {
   writeIdList(orgId, "outreach_group_types", ids);
 }
 
+/** What the seniors audit counts. Nothing is inferred from names: see
+ *  0116 for why that was tried and abandoned. */
+export const getSeniorsCcLists = cache((orgId: number) =>
+  readIdList(orgId, "seniors_cc_lists"),
+);
+export const getSeniorsSignups = cache((orgId: number) =>
+  readIdList(orgId, "seniors_signups"),
+);
+export const getSeniorsCheckinEvents = cache((orgId: number) =>
+  readIdList(orgId, "seniors_checkin_events"),
+);
+export const getSeniorsGroupTypes = cache((orgId: number) =>
+  readIdList(orgId, "seniors_group_types"),
+);
+export const getSeniorsGroups = cache((orgId: number) =>
+  readIdList(orgId, "seniors_groups"),
+);
+
+export function saveSeniorsSelection(
+  orgId: number,
+  sel: {
+    ccLists: string[];
+    signups: string[];
+    checkinEvents: string[];
+    groupTypes: string[];
+    groups: string[];
+  },
+): void {
+  writeIdList(orgId, "seniors_cc_lists", sel.ccLists);
+  writeIdList(orgId, "seniors_signups", sel.signups);
+  writeIdList(orgId, "seniors_checkin_events", sel.checkinEvents);
+  writeIdList(orgId, "seniors_group_types", sel.groupTypes);
+  writeIdList(orgId, "seniors_groups", sel.groups);
+}
+
+/** The age that counts as a senior. 65 until somebody changes it. */
+export const SENIORS_AGE_DEFAULT = 65;
+export const getSeniorsAgeMin = cache((orgId: number): number => {
+  const row = getDb()
+    .prepare(`SELECT seniors_age_min AS n FROM pco_sync_settings WHERE org_id = ?`)
+    .get(orgId) as { n: number | null } | undefined;
+  const n = row?.n;
+  return typeof n === "number" && n > 0 && n < 120 ? n : SENIORS_AGE_DEFAULT;
+});
+
+export function saveSeniorsAgeMin(orgId: number, age: number): void {
+  const n = Math.round(age);
+  if (!Number.isFinite(n) || n <= 0 || n >= 120) return;
+  const db = getDb();
+  if (!db.prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?").get(orgId)) {
+    saveSyncSettings(orgId, getSyncSettings(orgId));
+  }
+  db.prepare(
+    `UPDATE pco_sync_settings SET seniors_age_min = ?,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE org_id = ?`,
+  ).run(n, orgId);
+}
+
 /** The Known definition: which signals count, and how many kinds are
  *  needed. Separate setters from saveSyncSettings so the settings page can
  *  save this without rewriting the whole sync schedule. */

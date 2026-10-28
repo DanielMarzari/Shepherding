@@ -30,6 +30,7 @@ export const PAGE_REGISTRY: Record<string, PageDef> = {
   "care-queue": { href: "/care-queue", defaultLabel: "Care queue", activeAliases: ["Care queue"], badge: 17, description: "People flagged for follow-up — who needs a touch this week." },
   "shepherd-team": { href: "/shepherd-team", defaultLabel: "Shepherd team", activeAliases: ["Shepherd team"], description: "The shepherd team and who each member is caring for." },
   "shepherd-assign": { href: "/shepherd-team/assign", defaultLabel: "Assignment", activeAliases: ["Assignment"], description: "Give everyone in Known a shepherd \u2014 bulk-assign the people exactly one shepherd already named, settle the ones several named, and spread the rest against each shepherd's own bandwidth." },
+  "seniors-audit": { href: "/seniors-audit", defaultLabel: "Seniors audit", activeAliases: ["Seniors audit"], description: "Who is actually part of the seniors ministry \u2014 the mailing list and whether anyone opens it, everyone old enough on file, and whoever has turned up to a seniors event, merged and sorted by how involved they are." },
   "shepherd-gaps": { href: "/shepherd-team/gaps", defaultLabel: "Oversight gaps", activeAliases: ["Oversight gaps"], description: "People on a live team or group that nobody on the shepherd team is connected to \u2014 somebody is shepherding them, but the system cannot say who, so a question about them routes to nobody." },
   "shepherd-bandwidth": { href: "/shepherd-team/bandwidth", defaultLabel: "Bandwidth", activeAliases: ["Bandwidth"], description: "How many people each shepherd has agreed to be responsible for getting connected, and whether the team's total reaches everyone in Known." },
   shepherds: { href: "/shepherds", defaultLabel: "Shepherds", activeAliases: ["Shepherds"], description: "Everyone who leads a group or team, and who oversees them." },
@@ -175,7 +176,7 @@ export const DEFAULT_NAV_CONFIG: NavConfig = {
       label: "Reports & insights",
       mode: "top",
       icon: "chart-bar",
-      items: [P("demographics"), P("attendance"), P("pipeline"), P("sermon-impact"), P("mir"), P("graph"), P("intake-graph"), P("retention"), P("map"), P("reaching-the-valley"), P("next-campus-planner")],
+      items: [P("demographics"), P("attendance"), P("pipeline"), P("seniors-audit"), P("sermon-impact"), P("mir"), P("graph"), P("intake-graph"), P("retention"), P("map"), P("reaching-the-valley"), P("next-campus-planner")],
     },
     {
       id: "email",
