@@ -37,7 +37,7 @@ export function CapacityCard({ cap }: { cap: AssignCapacity }) {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <Stat n={cap.knownAdults} label="Known adults" />
-        <Stat n={cap.unassigned} label="still need a shepherd" />
+        <Stat n={cap.unassigned} label="nobody assigned to them yet" />
         <Stat
           n={cap.freeRoom}
           label="free places to assign into"
@@ -57,7 +57,7 @@ export function CapacityCard({ cap }: { cap: AssignCapacity }) {
       <div
         className="flex h-7 rounded-md overflow-hidden border border-border-soft"
         role="img"
-        aria-label={`Of ${cap.knownAdults} known adults: ${cap.assigned} assigned, ${placeable} could be assigned into a free place today, ${cap.uncovered} nobody has room for`}
+        aria-label={`Of ${cap.knownAdults} known adults: ${cap.assigned} assigned to a shepherd, ${placeable} could be assigned into a free place today, ${cap.uncovered} nobody has room for`}
       >
         <Seg
           w={pct(cap.assigned)}
@@ -84,7 +84,7 @@ export function CapacityCard({ cap }: { cap: AssignCapacity }) {
       </div>
 
       <div className="flex flex-wrap gap-4 mt-2 text-[11px] items-center">
-        <Key bg="var(--accent)" label="has a shepherd" />
+        <Key bg="var(--accent)" label="assigned to a shepherd" />
         <Key bg="var(--bg-elev-2)" label="a free place could take them today" />
         {cap.uncovered > 0 && (
           <Key bg="var(--bad-soft-fg)" label="nobody on the team has room" />
@@ -101,6 +101,14 @@ export function CapacityCard({ cap }: { cap: AssignCapacity }) {
           )}
         </span>
       </div>
+
+      <p className="text-xs text-subtle mt-3 leading-relaxed max-w-3xl">
+        Being assigned is not being shepherded. Everyone counted here is
+        Known, which means nobody is caring for them yet; an assignment is
+        somebody taking responsibility for getting them into a group or onto
+        a team, where they will be. They stop being Known when that lands,
+        not when the assignment is made.
+      </p>
 
       {cap.shepherdsOver > 0 && (
         <p className="text-xs text-subtle mt-3 leading-relaxed max-w-3xl">
