@@ -45,20 +45,6 @@ export function getSeniorsSelection(orgId: number): SeniorsSelection {
 }
 
 
-/** Names that carry SIA in capitals.
- *
- *  Seniors In Action is always written SIA, and GLOB is case-sensitive
- *  where LIKE is not — which is the whole difference between a usable
- *  signal and a useless one. Case-insensitively, "sia" also matches
- *  Malaysia, SE Asia, Iglesia de Fe, Colossians and Ephesians. In
- *  capitals it matches the SIA meetings, the SIA carpool trip, the SIA
- *  Bible studies and the Seniors In Action group type, and nothing else.
- *
- *  Still only a suggestion: the page sorts these first and offers to tick
- *  them, but nothing is counted until somebody says so.
- */
-const SIA_GLOB = "*SIA*";
-
 const ph = (xs: unknown[]) => xs.map(() => "?").join(",");
 const nameOf = (f: string | null, l: string | null, id: string) =>
   [f?.trim(), l?.trim()].filter(Boolean).join(" ") || `(unknown #${id})`;
@@ -490,7 +476,6 @@ export function listPickerOptions(orgId: number): PickerOption[] {
   for (const r of db
     .prepare(
       `SELECT s.pco_id AS id, s.name AS name, s.pco_created_at AS when_,
-              (s.name GLOB ?) AS sia,
               (SELECT COUNT(DISTINCT a.person_id)
                  FROM pco_registration_attendees a
                 WHERE a.org_id = s.org_id AND a.signup_id = s.pco_id
@@ -500,12 +485,11 @@ export function listPickerOptions(orgId: number): PickerOption[] {
           AND s.pco_created_at >= date('now','-${EVENT_PICKER_YEARS} years')
         ORDER BY s.pco_created_at DESC`,
     )
-    .all(SIA_GLOB, orgId) as Array<{
+    .all(orgId) as Array<{
     id: string;
     name: string | null;
     when_: string | null;
     people: number;
-    sia: number;
   }>) {
     out.push({
       kind: "signup",
@@ -514,13 +498,12 @@ export function listPickerOptions(orgId: number): PickerOption[] {
       people: r.people,
       when: r.when_,
       selected: sel.signups.includes(r.id),
-      suggested: r.sia === 1,
     });
   }
 
   for (const r of db
     .prepare(
-      `SELECT e.pco_id AS id, e.name AS name, (e.name GLOB ?) AS sia,
+      `SELECT e.pco_id AS id, e.name AS name,
               (SELECT MAX(c.event_time_starts_at) FROM pco_check_ins c
                 WHERE c.org_id = e.org_id AND c.event_id = e.pco_id) AS when_,
               (SELECT COUNT(DISTINCT c.person_id) FROM pco_check_ins c
@@ -530,12 +513,11 @@ export function listPickerOptions(orgId: number): PickerOption[] {
          FROM pco_check_in_events e
         WHERE e.org_id = ? AND e.archived_at IS NULL`,
     )
-    .all(SIA_GLOB, orgId) as Array<{
+    .all(orgId) as Array<{
     id: string;
     name: string | null;
     when_: string | null;
     people: number;
-    sia: number;
   }>) {
     out.push({
       kind: "checkin_event",
@@ -544,13 +526,12 @@ export function listPickerOptions(orgId: number): PickerOption[] {
       people: r.people,
       when: r.when_,
       selected: sel.checkinEvents.includes(r.id),
-      suggested: r.sia === 1,
     });
   }
 
   for (const r of db
     .prepare(
-      `SELECT t.pco_id AS id, t.name AS name, (t.name GLOB ?) AS sia,
+      `SELECT t.pco_id AS id, t.name AS name,
               (SELECT COUNT(DISTINCT m.person_id)
                  FROM pco_groups g
                  JOIN pco_group_memberships m
@@ -561,12 +542,7 @@ export function listPickerOptions(orgId: number): PickerOption[] {
          FROM pco_group_types t
         WHERE t.org_id = ?`,
     )
-    .all(SIA_GLOB, orgId) as Array<{
-    id: string;
-    name: string | null;
-    people: number;
-    sia: number;
-  }>) {
+    .all(orgId) as Array<{ id: string; name: string | null; people: number }>) {
     out.push({
       kind: "group_type",
       id: r.id,
@@ -574,13 +550,12 @@ export function listPickerOptions(orgId: number): PickerOption[] {
       people: r.people,
       when: null,
       selected: sel.groupTypes.includes(r.id),
-      suggested: r.sia === 1,
     });
   }
 
   for (const r of db
     .prepare(
-      `SELECT g.pco_id AS id, g.name AS name, (g.name GLOB ?) AS sia,
+      `SELECT g.pco_id AS id, g.name AS name,
               (SELECT COUNT(DISTINCT m.person_id)
                  FROM pco_group_memberships m
                 WHERE m.org_id = g.org_id AND m.group_id = g.pco_id
@@ -588,12 +563,7 @@ export function listPickerOptions(orgId: number): PickerOption[] {
          FROM pco_groups g
         WHERE g.org_id = ? AND g.archived_at IS NULL`,
     )
-    .all(SIA_GLOB, orgId) as Array<{
-    id: string;
-    name: string | null;
-    people: number;
-    sia: number;
-  }>) {
+    .all(orgId) as Array<{ id: string; name: string | null; people: number }>) {
     out.push({
       kind: "group",
       id: r.id,
@@ -601,7 +571,6 @@ export function listPickerOptions(orgId: number): PickerOption[] {
       people: r.people,
       when: null,
       selected: sel.groups.includes(r.id),
-      suggested: r.sia === 1,
     });
   }
 
@@ -614,17 +583,11 @@ export function listCcOptions(orgId: number): PickerOption[] {
   return (
     getDb()
       .prepare(
-        `SELECT list_id AS id, name, COALESCE(membership_count,0) AS people,
-              (name GLOB ? OR name LIKE '%enior%') AS sia
+        `SELECT list_id AS id, name, COALESCE(membership_count,0) AS people
            FROM constant_contact_lists WHERE org_id = ?
           ORDER BY name COLLATE NOCASE`,
       )
-      .all(SIA_GLOB, orgId) as Array<{
-      id: string;
-      name: string | null;
-      people: number;
-      sia: number;
-    }>
+      .all(orgId) as Array<{ id: string; name: string | null; people: number }>
   ).map((r) => ({
     kind: "signup" as const,
     id: r.id,
@@ -632,7 +595,6 @@ export function listCcOptions(orgId: number): PickerOption[] {
     people: r.people,
     when: null,
     selected: sel.ccLists.includes(r.id),
-    suggested: r.sia === 1,
   }));
 }
 

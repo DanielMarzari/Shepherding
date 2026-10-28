@@ -2,6 +2,15 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Version skew protection. Every deploy rsyncs a new .next and restarts
+  // pm2, which changes the ids Next gives Server Functions — so a tab that
+  // was open across a deploy posts an id the server no longer has, and the
+  // user gets "Failed to find Server Action" when they press Save. With a
+  // deployment id set, the client sees the mismatch in the response header
+  // and does a full reload instead of failing. Baked in at build time by
+  // the deploy workflow (the standalone server reads it back out of
+  // required-server-files.json); unset locally, where dev has no skew.
+  deploymentId: process.env.DEPLOYMENT_VERSION,
   serverExternalPackages: ["better-sqlite3"],
   async redirects() {
     return [

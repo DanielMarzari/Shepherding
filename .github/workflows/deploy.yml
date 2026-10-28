@@ -20,7 +20,12 @@ jobs:
         run: npm ci
 
       - name: Build
+        # The commit is the deployment id, so assets and Server Function ids
+        # from different deploys can never be mixed: a browser holding the
+        # old build reloads itself instead of calling an action that is gone.
         run: npm run build
+        env:
+          DEPLOYMENT_VERSION: ${{ github.sha }}
 
       - name: Setup SSH
         run: |

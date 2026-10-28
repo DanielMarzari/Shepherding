@@ -33,15 +33,6 @@ export function SettingsPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
-  /** Ticks the suggestions without saving, so you can look before you
-   *  commit. Null until the button is pressed, so it never overrides what
-   *  is already stored. */
-  const [takeSuggested, setTakeSuggested] = useState(false);
-
-  const suggested = useMemo(
-    () => [...ccOptions, ...eventOptions].filter((o) => o.suggested && !o.selected),
-    [ccOptions, eventOptions],
-  );
   const [state, action, pending] = useActionState<SeniorsState | null, FormData>(
     saveSeniorsSettingsAction,
     null,
@@ -64,15 +55,6 @@ export function SettingsPanel({
       const arr = out.get(o.kind) ?? [];
       arr.push(o);
       out.set(o.kind, arr);
-    }
-    // Suggestions first inside each kind: they are the ones worth reading.
-    for (const arr of out.values()) {
-      arr.sort(
-        (a, b) =>
-          Number(b.suggested) - Number(a.suggested) ||
-          b.people - a.people ||
-          a.name.localeCompare(b.name),
-      );
     }
     return out;
   }, [eventOptions, q]);
@@ -101,42 +83,20 @@ export function SettingsPanel({
       {open && (
         <form action={action} className="border-t border-border-soft">
           <div className="px-5 py-4 space-y-5">
-            {suggested.length > 0 && (
-              <div className="rounded border border-accent/40 bg-accent-soft-bg/20 px-3.5 py-3 flex flex-wrap items-center gap-3">
-                <p className="text-xs text-muted leading-relaxed flex-1 min-w-[280px]">
-                  <strong className="text-fg">
-                    {suggested.length} look like Seniors In Action.
-                  </strong>{" "}
-                  Matched on <span className="mono text-fg">SIA</span> in
-                  capitals, which the ministry always uses &mdash; lower-case
-                  &ldquo;sia&rdquo; would also catch Malaysia, SE Asia and
-                  Iglesia de Fe, so case is the whole signal here. Check them
-                  before saving.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setTakeSuggested(true)}
-                  disabled={takeSuggested}
-                  className="shrink-0 px-3 py-1.5 rounded border border-accent text-accent text-xs font-medium cursor-pointer disabled:opacity-50"
-                >
-                  {takeSuggested ? "Ticked below" : "Tick all of them"}
-                </button>
-              </div>
-            )}
             <Section
               title="Mailing lists"
               note="Constant Contact lists the ministry writes to. Both of the seniors lists count — the retired one still holds people the current one does not."
             >
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                 {ccOptions.map((o) => (
-                  <Tick key={o.id} name="ccList" o={o} unit="contacts" take={takeSuggested} />
+                  <Tick key={o.id} name="ccList" o={o} unit="contacts" />
                 ))}
               </div>
             </Section>
 
             <Section
-              title="Seniors events"
-              note={`Registrations from the last ${years} years, plus check-in events, group types and groups. Names cannot be trusted here — "SIA" matches SE Asia and Malaysia, "senior" matches the high-school senior trip — so nothing is guessed.`}
+              title={`Every event from the last ${years} years — ${eventOptions.length} of them`}
+              note={`All of them are listed, in full: every registration from the last ${years} years, then the check-in events, the group types and the groups. Nothing is pre-ticked and nothing is guessed from a name. The filter below narrows what is shown; it never reveals anything the list was holding back.`}
             >
               <input
                 type="search"
@@ -146,7 +106,11 @@ export function SettingsPanel({
                 aria-label="Filter the event list"
                 className="bg-bg border border-border-soft rounded px-3 py-1.5 text-[13px] w-full max-w-xs mb-3"
               />
-              <div className="space-y-4 max-h-[460px] overflow-y-auto pr-1">
+              {/* No scroll box. A capped list with more below it reads as
+                  the whole list, and the only way to find out otherwise is
+                  to type in the filter and watch new rows appear — which
+                  makes the filter look like it is adding things. */}
+              <div className="space-y-4">
                 {Object.keys(KIND_LABEL).map((kind) => {
                   const rows = groups.get(kind) ?? [];
                   if (rows.length === 0) return null;
@@ -154,16 +118,11 @@ export function SettingsPanel({
                     <div key={kind}>
                       <div className="text-[10px] uppercase tracking-wider text-subtle mb-1.5">
                         {KIND_LABEL[kind]}
+                        <span className="ml-1.5 tnum">{rows.length}</span>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                         {rows.map((o) => (
-                          <Tick
-                            key={`${o.kind}:${o.id}`}
-                            name={o.kind}
-                            o={o}
-                            unit="people"
-                            take={takeSuggested}
-                          />
+  <Tick key={`${o.kind}:${o.id}`} name={o.kind} o={o} unit="people" />
                         ))}
                       </div>
                     </div>
@@ -243,31 +202,25 @@ function Tick({
   name,
   o,
   unit,
-  take,
 }: {
   name: string;
   o: PickerOption;
   unit: string;
-  /** "Tick all of them" was pressed — remount so the box picks up the new
-   *  default without taking the field over as controlled state. */
-  take: boolean;
 }) {
-  const on = o.selected || (take && o.suggested);
   return (
     <label className="flex items-center gap-2 text-[13px] rounded px-2 py-1 hover:bg-bg-elev-2 cursor-pointer">
       <input
-        key={on ? "on" : "off"}
         type="checkbox"
         name={name}
         value={o.id}
-        defaultChecked={on}
+        defaultChecked={o.selected}
         className="accent-[var(--accent)]"
       />
       <span className="min-w-0 flex-1 truncate">
         {o.name}
-        {o.suggested && (
-          <span className="text-[10px] text-accent border border-accent/40 rounded px-1 py-0.5 ml-1.5 align-middle">
-            SIA
+        {o.when && (
+          <span className="text-[11px] text-subtle ml-2">
+            {o.when.slice(0, 10)}
           </span>
         )}
       </span>
