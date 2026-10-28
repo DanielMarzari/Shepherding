@@ -30,7 +30,7 @@ export {
  *  them. These strings ARE the values stored on a row's `flags`, so the
  *  list and the producer cannot drift. */
 export const FLAG_TYPES = [
-  "Deceased, still a member",
+  "Deceased",
   "Moved out of area",
   "Inactive in PCO",
   "Possible duplicate",

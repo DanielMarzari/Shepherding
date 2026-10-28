@@ -235,7 +235,7 @@ function getMembershipAuditImpl(
     // warnings dropdown matches flags by equality, so a variable suffix
     // would quietly make this one unfilterable.
     if (r.diedOn || isDeceasedReason(r.inactiveReason)) {
-      flags.push("Deceased, still a member");
+      flags.push("Deceased");
     }
     // Inactive *because they left the area*. Someone who moved away should
     // have come off the roster when they went, so this is a membership
