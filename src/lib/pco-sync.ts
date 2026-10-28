@@ -585,7 +585,9 @@ async function syncPeople(
   cutoff: string | null,
 ): Promise<{ fetched: number; upserted: number; maxUpdatedAt: string | null }> {
   const params = new URLSearchParams({
-    include: "addresses,marital_status,emails,phone_numbers",
+    // inactive_reason is the only record PCO keeps of why someone was
+    // deactivated — including that they died. See 0114.
+    include: "addresses,marital_status,emails,phone_numbers,inactive_reason",
     per_page: "100",
     order: "updated_at",
   });
@@ -603,11 +605,13 @@ async function syncPeople(
     const maritalById = new Map<string, PCOResource>();
     const emailById = new Map<string, PCOResource>();
     const phoneById = new Map<string, PCOResource>();
+    const reasonById = new Map<string, PCOResource>();
     for (const inc of included) {
       if (inc.type === "Address") addressById.set(inc.id, inc);
       if (inc.type === "MaritalStatus") maritalById.set(inc.id, inc);
       if (inc.type === "Email") emailById.set(inc.id, inc);
       if (inc.type === "PhoneNumber") phoneById.set(inc.id, inc);
+      if (inc.type === "InactiveReason") reasonById.set(inc.id, inc);
     }
 
     for (const p of records) {
@@ -634,6 +638,17 @@ async function syncPeople(
       const marital = maritalId ? maritalById.get(maritalId) : null;
       const maritalValue = marital
         ? ((marital.attributes as Record<string, unknown> | undefined)?.value as
+            | string
+            | undefined) ?? null
+        : null;
+
+      // Same shape as marital status: a to-one relationship whose name
+      // lives on the included resource, under `value`.
+      const reasonRel = rels.inactive_reason?.data;
+      const reasonId = !Array.isArray(reasonRel) && reasonRel ? reasonRel.id : null;
+      const reason = reasonId ? reasonById.get(reasonId) : null;
+      const inactiveReason = reason
+        ? ((reason.attributes as Record<string, unknown> | undefined)?.value as
             | string
             | undefined) ?? null
         : null;
@@ -674,6 +689,7 @@ async function syncPeople(
         pcoCreatedAt: (attrs.created_at as string | undefined) ?? null,
         pcoUpdatedAt: updatedAt,
         inactivatedAt: (attrs.inactivated_at as string | undefined) ?? null,
+        inactiveReason,
       });
       upserted++;
 
@@ -722,8 +738,59 @@ async function syncPeople(
 
   // Backfill plaintext names for anyone synced before 0074 (idempotent).
   backfillPersonNames(orgId);
+  await backfillInactiveReasons(client, orgId);
 
   return { fetched, upserted, maxUpdatedAt };
+}
+
+/** One-time fill of inactive_reason for people who were already synced.
+ *
+ *  The people sync is incremental — it asks only for records changed since
+ *  the last run — so a column added to existing rows stays null until each
+ *  person happens to change. For a reason somebody was deactivated years
+ *  ago, that is never. This pages the inactive people once, which is the
+ *  only cohort that has a reason at all.
+ *
+ *  Guarded on the column being entirely empty, so it runs on the first sync
+ *  after 0114 and is a single cheap COUNT on every sync after that.
+ */
+async function backfillInactiveReasons(
+  client: PCOClient,
+  orgId: number,
+): Promise<void> {
+  const db = getDb();
+  const already = db
+    .prepare(
+      `SELECT 1 FROM pco_people
+        WHERE org_id = ? AND inactive_reason IS NOT NULL LIMIT 1`,
+    )
+    .get(orgId);
+  if (already) return;
+
+  const upd = db.prepare(
+    `UPDATE pco_people SET inactive_reason = ? WHERE org_id = ? AND pco_id = ?`,
+  );
+  const path =
+    "/people/v2/people?where[status]=inactive&include=inactive_reason&per_page=100";
+  for await (const { page } of client.paginate(path)) {
+    const reasonById = new Map<string, string>();
+    for (const inc of page.included ?? []) {
+      if (inc.type !== "InactiveReason") continue;
+      const v = (inc.attributes as Record<string, unknown> | undefined)?.value;
+      if (typeof v === "string") reasonById.set(inc.id, v);
+    }
+    const records = Array.isArray(page.data) ? page.data : [page.data];
+    const write = db.transaction(() => {
+      for (const person of records) {
+        const rel = person.relationships?.inactive_reason?.data;
+        const id = !Array.isArray(rel) && rel ? rel.id : null;
+        const value = id ? reasonById.get(id) : null;
+        if (!value) continue;
+        upd.run(value, orgId, person.id);
+      }
+    });
+    write();
+  }
 }
 
 /** Replace the stored email hashes for one person. Cheap delete+insert
@@ -828,13 +895,15 @@ function upsertPerson(
     pcoCreatedAt: string | null;
     pcoUpdatedAt: string | null;
     inactivatedAt: string | null;
+    inactiveReason: string | null;
   },
 ) {
   prepareCached(
     `INSERT INTO pco_people
       (org_id, pco_id, enc_pii, first_name, last_name, nickname, legal_first_name, gender, membership_type,
-       marital_status, status, pco_created_at, pco_updated_at, inactivated_at, synced_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       marital_status, status, pco_created_at, pco_updated_at, inactivated_at,
+       inactive_reason, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, pco_id) DO UPDATE SET
        enc_pii = excluded.enc_pii,
        first_name = excluded.first_name,
@@ -848,6 +917,7 @@ function upsertPerson(
        pco_created_at = excluded.pco_created_at,
        pco_updated_at = excluded.pco_updated_at,
        inactivated_at = excluded.inactivated_at,
+       inactive_reason = excluded.inactive_reason,
        synced_at = excluded.synced_at`,
   ).run(
     orgId,
@@ -864,6 +934,7 @@ function upsertPerson(
     p.pcoCreatedAt,
     p.pcoUpdatedAt,
     p.inactivatedAt,
+    p.inactiveReason,
   );
 }
 

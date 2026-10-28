@@ -40,7 +40,14 @@ interface RawRow {
   lastActivityAt: string | null;
   classification: string | null;
   diedOn: string | null;
+  inactiveReason: string | null;
   dupPairs: number;
+}
+
+/** PCO's inactive reasons are free text an admin can rename, so match on
+ *  the word rather than the exact label this organisation happens to use. */
+function isDeceasedReason(reason: string | null): boolean {
+  return reason != null && /deceas|decease?d|died|death/i.test(reason);
 }
 
 const PLACEHOLDER_NAMES = new Set([
@@ -92,6 +99,7 @@ function getMembershipAuditImpl(
          p.last_name           AS lastName,
          p.status              AS status,
          p.inactivated_at      AS inactivatedAt,
+         p.inactive_reason     AS inactiveReason,
          COALESCE(pa.in_worship_lane, 0)   AS w,
          COALESCE(pa.in_serving_lane, 0)   AS s,
          COALESCE(pa.in_community_lane, 0) AS c,
@@ -191,14 +199,22 @@ function getMembershipAuditImpl(
 
     const flags: string[] = [];
     const statusLower = (r.status ?? "").toLowerCase();
-    // PCO has no deceased status and no deceased membership type — the
-    // "Date of Death" custom field is the only record that someone has
-    // died. Since this page is Members only, holding one AT ALL means the
-    // roster still counts them as a member, which is the point of the flag.
+    // PCO has no deceased status and no deceased membership type. It
+    // records a death as the *inactive reason* on the person — one of the
+    // organisation's own list of reasons, alongside "Moved Out of Area".
+    // The "Date of Death" custom field reads like it should be the record
+    // and this flag used to trust it alone, which found 4 people out of the
+    // 143 PCO actually has marked. Either one counts now; the reason is
+    // what almost always carries it.
+    //
+    // Since this page is Members only, being marked at all means the roster
+    // still counts them as a member, which is the point of the flag.
     // Exactly the string in FLAG_TYPES, with no date appended: the
     // warnings dropdown matches flags by equality, so a variable suffix
     // would quietly make this one unfilterable.
-    if (r.diedOn) flags.push("Deceased, still a member");
+    if (r.diedOn || isDeceasedReason(r.inactiveReason)) {
+      flags.push("Deceased, still a member");
+    }
     if (statusLower === "inactive" || r.inactivatedAt) flags.push("Inactive in PCO");
     if (!first && !last) flags.push("No name on record");
     else if (isJunkName(first) || isJunkName(last)) flags.push("Name looks wrong");

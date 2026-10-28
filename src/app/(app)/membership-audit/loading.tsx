@@ -1,11 +1,11 @@
 import { PageSkeleton } from "@/components/PageSkeleton";
 
-export default function AuditLoading() {
+export default function MembershipAuditLoading() {
   return (
     <PageSkeleton
-      title="Data audit"
+      title="Membership audit"
       active="See more"
-      breadcrumb="See more › Audit"
+      breadcrumb="See more › Membership audit"
       statCount={4}
       contentRows={3}
     />
