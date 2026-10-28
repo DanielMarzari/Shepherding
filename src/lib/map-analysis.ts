@@ -19,6 +19,23 @@ interface Pt {
 
 const LOCAL_MPH = 28;
 
+/** Homes beyond this many straight-line miles are not part of any campus
+ *  question, and are dropped before anything is computed.
+ *
+ *  The drive-time window alone did not bound this. OSRM runs on a
+ *  Pennsylvania extract, so a coordinate outside it snaps to the nearest
+ *  road *inside* it: a home in Hawaii came back as a 165-minute drive and
+ *  passed a 3-hour filter. 1,426 homes were entering the analysis that way,
+ *  and the distance-weighted median for unknown people landed in New
+ *  Mexico. A straight-line cap cannot be fooled by routing — it is computed
+ *  from the home's own coordinates.
+ *
+ *  100 miles is deliberately generous for a 30-minute campus: someone
+ *  driving an hour to the new site from an hour the far side of it is
+ *  already a two-hour span. Nobody inside it is excluded — of the homes
+ *  within 100 miles, all but two are inside the 3-hour window as well. */
+const MAX_REACH_MI = 100;
+
 function haversineMiles(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const R = 3958.8;
   const dLat = ((bLat - aLat) * Math.PI) / 180;
@@ -116,22 +133,24 @@ function loadPoints(orgId: number): Pt[] {
   // 25,834 geocoded people's PII blobs, on every request, for a ZIP that
   // labels one marker. The ZIP now lives on person_geo (0112); a null is
   // simply no label, which is what an unparseable address always gave.
-  return rows.map((r) => {
-    const zip = r.zip;
-    const d = drive.get(r.personId);
+  const out: Pt[] = [];
+  for (const r of rows) {
     const dFc = haversineMiles(CHURCH.lat, CHURCH.lng, r.lat, r.lng);
-    return {
+    if (dFc > MAX_REACH_MI) continue;
+    const d = drive.get(r.personId);
+    out.push({
       personId: r.personId,
       lat: r.lat,
       lng: r.lng,
       classification: r.classification,
-      zip,
+      zip: r.zip,
       driveMiles: d?.miles,
       driveMinutes: d?.minutes,
       dFc,
       travelMin: d?.minutes ?? (dFc / LOCAL_MPH) * 60,
-    };
-  });
+    });
+  }
+  return out;
 }
 
 /** Weighted geometric median (Weiszfeld), in lat/lng degrees.
@@ -181,45 +200,59 @@ function weightedMedian(
   return { lat, lng };
 }
 
-/** Below this, the bearings are too evenly spread for a direction to mean
- *  anything and the polar seed is skipped. Measured on this congregation:
- *  0.649, strongly one way (south-west). */
-const CONCENTRATED = 0.35;
+/** Grid cell size in degrees — about 0.7 miles on a side here. */
+const CELL_DEG = 0.01;
 
-/** Miles per degree of latitude — close enough over one valley. */
-const MI_PER_DEG = 69.0;
-
-/** A first guess at the campus, in polar coordinates around the church:
- *  the median distance out, along the mean bearing. Returns null when the
- *  homes ring the church too evenly for a bearing to describe them. */
-function polarSeed(
-  cohortPts: Pt[],
+/** Fold a set of homes into one weighted point per grid cell.
+ *
+ *  The median below re-weights every home against the current guess, a few
+ *  hundred times over. Homes on the same street are, to that arithmetic,
+ *  the same home with more weight — so collapse each cell to its centroid
+ *  carrying the cell's total weight and the sum stays the same shape. The
+ *  Lehigh Valley's 24,136 homes fall into about 1,200 cells.
+ *
+ *  Only the median runs on cells. Which homes a campus would actually be
+ *  closer to is still decided one home at a time: a cell is either wholly
+ *  in or wholly out, and deciding it in bulk was enough to send the unknown
+ *  cohort's campus 50 miles off, into a different basin entirely.
+ *
+ *  Writes into caller-owned buffers and returns how many cells it wrote.
+ */
+function foldCells(
   la: Float64Array,
   ln: Float64Array,
-  dfc: Float64Array,
+  wt: Float64Array,
+  idx: Int32Array | number[],
   n: number,
-): { lat: number; lng: number } | null {
-  const cosLat = Math.cos((CHURCH.lat * Math.PI) / 180);
-  let sx = 0, sy = 0;
-  for (let i = 0; i < n; i++) {
-    const dy = la[i] - CHURCH.lat;
-    const dx = (ln[i] - CHURCH.lng) * cosLat;
-    const h = Math.sqrt(dx * dx + dy * dy);
-    if (h === 0) continue;
-    sx += dx / h;
-    sy += dy / h;
+  oLa: Float64Array,
+  oLn: Float64Array,
+  oWt: Float64Array,
+): number {
+  const cells = new Map<number, [number, number, number, number]>();
+  for (let k = 0; k < n; k++) {
+    const i = idx[k];
+    // One integer key per cell: lat cell * 100000 + lng cell. Both fit
+    // comfortably — latitude indices run to ~9,000 and longitude to ~18,000.
+    const key =
+      Math.round(la[i] / CELL_DEG) * 100000 + Math.round(ln[i] / CELL_DEG);
+    let c = cells.get(key);
+    if (!c) {
+      c = [0, 0, 0, 0];
+      cells.set(key, c);
+    }
+    c[0] += la[i];
+    c[1] += ln[i];
+    c[2] += wt[i];
+    c[3]++;
   }
-  const resultant = Math.sqrt(sx * sx + sy * sy) / n;
-  if (resultant < CONCENTRATED) return null;
-
-  const radii = Float64Array.from(dfc.subarray(0, n));
-  radii.sort();
-  const rStar = radii[Math.floor(n / 2)];
-  const theta = Math.atan2(sy, sx);
-  return {
-    lat: CHURCH.lat + (rStar * Math.sin(theta)) / MI_PER_DEG,
-    lng: CHURCH.lng + (rStar * Math.cos(theta)) / (MI_PER_DEG * cosLat),
-  };
+  let j = 0;
+  for (const c of cells.values()) {
+    oLa[j] = c[0] / c[3];
+    oLn[j] = c[1] / c[3];
+    oWt[j] = c[2];
+    j++;
+  }
+  return j;
 }
 
 /** Site a second campus for one cohort, within the radius.
@@ -249,54 +282,34 @@ function siteSecondCampus(
     wt[i] = cohort === "unknown" ? Math.max(0.5, p.dFc) : 1;
   }
 
-  // Seed in polar coordinates around the church: how far out, and which
-  // way. The distance is the median of everyone's distance — sort, take the
-  // middle. The direction is the circular mean of their bearings: sum the
-  // unit vectors and take the angle of the result. Both are one pass, and
-  // the seed lands about half a mile from where the walk below ends up, so
-  // the walk has little left to do.
+  // Seed at the median of the farther half, so the answer does not simply
+  // collapse onto Faith Church.
   //
-  // An eigenvector would give the axis people lie along, which cannot tell
-  // southwest from northeast; the resultant vector gives the direction.
-  //
-  // The length of that resultant says whether a direction means anything:
-  // near 1 the congregation lies one way, near 0 it rings the church evenly
-  // and no single bearing describes it. Below CONCENTRATED we fall back to
-  // the old seed — the median of the farther half — which assumes nothing
-  // about shape.
-  const seed = polarSeed(cohortPts, la, ln, dfc, n);
-  let c2: { lat: number; lng: number };
-  if (seed) {
-    c2 = seed;
-  } else {
-    const order = Array.from({ length: n }, (_, i) => i).sort(
-      (a, b) => dfc[b] - dfc[a],
-    );
-    const half = Math.ceil(n / 2);
-    const sLa = new Float64Array(half), sLn = new Float64Array(half);
-    const sWt = new Float64Array(half);
-    for (let i = 0; i < half; i++) {
-      const j = order[i];
-      sLa[i] = la[j];
-      sLn[i] = ln[j];
-      sWt[i] = wt[j];
-    }
-    c2 = weightedMedian(sLa, sLn, sWt, half);
-  }
+  // A polar seed stood here for a day: the median distance out, along the
+  // mean bearing of every home. It assumed the congregation lies one way
+  // from the church. Measured, it does not — the resultant vector's length
+  // is 0.27, meaning the homes ring the church fairly evenly, and no single
+  // bearing describes them. The seed landed in the same place as this one
+  // when it worked and 2,000 miles away when it did not, so it is gone.
+  const order = Array.from({ length: n }, (_, i) => i).sort(
+    (a, b) => dfc[b] - dfc[a],
+  );
+  const half = Math.ceil(n / 2);
+  const bLa = new Float64Array(n);
+  const bLn = new Float64Array(n);
+  const bWt = new Float64Array(n);
+  let cellN = foldCells(la, ln, wt, order, half, bLa, bLn, bWt);
+  let c2: { lat: number; lng: number } = weightedMedian(bLa, bLn, bWt, cellN);
 
-  // Scratch buffers for "who this campus would serve", reused each round
-  // rather than reallocated.
-  const kLa = new Float64Array(n), kLn = new Float64Array(n);
-  const kWt = new Float64Array(n);
+  // Who this campus would be closer to than Faith Church is — decided one
+  // home at a time, into a reusable index buffer.
+  const served = new Int32Array(n);
   let servedN = 0;
   const gather = () => {
     servedN = 0;
     for (let i = 0; i < n; i++) {
       if (haversineMiles(c2.lat, c2.lng, la[i], ln[i]) < dfc[i]) {
-        kLa[servedN] = la[i];
-        kLn[servedN] = ln[i];
-        kWt[servedN] = wt[i];
-        servedN++;
+        served[servedN++] = i;
       }
     }
   };
@@ -305,9 +318,11 @@ function siteSecondCampus(
     gather();
     if (servedN < 5) break;
     const prev = c2;
-    c2 = weightedMedian(kLa, kLn, kWt, servedN);
+    cellN = foldCells(la, ln, wt, served, servedN, bLa, bLn, bWt);
+    c2 = weightedMedian(bLa, bLn, bWt, cellN);
     // Stop once the campus stops moving — about a metre.
-    if (Math.abs(prev.lat - c2.lat) < 1e-5 && Math.abs(prev.lng - c2.lng) < 1e-5) break;
+    if (Math.abs(prev.lat - c2.lat) < 1e-5 && Math.abs(prev.lng - c2.lng) < 1e-5)
+      break;
   }
   if (servedN < 5) return null;
 

@@ -154,7 +154,7 @@ export default async function MapPage() {
                 value={reach.shepherdedCorr == null ? "—" : `r ${reach.shepherdedCorr.toFixed(2)}`}
                 sub="point-biserial"
               />
-              <Stat label="People analyzed" value={reach.count.toLocaleString()} sub={`Shepherded or Known · ≤${mapSettings.secondCampusMaxHours}h`} />
+              <Stat label="People analyzed" value={reach.count.toLocaleString()} sub={`Shepherded or Known · ≤${mapSettings.secondCampusMaxHours}h · ≤100 mi`} />
             </div>
 
             {reach.bands.length >= 2 && (
