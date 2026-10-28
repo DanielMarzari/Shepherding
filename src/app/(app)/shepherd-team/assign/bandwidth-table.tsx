@@ -149,11 +149,6 @@ function Row({ s, editing }: { s: ShepherdRow; editing: boolean }) {
         ) : (
           <span className="tnum">
             {used} / {max}
-            {!s.bandwidthSet && (
-              <span className="text-subtle text-[11px] italic ml-1.5">
-                default
-              </span>
-            )}
           </span>
         )}
       </td>

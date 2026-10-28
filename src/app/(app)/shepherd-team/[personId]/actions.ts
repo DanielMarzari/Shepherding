@@ -24,6 +24,7 @@ function revalidateAll(shepherdPersonId: string) {
     `/shepherd-team/${shepherdPersonId}`,
     "/shepherd-team",
     "/shepherd-team/assign",
+    "/shepherd-team/assign-inline",
     "/shepherd-team/bandwidth",
     "/shepherd-map",
   ]) {
