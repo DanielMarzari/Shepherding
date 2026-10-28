@@ -359,6 +359,12 @@ function siteSecondCampus(
   };
 }
 
+/** Bump when the siting algorithm changes, so cached answers computed by
+ *  the old one are not served. The signature below fingerprints the data;
+ *  without this it would happily keep serving a result the current code
+ *  would never produce. */
+const ALGO_VERSION = "2-capped-cells";
+
 /** What the analysis was computed from — the content, not a timestamp.
  *
  *  Homes almost never move. The first version of this keyed on the activity
@@ -392,7 +398,7 @@ function reachSignature(orgId: number): string {
     )
     .get(orgId) as { n: number; mins: number };
   const parts = rows.map((r) => `${r.cls}=${r.n}/${r.sLat}/${r.sLng}`);
-  return `${parts.join(",")}|${d.n}/${d.mins}`;
+  return `${ALGO_VERSION}|${parts.join(",")}|${d.n}/${d.mins}`;
 }
 
 /** True when the cached answer is still the answer. */
