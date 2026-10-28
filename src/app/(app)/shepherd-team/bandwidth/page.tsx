@@ -1,7 +1,11 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { requireOrg } from "@/lib/auth";
-import { getAssignCapacity, getAssignShepherds } from "@/lib/shepherd-assign";
+import {
+  DEFAULT_BANDWIDTH,
+  getAssignCapacity,
+  getAssignShepherds,
+} from "@/lib/shepherd-assign";
 import { BandwidthTable } from "../assign/bandwidth-table";
 
 /** Setting bandwidth, on its own page.
@@ -51,9 +55,15 @@ export default async function BandwidthPage() {
           <p className="text-muted text-sm mt-1.5 max-w-2xl leading-relaxed">
             How many people each shepherd is responsible for getting
             connected. Not how many they can befriend &mdash; there is no cap,
-            and one role may carry 40 while another carries 400. Leave it
-            blank and it stays unset rather than counting toward the
-            team&rsquo;s total.{" "}
+            and one role may carry 40 while another carries 400. Everyone
+            starts at {DEFAULT_BANDWIDTH} until somebody says otherwise;
+            clearing a box returns them to it.{" "}
+            <Link
+              href="/shepherd-team"
+              className="text-accent hover:underline"
+            >
+              Set who they oversee &rarr;
+            </Link>{" "}
             <Link
               href="/shepherd-team/assign"
               className="text-accent hover:underline"
@@ -71,7 +81,7 @@ export default async function BandwidthPage() {
               label={
                 cap.bandwidthsSet === cap.shepherds
                   ? `team total, all ${cap.shepherds} set`
-                  : `team total · ${cap.shepherds - cap.bandwidthsSet} of ${cap.shepherds} not set`
+                  : `team total · ${cap.shepherds - cap.bandwidthsSet} of ${cap.shepherds} still on ${DEFAULT_BANDWIDTH}`
               }
             />
             <Stat n={cap.byRole + cap.assigned} label="carried today" />

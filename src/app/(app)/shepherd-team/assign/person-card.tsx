@@ -56,11 +56,11 @@ export function PersonCard({
           .map((n) => byName.get(n))
           .filter((s): s is ShepherdRow => !!s)
       : shepherds
-          .filter((s) => s.bandwidth !== null && s.bandwidth - s.byRole - s.assigned > 0)
+          .filter((s) => s.bandwidth - s.byRole - s.assigned > 0)
           .sort(
             (a, b) =>
-              (b.bandwidth ?? 0) - b.byRole - b.assigned -
-              ((a.bandwidth ?? 0) - a.byRole - a.assigned),
+              b.bandwidth - b.byRole - b.assigned -
+              (a.bandwidth - a.byRole - a.assigned),
           )
           .slice(0, 8);
 
@@ -119,22 +119,19 @@ export function PersonCard({
 
       {options.length === 0 ? (
         <p className="text-sm text-muted text-center py-6 leading-relaxed">
-          Nobody has room. Set a bandwidth on the{" "}
-          <Link href="/shepherd-team/assign" className="text-accent hover:underline">
-            assignment page
-          </Link>{" "}
-          first — people are only placed against a bandwidth somebody has
-          agreed to.
+          Nobody has room — everyone on the team is at their bandwidth. Raise
+          it on the{" "}
+          <Link href="/shepherd-team/bandwidth" className="text-accent hover:underline">
+            bandwidth page
+          </Link>
+          , or add people to the team.
         </p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {options.map((s) => {
             const used = s.byRole + s.assigned;
-            const room = s.bandwidth === null ? null : s.bandwidth - used;
-            const pct =
-              s.bandwidth === null
-                ? 100
-                : Math.min(100, (used / Math.max(s.bandwidth, 1)) * 100);
+            const room = s.bandwidth - used;
+            const pct = Math.min(100, (used / Math.max(s.bandwidth, 1)) * 100);
             return (
               <form key={s.personId} action={action}>
                 <input type="hidden" name="personId" value={person.personId} />
@@ -159,21 +156,15 @@ export function PersonCard({
                       </span>
                       <span
                         className={`block text-[11px] tnum ${
-                          room === null
-                            ? "text-subtle"
-                            : room <= 0
-                              ? "text-bad-soft-fg"
-                              : room < 10
-                                ? "text-warn-soft-fg"
-                                : "text-subtle"
+                          room <= 0
+                            ? "text-bad-soft-fg"
+                            : room < 10
+                              ? "text-warn-soft-fg"
+                              : "text-subtle"
                         }`}
                       >
-                        {room === null
-                          ? "bandwidth not set"
-                          : room <= 0
-                            ? "full"
-                            : `${room} free`}{" "}
-                        · {used}/{s.bandwidth ?? "—"}
+                        {room <= 0 ? "full" : `${room} free`} ·{" "}
+                        {used}/{s.bandwidth}
                       </span>
                     </span>
                   </span>

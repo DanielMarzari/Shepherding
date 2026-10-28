@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
 import {
   type AssignSource,
+  DEFAULT_BANDWIDTH,
   assignPerson,
   autoAssignPool,
   bulkAssignUncontested,
@@ -107,7 +108,11 @@ export async function saveBandwidthAction(
     if (!key.startsWith("bw_")) continue;
     const shepherdId = key.slice(3);
     const raw = String(value).trim();
-    if (raw === "") {
+    // Blank, or the default typed back in, means no figure of their own.
+    // This form submits all 25 rows whether or not you touched them, so
+    // without the second half of that test, changing one person would
+    // record the default as everybody's own decision.
+    if (raw === "" || Number(raw) === DEFAULT_BANDWIDTH) {
       saveBandwidth(s.orgId, shepherdId, null);
       continue;
     }
@@ -117,5 +122,10 @@ export async function saveBandwidthAction(
     saved++;
   }
   revalidateAll();
-  return { status: "done", message: `Saved ${saved} bandwidth${saved === 1 ? "" : "s"}.` };
+  return {
+    status: "done",
+    message: saved
+      ? `Saved ${saved} bandwidth${saved === 1 ? "" : "s"}. The rest stay on the default of ${DEFAULT_BANDWIDTH}.`
+      : `Everyone is on the default of ${DEFAULT_BANDWIDTH}.`,
+  };
 }

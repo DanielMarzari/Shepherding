@@ -5,6 +5,7 @@ import { requireOrg } from "@/lib/auth";
 import { addAssignments, removeAssignment } from "@/lib/assignments-write";
 import { searchPeople } from "@/lib/people-read";
 import {
+  DEFAULT_BANDWIDTH,
   assignPerson,
   saveBandwidth,
   unassignPerson,
@@ -145,7 +146,10 @@ export async function saveOneBandwidthAction(
   if (raw === "") {
     saveBandwidth(s.orgId, shepherdPersonId, null);
     revalidateAll(shepherdPersonId);
-    return { status: "done", message: "Cleared — back to unset." };
+    return {
+      status: "done",
+      message: `Cleared — back to the default of ${DEFAULT_BANDWIDTH}.`,
+    };
   }
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) {

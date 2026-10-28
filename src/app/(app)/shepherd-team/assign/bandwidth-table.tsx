@@ -9,8 +9,8 @@ import { saveBandwidthAction, type AssignState } from "./actions";
  *
  *  Deliberately no "claim a group" action here. Recording what somebody
  *  already oversees through a group or team is a different job — it feeds
- *  the By role column and lives on the shepherd map. This page assigns
- *  individuals.
+ *  the By role column, and a name in this table links straight to the page
+ *  where that is done. This page assigns individuals.
  */
 export function BandwidthTable({
   shepherds,
@@ -94,10 +94,8 @@ export function BandwidthTable({
 function Row({ s, editing }: { s: ShepherdRow; editing: boolean }) {
   const used = s.byRole + s.assigned;
   const max = s.bandwidth;
-  const room = max === null ? null : max - used;
-  // With no bandwidth set there is nothing to be a share OF, so the bar
-  // shows the load against itself rather than inventing a denominator.
-  const denom = Math.max(max ?? used, 1);
+  const room = max - used;
+  const denom = Math.max(max, 1);
   const pRole = Math.min(100, (s.byRole / denom) * 100);
   const pAss = Math.min(100 - pRole, (s.assigned / denom) * 100);
 
@@ -111,12 +109,12 @@ function Row({ s, editing }: { s: ShepherdRow; editing: boolean }) {
           >
             {s.initials}
           </span>
-          <a
-            href={`/people/${s.personId}`}
+          <Link
+            href={`/shepherd-team/${s.personId}`}
             className="font-medium text-accent hover:underline"
           >
             {s.name}
-          </a>
+          </Link>
         </span>
       </td>
       <td className="px-4 py-2.5">
@@ -144,22 +142,23 @@ function Row({ s, editing }: { s: ShepherdRow; editing: boolean }) {
             type="number"
             min={0}
             name={`bw_${s.personId}`}
-            defaultValue={max ?? ""}
-            placeholder="not set"
+            defaultValue={max}
+            placeholder={String(max)}
             className="w-[92px] bg-bg border border-border-soft rounded px-2 py-1 text-[13px] text-right tnum"
           />
-        ) : max === null ? (
-          <span className="text-subtle text-xs">not set</span>
         ) : (
           <span className="tnum">
             {used} / {max}
+            {!s.bandwidthSet && (
+              <span className="text-subtle text-[11px] italic ml-1.5">
+                default
+              </span>
+            )}
           </span>
         )}
       </td>
       <td className="px-4 py-2.5 text-right">
-        {room === null ? (
-          <span className="text-subtle text-xs">—</span>
-        ) : room <= 0 ? (
+        {room <= 0 ? (
           <span className="text-bad-soft-fg text-xs font-medium">full</span>
         ) : (
           <span

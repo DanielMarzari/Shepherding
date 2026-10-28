@@ -48,12 +48,10 @@ export default async function ShepherdOversightPage({
   const assigned = o.assignedPeople.length;
   const load = o.byRole + assigned;
   const max = o.bandwidth;
-  const room = max === null ? null : max - load;
-  const over = max === null ? 0 : Math.max(0, load - max);
+  const room = max - load;
+  const over = Math.max(0, load - max);
 
-  // With no bandwidth set there is nothing to be a share of, so the bar
-  // measures the load against itself rather than inventing a denominator.
-  const denom = Math.max(max ?? load, 1);
+  const denom = Math.max(max, 1);
   const pRole = Math.min(100, (o.byRole / denom) * 100);
   const pAss = Math.min(100 - pRole, (assigned / denom) * 100);
   const pFree = Math.max(0, 100 - pRole - pAss);
@@ -104,6 +102,7 @@ export default async function ShepherdOversightPage({
               <BandwidthField
                 shepherdPersonId={o.personId}
                 bandwidth={max}
+                bandwidthSet={o.bandwidthSet}
                 isAdmin={isAdmin}
               />
             </div>
@@ -136,7 +135,7 @@ export default async function ShepherdOversightPage({
           <span className="flex items-center gap-3.5 text-[11px] text-muted flex-wrap">
             <Key swatch="solid" label={`${o.byRole.toLocaleString()} by role`} />
             <Key swatch="hatch" label={`${assigned.toLocaleString()} assigned`} />
-            {room !== null && room > 0 && (
+            {room > 0 && (
               <Key swatch="empty" label={`${room.toLocaleString()} free`} />
             )}
             {over > 0 && (
@@ -144,9 +143,9 @@ export default async function ShepherdOversightPage({
                 {over.toLocaleString()} over their bandwidth
               </span>
             )}
-            {max === null && (
+            {!o.bandwidthSet && (
               <span className="text-subtle">
-                no bandwidth set &mdash; nothing to measure against
+                measured against the default &mdash; nobody has set theirs
               </span>
             )}
           </span>

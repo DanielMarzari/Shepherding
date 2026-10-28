@@ -3,7 +3,7 @@ import { getDb } from "./db";
 import { type TargetKind } from "./assignments-types";
 import { listAssignments } from "./assignments-read";
 import { getListByName } from "./lists-read";
-import { SHEPHERD_TEAM_LIST } from "./shepherd-assign";
+import { DEFAULT_BANDWIDTH, SHEPHERD_TEAM_LIST } from "./shepherd-assign";
 import { getShepherdTeamBreakdown } from "./shepherd-team-read";
 
 /** One shepherd's page: what they oversee, what it costs them, and the
@@ -42,7 +42,10 @@ export interface Oversight {
   /** Distinct people reached through groups, teams and the connections
    *  below. Not the sum of the tiles — somebody in two of them counts once. */
   byRole: number;
-  bandwidth: number | null;
+  /** Never null: DEFAULT_BANDWIDTH when they have none of their own. */
+  bandwidth: number;
+  /** True when this is their own figure rather than the default. */
+  bandwidthSet: boolean;
   connections: Connection[];
   /** People handed to them individually, newest first. */
   assignedPeople: AssignedPerson[];
@@ -99,15 +102,12 @@ export function getOversight(
     l: string | null;
   }>;
 
-  const bandwidth =
-    (
-      db
-        .prepare(
-          `SELECT max_people AS n FROM shepherd_bandwidth
-            WHERE org_id = ? AND shepherd_person_id = ?`,
-        )
-        .get(orgId, shepherdPersonId) as { n: number } | undefined
-    )?.n ?? null;
+  const ownBandwidth = db
+    .prepare(
+      `SELECT max_people AS n FROM shepherd_bandwidth
+        WHERE org_id = ? AND shepherd_person_id = ?`,
+    )
+    .get(orgId, shepherdPersonId) as { n: number } | undefined;
 
   return {
     personId: shepherdPersonId,
@@ -117,7 +117,8 @@ export function getOversight(
       getShepherdTeamBreakdown(orgId, [shepherdPersonId]).get(
         shepherdPersonId,
       )?.totalReach ?? 0,
-    bandwidth,
+    bandwidth: ownBandwidth?.n ?? DEFAULT_BANDWIDTH,
+    bandwidthSet: ownBandwidth !== undefined,
     connections: mine.map((a) => ({
       id: a.id,
       kind: a.targetKind,

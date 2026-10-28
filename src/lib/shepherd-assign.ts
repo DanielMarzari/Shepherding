@@ -20,6 +20,21 @@ import { getShepherdTeamBreakdown } from "./shepherd-team-read";
 
 export const SHEPHERD_TEAM_LIST = "REFERENCE - Shepherd Team";
 
+/** What a shepherd carries until somebody says otherwise.
+ *
+ *  Bandwidth used to start unset, on the reasoning that a number nobody
+ *  agreed to should not count toward the team's capacity. In practice that
+ *  left every page reading zero and the allocator refusing to place
+ *  anyone, so the first real question — is the team big enough — could not
+ *  be asked until 25 conversations had happened. A visible starting figure
+ *  everyone can argue with beats a blank that stops the page working.
+ *
+ *  It is a default, not a judgment: `bandwidthSet` says whether a shepherd
+ *  has one of their own, so the pages can still show who has actually been
+ *  asked. Clearing the field returns them to this number.
+ */
+export const DEFAULT_BANDWIDTH = 50;
+
 export interface ShepherdRow {
   personId: string;
   name: string;
@@ -28,9 +43,10 @@ export interface ShepherdRow {
   byRole: number;
   /** People handed to them on this page. */
   assigned: number;
-  /** null = never set. Shown as such rather than defaulted, so an unset
-   *  bandwidth cannot silently inflate the team's capacity. */
-  bandwidth: number | null;
+  /** Never null: DEFAULT_BANDWIDTH when they have none of their own. */
+  bandwidth: number;
+  /** True when this is their own figure rather than the default. */
+  bandwidthSet: boolean;
 }
 
 export interface AssignCapacity {
@@ -38,8 +54,9 @@ export interface AssignCapacity {
   shepherds: number;
   /** knownAdults / shepherds, rounded — the "if you split it evenly" line. */
   evenSplit: number;
-  /** Sum of every bandwidth that has been set. */
+  /** Sum across the whole team, defaults included. */
   totalBandwidth: number;
+  /** How many have a figure of their own rather than the default. */
   bandwidthsSet: number;
   byRole: number;
   assigned: number;
@@ -146,7 +163,8 @@ function getAssignShepherdsImpl(orgId: number): ShepherdRow[] {
         initials: initialsOf(name),
         byRole: breakdown.get(id)?.totalReach ?? 0,
         assigned: assigned.get(id) ?? 0,
-        bandwidth: bandwidth.get(id) ?? null,
+        bandwidth: bandwidth.get(id) ?? DEFAULT_BANDWIDTH,
+        bandwidthSet: bandwidth.has(id),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -183,8 +201,8 @@ function getAssignCapacityImpl(orgId: number): AssignCapacity {
     ).n ?? 0;
 
   const byRole = shepherds.reduce((s, r) => s + r.byRole, 0);
-  const withBandwidth = shepherds.filter((s) => s.bandwidth !== null);
-  const totalBandwidth = withBandwidth.reduce((s, r) => s + (r.bandwidth ?? 0), 0);
+  const totalBandwidth = shepherds.reduce((s, r) => s + r.bandwidth, 0);
+  const ownBandwidth = shepherds.filter((s) => s.bandwidthSet);
 
   return {
     knownAdults,
@@ -193,7 +211,7 @@ function getAssignCapacityImpl(orgId: number): AssignCapacity {
       ? Math.round(knownAdults / shepherds.length)
       : 0,
     totalBandwidth,
-    bandwidthsSet: withBandwidth.length,
+    bandwidthsSet: ownBandwidth.length,
     byRole,
     assigned,
     unassigned: Math.max(0, knownAdults - assigned),
@@ -429,10 +447,10 @@ export function bulkAssignUncontested(orgId: number): number {
 /** Spread the unclaimed pool across whoever still has room.
  *
  *  Respects every bandwidth and STOPS when the team is full rather than
- *  overfilling — a bandwidth nobody enforces is decoration. Shepherds with
- *  no bandwidth set are skipped entirely: we were never told what they can
- *  carry, and guessing on their behalf is how people end up with 400 people
- *  they never agreed to.
+ *  overfilling — a bandwidth nobody enforces is decoration. Everyone has a
+ *  bandwidth now, their own or DEFAULT_BANDWIDTH, so nobody is skipped;
+ *  what stops this filling someone past what they agreed to is the figure
+ *  itself, which is why it is worth setting properly.
  *
  *  Fills the emptiest shepherd first, so the result is level rather than
  *  alphabetical. Returns how many were placed and how many were left.
@@ -443,10 +461,9 @@ export function autoAssignPool(orgId: number): {
 } {
   const db = getDb();
   const shepherds = getAssignShepherds(orgId)
-    .filter((s) => s.bandwidth !== null)
     .map((s) => ({
       id: s.personId,
-      room: (s.bandwidth ?? 0) - s.byRole - s.assigned,
+      room: s.bandwidth - s.byRole - s.assigned,
     }))
     .filter((s) => s.room > 0);
 

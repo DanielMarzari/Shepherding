@@ -59,7 +59,7 @@ export function AddConnection({
   assignedPersonIds: string[];
   /** What they carry today — the running total counts up from here. */
   load: number;
-  bandwidth: number | null;
+  bandwidth: number;
 }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<Mode>("group");
@@ -331,7 +331,7 @@ export function AddConnection({
                       <strong className="text-fg">
                         {(load + adding).toLocaleString()}
                       </strong>
-                      {bandwidth !== null && ` of ${bandwidth.toLocaleString()}`}
+                      {` of ${bandwidth.toLocaleString()}`}
                     </span>
                   )}
                   {selected.size > 0 && (

@@ -4,17 +4,21 @@ import { useActionState } from "react";
 import { saveOneBandwidthAction, type OversightState } from "./actions";
 
 /** This shepherd's bandwidth, set here rather than on a list of 25.
- *  Blank means unset, which is not the same as nought: an unset bandwidth
- *  is left out of the team total instead of silently reading as zero. */
+ *  Everyone starts on the team default; clearing the field returns them to
+ *  it rather than to nothing, and the label below says which they are on so
+ *  a default is never mistaken for a decision. */
 export function BandwidthField({
   shepherdPersonId,
   bandwidth,
+  bandwidthSet,
   isAdmin,
 }: {
   shepherdPersonId: string;
-  bandwidth: number | null;
+  bandwidth: number;
+  bandwidthSet: boolean;
   isAdmin: boolean;
 }) {
+  const caption = bandwidthSet ? "bandwidth" : "bandwidth · default";
   const [state, action, pending] = useActionState<
     OversightState | null,
     FormData
@@ -24,13 +28,9 @@ export function BandwidthField({
     return (
       <div>
         <div className="text-2xl font-semibold tnum">
-          {bandwidth === null ? (
-            <span className="text-subtle text-base">not set</span>
-          ) : (
-            bandwidth.toLocaleString()
-          )}
+          {bandwidth.toLocaleString()}
         </div>
-        <div className="text-[11px] text-subtle leading-snug">bandwidth</div>
+        <div className="text-[11px] text-subtle leading-snug">{caption}</div>
       </div>
     );
   }
@@ -42,8 +42,8 @@ export function BandwidthField({
           type="number"
           min={0}
           name="bandwidth"
-          defaultValue={bandwidth ?? ""}
-          placeholder="not set"
+          defaultValue={bandwidth}
+          placeholder={String(bandwidth)}
           aria-label="Bandwidth — how many people this shepherd is responsible for"
           className="w-[86px] bg-bg border border-border-soft rounded px-2 py-1.5 text-[15px] text-right tnum focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         />
@@ -57,7 +57,7 @@ export function BandwidthField({
         </button>
       </div>
       <div className="text-[11px] text-subtle leading-snug mt-1">
-        bandwidth
+        {caption}
         {state?.message && (
           <span
             className={`ml-1.5 ${

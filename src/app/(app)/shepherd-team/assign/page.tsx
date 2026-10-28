@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { requireOrg } from "@/lib/auth";
 import {
+  DEFAULT_BANDWIDTH,
   getAssignBuckets,
   getAssignCapacity,
   getAssignShepherds,
@@ -66,11 +67,22 @@ export default async function AssignPage() {
             <p className="text-muted text-sm mt-1.5 max-w-2xl leading-relaxed">
               Everyone who is{" "}
               <strong className="text-fg">Known</strong>{" "}
-              should be assigned to someone on the shepherd team.{" "}
-              <Link href="/shepherd-team" className="text-accent hover:underline">
-                See shepherd team &rarr;
-              </Link>
+              should be assigned to someone on the shepherd team.
             </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/shepherd-team"
+              className="shrink-0 px-3.5 py-2 rounded border border-border-soft text-[13px] hover:bg-bg-elev-2"
+            >
+              Set who they oversee &rarr;
+            </Link>
+            <Link
+              href="/shepherd-team/bandwidth"
+              className="shrink-0 px-3.5 py-2 rounded border border-border-soft text-[13px] hover:bg-bg-elev-2"
+            >
+              Set bandwidths &rarr;
+            </Link>
           </div>
         </div>
 
@@ -80,8 +92,8 @@ export default async function AssignPage() {
             <h2 className="text-sm font-semibold">Capacity</h2>
             <span className="text-xs text-subtle max-w-xl text-right">
               Bandwidth is how many people you are responsible for getting
-              connected — not how many you can befriend. Set it per shepherd;
-              there is no cap.
+              connected — not how many you can befriend. Everyone starts at
+              {" "}{DEFAULT_BANDWIDTH}; set it per shepherd, there is no cap.
             </span>
           </div>
 
@@ -94,7 +106,7 @@ export default async function AssignPage() {
               label={
                 cap.bandwidthsSet === cap.shepherds
                   ? "team bandwidth as set"
-                  : `team bandwidth · ${cap.shepherds - cap.bandwidthsSet} not set`
+                  : `team bandwidth · ${cap.shepherds - cap.bandwidthsSet} on the default`
               }
               tone={cap.beyond > 0 ? "warn" : "good"}
             />

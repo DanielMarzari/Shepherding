@@ -42,9 +42,10 @@ export function BulkAssignButton({
 /** The one bulk move for the pool.
  *
  *  Fills the emptiest shepherd first and stops at every bandwidth rather
- *  than overfilling — a maximum nobody enforces is decoration. Shepherds
- *  with no bandwidth set are skipped: we were never told what they can
- *  carry, and deciding that for them is not this button's job.
+ *  than overfilling — a maximum nobody enforces is decoration. Everyone has
+ *  a bandwidth, their own or the team default, so nobody is skipped; the
+ *  figure is the only thing holding this back, which is the argument for
+ *  setting it before pressing the button.
  */
 export function AutoAssignButton({
   count,
@@ -67,8 +68,8 @@ export function AutoAssignButton({
           Auto-assign all {count.toLocaleString()}.
         </strong>{" "}
         Fills whoever has most room first, and stops at every bandwidth rather
-        than overfilling. Shepherds with no bandwidth set are left out. You can
-        change any of them afterwards.
+        than overfilling. Anyone still on the team default is filled to that.
+        You can change any of them afterwards.
       </span>
       {state?.message && (
         <span
