@@ -33,6 +33,15 @@ export function SettingsPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  /** Ticks the suggestions without saving, so you can look before you
+   *  commit. Null until the button is pressed, so it never overrides what
+   *  is already stored. */
+  const [takeSuggested, setTakeSuggested] = useState(false);
+
+  const suggested = useMemo(
+    () => [...ccOptions, ...eventOptions].filter((o) => o.suggested && !o.selected),
+    [ccOptions, eventOptions],
+  );
   const [state, action, pending] = useActionState<SeniorsState | null, FormData>(
     saveSeniorsSettingsAction,
     null,
@@ -55,6 +64,15 @@ export function SettingsPanel({
       const arr = out.get(o.kind) ?? [];
       arr.push(o);
       out.set(o.kind, arr);
+    }
+    // Suggestions first inside each kind: they are the ones worth reading.
+    for (const arr of out.values()) {
+      arr.sort(
+        (a, b) =>
+          Number(b.suggested) - Number(a.suggested) ||
+          b.people - a.people ||
+          a.name.localeCompare(b.name),
+      );
     }
     return out;
   }, [eventOptions, q]);
@@ -83,13 +101,35 @@ export function SettingsPanel({
       {open && (
         <form action={action} className="border-t border-border-soft">
           <div className="px-5 py-4 space-y-5">
+            {suggested.length > 0 && (
+              <div className="rounded border border-accent/40 bg-accent-soft-bg/20 px-3.5 py-3 flex flex-wrap items-center gap-3">
+                <p className="text-xs text-muted leading-relaxed flex-1 min-w-[280px]">
+                  <strong className="text-fg">
+                    {suggested.length} look like Seniors In Action.
+                  </strong>{" "}
+                  Matched on <span className="mono text-fg">SIA</span> in
+                  capitals, which the ministry always uses &mdash; lower-case
+                  &ldquo;sia&rdquo; would also catch Malaysia, SE Asia and
+                  Iglesia de Fe, so case is the whole signal here. Check them
+                  before saving.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setTakeSuggested(true)}
+                  disabled={takeSuggested}
+                  className="shrink-0 px-3 py-1.5 rounded border border-accent text-accent text-xs font-medium cursor-pointer disabled:opacity-50"
+                >
+                  {takeSuggested ? "Ticked below" : "Tick all of them"}
+                </button>
+              </div>
+            )}
             <Section
               title="Mailing lists"
               note="Constant Contact lists the ministry writes to. Both of the seniors lists count — the retired one still holds people the current one does not."
             >
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                 {ccOptions.map((o) => (
-                  <Tick key={o.id} name="ccList" o={o} unit="contacts" />
+                  <Tick key={o.id} name="ccList" o={o} unit="contacts" take={takeSuggested} />
                 ))}
               </div>
             </Section>
@@ -117,7 +157,13 @@ export function SettingsPanel({
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                         {rows.map((o) => (
-                          <Tick key={`${o.kind}:${o.id}`} name={o.kind} o={o} unit="people" />
+                          <Tick
+                            key={`${o.kind}:${o.id}`}
+                            name={o.kind}
+                            o={o}
+                            unit="people"
+                            take={takeSuggested}
+                          />
                         ))}
                       </div>
                     </div>
@@ -197,21 +243,34 @@ function Tick({
   name,
   o,
   unit,
+  take,
 }: {
   name: string;
   o: PickerOption;
   unit: string;
+  /** "Tick all of them" was pressed — remount so the box picks up the new
+   *  default without taking the field over as controlled state. */
+  take: boolean;
 }) {
+  const on = o.selected || (take && o.suggested);
   return (
     <label className="flex items-center gap-2 text-[13px] rounded px-2 py-1 hover:bg-bg-elev-2 cursor-pointer">
       <input
+        key={on ? "on" : "off"}
         type="checkbox"
         name={name}
         value={o.id}
-        defaultChecked={o.selected}
+        defaultChecked={on}
         className="accent-[var(--accent)]"
       />
-      <span className="min-w-0 flex-1 truncate">{o.name}</span>
+      <span className="min-w-0 flex-1 truncate">
+        {o.name}
+        {o.suggested && (
+          <span className="text-[10px] text-accent border border-accent/40 rounded px-1 py-0.5 ml-1.5 align-middle">
+            SIA
+          </span>
+        )}
+      </span>
       <span
         className={`text-[11px] tnum shrink-0 ${
           o.people === 0 ? "text-subtle" : "text-muted"

@@ -44,22 +44,28 @@ const SECTION_TO_GROUP: Record<string, string> = {
  *  reappears on the next render. Making that stick needs the removal persisted
  *  (a dismissed-pages list on nav_config); not worth the machinery until
  *  somebody actually wants one of these gone. */
-const MANAGED_PAGES: Record<string, string> = {
-  spotify: "settings-integration",
+const MANAGED_PAGES: Record<string, { id: string; label: string }> = {
+  spotify: { id: "settings-integration", label: "Integrations" },
   // The assignment page. Faith Church's saved nav has a "leadership" group
   // (labelled "Shepherding") holding the shepherd team, so the page that
   // assigns Known people to that team belongs beside it — without this it
   // would exist only at its URL.
-  "shepherd-assign": "leadership",
-  "shepherd-bandwidth": "leadership",
+  "shepherd-assign": { id: "leadership", label: "Shepherding" },
+  "shepherd-bandwidth": { id: "leadership", label: "Shepherding" },
+  // The rosters nobody on the shepherd team is connected to. Beside the
+  // team it is about.
+  "shepherd-gaps": { id: "leadership", label: "Shepherding" },
+  // Who is actually in the seniors ministry. It sits with the audits: like
+  // them it is a list of things to go and fix, not a dashboard to read.
+  "seniors-audit": { id: "audit", label: "Audits" },
   // Giving impact joins the two pages it shares a method with. Faith Church's
   // saved nav keeps Sermon impact and Announcement impact together in
   // "Next steps", so that is where this belongs for them too — without it the
   // page would be reachable only by URL.
-  "giving-impact": "next-steps",
+  "giving-impact": { id: "next-steps", label: "Next steps" },
   // Where PushPay's and Subsplash's credential slots moved when their own
   // pages stopped holding credentials (migration 0092).
-  credentials: "settings-integration",
+  credentials: { id: "settings-integration", label: "Integrations" },
 };
 
 const MANAGED_GROUPS: Record<string, { label: string; icon?: string; mode: "top" | "drill" }> = {
@@ -207,9 +213,13 @@ export function resolveNavConfig(orgId: number): ResolvedNav {
       g.items.filter((it) => it.kind === "page").map((it) => it.pageKey),
     ),
   );
-  for (const [pageKey, gid] of Object.entries(MANAGED_PAGES)) {
+  for (const [pageKey, target] of Object.entries(MANAGED_PAGES)) {
     if (placedPages.has(pageKey)) continue;
-    const g = groupById.get(gid);
+    // By id, then by what the admin called the layer. An org that built its
+    // own folder — Faith Church's "Audits" has a generated id — would
+    // otherwise never be found by id, and the page would exist only at its
+    // URL, which is the exact failure this table was written to prevent.
+    const g = groupById.get(target.id) ?? groupByLabel.get(norm(target.label));
     if (!g) continue; // the admin removed the group; respect that
     g.items.push({ kind: "page", pageKey });
   }

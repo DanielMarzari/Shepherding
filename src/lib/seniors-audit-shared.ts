@@ -117,6 +117,9 @@ export interface PickerOption {
   /** When it last ran, for the two-year window. */
   when: string | null;
   selected: boolean;
+  /** The name carries SIA in capitals, so it is almost certainly this
+   *  ministry. A suggestion, never a tick. */
+  suggested: boolean;
 }
 
 export interface SeniorsSelection {
