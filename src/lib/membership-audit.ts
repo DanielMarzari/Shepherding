@@ -242,7 +242,7 @@ function getMembershipAuditImpl(
     // question rather than the general "inactive" one — and it reads as a
     // reason to act, which "Inactive in PCO" does not.
     if (isMovedAwayReason(r.inactiveReason)) {
-      flags.push("Moved out of area, still a member");
+      flags.push("Moved out of area");
     }
     if (statusLower === "inactive" || r.inactivatedAt) flags.push("Inactive in PCO");
     if (!first && !last) flags.push("No name on record");
