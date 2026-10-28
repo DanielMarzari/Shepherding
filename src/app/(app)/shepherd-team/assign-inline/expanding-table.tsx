@@ -101,8 +101,14 @@ function Row({
 
   return (
     <>
+      {/* The whole row is the control, not a disclosure arrow beside the
+          name: the row is what you are pointing at, so that is what should
+          respond. Still a real button for the keyboard — it sits in the
+          first cell, stretched over the row, so Tab and Enter work and a
+          screen reader is told what it does. */}
       <tr
-        className={`border-b border-border-softer ${
+        onClick={onToggle}
+        className={`border-b border-border-softer cursor-pointer ${
           open ? "bg-bg-elev-2/60" : "hover:bg-bg-elev-2/50"
         }`}
       >
@@ -114,23 +120,12 @@ function Row({
             >
               {s.initials}
             </span>
-            {/* A button, not a link: this opens the detail in place. The
-                row below carries a link to the standalone page for anyone
-                who wants a URL to send. */}
             <button
               type="button"
-              onClick={onToggle}
               aria-expanded={open}
-              className="font-medium text-accent hover:underline cursor-pointer text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded flex items-center gap-1.5"
+              aria-label={`${open ? "Close" : "Open"} what ${s.name} oversees`}
+              className="font-medium text-left cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
             >
-              <span
-                aria-hidden="true"
-                className={`text-[10px] text-muted transition-transform ${
-                  open ? "rotate-90" : ""
-                }`}
-              >
-                ▶
-              </span>
               {s.name}
             </button>
           </span>
@@ -238,19 +233,17 @@ function Detail({
 
   const assigned = data.assignedPeople.length;
   const load = data.byRole + assigned;
-  const b = data.breakdown;
 
   return (
     <div className="px-5 py-5 space-y-4 border-l-2 border-accent">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        {/* The four buckets from the shepherd team page, so opening a row
-            answers "what is their reach made of" without a second trip. */}
-        <div className="flex flex-wrap gap-6">
-          <Bucket n={b?.volunteerLeaders ?? 0} label="volunteer leaders" />
-          <Bucket n={b?.congregants ?? 0} label="congregants" />
-          <Bucket n={b?.careNonShepherded ?? 0} label="care, no group" />
-          <Bucket n={b?.staffDirect ?? 0} label="staff" />
-          <Bucket n={assigned} label="named individually" />
+        {/* Two numbers, because there are two questions: who comes with
+            the role, and who was handed to them. What the role is made of
+            is the tiles below — breaking it into reach buckets here says
+            the same thing twice, less clearly. */}
+        <div className="flex flex-wrap gap-7">
+          <Bucket n={data.byRole} label="shepherd through their role" />
+          <Bucket n={assigned} label="assigned to them" />
         </div>
         <div className="flex items-start gap-5">
           {/* Its own form posts one bandwidth; the table's Save posts all

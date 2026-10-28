@@ -15,12 +15,14 @@ import { BulkAssignButton } from "./bulk-button";
  *  two copies of this that have quietly drifted apart.
  */
 export function CapacityCard({ cap }: { cap: AssignCapacity }) {
-  // Bar segments are a share of whichever is larger: what the team has
-  // agreed to carry, or what there is to carry. Scaling to the bandwidth
-  // alone would hide the overflow, which is the one thing worth seeing.
-  const scale = Math.max(cap.totalBandwidth, cap.knownAdults, 1);
+  // The bar measures the people, not the bandwidth: everyone in Known,
+  // split into those somebody already has, those a free place could take
+  // today, and those nobody on the team has room for.
+  const scale = Math.max(cap.knownAdults, 1);
   const pct = (n: number) => `${((n / scale) * 100).toFixed(1)}%`;
-  const unused = Math.max(0, cap.totalBandwidth - cap.byRole - cap.assigned);
+  // Free places are only worth showing up to the number of people left to
+  // place — room beyond that is not coverage of anybody.
+  const placeable = Math.min(cap.freeRoom, cap.unassigned);
 
   return (
     <div className="rounded-lg border border-border-soft bg-bg-elev p-5">
@@ -35,63 +37,87 @@ export function CapacityCard({ cap }: { cap: AssignCapacity }) {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <Stat n={cap.knownAdults} label="Known adults" />
-        <Stat n={cap.shepherds} label="shepherds" />
-        <Stat n={cap.evenSplit} label="each, split evenly" />
+        <Stat n={cap.unassigned} label="still need a shepherd" />
         <Stat
-          n={cap.totalBandwidth}
+          n={cap.freeRoom}
+          label="free places to assign into"
+          tone={cap.freeRoom > 0 ? "good" : undefined}
+        />
+        <Stat
+          n={cap.uncovered}
           label={
-            cap.bandwidthsSet === cap.shepherds
-              ? "team bandwidth as set"
-              : `team bandwidth · ${cap.shepherds - cap.bandwidthsSet} on the default`
+            cap.uncovered > 0
+              ? "nobody has room for them"
+              : "everyone can be covered"
           }
-          tone={cap.beyond > 0 ? "warn" : "good"}
+          tone={cap.uncovered > 0 ? "warn" : "good"}
         />
       </div>
 
       <div
         className="flex h-7 rounded-md overflow-hidden border border-border-soft"
         role="img"
-        aria-label={`${cap.byRole} by role, ${cap.assigned} assigned, ${unused} unused bandwidth, ${cap.beyond} beyond the team's bandwidth`}
+        aria-label={`Of ${cap.knownAdults} known adults: ${cap.assigned} assigned, ${placeable} could be assigned into a free place today, ${cap.uncovered} nobody has room for`}
       >
-        <Seg w={pct(cap.byRole)} bg="var(--accent)" fg="var(--accent-fg)" n={cap.byRole} />
-        <Seg w={pct(cap.assigned)} bg="color-mix(in srgb, var(--accent) 45%, transparent)" fg="var(--fg)" n={cap.assigned} />
-        {unused > 0 && (
+        <Seg
+          w={pct(cap.assigned)}
+          bg="var(--accent)"
+          fg="var(--accent-fg)"
+          n={cap.assigned}
+        />
+        {placeable > 0 && (
           <div
-            style={{ width: pct(unused) }}
+            style={{ width: pct(placeable) }}
             className="bg-bg-elev-2 text-muted text-[11px] font-semibold flex items-center justify-center tnum"
           >
-            {unused.toLocaleString()} unused
+            {placeable.toLocaleString()} room for
           </div>
         )}
-        {cap.beyond > 0 && (
+        {cap.uncovered > 0 && (
           <div
-            style={{ width: pct(cap.beyond), background: "var(--bad-soft-fg)" }}
+            style={{ width: pct(cap.uncovered), background: "var(--bad-soft-fg)" }}
             className="text-[11px] font-bold flex items-center justify-center tnum text-bg"
           >
-            {cap.beyond.toLocaleString()} beyond
+            {cap.uncovered.toLocaleString()} no room
           </div>
         )}
       </div>
 
       <div className="flex flex-wrap gap-4 mt-2 text-[11px] items-center">
-        <Key bg="var(--accent)" label="by role" />
-        <Key bg="color-mix(in srgb, var(--accent) 45%, transparent)" label="assigned" />
-        <Key bg="var(--bg-elev-2)" label="unused" />
-        {cap.beyond > 0 && (
-          <Key bg="var(--bad-soft-fg)" label="beyond what the team has agreed to carry" />
+        <Key bg="var(--accent)" label="has a shepherd" />
+        <Key bg="var(--bg-elev-2)" label="a free place could take them today" />
+        {cap.uncovered > 0 && (
+          <Key bg="var(--bad-soft-fg)" label="nobody on the team has room" />
         )}
         <span className="ml-auto text-muted">
-          {cap.beyond > 0 ? (
+          {cap.uncovered > 0 ? (
             <>
-              Raise the average to{" "}
-              <strong className="tnum">{cap.neededAverage}</strong> and the team
-              covers everyone.
+              An average bandwidth of{" "}
+              <strong className="tnum">{cap.neededAverage}</strong> would cover
+              everyone.
             </>
           ) : (
-            <>The team&rsquo;s bandwidth covers everyone in Known.</>
+            <>The team has room for everyone in Known.</>
           )}
         </span>
       </div>
+
+      {cap.shepherdsOver > 0 && (
+        <p className="text-xs text-subtle mt-3 leading-relaxed max-w-3xl">
+          Separately,{" "}
+          <strong className="text-fg tnum">{cap.shepherdsOver}</strong>{" "}
+          {cap.shepherdsOver === 1 ? "shepherd carries" : "shepherds carry"}{" "}
+          more than their own bandwidth &mdash;{" "}
+          <strong className="text-fg tnum">
+            {cap.overCommitted.toLocaleString()}
+          </strong>{" "}
+          people above it in total. That is a question about how those
+          ministries are structured, and it does not reduce what the rest of
+          the team can take on: the free places above are already counted per
+          shepherd, so nobody&rsquo;s overload cancels out anybody
+          else&rsquo;s room.
+        </p>
+      )}
     </div>
   );
 }

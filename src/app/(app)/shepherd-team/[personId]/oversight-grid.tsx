@@ -159,9 +159,11 @@ function Tile({
           title
         )}
       </div>
-      <div className="text-[11px] text-subtle mt-auto pt-1.5">{detail}</div>
+      <div className="text-[11px] text-subtle mt-auto pt-1.5 pr-7">
+        {detail}
+      </div>
       {isAdmin && (
-        <div className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+        <div className="absolute bottom-2.5 right-2.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
           {remove}
         </div>
       )}
@@ -209,6 +211,8 @@ function Unassign({
   );
 }
 
+/** Bottom right, where the tile has nothing written, and a bin rather
+ *  than an × so it reads as "remove this" at a glance. */
 function RemoveButton({
   pending,
   label,
@@ -222,9 +226,28 @@ function RemoveButton({
       disabled={pending}
       aria-label={label}
       title={label}
-      className="w-5 h-5 rounded border border-border-soft bg-bg text-[11px] leading-none text-muted hover:text-bad-soft-fg hover:border-bad-soft-fg cursor-pointer disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="w-6 h-6 rounded border border-border-soft bg-bg flex items-center justify-center text-muted hover:text-bad-soft-fg hover:border-bad-soft-fg cursor-pointer disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
-      {pending ? "·" : "×"}
+      {pending ? (
+        <span className="text-[11px] leading-none">·</span>
+      ) : (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="w-3.5 h-3.5"
+        >
+          <path d="M3 6h18" />
+          <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+          <path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" />
+          <path d="M10 11v6" />
+          <path d="M14 11v6" />
+        </svg>
+      )}
     </button>
   );
 }

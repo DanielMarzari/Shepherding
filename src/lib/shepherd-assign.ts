@@ -62,8 +62,24 @@ export interface AssignCapacity {
   assigned: number;
   /** Known adults with no shepherd yet. */
   unassigned: number;
-  /** How many more than the team has agreed to carry. 0 when it fits. */
-  beyond: number;
+  /** Places left, counted per shepherd and never below nought.
+   *
+   *  Bandwidth is not a pool. Somebody carrying 150 against a bandwidth of
+   *  50 does not use up anybody else's room — the 50 free beside a
+   *  shepherd with nobody are still 50 people who can be assigned today.
+   *  Summing the team and subtracting what it carries nets one person's
+   *  overload against another's free places and reports no room when there
+   *  is plenty, which is the opposite of what this page is for. */
+  freeRoom: number;
+  /** People sitting above somebody's own bandwidth, summed. A question
+   *  about how that one ministry is structured, not about the team's room
+   *  to take anybody else on. */
+  overCommitted: number;
+  /** How many shepherds that is. */
+  shepherdsOver: number;
+  /** Known adults who would still have nobody once every free place is
+   *  used. 0 when the team can reach everyone. */
+  uncovered: number;
   /** What the average bandwidth would have to be to cover everyone. */
   neededAverage: number;
 }
@@ -204,6 +220,22 @@ function getAssignCapacityImpl(orgId: number): AssignCapacity {
   const totalBandwidth = shepherds.reduce((s, r) => s + r.bandwidth, 0);
   const ownBandwidth = shepherds.filter((s) => s.bandwidthSet);
 
+  // Per shepherd, and the two directions kept apart. See freeRoom above
+  // for why they are never netted off against each other.
+  let freeRoom = 0;
+  let overCommitted = 0;
+  let shepherdsOver = 0;
+  for (const r of shepherds) {
+    const slack = r.bandwidth - r.byRole - r.assigned;
+    if (slack > 0) freeRoom += slack;
+    else if (slack < 0) {
+      overCommitted += -slack;
+      shepherdsOver++;
+    }
+  }
+
+  const unassigned = Math.max(0, knownAdults - assigned);
+
   return {
     knownAdults,
     shepherds: shepherds.length,
@@ -214,8 +246,11 @@ function getAssignCapacityImpl(orgId: number): AssignCapacity {
     bandwidthsSet: ownBandwidth.length,
     byRole,
     assigned,
-    unassigned: Math.max(0, knownAdults - assigned),
-    beyond: Math.max(0, knownAdults - totalBandwidth),
+    unassigned,
+    freeRoom,
+    overCommitted,
+    shepherdsOver,
+    uncovered: Math.max(0, unassigned - freeRoom),
     neededAverage: shepherds.length
       ? Math.ceil(knownAdults / shepherds.length)
       : 0,

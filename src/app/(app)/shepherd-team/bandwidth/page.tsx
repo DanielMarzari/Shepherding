@@ -40,7 +40,10 @@ export default async function BandwidthPage() {
     );
   }
 
-  const short = Math.max(0, cap.knownAdults - cap.totalBandwidth);
+  // Not knownAdults minus the team total: that nets one shepherd's
+  // overload against another's free places. See freeRoom in
+  // shepherd-assign for why the two are kept apart.
+  const short = cap.uncovered;
 
   return (
     <AppShell active="Bandwidth" breadcrumb="Shepherd team › Bandwidth">
@@ -84,18 +87,22 @@ export default async function BandwidthPage() {
                   : `team total · ${cap.shepherds - cap.bandwidthsSet} of ${cap.shepherds} still on ${DEFAULT_BANDWIDTH}`
               }
             />
-            <Stat n={cap.byRole + cap.assigned} label="carried today" />
+            <Stat
+              n={cap.freeRoom}
+              label="free places across the team"
+              tone={cap.freeRoom > 0 ? "good" : undefined}
+            />
             <Stat
               n={short}
-              label={short > 0 ? "short of covering everyone" : "nobody uncovered"}
+              label={short > 0 ? "nobody has room for them" : "nobody uncovered"}
               tone={short > 0 ? "warn" : "good"}
             />
           </div>
           <p className="text-xs text-subtle mt-3.5 leading-relaxed">
             {short > 0 ? (
               <>
-                The team&rsquo;s bandwidth does not reach everyone in Known.
-                An average of{" "}
+                Even using every free place, the team does not reach
+                everyone in Known. An average of{" "}
                 <strong className="text-fg tnum">{cap.neededAverage}</strong>{" "}
                 each would cover it &mdash; but the honest answer may be that
                 the team needs more people on it, not larger numbers on the

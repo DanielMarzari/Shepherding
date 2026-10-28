@@ -8,9 +8,7 @@ import {
   listTargetOptions,
 } from "@/lib/assignments-read";
 import { getOversight, optionReachCounts } from "@/lib/shepherd-oversight";
-import { getShepherdTeamBreakdown } from "@/lib/shepherd-team-read";
 import type { AssignedPerson, Connection } from "@/lib/shepherd-oversight";
-import type { ShepherdBreakdown } from "@/lib/shepherd-team-read";
 
 export interface RowDetail {
   personId: string;
@@ -20,7 +18,6 @@ export interface RowDetail {
   byRole: number;
   connections: Connection[];
   assignedPeople: AssignedPerson[];
-  breakdown: ShepherdBreakdown | null;
   targetsByKind: Record<TargetKind, TargetOption[]>;
   counts: Record<string, number>;
 }
@@ -53,7 +50,6 @@ export async function loadRowAction(personId: string): Promise<RowDetail | null>
     byRole: o.byRole,
     connections: o.connections,
     assignedPeople: o.assignedPeople,
-    breakdown: getShepherdTeamBreakdown(session.orgId, [personId]).get(personId) ?? null,
     targetsByKind,
     counts: optionReachCounts(session.orgId),
   };
