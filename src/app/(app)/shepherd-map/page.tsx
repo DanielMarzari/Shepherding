@@ -13,7 +13,9 @@ import {
   listShepherds,
   listTargetOptions,
 } from "@/lib/assignments-read";
+import { listOversightGaps } from "@/lib/oversight-gaps";
 import { AddAssignmentForm } from "./AddAssignmentForm";
+import { OversightGapList } from "./oversight-gaps";
 import { OrgAccessToggle } from "./OrgAccessToggle";
 import { removeAssignmentAction } from "./actions";
 
@@ -34,6 +36,7 @@ export default async function ShepherdMapPage() {
   const shepherds = listShepherds(session.orgId);
   const assignments = listAssignments(session.orgId);
   const orgWideAccess = listOrgWideAccessIds(session.orgId);
+  const gaps = listOversightGaps(session.orgId);
 
   const targetsByKind = Object.fromEntries(
     (Object.keys(TARGET_KIND_LABELS) as TargetKind[]).map((k) => [
@@ -85,6 +88,14 @@ export default async function ShepherdMapPage() {
             are and changes nothing anyone sees.
           </p>
         </div>
+
+        {shepherds.length > 0 && (
+          <OversightGapList
+            gaps={gaps}
+            shepherds={shepherds}
+            isAdmin={isAdmin}
+          />
+        )}
 
         {shepherds.length === 0 ? (
           <Card className="p-6 text-sm text-muted">

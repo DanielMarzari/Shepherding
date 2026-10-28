@@ -24,8 +24,13 @@ export async function addAssignmentAction(formData: FormData) {
     noteRaw === "" ? null : noteRaw.slice(0, 500),
   );
 
+  // The gap list at the top of the map shrinks as connections are made,
+  // and every page that counts what a shepherd oversees changes with it.
   revalidatePath("/shepherd-map");
   revalidatePath("/shepherd-team");
+  revalidatePath("/shepherd-team/assign");
+  revalidatePath("/shepherd-team/assign-inline");
+  revalidatePath("/shepherd-team/bandwidth");
   revalidatePath(`/shepherd-team/${shepherdPersonId}`);
 }
 
