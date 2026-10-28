@@ -45,9 +45,13 @@ interface RawRow {
 }
 
 /** PCO's inactive reasons are free text an admin can rename, so match on
- *  the word rather than the exact label this organisation happens to use. */
+ *  the words rather than the exact labels this organisation happens to use. */
 function isDeceasedReason(reason: string | null): boolean {
   return reason != null && /deceas|decease?d|died|death/i.test(reason);
+}
+
+function isMovedAwayReason(reason: string | null): boolean {
+  return reason != null && /moved|relocat/i.test(reason);
 }
 
 const PLACEHOLDER_NAMES = new Set([
@@ -84,14 +88,30 @@ function getMembershipAuditImpl(
   // Only high-confidence pairs count. The low tier holds 6,979 pairs and
   // touches 480 of 1,078 members, which would make "Worth a look" useless;
   // high touches 29.
+  //
+  // BOTH sides of a pair must hold the membership type being audited. A
+  // member who duplicates some first-time visitor's record is a tidiness
+  // problem and belongs to /audit/duplicates, which still shows every pair.
+  // The question *this* page asks is narrower: are two of these rows the
+  // same human, so that the count of members is overstated? Only a pair
+  // that is the audited type on both sides can do that.
   const raw = db
     .prepare(
-      `WITH dups AS (
-         SELECT person_a AS pid FROM duplicate_pairs
-          WHERE org_id = ? AND confidence = 'high'
+      `WITH same_type AS (
+         SELECT dp.person_a, dp.person_b
+           FROM duplicate_pairs dp
+           JOIN pco_people a
+             ON a.org_id = dp.org_id AND a.pco_id = dp.person_a
+            AND a.membership_type = ?
+           JOIN pco_people b
+             ON b.org_id = dp.org_id AND b.pco_id = dp.person_b
+            AND b.membership_type = ?
+          WHERE dp.org_id = ? AND dp.confidence = 'high'
+       ),
+       dups AS (
+         SELECT person_a AS pid FROM same_type
          UNION
-         SELECT person_b FROM duplicate_pairs
-          WHERE org_id = ? AND confidence = 'high'
+         SELECT person_b FROM same_type
        )
        SELECT
          p.pco_id              AS pcoId,
@@ -118,7 +138,7 @@ function getMembershipAuditImpl(
         AND dod.field_name = 'Date of Death'
       WHERE p.org_id = ? AND p.membership_type = ?`,
     )
-    .all(orgId, orgId, orgId, membershipType) as RawRow[];
+    .all(membershipType, membershipType, orgId, orgId, membershipType) as RawRow[];
 
   // Who each person pairs with, resolved to names in one pass. The column
   // showing "Possible duplicate" without saying duplicate of WHOM made the
@@ -129,11 +149,13 @@ function getMembershipAuditImpl(
               pa.first_name AS aFirst, pa.last_name AS aLast,
               pb.first_name AS bFirst, pb.last_name AS bLast
          FROM duplicate_pairs dp
-         LEFT JOIN pco_people pa ON pa.org_id = dp.org_id AND pa.pco_id = dp.person_a
-         LEFT JOIN pco_people pb ON pb.org_id = dp.org_id AND pb.pco_id = dp.person_b
+         JOIN pco_people pa ON pa.org_id = dp.org_id AND pa.pco_id = dp.person_a
+          AND pa.membership_type = ?
+         JOIN pco_people pb ON pb.org_id = dp.org_id AND pb.pco_id = dp.person_b
+          AND pb.membership_type = ?
         WHERE dp.org_id = ? AND dp.confidence = 'high'`,
     )
-    .all(orgId) as Array<{
+    .all(membershipType, membershipType, orgId) as Array<{
     a: string;
     b: string;
     aFirst: string | null;
@@ -214,6 +236,13 @@ function getMembershipAuditImpl(
     // would quietly make this one unfilterable.
     if (r.diedOn || isDeceasedReason(r.inactiveReason)) {
       flags.push("Deceased, still a member");
+    }
+    // Inactive *because they left the area*. Someone who moved away should
+    // have come off the roster when they went, so this is a membership
+    // question rather than the general "inactive" one — and it reads as a
+    // reason to act, which "Inactive in PCO" does not.
+    if (isMovedAwayReason(r.inactiveReason)) {
+      flags.push("Moved out of area, still a member");
     }
     if (statusLower === "inactive" || r.inactivatedAt) flags.push("Inactive in PCO");
     if (!first && !last) flags.push("No name on record");

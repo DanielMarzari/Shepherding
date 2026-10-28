@@ -31,6 +31,7 @@ export {
  *  list and the producer cannot drift. */
 export const FLAG_TYPES = [
   "Deceased, still a member",
+  "Moved out of area, still a member",
   "Inactive in PCO",
   "Possible duplicate",
   "Name looks wrong",
