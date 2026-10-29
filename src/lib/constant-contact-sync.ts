@@ -102,9 +102,10 @@ async function syncContacts(orgId: number, budget: Budget, full: boolean): Promi
   const db = getDb();
   const resolvePerson = db.prepare("SELECT person_id FROM pco_person_emails WHERE org_id = ? AND email_hash = ? LIMIT 1");
   const up = db.prepare(
-    `INSERT INTO constant_contact_contacts (org_id, contact_id, email_hash, person_id, permission_to_send, opt_in_source, opted_in_at, opted_out_at, create_source, created_at, updated_at, synced_at)
-     VALUES (@org, @id, @hash, @person, @perm, @optinSrc, @optedInAt, @optedOutAt, @createSrc, @created, @updated, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    `INSERT INTO constant_contact_contacts (org_id, contact_id, email_hash, person_id, first_name, last_name, permission_to_send, opt_in_source, opted_in_at, opted_out_at, create_source, created_at, updated_at, synced_at)
+     VALUES (@org, @id, @hash, @person, @first, @last, @perm, @optinSrc, @optedInAt, @optedOutAt, @createSrc, @created, @updated, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, contact_id) DO UPDATE SET email_hash=excluded.email_hash, person_id=excluded.person_id,
+       first_name=excluded.first_name, last_name=excluded.last_name,
        permission_to_send=excluded.permission_to_send, opt_in_source=excluded.opt_in_source, opted_in_at=excluded.opted_in_at,
        opted_out_at=excluded.opted_out_at, create_source=excluded.create_source, updated_at=excluded.updated_at, synced_at=excluded.synced_at`,
   );
@@ -125,6 +126,7 @@ async function syncContacts(orgId: number, budget: Budget, full: boolean): Promi
       const ea = c.email_address ?? {};
       up.run({
         org: orgId, id: s(c.contact_id), hash, person,
+        first: s(c.first_name), last: s(c.last_name),
         perm: s(ea.permission_to_send), optinSrc: s(ea.opt_in_source), optedInAt: s(ea.opt_in_date),
         optedOutAt: s(ea.opt_out_date), createSrc: s(c.create_source), created: s(c.created_at), updated: s(c.updated_at),
       });
@@ -137,6 +139,53 @@ async function syncContacts(orgId: number, budget: Budget, full: boolean): Promi
   }
   if (!budget.capped && maxUpdated) writeCursor(orgId, "contacts", maxUpdated);
   return count;
+}
+
+
+/** Fill first_name / last_name for contacts synced before 0117.
+ *
+ *  The contact sync is incremental on updated_after, so a column added
+ *  today stays empty for every contact that has not changed since — and
+ *  guarding on "the column is empty" fails the same way it did in 0115:
+ *  the next incremental pass fills a handful of rows and the guard then
+ *  reports the job done forever. So the one full walk is recorded, and the
+ *  marker is written only after it finishes.
+ *
+ *  It ignores the cursor on purpose and pages every contact once. Runs at
+ *  the end of a sync so a failure here cannot cost the sync itself.
+ */
+async function backfillContactNames(orgId: number, budget: Budget): Promise<number> {
+  const db = getDb();
+  const done = db
+    .prepare("SELECT names_backfilled_at AS at FROM constant_contact_sync_settings WHERE org_id = ?")
+    .get(orgId) as { at: string | null } | undefined;
+  if (done?.at) return 0;
+
+  const up = db.prepare(
+    `UPDATE constant_contact_contacts SET first_name = ?, last_name = ?
+      WHERE org_id = ? AND contact_id = ?`,
+  );
+  let filled = 0;
+  for await (const page of ccPages(
+    orgId,
+    "/v3/contacts?limit=500&status=all",
+    budget,
+  )) {
+    for (const c of firstArray(page)) {
+      up.run(s(c.first_name), s(c.last_name), orgId, s(c.contact_id));
+      filled++;
+    }
+  }
+  // Only once the whole walk got through. A capped run leaves the marker
+  // unset so the next sync picks it up again.
+  if (!budget.capped) {
+    db.prepare(
+      `UPDATE constant_contact_sync_settings
+          SET names_backfilled_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE org_id = ?`,
+    ).run(orgId);
+  }
+  return filled;
 }
 
 async function syncCampaigns(orgId: number, budget: Budget): Promise<number> {
@@ -362,6 +411,7 @@ export async function runCcSync(orgId: number, trigger: "manual" | "auto" = "man
     details.campaignStats = await syncCampaignStats(orgId, budget);
     details.activity = await syncCampaignActivity(orgId, budget, full);
     details.relinked = relinkContacts(orgId);
+    details.namesBackfilled = await backfillContactNames(orgId, budget);
     details.capped = budget.capped;
     db.prepare("UPDATE constant_contact_sync_runs SET finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), status = ?, requests = ?, details = ? WHERE id = ?")
       .run(budget.capped ? "partial" : "ok", budget.count, JSON.stringify(details), runId);

@@ -1,7 +1,8 @@
 import "server-only";
 import { getDb } from "./db";
 import {
-  type SeniorLaneKey,
+  STANDING_ORDER,
+  type SeniorSignal,
   type AgeSource,
   type EmailSource,
   type EventSource,
@@ -62,69 +63,42 @@ const ALIVE_SQL = `
        AND d.field_name = 'Date of Death' AND d.value_on IS NOT NULL)`;
 
 
-/** Lane flags and last-activity date for a set of people, in one query.
+/** Is there any sign of this person in PCO, and when was the last one.
  *
- *  The same five lanes the rest of the app uses, read from the snapshot
- *  rather than re-derived — re-deriving them here is how two pages end up
- *  disagreeing about whether somebody serves. Email is added per row by
- *  the caller, since it comes from Constant Contact and not from PCO.
+ *  Reads the snapshot's five lane flags and collapses them: which lane it
+ *  was does not change what this page does next. Re-deriving them here is
+ *  how two pages end up disagreeing about whether somebody serves, so the
+ *  flags are taken as given.
  */
-function laneRows(
+function pcoSignals(
   orgId: number,
   ids: string[],
-): Map<
-  string,
-  { lanes: Record<SeniorLaneKey, boolean>; lastActivityAt: string | null }
-> {
-  const out = new Map<
-    string,
-    { lanes: Record<SeniorLaneKey, boolean>; lastActivityAt: string | null }
-  >();
+): Map<string, { pco: boolean; lastActivityAt: string | null }> {
+  const out = new Map<string, { pco: boolean; lastActivityAt: string | null }>();
   if (ids.length === 0) return out;
   const db = getDb();
   for (let i = 0; i < ids.length; i += 500) {
     const chunk = ids.slice(i, i + 500);
     for (const r of db
       .prepare(
-        `SELECT person_id AS id, in_worship_lane AS w, in_serving_lane AS s,
-                in_community_lane AS c, in_giving_lane AS g,
-                in_outreach_lane AS o, last_activity_at AS last
+        `SELECT person_id AS id, last_activity_at AS last,
+                (in_worship_lane + in_serving_lane + in_community_lane
+                 + in_giving_lane + in_outreach_lane) AS lanes
            FROM person_activity
           WHERE org_id = ? AND person_id IN (${ph(chunk)})`,
       )
       .all(orgId, ...chunk) as Array<{
       id: string;
-      w: number;
-      s: number;
-      c: number;
-      g: number;
-      o: number;
       last: string | null;
+      lanes: number;
     }>) {
-      out.set(r.id, {
-        lanes: {
-          w: r.w === 1,
-          s: r.s === 1,
-          c: r.c === 1,
-          g: r.g === 1,
-          o: r.o === 1,
-          e: false,
-        },
-        lastActivityAt: r.last,
-      });
+      out.set(r.id, { pco: r.lanes > 0, lastActivityAt: r.last });
     }
   }
   return out;
 }
 
-const NO_LANES: Record<SeniorLaneKey, boolean> = {
-  w: false,
-  s: false,
-  c: false,
-  g: false,
-  o: false,
-  e: false,
-};
+const NO_SIGNALS: Record<SeniorSignal, boolean> = { pco: false, email: false };
 
 const daysSince = (iso: string | null): number | null => {
   if (!iso) return null;
@@ -148,6 +122,7 @@ export function getEmailSource(orgId: number): EmailSource {
     opens: 0,
     openers: 0,
     rows: [],
+    unnamed: 0,
   };
   if (listIds.length === 0) return empty;
 
@@ -186,27 +161,35 @@ export function getEmailSource(orgId: number): EmailSource {
   }>;
   const aids = campaigns.map((c) => c.aid).filter((a): a is string => !!a);
 
+  const listName = new Map(lists.map((l) => [l.id, l.name ?? "(unnamed list)"]));
   const contacts = db
     .prepare(
-      `SELECT DISTINCT c.contact_id AS contactId, c.person_id AS personId,
-              p.first_name AS f, p.last_name AS l
+      `SELECT c.contact_id AS contactId, c.person_id AS personId,
+              p.first_name AS pf, p.last_name AS pl,
+              c.first_name AS cf, c.last_name AS cl,
+              GROUP_CONCAT(m.list_id) AS listIds
          FROM constant_contact_list_memberships m
          JOIN constant_contact_contacts c
            ON c.org_id = m.org_id AND c.contact_id = m.contact_id
          LEFT JOIN pco_people p
            ON p.org_id = c.org_id AND p.pco_id = c.person_id
-        WHERE m.org_id = ? AND m.list_id IN (${ph(listIds)})`,
+        WHERE m.org_id = ? AND m.list_id IN (${ph(listIds)})
+        GROUP BY c.contact_id`,
     )
     .all(orgId, ...listIds) as Array<{
     contactId: string;
     personId: string | null;
-    f: string | null;
-    l: string | null;
+    pf: string | null;
+    pl: string | null;
+    cf: string | null;
+    cl: string | null;
+    listIds: string | null;
   }>;
 
   // Opens and sends per contact, over those campaigns only.
   const opened = new Map<string, { n: number; last: string | null }>();
   const sentTo = new Map<string, number>();
+  const clicked = new Map<string, number>();
   if (aids.length) {
     for (const r of db
       .prepare(
@@ -214,7 +197,7 @@ export function getEmailSource(orgId: number): EmailSource {
                 COUNT(*) AS n, MAX(occurred_at) AS last
            FROM constant_contact_activity
           WHERE org_id = ? AND campaign_activity_id IN (${ph(aids)})
-            AND activity_type IN ('open','send')
+            AND activity_type IN ('open','send','click')
           GROUP BY contact_id, activity_type`,
       )
       .all(orgId, ...aids) as Array<{
@@ -224,22 +207,35 @@ export function getEmailSource(orgId: number): EmailSource {
       last: string | null;
     }>) {
       if (r.t === "open") opened.set(r.cid, { n: r.n, last: r.last });
+      else if (r.t === "click") clicked.set(r.cid, r.n);
       else sentTo.set(r.cid, r.n);
     }
   }
 
   const rows = contacts
-    .map((c) => ({
-      contactId: c.contactId,
-      email: null as string | null,
-      personId: c.personId,
-      name: c.personId ? nameOf(c.f, c.l, c.personId) : null,
-      // Where per-contact sends were not tracked, everyone on the list got
-      // every campaign — which is what a list send means.
-      sent: sentTo.get(c.contactId) ?? campaigns.length,
-      opened: opened.get(c.contactId)?.n ?? 0,
-      lastOpenedAt: opened.get(c.contactId)?.last ?? null,
-    }))
+    .map((c) => {
+      // PCO's name when we have the person, Constant Contact's own when we
+      // do not. Without the second, an unmatched contact is a person with
+      // no name, no address and no record — nothing anybody can act on.
+      const name = c.personId
+        ? nameOf(c.pf, c.pl, c.personId)
+        : [c.cf?.trim(), c.cl?.trim()].filter(Boolean).join(" ") || null;
+      return {
+        contactId: c.contactId,
+        personId: c.personId,
+        name,
+        lists: (c.listIds ?? "")
+          .split(",")
+          .filter(Boolean)
+          .map((id) => listName.get(id) ?? id),
+        // Where per-contact sends were not tracked, everyone on the list got
+        // every campaign — which is what a list send means.
+        sent: sentTo.get(c.contactId) ?? campaigns.length,
+        opened: opened.get(c.contactId)?.n ?? 0,
+        clicked: clicked.get(c.contactId) ?? 0,
+        lastOpenedAt: opened.get(c.contactId)?.last ?? null,
+      };
+    })
     .sort((a, b) => b.opened - a.opened || (a.name ?? "~").localeCompare(b.name ?? "~"));
 
   return {
@@ -255,7 +251,8 @@ export function getEmailSource(orgId: number): EmailSource {
     sends: campaigns.reduce((s, c) => s + c.sends, 0),
     opens: campaigns.reduce((s, c) => s + c.opens, 0),
     openers: rows.filter((r) => r.opened > 0).length,
-  rows,
+    rows,
+    unnamed: rows.filter((r) => !r.personId && !r.name).length,
   };
 }
 
@@ -265,6 +262,9 @@ export function getAgeSource(orgId: number): AgeSource {
   const db = getDb();
   const ageMin = getSeniorsAgeMin(orgId);
   const bornOnOrBefore = new Date().getFullYear() - ageMin;
+
+  const one = (sql: string, ...args: unknown[]) =>
+    (db.prepare(sql).get(orgId, ...args) as { n: number }).n;
 
   const rows = db
     .prepare(
@@ -285,20 +285,21 @@ export function getAgeSource(orgId: number): AgeSource {
     cls: string;
   }>;
 
-  const one = (sql: string, ...args: unknown[]) =>
-    (db.prepare(sql).get(orgId, ...args) as { n: number }).n;
+  const total = one(
+    `SELECT COUNT(*) AS n FROM pco_people p
+      WHERE p.org_id = ? AND p.birth_year <= ?`,
+    bornOnOrBefore,
+  );
 
   return {
     ageMin,
     bornOnOrBefore,
+    total,
+    // total minus whoever was taken out, so the headline is already net and
+    // cannot be read as "and then subtract the inactive".
     count: rows.length,
-    inactive: one(
-      `SELECT COUNT(*) AS n FROM pco_people p
-        WHERE p.org_id = ? AND p.birth_year <= ?
-          AND (p.inactivated_at IS NOT NULL
-            OR LOWER(COALESCE(p.status,'')) = 'inactive')`,
-      bornOnOrBefore,
-    ),
+    inactive: total - rows.length,
+
     noBirthYear: one(
       `SELECT COUNT(*) AS n FROM pco_people p
         WHERE p.org_id = ? AND p.birth_year IS NULL AND ${ALIVE_SQL}`,
@@ -315,29 +316,38 @@ export function getAgeSource(orgId: number): AgeSource {
 // ── source 3: turned up ──────────────────────────────────────────────
 
 /** personId → the seniors events they appear in. */
-function eventAttendance(orgId: number): Map<string, string[]> {
+function eventAttendance(
+  orgId: number,
+): Map<string, { events: string[]; last: string | null }> {
   const db = getDb();
-  const out = new Map<string, string[]>();
-  const add = (pid: string | null, label: string) => {
+  const out = new Map<string, { events: string[]; last: string | null }>();
+  const add = (pid: string | null, label: string, when: string | null) => {
     if (!pid) return;
-    const arr = out.get(pid) ?? [];
-    if (!arr.includes(label)) arr.push(label);
-    out.set(pid, arr);
+    const cur = out.get(pid) ?? { events: [], last: null };
+    if (!cur.events.includes(label)) cur.events.push(label);
+    // The most recent of whatever each source could tell us.
+    if (when && (!cur.last || when > cur.last)) cur.last = when;
+    out.set(pid, cur);
   };
 
   const signups = getSeniorsSignups(orgId);
   if (signups.length) {
     for (const r of db
       .prepare(
-        `SELECT a.person_id AS pid, s.name AS name
+        `SELECT a.person_id AS pid, s.name AS name,
+                a.pco_created_at AS when_
            FROM pco_registration_attendees a
            JOIN pco_registration_signups s
              ON s.org_id = a.org_id AND s.pco_id = a.signup_id
           WHERE a.org_id = ? AND a.signup_id IN (${ph(signups)})
             AND a.canceled = 0`,
       )
-      .all(orgId, ...signups) as Array<{ pid: string | null; name: string | null }>) {
-      add(r.pid, r.name ?? "(registration)");
+      .all(orgId, ...signups) as Array<{
+      pid: string | null;
+      name: string | null;
+      when_: string | null;
+    }>) {
+      add(r.pid, r.name ?? "(registration)", r.when_);
     }
   }
 
@@ -345,15 +355,21 @@ function eventAttendance(orgId: number): Map<string, string[]> {
   if (events.length) {
     for (const r of db
       .prepare(
-        `SELECT DISTINCT c.person_id AS pid, e.name AS name
+        `SELECT c.person_id AS pid, e.name AS name,
+                MAX(c.event_time_starts_at) AS when_
            FROM pco_check_ins c
            JOIN pco_check_in_events e
              ON e.org_id = c.org_id AND e.pco_id = c.event_id
           WHERE c.org_id = ? AND c.event_id IN (${ph(events)})
-            AND c.person_id IS NOT NULL`,
+            AND c.person_id IS NOT NULL
+          GROUP BY c.person_id, e.pco_id`,
       )
-      .all(orgId, ...events) as Array<{ pid: string | null; name: string | null }>) {
-      add(r.pid, r.name ?? "(event)");
+      .all(orgId, ...events) as Array<{
+      pid: string | null;
+      name: string | null;
+      when_: string | null;
+    }>) {
+      add(r.pid, r.name ?? "(event)", r.when_);
     }
   }
 
@@ -372,14 +388,20 @@ function eventAttendance(orgId: number): Map<string, string[]> {
     }
     for (const r of db
       .prepare(
-        `SELECT DISTINCT m.person_id AS pid, g.name AS name
+        `SELECT m.person_id AS pid, g.name AS name,
+                MAX(COALESCE(m.last_attended_at, m.joined_at)) AS when_
            FROM pco_group_memberships m
            JOIN pco_groups g ON g.org_id = m.org_id AND g.pco_id = m.group_id
           WHERE m.org_id = ? AND m.archived_at IS NULL
-            AND g.archived_at IS NULL AND (${where.join(" OR ")})`,
+            AND g.archived_at IS NULL AND (${where.join(" OR ")})
+          GROUP BY m.person_id, g.pco_id`,
       )
-      .all(orgId, ...args) as Array<{ pid: string | null; name: string | null }>) {
-      add(r.pid, r.name ?? "(group)");
+      .all(orgId, ...args) as Array<{
+      pid: string | null;
+      name: string | null;
+      when_: string | null;
+    }>) {
+      add(r.pid, r.name ?? "(group)", r.when_);
     }
   }
 
@@ -397,8 +419,8 @@ export function getEventSource(orgId: number): EventSource {
 
   const attendance = eventAttendance(orgId);
   const byEvent = new Map<string, number>();
-  for (const labels of attendance.values()) {
-    for (const l of labels) byEvent.set(l, (byEvent.get(l) ?? 0) + 1);
+  for (const v of attendance.values()) {
+    for (const l of v.events) byEvent.set(l, (byEvent.get(l) ?? 0) + 1);
   }
 
   const db = getDb();
@@ -436,7 +458,8 @@ export function getEventSource(orgId: number): EventSource {
         personId: id,
         name: names.get(id)?.name ?? `(unknown #${id})`,
         classification: names.get(id)?.cls ?? "unknown",
-        events: attendance.get(id) ?? [],
+        events: attendance.get(id)?.events ?? [],
+        lastAttendedAt: attendance.get(id)?.last ?? null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name)),
   };
@@ -466,12 +489,13 @@ export function getWorkingList(orgId: number): WorkingList {
       personId: r.personId,
       name: r.name,
       sources: ["A"],
-      lanes: { ...NO_LANES },
-      laneCount: 0,
+      signals: { ...NO_SIGNALS },
+      lists: [],
       lastActivityAt: null,
       daysSince: null,
       sent: 0,
       opened: 0,
+      clicked: 0,
       events: [],
       classification: r.classification,
       inactive: false,
@@ -488,12 +512,13 @@ export function getWorkingList(orgId: number): WorkingList {
       personId: r.personId,
       name: r.name ?? "(no PCO match)",
       sources: [],
-      lanes: { ...NO_LANES },
-      laneCount: 0,
+      signals: { ...NO_SIGNALS },
+      lists: [],
       lastActivityAt: null,
       daysSince: null,
       sent: 0,
       opened: 0,
+      clicked: 0,
       events: [],
       classification: "unknown",
       inactive: false,
@@ -501,14 +526,16 @@ export function getWorkingList(orgId: number): WorkingList {
     if (!row.sources.includes("E")) row.sources.push("E");
     row.sent = Math.max(row.sent, r.sent);
     row.opened = Math.max(row.opened, r.opened);
+    row.clicked = Math.max(row.clicked, r.clicked);
+    for (const l of r.lists) if (!row.lists.includes(l)) row.lists.push(l);
   }
 
   // Then the events.
-  for (const [pid, labels] of attendance) {
+  for (const [pid, v] of attendance) {
     const row = acc.get(pid);
     if (row) {
       if (!row.sources.includes("R")) row.sources.push("R");
-      row.events = labels;
+      row.events = v.events;
       continue;
     }
     // Somebody at a seniors event who is neither on the list nor old
@@ -532,54 +559,81 @@ export function getWorkingList(orgId: number): WorkingList {
       personId: pid,
       name: nameOf(p.f, p.l, pid),
       sources: ["R"],
-      lanes: { ...NO_LANES },
-      laneCount: 0,
+      signals: { ...NO_SIGNALS },
+      lists: [],
       lastActivityAt: null,
       daysSince: null,
       sent: 0,
       opened: 0,
-      events: labels,
+      clicked: 0,
+      events: v.events,
       classification: p.cls,
       inactive: p.inactive === 1,
     });
   }
 
-  // One query for everybody's lanes, rather than one per row. Email is
-  // set from what this page already knows: opening one of the ministry's
-  // emails is the signal, receiving one is not.
+  // One query for everybody, rather than one per row.
   const withId = [...acc.values()].filter((r) => r.personId);
-  const lanes = laneRows(
+  const sig = pcoSignals(
     orgId,
     withId.map((r) => r.personId as string),
   );
   for (const r of acc.values()) {
-    const got = r.personId ? lanes.get(r.personId) : undefined;
-    r.lanes = got ? { ...got.lanes } : { ...NO_LANES };
-    r.lanes.e = r.opened > 0;
-    r.laneCount = Object.values(r.lanes).filter(Boolean).length;
+    const got = r.personId ? sig.get(r.personId) : undefined;
+    r.signals = {
+      pco: got?.pco ?? false,
+      // Opening one of the ministry's emails is the signal. Receiving one
+      // is not, which is the distinction the whole page turns on.
+      email: r.opened > 0,
+    };
     r.lastActivityAt = got?.lastActivityAt ?? null;
     r.daysSince = daysSince(r.lastActivityAt);
   }
 
   const standingOf = (r: Acc): Standing => {
-    if (r.events.length > 0) return "at_events";
+    // Already with you beats everything else it could say.
+    if (r.events.length > 0) return "in_ministry";
+    // On the list: the only question is whether it reaches them.
     if (r.sources.includes("E")) {
       return r.opened > 0 ? "reads_email" : "ignores_email";
     }
-    return r.classification === "unknown" ? "not_involved" : "active_elsewhere";
+    // Old enough, on no list, at no event. The three cases differ in what
+    // can be done about them, which is why they are not one bucket.
+    if (r.signals.pco) return "active_elsewhere";
+    if (r.daysSince === null) return "nothing_recorded";
+    return r.daysSince > 365 ? "gone_quiet" : "active_elsewhere";
   };
+
+  // Nobody inactive in PCO, and nobody deceased. The age source already
+  // left them out; the mailing list and the event rosters do not, and a
+  // list the ministry is meant to act on should not open with people who
+  // have left or died. An unmatched contact has no PCO record to judge,
+  // so it stays.
+  const ids = withId.map((r) => r.personId as string);
+  const excluded = new Set<string>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    for (const r of db
+      .prepare(
+        `SELECT p.pco_id AS id FROM pco_people p
+          WHERE p.org_id = ? AND p.pco_id IN (${ph(chunk)})
+            AND NOT (${ALIVE_SQL})`,
+      )
+      .all(orgId, ...chunk) as Array<{ id: string }>) {
+      excluded.add(r.id);
+    }
+  }
+  for (const [key, r] of acc) {
+    if (r.personId && excluded.has(r.personId)) acc.delete(key);
+  }
 
   const rows: SeniorRow[] = [...acc.values()]
     .map((r) => ({ ...r, standing: standingOf(r) }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const byStanding = {
-    at_events: 0,
-    reads_email: 0,
-    ignores_email: 0,
-    active_elsewhere: 0,
-    not_involved: 0,
-  } as Record<Standing, number>;
+  const byStanding = Object.fromEntries(
+    STANDING_ORDER.map((k) => [k, 0]),
+  ) as Record<Standing, number>;
   for (const r of rows) byStanding[r.standing]++;
 
   return {

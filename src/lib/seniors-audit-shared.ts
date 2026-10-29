@@ -25,21 +25,26 @@ export type SeniorSource = "E" | "A" | "R";
  *  and the ministry's only channel is the mailing list. Keeping the keys
  *  the same as the membership audit's means a row reads identically on
  *  both pages. */
-export const SENIOR_LANE_KEYS = ["w", "s", "c", "g", "o", "e"] as const;
-export type SeniorLaneKey = (typeof SENIOR_LANE_KEYS)[number];
+/** Two signals, not five lanes.
+ *
+ *  Elsewhere the lanes answer "which direction is this person growing in".
+ *  Here the question is blunter — is there any sign of this person at all,
+ *  and does it reach them. Which of worship, serve, community, give or
+ *  outreach it came from does not change what the ministry does next, so
+ *  they collapse into one. The five are still on the person's own page.
+ */
+export const SENIOR_SIGNALS = ["pco", "email"] as const;
+export type SeniorSignal = (typeof SENIOR_SIGNALS)[number];
 
-export const SENIOR_LANE_LABELS: Record<SeniorLaneKey, string> = {
-  w: "Worship",
-  s: "Serve",
-  c: "Community",
-  g: "Give",
-  o: "Outreach",
-  e: "Email",
+export const SIGNAL_LABEL: Record<SeniorSignal, string> = {
+  pco: "In person",
+  email: "Opens email",
 };
 
-/** Opened at least one of the emails sent in the window. Receiving one is
- *  not engagement — that is the whole point of the distinction. */
-export const EMAIL_LANE: SeniorLaneKey = "e";
+export const SIGNAL_NOTE: Record<SeniorSignal, string> = {
+  pco: "PCO shows them in a group, on a team, giving, serving or at worship.",
+  email: "Opened at least one of the ministry's emails in the last year. Receiving one does not count.",
+};
 
 /** How long ago somebody last did anything, bucketed. Same buckets as the
  *  membership audit so the two pages agree on what "recent" means. */
@@ -60,29 +65,48 @@ export const SENIORS_NEVER_BUCKET = "never";
  *  the church who has never come to a seniors event is a different
  *  problem from somebody nobody has seen at all. */
 export type Standing =
-  | "at_events"
+  | "in_ministry"
   | "reads_email"
-  | "ignores_email"
   | "active_elsewhere"
-  | "not_involved";
+  | "ignores_email"
+  | "gone_quiet"
+  | "nothing_recorded";
+
+/** Most actionable first. Reading down is roughly the order a ministry
+ *  would work the list: the people already with you, then the warm ones,
+ *  then the ones worth an invitation, then the ones there is nothing to be
+ *  done about. */
+export const STANDING_ORDER: Standing[] = [
+  "in_ministry",
+  "reads_email",
+  "active_elsewhere",
+  "ignores_email",
+  "gone_quiet",
+  "nothing_recorded",
+];
 
 export const STANDING_LABEL: Record<Standing, string> = {
-  at_events: "Comes to seniors events",
-  reads_email: "Reads the emails",
-  ignores_email: "Gets the emails, never opens them",
+  in_ministry: "In the seniors ministry",
+  reads_email: "Reads the emails, not at events",
   active_elsewhere: "Active in church, not in seniors",
-  not_involved: "Not involved anywhere",
+  ignores_email: "Gets the emails, never opens them",
+  gone_quiet: "No activity for over a year",
+  nothing_recorded: "Nothing recorded",
 };
 
 export const STANDING_NOTE: Record<Standing, string> = {
-  at_events: "Registered for or on the roster of something you marked as seniors.",
-  reads_email: "On the list and has opened at least one email in the last year.",
-  ignores_email:
-    "On the list and has opened nothing in a year — reached on paper only.",
+  in_ministry:
+    "Registered for, or on the roster of, something you marked as a seniors event. Already with you.",
+  reads_email:
+    "On the mailing list and opened at least one email in the last year, but has not come to anything. The warmest group that is not yet in the room.",
   active_elsewhere:
-    "Old enough, and active in the church by other signals, but never invited into this.",
-  not_involved:
-    "Old enough, and nothing in the last year says they are still with you.",
+    "Old enough, and PCO shows them active somewhere in the church — a group, a team, giving, serving — but they are on no seniors list and at no seniors event. Nobody has invited them.",
+  ignores_email:
+    "On the mailing list and has opened nothing in a year. Reached on paper only; another email is unlikely to be what changes that.",
+  gone_quiet:
+    "PCO has activity for them, but the most recent is over a year old. Probably no longer attending.",
+  nothing_recorded:
+    "No activity recorded at all. That is not proof they have gone — it may mean nothing they do gets recorded in PCO — but there is nothing here to work from.",
 };
 
 export interface SeniorRow {
@@ -90,15 +114,17 @@ export interface SeniorRow {
   name: string;
   sources: SeniorSource[];
   standing: Standing;
-  /** The six lanes. Email is true when they have opened one. */
-  lanes: Record<SeniorLaneKey, boolean>;
-  laneCount: number;
+  /** Any of the five PCO lanes, and whether they open the email. */
+  signals: Record<SeniorSignal, boolean>;
+  /** Which mailing lists they are on, by name. Empty when none. */
+  lists: string[];
   /** When the snapshot last saw them do anything, and how long ago. */
   lastActivityAt: string | null;
   daysSince: number | null;
-  /** Emails sent to them, and how many they opened, in the window. */
+  /** Emails sent to them, how many they opened and clicked, in the window. */
   sent: number;
   opened: number;
+  clicked: number;
   /** Seniors events they registered for or are on the roster of. */
   events: string[];
   /** Their classification, for the "active elsewhere" case. */
@@ -122,27 +148,37 @@ export interface EmailSource {
    *  never the address, so there is nothing to show but the fact of them. */
   rows: Array<{
     contactId: string;
-    email: string | null;
     personId: string | null;
+    /** Constant Contact's own name for the contact, which is all we have
+     *  for anybody not matched to PCO. Null when CC has none either. */
     name: string | null;
+    /** Which of the chosen lists they are on. */
+    lists: string[];
     sent: number;
     opened: number;
+    clicked: number;
     lastOpenedAt: string | null;
   }>;
+  /** Unmatched contacts for whom Constant Contact has no name either —
+   *  genuinely nothing to go on. */
+  unnamed: number;
 }
 
 export interface AgeSource {
   ageMin: number;
   bornOnOrBefore: number;
-  /** Alive, active in PCO, old enough. The number Dan asks for. */
+  /** Everybody old enough, before anybody is taken out. */
+  total: number;
+  /** Alive, active in PCO, old enough — total minus inactive. */
   count: number;
-  /** Excluded because PCO has them inactive — shown as a number only. */
+  /** Taken out of `total` because PCO has them inactive or deceased. */
   inactive: number;
   /** No birth year at all. One line, not a panel: the list is a floor. */
   noBirthYear: number;
   rows: Array<{
     personId: string;
     name: string;
+    /** Kept for the CSV; the table shows names only. */
     classification: string;
     birthYear: number;
   }>;
@@ -159,6 +195,9 @@ export interface EventSource {
     name: string;
     classification: string;
     events: string[];
+    /** The most recent of those events, as a date. Null when none of the
+     *  sources carries a date for them. */
+    lastAttendedAt: string | null;
   }>;
 }
 
@@ -190,4 +229,16 @@ export interface WorkingList {
   /** Old enough, no email, no event — the reason the page exists. */
   neverInvited: number;
   eventsConfigured: boolean;
+}
+
+/** "9y 7m", "3m", "12d" — a number of days is unreadable past a few
+ *  hundred, and 3,493 of them tells nobody anything. */
+export function humanAge(days: number | null): string {
+  if (days === null) return "never";
+  if (days < 31) return `${days}d`;
+  const months = Math.floor(days / 30.44);
+  if (months < 12) return `${months}m`;
+  const years = Math.floor(months / 12);
+  const rem = months % 12;
+  return rem === 0 ? `${years}y` : `${years}y ${rem}m`;
 }

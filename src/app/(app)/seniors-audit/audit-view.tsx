@@ -8,15 +8,18 @@ import {
 import {
   SENIORS_ACTIVITY_BUCKETS,
   SENIORS_NEVER_BUCKET,
-  SENIOR_LANE_KEYS,
-  SENIOR_LANE_LABELS,
+  SENIOR_SIGNALS,
+  SIGNAL_LABEL,
+  SIGNAL_NOTE,
   STANDING_LABEL,
   STANDING_NOTE,
+  STANDING_ORDER,
+  humanAge,
   type AgeSource,
   type EmailSource,
   type EventSource,
-  type SeniorLaneKey,
   type SeniorRow,
+  type SeniorSignal,
   type Standing,
   type WorkingList,
 } from "@/lib/seniors-audit-shared";
@@ -24,19 +27,21 @@ import { downloadCsv } from "./csv";
 
 type Tab = "list" | "email" | "age" | "events";
 
+/** Spelled out rather than lettered. "E / A / R" needed a legend, and a
+ *  legend on every row is a column that does not pay for itself. */
 const SOURCE_LABEL: Record<string, string> = {
-  E: "on the mailing list",
-  A: "old enough on file",
-  R: "registered or on a roster",
+  E: "Email",
+  A: "Age",
+  R: "Events",
 };
 
-const ORDER: Standing[] = [
-  "at_events",
-  "reads_email",
-  "ignores_email",
-  "active_elsewhere",
-  "not_involved",
-];
+const SOURCE_NOTE: Record<string, string> = {
+  E: "On one of the seniors mailing lists",
+  A: "Old enough, by the birth year on file",
+  R: "Registered for or on the roster of a seniors event",
+};
+
+const ORDER = STANDING_ORDER;
 
 export function AuditView({
   working,
@@ -86,7 +91,7 @@ export function AuditView({
 
 function CollectedTab({ working }: { working: WorkingList }) {
   const [only, setOnly] = useState<Standing | null>(null);
-  const [lanes, setLanes] = useState<SeniorLaneKey[]>([]);
+  const [signals, setSignals] = useState<SeniorSignal[]>([]);
   const [bucket, setBucket] = useState<string | null>(null);
   const [q, setQ] = useState("");
 
@@ -96,7 +101,7 @@ function CollectedTab({ working }: { working: WorkingList }) {
       if (only && r.standing !== only) return false;
       // Every ticked lane must be true: "worship AND serve" is the useful
       // question, not "worship OR serve", which is nearly everybody.
-      if (lanes.length && !lanes.every((k) => r.lanes[k])) return false;
+      if (signals.length && !signals.every((k) => r.signals[k])) return false;
       if (bucket) {
         if (bucket === SENIORS_NEVER_BUCKET) {
           if (r.daysSince !== null) return false;
@@ -112,7 +117,7 @@ function CollectedTab({ working }: { working: WorkingList }) {
       if (needle && !r.name.toLowerCase().includes(needle)) return false;
       return true;
     });
-  }, [working.rows, only, lanes, bucket, q]);
+  }, [working.rows, only, signals, bucket, q]);
 
   const columns: SortableColumn<SeniorRow>[] = [
     {
@@ -141,52 +146,51 @@ function CollectedTab({ working }: { working: WorkingList }) {
       key: "sources",
       label: "Where from",
       align: "left",
-      className: "w-[120px]",
+      className: "w-[210px]",
       sortValue: (r) => r.sources.slice().sort().join(""),
       render: (r) => (
-        <span className="flex gap-1">
-          {(["E", "A", "R"] as const).map((sk) =>
-            r.sources.includes(sk) ? (
+        <span className="flex flex-wrap gap-1 items-center">
+          {(["E", "A", "R"] as const)
+            .filter((sk) => r.sources.includes(sk))
+            .map((sk) => (
               <span
                 key={sk}
-                title={SOURCE_LABEL[sk]}
-                className="w-5 h-5 rounded border border-accent/50 text-accent text-[10px] font-bold flex items-center justify-center"
+                title={SOURCE_NOTE[sk]}
+                className="px-1.5 py-0.5 rounded border border-accent/40 text-accent text-[10px] font-medium"
               >
-                {sk}
+                {SOURCE_LABEL[sk]}
               </span>
-            ) : (
-              <span
-                key={sk}
-                aria-hidden="true"
-                className="w-5 h-5 rounded border border-border-softer text-subtle text-[10px] flex items-center justify-center"
-              >
-                ·
-              </span>
-            ),
+            ))}
+          {r.lists.length > 0 && (
+            <span
+              className="text-[10px] text-subtle"
+              title={`On: ${r.lists.join(", ")}`}
+            >
+              {r.lists.length > 1 ? `${r.lists.length} lists` : r.lists[0]}
+            </span>
           )}
         </span>
       ),
     },
     {
-      key: "lanes",
-      label: "Activity",
+      key: "signals",
+      label: "Signs of life",
       align: "left",
-      className: "w-[190px]",
-      title: "Worship · Serve · Community · Give · Outreach · Email",
-      sortValue: (r) => r.laneCount,
+      className: "w-[170px]",
+      sortValue: (r) => Number(r.signals.pco) * 2 + Number(r.signals.email),
       render: (r) => (
-        <span className="flex gap-1">
-          {SENIOR_LANE_KEYS.map((k) => (
+        <span className="flex gap-1.5">
+          {SENIOR_SIGNALS.map((k) => (
             <span
               key={k}
-              title={`${SENIOR_LANE_LABELS[k]}${r.lanes[k] ? "" : " — no"}`}
-              className={`w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center border ${
-                r.lanes[k]
-                  ? "border-accent/50 text-accent bg-accent-soft-bg/30"
-                  : "border-border-softer text-subtle"
+              title={SIGNAL_NOTE[k]}
+              className={`px-1.5 py-0.5 rounded text-[10px] border ${
+                r.signals[k]
+                  ? "border-accent/50 text-accent bg-accent-soft-bg/30 font-medium"
+                  : "border-border-softer text-subtle line-through"
               }`}
             >
-              {r.lanes[k] ? SENIOR_LANE_LABELS[k][0] : "·"}
+              {SIGNAL_LABEL[k]}
             </span>
           ))}
         </span>
@@ -198,16 +202,20 @@ function CollectedTab({ working }: { working: WorkingList }) {
       align: "right",
       className: "w-[110px]",
       sortValue: (r) => (r.daysSince === null ? null : r.daysSince),
-      render: (r) =>
-        r.daysSince === null ? (
-          <span className="text-subtle text-xs">never</span>
-        ) : (
-          <span className="text-xs tnum text-muted">{r.daysSince}d</span>
-        ),
+      render: (r) => (
+        <span
+          className={`text-xs tnum ${
+            r.daysSince === null ? "text-subtle" : "text-muted"
+          }`}
+          title={r.lastActivityAt ?? "nothing recorded"}
+        >
+          {humanAge(r.daysSince)}
+        </span>
+      ),
     },
     {
       key: "standing",
-      label: "Standing",
+      label: "Summary",
       align: "left",
       sortValue: (r) => ORDER.indexOf(r.standing),
       render: (r) => (
@@ -232,7 +240,7 @@ function CollectedTab({ working }: { working: WorkingList }) {
         <p className="rounded-lg border border-warn-soft-fg/40 bg-bg-elev px-4 py-3 text-xs text-muted leading-relaxed">
           No seniors events are marked yet, so nobody can land in{" "}
           <strong className="text-fg">
-            {STANDING_LABEL.at_events.toLowerCase()}
+            {STANDING_LABEL.in_ministry.toLowerCase()}
           </strong>
           . Tick them under <strong className="text-fg">What counts as
           seniors</strong> above.
@@ -297,18 +305,19 @@ function CollectedTab({ working }: { working: WorkingList }) {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11px] uppercase tracking-wider text-subtle mr-1">
-            In every lane
+            Has
           </span>
-          {SENIOR_LANE_KEYS.map((k) => (
+          {SENIOR_SIGNALS.map((k) => (
             <Chip
               key={k}
-              on={lanes.includes(k)}
+              on={signals.includes(k)}
               onClick={() =>
-                setLanes((cur) =>
+                setSignals((cur) =>
                   cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k],
                 )
               }
-              label={SENIOR_LANE_LABELS[k]}
+              label={SIGNAL_LABEL[k]}
+              title={SIGNAL_NOTE[k]}
             />
           ))}
         </div>
@@ -323,12 +332,12 @@ function CollectedTab({ working }: { working: WorkingList }) {
           aria-label="Find a name"
           className="bg-bg-elev border border-border-soft rounded px-3 py-1.5 text-[13px] w-full max-w-xs"
         />
-        {(only || lanes.length > 0 || bucket) && (
+        {(only || signals.length > 0 || bucket) && (
           <button
             type="button"
             onClick={() => {
               setOnly(null);
-              setLanes([]);
+              setSignals([]);
               setBucket(null);
             }}
             className="text-xs text-accent hover:underline cursor-pointer"
@@ -347,13 +356,15 @@ function CollectedTab({ working }: { working: WorkingList }) {
               "seniors-collected-list.csv",
               [
                 "Name",
-                "On the mailing list",
-                "Old enough",
-                "At an event",
-                ...SENIOR_LANE_KEYS.map((k) => SENIOR_LANE_LABELS[k]),
-                "Lanes",
+                "From email",
+                "From age",
+                "From events",
+                "Mailing lists",
+                "Active in person",
+                "Opens email",
+                "Last seen",
                 "Days since last activity",
-                "Standing",
+                "Summary",
                 "Events",
                 "PCO link",
               ],
@@ -362,8 +373,10 @@ function CollectedTab({ working }: { working: WorkingList }) {
                 r.sources.includes("E") ? "yes" : "",
                 r.sources.includes("A") ? "yes" : "",
                 r.sources.includes("R") ? "yes" : "",
-                ...SENIOR_LANE_KEYS.map((k) => (r.lanes[k] ? "yes" : "")),
-                r.laneCount,
+                r.lists.join("; "),
+                r.signals.pco ? "yes" : "",
+                r.signals.email ? "yes" : "",
+                humanAge(r.daysSince),
                 r.daysSince,
                 STANDING_LABEL[r.standing],
                 r.events.join("; "),
@@ -412,25 +425,33 @@ function EmailTab({ email }: { email: EmailSource }) {
             {r.name}
           </a>
         ) : (
-          <span className="text-muted italic">
-            no PCO match
-            <span className="text-[11px] text-subtle ml-1.5 not-italic">
-              only a hashed address is stored
+          <span>
+            <span className="font-medium text-muted">
+              {r.name ?? "(no name on the contact)"}
+            </span>
+            <span className="text-[11px] text-subtle ml-1.5">
+              not in PCO
             </span>
           </span>
         ),
     },
     {
-      key: "opened",
-      label: "Opened",
+      key: "openRate",
+      label: "Open rate",
       align: "right",
-      className: "w-[120px]",
-      sortValue: (r) => r.opened,
-      render: (r) => (
-        <span className={`tnum text-xs ${r.opened === 0 ? "text-subtle" : ""}`}>
-          {r.opened} / {r.sent}
-        </span>
-      ),
+      className: "w-[110px]",
+      title: "Emails opened as a share of those sent to them in the window",
+      sortValue: (r) => (r.sent > 0 ? r.opened / r.sent : -1),
+      render: (r) => <Rate n={r.opened} of={r.sent} />,
+    },
+    {
+      key: "clickRate",
+      label: "Click rate",
+      align: "right",
+      className: "w-[110px]",
+      title: "Emails where they clicked a link, as a share of those sent",
+      sortValue: (r) => (r.sent > 0 ? r.clicked / r.sent : -1),
+      render: (r) => <Rate n={r.clicked} of={r.sent} />,
     },
     {
       key: "last",
@@ -475,10 +496,14 @@ function EmailTab({ email }: { email: EmailSource }) {
           {email.unmatched > 0 && (
             <>
               {" "}
-              The {email.unmatched} with no PCO match cannot be named here:
-              the database keeps an HMAC of each address and never the
-              address itself, so there is nothing to display but the fact
-              of them. Matching them means adding them to PCO.
+              The {email.unmatched.toLocaleString()} with no PCO match are
+              named from Constant Contact&rsquo;s own record of them, so you
+              can tell whether you know them.{" "}
+              {email.unnamed > 0
+                ? `${email.unnamed} have no name there either — those are an address and nothing else.`
+                : "All of them have a name."}{" "}
+              Their addresses are not shown anywhere: we store an HMAC of
+              each one and never the address itself.
             </>
           )}
         </p>
@@ -498,12 +523,27 @@ function EmailTab({ email }: { email: EmailSource }) {
         onExport={() =>
           downloadCsv(
             "seniors-email-list.csv",
-            ["Name", "Matched to PCO", "Opened", "Sent", "Last opened", "PCO link"],
+            [
+              "Name",
+              "In PCO",
+              "Lists",
+              "Sent",
+              "Opened",
+              "Open rate",
+              "Clicked",
+              "Click rate",
+              "Last opened",
+              "PCO link",
+            ],
             rows.map((r) => [
-              r.name ?? "(no PCO match)",
+              r.name ?? "(no name on the contact)",
               r.personId ? "yes" : "",
-              r.opened,
+              r.lists.join("; "),
               r.sent,
+              r.opened,
+              r.sent > 0 ? `${Math.round((r.opened / r.sent) * 100)}%` : "",
+              r.clicked,
+              r.sent > 0 ? `${Math.round((r.clicked / r.sent) * 100)}%` : "",
               r.lastOpenedAt ? r.lastOpenedAt.slice(0, 10) : "",
               r.personId
                 ? `https://people.planningcenteronline.com/people/${r.personId}`
@@ -516,7 +556,7 @@ function EmailTab({ email }: { email: EmailSource }) {
         rows={rows}
         columns={columns}
         rowKey={(r) => r.contactId}
-        initialSortKey="opened"
+        initialSortKey="openRate"
         initialSortDir="desc"
         emptyMessage="Nobody matches that."
       />
@@ -544,38 +584,24 @@ function AgeTab({ age }: { age: AgeSource }) {
         </a>
       ),
     },
-    {
-      key: "born",
-      label: "Born",
-      align: "right",
-      className: "w-[90px]",
-      sortValue: (r) => r.birthYear,
-      render: (r) => <span className="tnum text-xs text-muted">{r.birthYear}</span>,
-    },
-    {
-      key: "cls",
-      label: "Classified",
-      align: "left",
-      className: "w-[140px]",
-      sortValue: (r) => r.classification,
-      render: (r) => (
-        <span className="text-xs text-muted capitalize">{r.classification}</span>
-      ),
-    },
   ];
 
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-border-soft bg-bg-elev p-5">
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          <Stat n={age.count} label={`known to be ${age.ageMin} or older`} />
-          <Stat n={age.inactive} label="left out — inactive in PCO" />
-          <Stat n={age.rows.length} label="on the list below" />
+        <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
+          <Stat n={age.count} label={`seniors, ${age.ageMin} or older`} />
+          <span className="text-subtle text-lg pb-4">=</span>
+          <Stat n={age.total} label={`born ${age.bornOnOrBefore} or earlier`} />
+          <span className="text-subtle text-lg pb-4">&minus;</span>
+          <Stat n={age.inactive} label="inactive in PCO or deceased" />
         </div>
         <p className="text-[11px] text-subtle mt-3.5 leading-relaxed max-w-3xl">
-          Born {age.bornOnOrBefore} or earlier, still active in PCO, not
-          deceased. {age.noBirthYear.toLocaleString()} people have no birth
-          year on file and are not counted here either way.
+          The headline is already net: the{" "}
+          {age.inactive.toLocaleString()} are taken out, not waiting to be.{" "}
+          {age.noBirthYear.toLocaleString()} people have no birth year on
+          file and are in neither number &mdash; some of them are certainly
+          old enough, so this is a floor rather than a count.
         </p>
       </div>
 
@@ -621,6 +647,8 @@ function EventsTab({ events, years }: { events: EventSource; years: number }) {
     );
   }, [events.rows, q]);
 
+  const repeat = events.rows.filter((r) => r.events.length > 1).length;
+
   if (!events.configured) {
     return (
       <div className="rounded-lg border border-border-soft bg-bg-elev px-5 py-10 text-center">
@@ -647,16 +675,6 @@ function EventsTab({ events, years }: { events: EventSource; years: number }) {
       ),
     },
     {
-      key: "cls",
-      label: "Classified",
-      align: "left",
-      className: "w-[130px]",
-      sortValue: (r) => r.classification,
-      render: (r) => (
-        <span className="text-xs text-muted capitalize">{r.classification}</span>
-      ),
-    },
-    {
       key: "events",
       label: "What they came to",
       align: "left",
@@ -678,29 +696,37 @@ function EventsTab({ events, years }: { events: EventSource; years: number }) {
       key: "count",
       label: "Events",
       align: "right",
-      className: "w-[90px]",
+      className: "w-[80px]",
       sortValue: (r) => r.events.length,
       render: (r) => <span className="tnum text-xs">{r.events.length}</span>,
+    },
+    {
+      key: "last",
+      label: "Last one",
+      align: "right",
+      className: "w-[110px]",
+      title:
+        "The most recent of those events. Registrations date from the signup, check-ins from the service, group rosters from the last attendance recorded.",
+      sortValue: (r) => r.lastAttendedAt ?? null,
+      render: (r) => (
+        <span className="text-xs tnum text-muted">
+          {r.lastAttendedAt ? r.lastAttendedAt.slice(0, 10) : "—"}
+        </span>
+      ),
     },
   ];
 
   return (
     <div className="space-y-3">
+      {/* No list of the events themselves: they were chosen above, and
+          repeating them here is the same information twice. The numbers
+          are what the tab is for. */}
       <div className="rounded-lg border border-border-soft bg-bg-elev p-5">
-        <Stat n={events.people} label="distinct people across everything marked" />
-        <ul className="mt-4 space-y-1.5">
-          {events.events.map((e) => (
-            <li
-              key={e.id}
-              className="flex items-center gap-3 text-[13px] border-b border-border-softer pb-1.5"
-            >
-              <span className="min-w-0 flex-1 truncate">{e.name}</span>
-              <span className="text-xs text-muted tnum shrink-0">
-                {e.people.toLocaleString()} people
-              </span>
-            </li>
-          ))}
-        </ul>
+        <div className="flex flex-wrap gap-x-7 gap-y-3">
+          <Stat n={events.people} label="people have been to a seniors event" />
+          <Stat n={events.events.length} label="events marked as seniors" />
+          <Stat n={repeat} label="came to more than one" />
+        </div>
       </div>
 
       <ListHeader
@@ -711,12 +737,12 @@ function EventsTab({ events, years }: { events: EventSource; years: number }) {
         onExport={() =>
           downloadCsv(
             "seniors-event-attendees.csv",
-            ["Name", "Classified", "Events", "How many", "PCO link"],
+            ["Name", "Events", "How many", "Last one", "PCO link"],
             rows.map((r) => [
               r.name,
-              r.classification,
               r.events.join("; "),
               r.events.length,
+              r.lastAttendedAt ? r.lastAttendedAt.slice(0, 10) : "",
               `https://people.planningcenteronline.com/people/${r.personId}`,
             ]),
           )
@@ -726,7 +752,7 @@ function EventsTab({ events, years }: { events: EventSource; years: number }) {
         rows={rows}
         columns={columns}
         rowKey={(r) => r.personId}
-        initialSortKey="count"
+        initialSortKey="last"
         initialSortDir="desc"
         emptyMessage="Nobody matches that."
       />
@@ -788,20 +814,40 @@ function ExportButton({
   );
 }
 
+/** A percentage with the raw pair behind it on hover. The percentage is
+ *  what you compare between people; the counts are what you check when a
+ *  percentage looks implausible, which at a denominator of 12 it often
+ *  does. */
+function Rate({ n, of }: { n: number; of: number }) {
+  if (of === 0) return <span className="text-subtle text-xs">—</span>;
+  const pct = Math.round((n / of) * 100);
+  return (
+    <span
+      className={`tnum text-xs ${pct === 0 ? "text-subtle" : "text-muted"}`}
+      title={`${n} of ${of}`}
+    >
+      {pct}%
+    </span>
+  );
+}
+
 function Chip({
   on,
   onClick,
   label,
+  title,
 }: {
   on: boolean;
   onClick: () => void;
   label: string;
+  title?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={on}
+      title={title}
       className={`px-2.5 py-1 rounded-full border text-[11px] cursor-pointer transition-colors ${
         on
           ? "border-accent bg-accent-soft-bg/40 text-fg font-medium"
