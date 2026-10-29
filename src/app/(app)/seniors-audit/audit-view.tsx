@@ -15,6 +15,7 @@ import {
   STANDING_NOTE,
   STANDING_ORDER,
   humanAge,
+  shortDate,
   type AgeSource,
   type EmailSource,
   type EventSource,
@@ -124,6 +125,7 @@ function CollectedTab({ working }: { working: WorkingList }) {
       key: "name",
       label: "Person",
       align: "left",
+      className: "w-auto",
       sortValue: (r) => r.name.toLowerCase(),
       render: (r) =>
         r.personId ? (
@@ -161,20 +163,12 @@ function CollectedTab({ working }: { working: WorkingList }) {
                 {SOURCE_LABEL[sk]}
               </span>
             ))}
-          {r.lists.length > 0 && (
-            <span
-              className="text-[10px] text-subtle"
-              title={`On: ${r.lists.join(", ")}`}
-            >
-              {r.lists.length > 1 ? `${r.lists.length} lists` : r.lists[0]}
-            </span>
-          )}
         </span>
       ),
     },
     {
       key: "signals",
-      label: "Signs of life",
+      label: "Activity",
       align: "left",
       className: "w-[170px]",
       sortValue: (r) => Number(r.signals.pco) * 2 + Number(r.signals.email),
@@ -200,7 +194,9 @@ function CollectedTab({ working }: { working: WorkingList }) {
       key: "last",
       label: "Last seen",
       align: "right",
-      className: "w-[110px]",
+      className: "w-[110px] whitespace-nowrap",
+      title:
+        "The most recent thing we can see — a PCO activity date, or an email they opened, whichever is later.",
       sortValue: (r) => (r.daysSince === null ? null : r.daysSince),
       render: (r) => (
         <span
@@ -219,17 +215,7 @@ function CollectedTab({ working }: { working: WorkingList }) {
       align: "left",
       sortValue: (r) => ORDER.indexOf(r.standing),
       render: (r) => (
-        <>
-          <span className="text-xs text-muted">
-            {STANDING_LABEL[r.standing]}
-          </span>
-          {r.events.length > 0 && (
-            <span className="text-[11px] text-subtle ml-1.5">
-              {r.events.slice(0, 2).join(", ")}
-              {r.events.length > 2 && ` +${r.events.length - 2}`}
-            </span>
-          )}
-        </>
+        <span className="text-xs text-muted">{STANDING_LABEL[r.standing]}</span>
       ),
     },
   ];
@@ -302,6 +288,20 @@ function CollectedTab({ working }: { working: WorkingList }) {
             }
             label="Never"
           />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] uppercase tracking-wider text-subtle mr-1">
+            Summary
+          </span>
+          {ORDER.map((sv) => (
+            <Chip
+              key={sv}
+              on={only === sv}
+              onClick={() => setOnly((cur) => (cur === sv ? null : sv))}
+              label={STANDING_LABEL[sv]}
+              title={STANDING_NOTE[sv]}
+            />
+          ))}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11px] uppercase tracking-wider text-subtle mr-1">
@@ -397,6 +397,7 @@ function CollectedTab({ working }: { working: WorkingList }) {
         initialSortKey="name"
         initialSortDir="asc"
         emptyMessage="Nobody matches that."
+        tableClassName="table-fixed"
       />
     </div>
   );
@@ -589,19 +590,15 @@ function AgeTab({ age }: { age: AgeSource }) {
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-border-soft bg-bg-elev p-5">
-        <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
-          <Stat n={age.count} label={`seniors, ${age.ageMin} or older`} />
-          <span className="text-subtle text-lg pb-4">=</span>
-          <Stat n={age.total} label={`born ${age.bornOnOrBefore} or earlier`} />
-          <span className="text-subtle text-lg pb-4">&minus;</span>
-          <Stat n={age.inactive} label="inactive in PCO or deceased" />
-        </div>
+        <Stat
+          n={age.count}
+          label={`seniors, ${age.ageMin} or older, in the database`}
+        />
         <p className="text-[11px] text-subtle mt-3.5 leading-relaxed max-w-3xl">
-          The headline is already net: the{" "}
-          {age.inactive.toLocaleString()} are taken out, not waiting to be.{" "}
+          Born {age.bornOnOrBefore} or earlier, and still active in PCO.{" "}
           {age.noBirthYear.toLocaleString()} people have no birth year on
-          file and are in neither number &mdash; some of them are certainly
-          old enough, so this is a floor rather than a count.
+          file and are not counted &mdash; some of them are certainly old
+          enough, so this is a floor rather than a count.
         </p>
       </div>
 
@@ -704,13 +701,16 @@ function EventsTab({ events, years }: { events: EventSource; years: number }) {
       key: "last",
       label: "Last one",
       align: "right",
-      className: "w-[110px]",
+      className: "w-[100px] whitespace-nowrap",
       title:
         "The most recent of those events. Registrations date from the signup, check-ins from the service, group rosters from the last attendance recorded.",
       sortValue: (r) => r.lastAttendedAt ?? null,
       render: (r) => (
-        <span className="text-xs tnum text-muted">
-          {r.lastAttendedAt ? r.lastAttendedAt.slice(0, 10) : "—"}
+        <span
+          className="text-xs tnum text-muted whitespace-nowrap"
+          title={r.lastAttendedAt ?? "no date on any of them"}
+        >
+          {shortDate(r.lastAttendedAt)}
         </span>
       ),
     },

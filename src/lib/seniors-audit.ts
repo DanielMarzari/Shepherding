@@ -496,6 +496,7 @@ export function getWorkingList(orgId: number): WorkingList {
       sent: 0,
       opened: 0,
       clicked: 0,
+      lastOpenedAt: null,
       events: [],
       classification: r.classification,
       inactive: false,
@@ -519,6 +520,7 @@ export function getWorkingList(orgId: number): WorkingList {
       sent: 0,
       opened: 0,
       clicked: 0,
+      lastOpenedAt: null,
       events: [],
       classification: "unknown",
       inactive: false,
@@ -527,6 +529,9 @@ export function getWorkingList(orgId: number): WorkingList {
     row.sent = Math.max(row.sent, r.sent);
     row.opened = Math.max(row.opened, r.opened);
     row.clicked = Math.max(row.clicked, r.clicked);
+    if (r.lastOpenedAt && (!row.lastOpenedAt || r.lastOpenedAt > row.lastOpenedAt)) {
+      row.lastOpenedAt = r.lastOpenedAt;
+    }
     for (const l of r.lists) if (!row.lists.includes(l)) row.lists.push(l);
   }
 
@@ -566,6 +571,7 @@ export function getWorkingList(orgId: number): WorkingList {
       sent: 0,
       opened: 0,
       clicked: 0,
+      lastOpenedAt: null,
       events: v.events,
       classification: p.cls,
       inactive: p.inactive === 1,
@@ -586,7 +592,12 @@ export function getWorkingList(orgId: number): WorkingList {
       // is not, which is the distinction the whole page turns on.
       email: r.opened > 0,
     };
-    r.lastActivityAt = got?.lastActivityAt ?? null;
+    // Either signal counts. Somebody whose only trace is opening last
+    // week's newsletter was last seen last week, not never.
+    const pco = got?.lastActivityAt ?? null;
+    const mail = r.lastOpenedAt;
+    r.lastActivityAt =
+      pco && mail ? (pco > mail ? pco : mail) : (pco ?? mail);
     r.daysSince = daysSince(r.lastActivityAt);
   }
 

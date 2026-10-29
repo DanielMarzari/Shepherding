@@ -33,11 +33,42 @@ import { isPushpayGivingStale, refreshPushpayGiving } from "@/lib/pushpay-import
  * so the absence of that header is a strong signal of a direct loopback
  * hit from the cron daemon.
  */
+/** Orgs with Constant Contact settings on file. */
+function ccOrgs(): Array<{ id: number }> {
+  return getDb()
+    .prepare("SELECT DISTINCT org_id AS id FROM constant_contact_sync_settings")
+    .all() as Array<{ id: number }>;
+}
+
 export async function GET(req: Request) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
-  const force = new URL(req.url).searchParams.get("force") === "1";
+  const url = new URL(req.url);
+  const force = url.searchParams.get("force") === "1";
+
+  // ?only=cc runs the Constant Contact sync on its own, ignoring its weekly
+  // schedule, and nothing else. ?force=1 only forces the PCO sync — the CC
+  // one is gated separately — so without this the only way to pull contacts
+  // between Fridays was to run a 20-minute PCO sync that would skip them
+  // anyway. &full=1 drops the cursors and re-reads everything.
+  // Same auth as the rest of this endpoint.
+  if (url.searchParams.get("only") === "cc") {
+    const fullRefresh = url.searchParams.get("full") === "1";
+    const out: unknown[] = [];
+    for (const { id } of ccOrgs()) {
+      if (!getStoredConstantContactCreds(id).connected) {
+        out.push({ orgId: id, skipped: "not connected" });
+        continue;
+      }
+      try {
+        out.push({ orgId: id, ...(await runCcSync(id, "manual", { fullRefresh })) });
+      } catch (e) {
+        out.push({ orgId: id, error: e instanceof Error ? e.message : "failed" });
+      }
+    }
+    return NextResponse.json({ only: "cc", fullRefresh, results: out });
+  }
 
   // List all organizations with PCO settings on file. (One row per org.)
   const orgs = getDb()

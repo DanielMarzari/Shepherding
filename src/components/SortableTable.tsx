@@ -46,12 +46,18 @@ export function SortableTable<Row>({
   rowKey,
   emptyMessage,
   rowClassName,
+  /** Extra classes for the <table>. `table-fixed` keeps column widths
+   *  from shifting as a filter changes the content — with auto layout the
+   *  columns re-measure on every keystroke, which reads as the table
+   *  jumping about. Callers that pass it should give every column a width. */
+  tableClassName = "",
 }: {
   rows: Row[];
   columns: SortableColumn<Row>[];
   initialSortKey?: string;
   initialSortDir?: "asc" | "desc";
   rowKey: (row: Row, idx: number) => string;
+  tableClassName?: string;
   emptyMessage?: ReactNode;
   /** Extra classes for the <tr>. Can be a string or a fn (row, idx). */
   rowClassName?: string | ((row: Row, idx: number) => string);
@@ -101,7 +107,7 @@ export function SortableTable<Row>({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      <table className={`w-full text-sm ${tableClassName}`}>
         <thead className="text-xs text-muted">
           <tr className="border-b border-border-soft">
             {columns.map((c) => {

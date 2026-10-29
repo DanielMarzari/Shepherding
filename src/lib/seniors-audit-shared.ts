@@ -37,8 +37,8 @@ export const SENIOR_SIGNALS = ["pco", "email"] as const;
 export type SeniorSignal = (typeof SENIOR_SIGNALS)[number];
 
 export const SIGNAL_LABEL: Record<SeniorSignal, string> = {
-  pco: "In person",
-  email: "Opens email",
+  pco: "PCO activity",
+  email: "Email activity",
 };
 
 export const SIGNAL_NOTE: Record<SeniorSignal, string> = {
@@ -125,6 +125,8 @@ export interface SeniorRow {
   sent: number;
   opened: number;
   clicked: number;
+  /** The last email of the ministry's they opened. */
+  lastOpenedAt: string | null;
   /** Seniors events they registered for or are on the roster of. */
   events: string[];
   /** Their classification, for the "active elsewhere" case. */
@@ -241,4 +243,14 @@ export function humanAge(days: number | null): string {
   const years = Math.floor(months / 12);
   const rem = months % 12;
   return rem === 0 ? `${years}y` : `${years}y ${rem}m`;
+}
+
+/** dd/mm/yy. Short enough that the column never wraps mid-date, which is
+ *  what an ISO string does in 110 pixels. */
+export function shortDate(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)}`;
 }
