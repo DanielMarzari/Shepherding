@@ -51,6 +51,7 @@ export function SortableTable<Row>({
    *  columns re-measure on every keystroke, which reads as the table
    *  jumping about. Callers that pass it should give every column a width. */
   tableClassName = "",
+  onSortChange,
 }: {
   rows: Row[];
   columns: SortableColumn<Row>[];
@@ -61,6 +62,9 @@ export function SortableTable<Row>({
   emptyMessage?: ReactNode;
   /** Extra classes for the <tr>. Can be a string or a fn (row, idx). */
   rowClassName?: string | ((row: Row, idx: number) => string);
+  /** Told whenever a header click changes the sort, so a caller can put
+   *  the same rows in the same order somewhere else — a printout, say. */
+  onSortChange?: (key: string, dir: "asc" | "desc") => void;
 }) {
   const [sortKey, setSortKey] = useState<string | null>(
     initialSortKey ?? null,
@@ -68,42 +72,26 @@ export function SortableTable<Row>({
   const [sortDir, setSortDir] = useState<"asc" | "desc">(initialSortDir);
 
   function toggleSort(key: string): void {
+    let dir: "asc" | "desc";
     if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      dir = sortDir === "asc" ? "desc" : "asc";
     } else {
-      setSortKey(key);
       // Numeric columns most commonly want desc-first (biggest
       // number on top); text columns want asc-first (alphabetical).
       // Use the column's stated alignment as a coarse proxy: a
       // right-aligned column is usually a number, so start desc.
       const col = columns.find((c) => c.key === key);
-      setSortDir(col?.align === "right" ? "desc" : "asc");
+      dir = col?.align === "right" ? "desc" : "asc";
     }
+    setSortKey(key);
+    setSortDir(dir);
+    onSortChange?.(key, dir);
   }
 
-  const sorted = useMemo(() => {
-    if (!sortKey) return rows;
-    const col = columns.find((c) => c.key === sortKey);
-    if (!col || col.sortable === false) return rows;
-    const sortValue = col.sortValue ?? ((r: Row) => stringify(col.render(r)));
-    const out = [...rows];
-    const dir = sortDir === "asc" ? 1 : -1;
-    out.sort((a, b) => {
-      const av = sortValue(a);
-      const bv = sortValue(b);
-      // Nulls always at the end regardless of direction so the
-      // "no value" rows don't crowd the top half just because the
-      // direction flipped.
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      if (typeof av === "number" && typeof bv === "number") {
-        return (av - bv) * dir;
-      }
-      return String(av).localeCompare(String(bv)) * dir;
-    });
-    return out;
-  }, [rows, columns, sortKey, sortDir]);
+  const sorted = useMemo(
+    () => sortRows(rows, columns, sortKey, sortDir),
+    [rows, columns, sortKey, sortDir],
+  );
 
   return (
     <div className="overflow-x-auto">
@@ -194,6 +182,36 @@ export function SortableTable<Row>({
       </table>
     </div>
   );
+}
+
+/** The rows in the order the table would show them, for a given sort. */
+export function sortRows<Row>(
+  rows: Row[],
+  columns: SortableColumn<Row>[],
+  sortKey: string | null,
+  sortDir: "asc" | "desc",
+): Row[] {
+  if (!sortKey) return rows;
+  const col = columns.find((c) => c.key === sortKey);
+  if (!col || col.sortable === false) return rows;
+  const sortValue = col.sortValue ?? ((r: Row) => stringify(col.render(r)));
+  const out = [...rows];
+  const dir = sortDir === "asc" ? 1 : -1;
+  out.sort((a, b) => {
+    const av = sortValue(a);
+    const bv = sortValue(b);
+    // Nulls always at the end regardless of direction so the
+    // "no value" rows don't crowd the top half just because the
+    // direction flipped.
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "number" && typeof bv === "number") {
+      return (av - bv) * dir;
+    }
+    return String(av).localeCompare(String(bv)) * dir;
+  });
+  return out;
 }
 
 /** Best-effort scalar form of a rendered cell for the default sort.

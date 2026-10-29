@@ -69,8 +69,7 @@ export type Standing =
   | "reads_email"
   | "active_elsewhere"
   | "ignores_email"
-  | "gone_quiet"
-  | "nothing_recorded";
+  | "gone_quiet";
 
 /** Most actionable first. Reading down is roughly the order a ministry
  *  would work the list: the people already with you, then the warm ones,
@@ -82,7 +81,6 @@ export const STANDING_ORDER: Standing[] = [
   "active_elsewhere",
   "ignores_email",
   "gone_quiet",
-  "nothing_recorded",
 ];
 
 export const STANDING_LABEL: Record<Standing, string> = {
@@ -91,7 +89,6 @@ export const STANDING_LABEL: Record<Standing, string> = {
   active_elsewhere: "Active in church, not in seniors",
   ignores_email: "Gets the emails, never opens them",
   gone_quiet: "No activity for over a year",
-  nothing_recorded: "Nothing recorded",
 };
 
 export const STANDING_NOTE: Record<Standing, string> = {
@@ -104,14 +101,15 @@ export const STANDING_NOTE: Record<Standing, string> = {
   ignores_email:
     "On the mailing list and has opened nothing in a year. Reached on paper only; another email is unlikely to be what changes that.",
   gone_quiet:
-    "PCO has activity for them, but the most recent is over a year old. Probably no longer attending.",
-  nothing_recorded:
-    "No activity recorded at all. That is not proof they have gone — it may mean nothing they do gets recorded in PCO — but there is nothing here to work from.",
+    "Nothing in PCO for over a year, or nothing at all. Probably no longer attending — or doing nothing that PCO records.",
 };
 
 export interface SeniorRow {
   personId: string | null;
   name: string;
+  /** Placed in PCO by their name rather than their email address — the
+   *  address on the mailing list is not on their PCO record. */
+  nameMatch: boolean;
   sources: SeniorSource[];
   standing: Standing;
   /** Any of the five PCO lanes, and whether they open the email. */
@@ -139,6 +137,9 @@ export interface EmailSource {
   lists: Array<{ id: string; name: string; contacts: number }>;
   contacts: number;
   matched: number;
+  /** Of `matched`, how many by name: the address is not on their PCO
+   *  record, but exactly one person in PCO has their name. */
+  matchedByName: number;
   unmatched: number;
   campaigns: number;
   sends: number;
@@ -151,6 +152,8 @@ export interface EmailSource {
   rows: Array<{
     contactId: string;
     personId: string | null;
+    /** True when personId came from the name, not the address. */
+    nameMatch: boolean;
     /** Constant Contact's own name for the contact, which is all we have
      *  for anybody not matched to PCO. Null when CC has none either. */
     name: string | null;

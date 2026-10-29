@@ -22,6 +22,7 @@ import {
   getSeniorsGroups,
   getSeniorsSignups,
 } from "./pco";
+import { NICKNAMES, editDistance, fullNameKey, normNamePart } from "./name-match";
 
 /** The seniors audit: three sources, then one list.
  *
@@ -109,6 +110,131 @@ const daysSince = (iso: string | null): number | null => {
 
 // ── source 1: the mailing list ───────────────────────────────────────
 
+/** A name typed in capitals, or all in lower case, put into ordinary case.
+ *  Constant Contact keeps whatever was typed into a sign-up form, and
+ *  "ALAN RAIN" in a list of names reads as shouting. A name already in mixed
+ *  case is left alone — "McDonald" knows better than any rule here. */
+function tidyName(s: string): string {
+  if (!/[a-z]/i.test(s)) return s;
+  if (s !== s.toUpperCase() && s !== s.toLowerCase()) return s;
+  return s
+    .toLowerCase()
+    .replace(/(^|[\s'’-])(\p{L})/gu, (_, sep: string, c: string) => sep + c.toUpperCase())
+    .replace(/\bMc(\p{L})/gu, (_, c: string) => "Mc" + c.toUpperCase());
+}
+
+/** First names close enough to be the same person, once the surname is
+ *  already the same. Stricter than the duplicate audit's rule: spouses share
+ *  a surname and often an inbox, so "Jean" must not meet "Joan" on a
+ *  one-letter difference, nor "Dan" meet "Danielle" by being the start of
+ *  it. A known nickname (Bob / Robert) and a typo in a longer name (Kathryn /
+ *  Katheryn) are what this lets through. */
+function sameFirstName(a: string, b: string): boolean {
+  if (a === b) return true;
+  if ((NICKNAMES[a] ?? []).includes(b) || (NICKNAMES[b] ?? []).includes(a)) return true;
+  return a.length >= 5 && b.length >= 5 && a[0] === b[0] && editDistance(a, b) <= 1;
+}
+
+/** Contacts the email address could not place, placed by name instead.
+ *
+ *  The address on the mailing list is often not the one on the PCO record —
+ *  an old one, a child's, the one somebody typed into a paper form — so a
+ *  person PCO knows perfectly well shows up as a stranger. Their name is the
+ *  other thing both systems have.
+ *
+ *  Only a name that points at exactly one person counts. An exact name is
+ *  tried first; a nickname or a shortening only when nobody has the exact
+ *  name. Somebody alive in PCO beats an inactive record of the same name, so
+ *  one long-gone namesake does not stop a match — but two live people with
+ *  the name is two people, and that contact stays unmatched.
+ *
+ *  Read-time only. The sync's own link is by address and stays that way;
+ *  this is a judgement made for this page, not a fact written down.
+ */
+function matchByName(
+  orgId: number,
+  contacts: Array<{ contactId: string; first: string | null; last: string | null }>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  const wanted = contacts
+    .map((c) => ({
+      id: c.contactId,
+      first: normNamePart(c.first),
+      last: normNamePart(c.last),
+      full: fullNameKey(c.first, c.last),
+    }))
+    .filter((c) => c.first.length >= 2 && c.last.length >= 2);
+  if (wanted.length === 0) return out;
+
+  // Narrow by surname in SQL — the raw spelling and the normalized one, so
+  // "RAIN" and "O'Neil" both find their people — and judge the rest here.
+  const surnames = new Set<string>();
+  for (const c of contacts) {
+    if (c.last?.trim()) surnames.add(c.last.trim().toLowerCase());
+  }
+  for (const w of wanted) surnames.add(w.last);
+  const names = [...surnames];
+
+  type Person = { id: string; forms: string[]; last: string; full: string[]; alive: boolean };
+  const byLast = new Map<string, Person[]>();
+  const db = getDb();
+  for (let i = 0; i < names.length; i += 500) {
+    const chunk = names.slice(i, i + 500);
+    for (const p of db
+      .prepare(
+        `SELECT p.pco_id AS id, p.first_name AS f, p.last_name AS l,
+                p.nickname AS nick, p.legal_first_name AS legal,
+                CASE WHEN ${ALIVE_SQL} THEN 1 ELSE 0 END AS alive
+           FROM pco_people p
+          WHERE p.org_id = ? AND LOWER(TRIM(p.last_name)) IN (${ph(chunk)})`,
+      )
+      .all(orgId, ...chunk) as Array<{
+      id: string;
+      f: string | null;
+      l: string | null;
+      nick: string | null;
+      legal: string | null;
+      alive: number;
+    }>) {
+      const last = normNamePart(p.l);
+      // PCO keeps up to three first names for one person — first, nickname,
+      // legal — and the form somebody signs up with can be any of them.
+      const forms = [...new Set([p.f, p.nick, p.legal].map(normNamePart).filter(Boolean))];
+      if (!last || forms.length === 0) continue;
+      const list = byLast.get(last) ?? byLast.set(last, []).get(last)!;
+      if (list.some((x) => x.id === p.id)) continue;
+      list.push({
+        id: p.id,
+        forms,
+        last,
+        full: forms.map((f) => fullNameKey(f, p.l)),
+        alive: p.alive === 1,
+      });
+    }
+  }
+
+  // One person, or nobody: never a guess between two.
+  const pick = (cands: Person[]): string | null | "ambiguous" => {
+    if (cands.length === 0) return null;
+    const alive = cands.filter((p) => p.alive);
+    const pool = alive.length > 0 ? alive : cands;
+    return pool.length === 1 ? pool[0].id : "ambiguous";
+  };
+
+  for (const w of wanted) {
+    const cands = byLast.get(w.last) ?? [];
+    const exact = pick(cands.filter((p) => p.full.includes(w.full)));
+    if (exact === "ambiguous") continue;
+    if (exact) {
+      out.set(w.id, exact);
+      continue;
+    }
+    const near = pick(cands.filter((p) => p.forms.some((f) => sameFirstName(f, w.first))));
+    if (near && near !== "ambiguous") out.set(w.id, near);
+  }
+  return out;
+}
+
 export function getEmailSource(orgId: number): EmailSource {
   const db = getDb();
   const listIds = getSeniorsCcLists(orgId);
@@ -116,6 +242,7 @@ export function getEmailSource(orgId: number): EmailSource {
     lists: [],
     contacts: 0,
     matched: 0,
+    matchedByName: 0,
     unmatched: 0,
     campaigns: 0,
     sends: 0,
@@ -186,6 +313,37 @@ export function getEmailSource(orgId: number): EmailSource {
     listIds: string | null;
   }>;
 
+  // Whoever the address could not place, try by name — and then fetch the
+  // name PCO has for them, which is the one the rest of the page uses.
+  const byName = matchByName(
+    orgId,
+    contacts
+      .filter((c) => !c.personId)
+      .map((c) => ({ contactId: c.contactId, first: c.cf, last: c.cl })),
+  );
+  if (byName.size > 0) {
+    const ids = [...new Set(byName.values())];
+    const pcoName = new Map<string, { f: string | null; l: string | null }>();
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      for (const r of db
+        .prepare(
+          `SELECT pco_id AS id, first_name AS f, last_name AS l
+             FROM pco_people WHERE org_id = ? AND pco_id IN (${ph(chunk)})`,
+        )
+        .all(orgId, ...chunk) as Array<{ id: string; f: string | null; l: string | null }>) {
+        pcoName.set(r.id, r);
+      }
+    }
+    for (const c of contacts) {
+      const pid = c.personId ? undefined : byName.get(c.contactId);
+      if (!pid) continue;
+      c.personId = pid;
+      c.pf = pcoName.get(pid)?.f ?? null;
+      c.pl = pcoName.get(pid)?.l ?? null;
+    }
+  }
+
   // Opens and sends per contact, over those campaigns only.
   const opened = new Map<string, { n: number; last: string | null }>();
   const sentTo = new Map<string, number>();
@@ -217,12 +375,16 @@ export function getEmailSource(orgId: number): EmailSource {
       // PCO's name when we have the person, Constant Contact's own when we
       // do not. Without the second, an unmatched contact is a person with
       // no name, no address and no record — nothing anybody can act on.
+      const cc = [c.cf?.trim(), c.cl?.trim()].filter(Boolean).join(" ");
       const name = c.personId
         ? nameOf(c.pf, c.pl, c.personId)
-        : [c.cf?.trim(), c.cl?.trim()].filter(Boolean).join(" ") || null;
+        : cc
+          ? tidyName(cc)
+          : null;
       return {
         contactId: c.contactId,
         personId: c.personId,
+        nameMatch: byName.has(c.contactId),
         name,
         lists: (c.listIds ?? "")
           .split(",")
@@ -246,6 +408,7 @@ export function getEmailSource(orgId: number): EmailSource {
     })),
     contacts: contacts.length,
     matched: contacts.filter((c) => c.personId).length,
+    matchedByName: byName.size,
     unmatched: contacts.filter((c) => !c.personId).length,
     campaigns: campaigns.length,
     sends: campaigns.reduce((s, c) => s + c.sends, 0),
@@ -488,6 +651,7 @@ export function getWorkingList(orgId: number): WorkingList {
     take(r.personId, {
       personId: r.personId,
       name: r.name,
+      nameMatch: false,
       sources: ["A"],
       signals: { ...NO_SIGNALS },
       lists: [],
@@ -506,12 +670,14 @@ export function getWorkingList(orgId: number): WorkingList {
   // Then the mailing list, which brings people of any age — somebody on
   // the seniors list at 62 is on it for a reason.
   const unmatchedSeen = new Set<string>();
+  const byAddress = new Set<string>();
   for (const r of email.rows) {
     const key = r.personId ?? `contact:${r.contactId}`;
     if (!r.personId) unmatchedSeen.add(r.contactId);
     const row = take(key, {
       personId: r.personId,
-      name: r.name ?? "(no PCO match)",
+      name: r.name ?? "(no name on the contact)",
+      nameMatch: false,
       sources: [],
       signals: { ...NO_SIGNALS },
       lists: [],
@@ -526,6 +692,10 @@ export function getWorkingList(orgId: number): WorkingList {
       inactive: false,
     });
     if (!row.sources.includes("E")) row.sources.push("E");
+    // Flagged only when the name is the sole link: one contact that matched
+    // by address makes the record certain.
+    if (r.personId && !r.nameMatch) byAddress.add(r.personId);
+    else if (r.nameMatch) row.nameMatch = true;
     row.sent = Math.max(row.sent, r.sent);
     row.opened = Math.max(row.opened, r.opened);
     row.clicked = Math.max(row.clicked, r.clicked);
@@ -533,6 +703,10 @@ export function getWorkingList(orgId: number): WorkingList {
       row.lastOpenedAt = r.lastOpenedAt;
     }
     for (const l of r.lists) if (!row.lists.includes(l)) row.lists.push(l);
+  }
+
+  for (const r of acc.values()) {
+    if (r.personId && byAddress.has(r.personId)) r.nameMatch = false;
   }
 
   // Then the events.
@@ -563,6 +737,7 @@ export function getWorkingList(orgId: number): WorkingList {
     acc.set(pid, {
       personId: pid,
       name: nameOf(p.f, p.l, pid),
+      nameMatch: false,
       sources: ["R"],
       signals: { ...NO_SIGNALS },
       lists: [],
@@ -610,8 +785,10 @@ export function getWorkingList(orgId: number): WorkingList {
     }
     // Old enough, on no list, at no event. The three cases differ in what
     // can be done about them, which is why they are not one bucket.
+    // Nothing ever recorded reads the same as nothing for a year: there is
+    // no trace to work from either way.
     if (r.signals.pco) return "active_elsewhere";
-    if (r.daysSince === null) return "nothing_recorded";
+    if (r.daysSince === null) return "gone_quiet";
     return r.daysSince > 365 ? "gone_quiet" : "active_elsewhere";
   };
 

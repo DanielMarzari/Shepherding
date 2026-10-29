@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   SortableTable,
+  sortRows,
   type SortableColumn,
 } from "@/components/SortableTable";
 import {
@@ -25,6 +26,7 @@ import {
   type WorkingList,
 } from "@/lib/seniors-audit-shared";
 import { downloadCsv } from "./csv";
+import { printDocument, type PrintColumn, type PrintRow } from "./print";
 
 type Tab = "list" | "email" | "age" | "events";
 
@@ -43,6 +45,15 @@ const SOURCE_NOTE: Record<string, string> = {
 };
 
 const ORDER = STANDING_ORDER;
+
+const NOT_IN_PCO =
+  "Not in PCO. The name is Constant Contact's: nobody in PCO has this address, and the name points to no one there — or to more than one person.";
+const BY_NAME =
+  "Matched to PCO by name: the address on the mailing list is not on their PCO record, but this is the only person in PCO with the name.";
+const FLAG_LEGEND =
+  "Not in PCO — the name comes from the mailing list; nobody in PCO has the address, and the name points to no one there, or to more than one person.";
+
+type Sort = { key: string; dir: "asc" | "desc" };
 
 export function AuditView({
   working,
@@ -95,11 +106,13 @@ function CollectedTab({ working }: { working: WorkingList }) {
   const [signals, setSignals] = useState<SeniorSignal[]>([]);
   const [bucket, setBucket] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState<Sort>({ key: "name", dir: "asc" });
 
-  const rows = useMemo(() => {
+  // Everything but the Summary filter: the split printout takes every
+  // category, but still only the people the other filters leave.
+  const unsplit = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return working.rows.filter((r) => {
-      if (only && r.standing !== only) return false;
       // Every ticked lane must be true: "worship AND serve" is the useful
       // question, not "worship OR serve", which is nearly everybody.
       if (signals.length && !signals.every((k) => r.signals[k])) return false;
@@ -118,7 +131,11 @@ function CollectedTab({ working }: { working: WorkingList }) {
       if (needle && !r.name.toLowerCase().includes(needle)) return false;
       return true;
     });
-  }, [working.rows, only, signals, bucket, q]);
+  }, [working.rows, signals, bucket, q]);
+  const rows = useMemo(
+    () => (only ? unsplit.filter((r) => r.standing === only) : unsplit),
+    [unsplit, only],
+  );
 
   const columns: SortableColumn<SeniorRow>[] = [
     {
@@ -132,16 +149,12 @@ function CollectedTab({ working }: { working: WorkingList }) {
           <a
             href={`/people/${r.personId}`}
             className="font-medium hover:text-accent"
+            title={r.nameMatch ? BY_NAME : undefined}
           >
             {r.name}
           </a>
         ) : (
-          <span className="text-muted italic">
-            {r.name}
-            <span className="text-[11px] text-subtle ml-1.5 not-italic">
-              no PCO record — only a hashed address is stored
-            </span>
-          </span>
+          <NotInPco name={r.name} />
         ),
     },
     {
@@ -219,6 +232,75 @@ function CollectedTab({ working }: { working: WorkingList }) {
       ),
     },
   ];
+
+  function printCollected(mode: "view" | "split") {
+    const split = mode === "split";
+    // A single category needs no Summary column: it is the heading.
+    const oneCategory = split || only !== null;
+    const cols: PrintColumn[] = [
+      { label: "Person" },
+      { label: "Where from", width: "1.6in" },
+      { label: "PCO activity", width: "0.8in", align: "center" },
+      { label: "Opens email", width: "0.8in", align: "center" },
+      { label: "Last seen", width: "0.75in", align: "right" },
+      ...(oneCategory ? [] : [{ label: "Summary", width: "2in" }]),
+    ];
+    const toPrint = (r: SeniorRow): PrintRow => ({
+      cells: [
+        r.name,
+        (["E", "A", "R"] as const)
+          .filter((sk) => r.sources.includes(sk))
+          .map((sk) => SOURCE_LABEL[sk])
+          .join(" · "),
+        "",
+        "",
+        humanAge(r.daysSince),
+        ...(oneCategory ? [] : [STANDING_LABEL[r.standing]]),
+      ],
+      ticks: { 2: r.signals.pco, 3: r.signals.email },
+      flag: !r.personId,
+    });
+    const ordered = sortRows(split ? unsplit : rows, columns, sort.key, sort.dir);
+
+    const meta: string[] = [];
+    const b = [
+      ...SENIORS_ACTIVITY_BUCKETS,
+      { id: SENIORS_NEVER_BUCKET, label: "Never" },
+    ].find((x) => x.id === bucket);
+    if (b) meta.push(`Active in: ${b.label}`);
+    if (signals.length) meta.push(`Has: ${signals.map((k) => SIGNAL_LABEL[k]).join(" and ")}`);
+    if (q.trim()) meta.push(`Name contains “${q.trim()}”`);
+
+    if (split) {
+      const groups = ORDER.map((sv) => ({
+        sv,
+        rows: ordered.filter((r) => r.standing === sv),
+      })).filter((g) => g.rows.length > 0);
+      printDocument({
+        title: "Seniors audit — by summary",
+        subtitle: "The collected list, one category per section",
+        meta,
+        overview: groups.map((g) => ({ label: STANDING_LABEL[g.sv], count: g.rows.length })),
+        columns: cols,
+        sections: groups.map((g) => ({
+          heading: STANDING_LABEL[g.sv],
+          note: STANDING_NOTE[g.sv],
+          rows: g.rows.map(toPrint),
+        })),
+        pagePerSection: true,
+        flagLegend: FLAG_LEGEND,
+      });
+      return;
+    }
+    printDocument({
+      title: only ? `Seniors audit — ${STANDING_LABEL[only]}` : "Seniors audit — collected list",
+      subtitle: only ? STANDING_NOTE[only] : "Everyone from the mailing list, the age list and the events, in one list",
+      meta,
+      columns: cols,
+      sections: [{ rows: ordered.map(toPrint) }],
+      flagLegend: FLAG_LEGEND,
+    });
+  }
 
   return (
     <div className="space-y-3">
@@ -349,13 +431,30 @@ function CollectedTab({ working }: { working: WorkingList }) {
           {rows.length.toLocaleString()} of{" "}
           {working.rows.length.toLocaleString()}
         </span>
+        <PdfMenu
+          disabled={rows.length === 0}
+          options={[
+            {
+              label: "What's in view",
+              hint: `${rows.length.toLocaleString()} people, as filtered and sorted now`,
+              onClick: () => printCollected("view"),
+            },
+            {
+              label: "By summary category",
+              hint: "One section per category, each starting on a new page",
+              onClick: () => printCollected("split"),
+              disabled: unsplit.length === 0,
+            },
+          ]}
+        />
         <ExportButton
-          label="Export this list"
+          label="Export CSV"
           onClick={() =>
             downloadCsv(
               "seniors-collected-list.csv",
               [
                 "Name",
+                "In PCO",
                 "From email",
                 "From age",
                 "From events",
@@ -370,6 +469,7 @@ function CollectedTab({ working }: { working: WorkingList }) {
               ],
               rows.map((r) => [
                 r.name,
+                r.personId ? (r.nameMatch ? "yes, by name" : "yes") : "",
                 r.sources.includes("E") ? "yes" : "",
                 r.sources.includes("A") ? "yes" : "",
                 r.sources.includes("R") ? "yes" : "",
@@ -398,6 +498,7 @@ function CollectedTab({ working }: { working: WorkingList }) {
         initialSortDir="asc"
         emptyMessage="Nobody matches that."
         tableClassName="table-fixed"
+        onSortChange={(key, dir) => setSort({ key, dir })}
       />
     </div>
   );
@@ -408,6 +509,7 @@ function CollectedTab({ working }: { working: WorkingList }) {
 function EmailTab({ email }: { email: EmailSource }) {
   const openRate = email.sends > 0 ? (email.opens / email.sends) * 100 : 0;
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState<Sort>({ key: "openRate", dir: "desc" });
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return email.rows;
@@ -422,18 +524,15 @@ function EmailTab({ email }: { email: EmailSource }) {
       sortValue: (r) => (r.name ?? "~").toLowerCase(),
       render: (r) =>
         r.personId ? (
-          <a href={`/people/${r.personId}`} className="font-medium hover:text-accent">
+          <a
+            href={`/people/${r.personId}`}
+            className="font-medium hover:text-accent"
+            title={r.nameMatch ? BY_NAME : undefined}
+          >
             {r.name}
           </a>
         ) : (
-          <span>
-            <span className="font-medium text-muted">
-              {r.name ?? "(no name on the contact)"}
-            </span>
-            <span className="text-[11px] text-subtle ml-1.5">
-              not in PCO
-            </span>
-          </span>
+          <NotInPco name={r.name ?? "(no name on the contact)"} />
         ),
     },
     {
@@ -473,7 +572,14 @@ function EmailTab({ email }: { email: EmailSource }) {
       <div className="rounded-lg border border-border-soft bg-bg-elev p-5">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <Stat n={email.contacts} label="contacts on the lists" />
-          <Stat n={email.matched} label="matched to a PCO person" />
+          <Stat
+            n={email.matched}
+            label={
+              email.matchedByName > 0
+                ? `matched to a PCO person, ${email.matchedByName.toLocaleString()} of them by name`
+                : "matched to a PCO person"
+            }
+          />
           <Stat
             n={email.unmatched}
             label="no PCO match"
@@ -498,8 +604,10 @@ function EmailTab({ email }: { email: EmailSource }) {
             <>
               {" "}
               The {email.unmatched.toLocaleString()} with no PCO match are
-              named from Constant Contact&rsquo;s own record of them, so you
-              can tell whether you know them.{" "}
+              named from Constant Contact&rsquo;s own record of them and
+              marked with the warning sign. Nobody in PCO has their address,
+              and nobody has their name either &mdash; or more than one
+              person does, and there is no telling which.{" "}
               {email.unnamed > 0
                 ? `${email.unnamed} have no name there either — those are an address and nothing else.`
                 : "All of them have a name."}{" "}
@@ -521,6 +629,36 @@ function EmailTab({ email }: { email: EmailSource }) {
         setQ={setQ}
         shown={rows.length}
         total={email.rows.length}
+        onPdf={() =>
+          printDocument({
+            title: "Seniors audit — mailing list",
+            subtitle: `Everyone on the seniors lists, with what they opened in the last year`,
+            meta: [
+              ...email.lists.map((l) => l.name),
+              ...(q.trim() ? [`Name contains “${q.trim()}”`] : []),
+            ],
+            columns: [
+              { label: "Person" },
+              { label: "Open rate", width: "0.9in", align: "right" },
+              { label: "Click rate", width: "0.9in", align: "right" },
+              { label: "Last opened", width: "1in", align: "right" },
+            ],
+            sections: [
+              {
+                rows: sortRows(rows, columns, sort.key, sort.dir).map((r) => ({
+                  cells: [
+                    r.name ?? "(no name on the contact)",
+                    r.sent > 0 ? `${Math.round((r.opened / r.sent) * 100)}%` : "—",
+                    r.sent > 0 ? `${Math.round((r.clicked / r.sent) * 100)}%` : "—",
+                    shortDate(r.lastOpenedAt),
+                  ],
+                  flag: !r.personId,
+                })),
+              },
+            ],
+            flagLegend: FLAG_LEGEND,
+          })
+        }
         onExport={() =>
           downloadCsv(
             "seniors-email-list.csv",
@@ -538,7 +676,7 @@ function EmailTab({ email }: { email: EmailSource }) {
             ],
             rows.map((r) => [
               r.name ?? "(no name on the contact)",
-              r.personId ? "yes" : "",
+              r.personId ? (r.nameMatch ? "yes, by name" : "yes") : "",
               r.lists.join("; "),
               r.sent,
               r.opened,
@@ -560,6 +698,7 @@ function EmailTab({ email }: { email: EmailSource }) {
         initialSortKey="openRate"
         initialSortDir="desc"
         emptyMessage="Nobody matches that."
+        onSortChange={(key, dir) => setSort({ key, dir })}
       />
     </div>
   );
@@ -567,6 +706,7 @@ function EmailTab({ email }: { email: EmailSource }) {
 
 function AgeTab({ age }: { age: AgeSource }) {
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState<Sort>({ key: "name", dir: "asc" });
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return age.rows;
@@ -607,6 +747,24 @@ function AgeTab({ age }: { age: AgeSource }) {
         setQ={setQ}
         shown={rows.length}
         total={age.rows.length}
+        onPdf={() =>
+          printDocument({
+            title: `Seniors audit — ${age.ageMin} and older`,
+            subtitle: `Born ${age.bornOnOrBefore} or earlier, and active in PCO`,
+            meta: q.trim() ? [`Name contains “${q.trim()}”`] : [],
+            columns: [
+              { label: "Person" },
+              { label: "Born", width: "0.8in", align: "right" },
+            ],
+            sections: [
+              {
+                rows: sortRows(rows, columns, sort.key, sort.dir).map((r) => ({
+                  cells: [r.name, String(r.birthYear)],
+                })),
+              },
+            ],
+          })
+        }
         onExport={() =>
           downloadCsv(
             `seniors-${age.ageMin}-plus.csv`,
@@ -627,6 +785,7 @@ function AgeTab({ age }: { age: AgeSource }) {
         initialSortKey="name"
         initialSortDir="asc"
         emptyMessage="Nobody matches that."
+        onSortChange={(key, dir) => setSort({ key, dir })}
       />
     </div>
   );
@@ -634,6 +793,7 @@ function AgeTab({ age }: { age: AgeSource }) {
 
 function EventsTab({ events, years }: { events: EventSource; years: number }) {
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState<Sort>({ key: "last", dir: "desc" });
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return events.rows;
@@ -734,6 +894,31 @@ function EventsTab({ events, years }: { events: EventSource; years: number }) {
         setQ={setQ}
         shown={rows.length}
         total={events.rows.length}
+        onPdf={() =>
+          printDocument({
+            title: "Seniors audit — event attendees",
+            subtitle: "Everyone registered for, or on the roster of, a seniors event",
+            meta: q.trim() ? [`Matching “${q.trim()}”`] : [],
+            columns: [
+              { label: "Person", width: "2.1in" },
+              { label: "What they came to" },
+              { label: "Events", width: "0.6in", align: "right" },
+              { label: "Last one", width: "0.75in", align: "right" },
+            ],
+            sections: [
+              {
+                rows: sortRows(rows, columns, sort.key, sort.dir).map((r) => ({
+                  cells: [
+                    r.name,
+                    r.events.join(" · "),
+                    String(r.events.length),
+                    shortDate(r.lastAttendedAt),
+                  ],
+                })),
+              },
+            ],
+          })
+        }
         onExport={() =>
           downloadCsv(
             "seniors-event-attendees.csv",
@@ -755,6 +940,7 @@ function EventsTab({ events, years }: { events: EventSource; years: number }) {
         initialSortKey="last"
         initialSortDir="desc"
         emptyMessage="Nobody matches that."
+        onSortChange={(key, dir) => setSort({ key, dir })}
       />
     </div>
   );
@@ -768,12 +954,14 @@ function ListHeader({
   shown,
   total,
   onExport,
+  onPdf,
 }: {
   q: string;
   setQ: (v: string) => void;
   shown: number;
   total: number;
   onExport: () => void;
+  onPdf: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -788,7 +976,101 @@ function ListHeader({
       <span className="text-xs text-subtle tnum ml-auto">
         {shown.toLocaleString()} of {total.toLocaleString()}
       </span>
-      <ExportButton label="Export this list" onClick={onExport} disabled={shown === 0} />
+      <ExportButton label="PDF" onClick={onPdf} disabled={shown === 0} />
+      <ExportButton label="Export CSV" onClick={onExport} disabled={shown === 0} />
+    </div>
+  );
+}
+
+/** A name with nothing in PCO behind it: the name, and a sign that says so.
+ *  The sign carries the explanation on hover rather than a sentence on
+ *  every row. */
+function NotInPco({ name }: { name: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-muted" title={NOT_IN_PCO}>
+      <span className="font-medium">{name}</span>
+      <svg
+        viewBox="0 0 16 16"
+        className="w-3.5 h-3.5 shrink-0 text-warn-soft-fg"
+        aria-label="Not in PCO"
+        role="img"
+      >
+        <path
+          d="M8 1.5 15 14H1z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+        <path d="M8 6v3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        <circle cx="8" cy="11.6" r=".95" fill="currentColor" />
+      </svg>
+    </span>
+  );
+}
+
+/** Two ways to print the list, behind one button. */
+function PdfMenu({
+  options,
+  disabled,
+}: {
+  options: Array<{ label: string; hint: string; onClick: () => void; disabled?: boolean }>;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="px-3 py-1.5 rounded border border-border-soft text-xs hover:bg-bg-elev-2 cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+      >
+        PDF
+        <span className="text-[9px] text-subtle" aria-hidden>
+          ▼
+        </span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 mt-1.5 z-20 w-72 rounded-lg border border-border-soft bg-bg-elev shadow-lg p-1"
+        >
+          {options.map((o) => (
+            <button
+              key={o.label}
+              type="button"
+              role="menuitem"
+              disabled={o.disabled}
+              onClick={() => {
+                setOpen(false);
+                o.onClick();
+              }}
+              className="w-full text-left rounded px-3 py-2 hover:bg-bg-elev-2 cursor-pointer disabled:opacity-50 disabled:cursor-default"
+            >
+              <div className="text-[13px] font-medium">{o.label}</div>
+              <div className="text-[11px] text-subtle leading-snug mt-0.5">{o.hint}</div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
