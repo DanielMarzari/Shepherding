@@ -17,6 +17,44 @@ export const EVENT_PICKER_YEARS = 2;
  *  at once and "1 / 2 / 3" says nothing about which is which. */
 export type SeniorSource = "E" | "A" | "R";
 
+/** The five next-steps lanes, plus email engagement as a sixth.
+ *
+ *  Email is not a lane anywhere else in the app, and it is not one here
+ *  either in any real sense — but on this page it answers the same
+ *  question the others do ("is there a sign of life in this direction"),
+ *  and the ministry's only channel is the mailing list. Keeping the keys
+ *  the same as the membership audit's means a row reads identically on
+ *  both pages. */
+export const SENIOR_LANE_KEYS = ["w", "s", "c", "g", "o", "e"] as const;
+export type SeniorLaneKey = (typeof SENIOR_LANE_KEYS)[number];
+
+export const SENIOR_LANE_LABELS: Record<SeniorLaneKey, string> = {
+  w: "Worship",
+  s: "Serve",
+  c: "Community",
+  g: "Give",
+  o: "Outreach",
+  e: "Email",
+};
+
+/** Opened at least one of the emails sent in the window. Receiving one is
+ *  not engagement — that is the whole point of the distinction. */
+export const EMAIL_LANE: SeniorLaneKey = "e";
+
+/** How long ago somebody last did anything, bucketed. Same buckets as the
+ *  membership audit so the two pages agree on what "recent" means. */
+export const SENIORS_ACTIVITY_BUCKETS: {
+  id: string;
+  label: string;
+  maxMonths: number | null;
+}[] = [
+  { id: "3", label: "Last 3 months", maxMonths: 3 },
+  { id: "9", label: "Last 9 months", maxMonths: 9 },
+  { id: "12", label: "Last year", maxMonths: 12 },
+  { id: "old", label: "Over a year ago", maxMonths: null },
+];
+export const SENIORS_NEVER_BUCKET = "never";
+
 /** The ladder, most involved first. It is about involvement in the
  *  seniors ministry, not about being a senior: somebody busy elsewhere in
  *  the church who has never come to a seniors event is a different
@@ -52,6 +90,12 @@ export interface SeniorRow {
   name: string;
   sources: SeniorSource[];
   standing: Standing;
+  /** The six lanes. Email is true when they have opened one. */
+  lanes: Record<SeniorLaneKey, boolean>;
+  laneCount: number;
+  /** When the snapshot last saw them do anything, and how long ago. */
+  lastActivityAt: string | null;
+  daysSince: number | null;
   /** Emails sent to them, and how many they opened, in the window. */
   sent: number;
   opened: number;
@@ -73,6 +117,9 @@ export interface EmailSource {
   opens: number;
   /** Contacts who opened at least one email in the window. */
   openers: number;
+  /** Distinct people the lists reach, as rows. An unmatched contact has no
+   *  personId and no name: the database keeps only an HMAC of the address,
+   *  never the address, so there is nothing to show but the fact of them. */
   rows: Array<{
     contactId: string;
     email: string | null;
@@ -106,6 +153,13 @@ export interface EventSource {
   configured: boolean;
   people: number;
   events: Array<{ kind: string; id: string; name: string; people: number }>;
+  /** The distinct people behind that count, with what they turned up to. */
+  rows: Array<{
+    personId: string;
+    name: string;
+    classification: string;
+    events: string[];
+  }>;
 }
 
 export interface PickerOption {

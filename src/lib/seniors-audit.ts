@@ -1,6 +1,7 @@
 import "server-only";
 import { getDb } from "./db";
 import {
+  type SeniorLaneKey,
   type AgeSource,
   type EmailSource,
   type EventSource,
@@ -59,6 +60,78 @@ const ALIVE_SQL = `
     SELECT 1 FROM pco_person_fields d
      WHERE d.org_id = p.org_id AND d.person_id = p.pco_id
        AND d.field_name = 'Date of Death' AND d.value_on IS NOT NULL)`;
+
+
+/** Lane flags and last-activity date for a set of people, in one query.
+ *
+ *  The same five lanes the rest of the app uses, read from the snapshot
+ *  rather than re-derived — re-deriving them here is how two pages end up
+ *  disagreeing about whether somebody serves. Email is added per row by
+ *  the caller, since it comes from Constant Contact and not from PCO.
+ */
+function laneRows(
+  orgId: number,
+  ids: string[],
+): Map<
+  string,
+  { lanes: Record<SeniorLaneKey, boolean>; lastActivityAt: string | null }
+> {
+  const out = new Map<
+    string,
+    { lanes: Record<SeniorLaneKey, boolean>; lastActivityAt: string | null }
+  >();
+  if (ids.length === 0) return out;
+  const db = getDb();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    for (const r of db
+      .prepare(
+        `SELECT person_id AS id, in_worship_lane AS w, in_serving_lane AS s,
+                in_community_lane AS c, in_giving_lane AS g,
+                in_outreach_lane AS o, last_activity_at AS last
+           FROM person_activity
+          WHERE org_id = ? AND person_id IN (${ph(chunk)})`,
+      )
+      .all(orgId, ...chunk) as Array<{
+      id: string;
+      w: number;
+      s: number;
+      c: number;
+      g: number;
+      o: number;
+      last: string | null;
+    }>) {
+      out.set(r.id, {
+        lanes: {
+          w: r.w === 1,
+          s: r.s === 1,
+          c: r.c === 1,
+          g: r.g === 1,
+          o: r.o === 1,
+          e: false,
+        },
+        lastActivityAt: r.last,
+      });
+    }
+  }
+  return out;
+}
+
+const NO_LANES: Record<SeniorLaneKey, boolean> = {
+  w: false,
+  s: false,
+  c: false,
+  g: false,
+  o: false,
+  e: false,
+};
+
+const daysSince = (iso: string | null): number | null => {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
+};
 
 // ── source 1: the mailing list ───────────────────────────────────────
 
@@ -320,12 +393,36 @@ export function getEventSource(orgId: number): EventSource {
     sel.checkinEvents.length > 0 ||
     sel.groupTypes.length > 0 ||
     sel.groups.length > 0;
-  if (!configured) return { configured: false, people: 0, events: [] };
+  if (!configured) return { configured: false, people: 0, events: [], rows: [] };
 
   const attendance = eventAttendance(orgId);
   const byEvent = new Map<string, number>();
   for (const labels of attendance.values()) {
     for (const l of labels) byEvent.set(l, (byEvent.get(l) ?? 0) + 1);
+  }
+
+  const db = getDb();
+  const ids = [...attendance.keys()];
+  const names = new Map<string, { name: string; cls: string }>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    for (const r of db
+      .prepare(
+        `SELECT p.pco_id AS id, p.first_name AS f, p.last_name AS l,
+                COALESCE(pa.classification,'unknown') AS cls
+           FROM pco_people p
+           LEFT JOIN person_activity pa
+             ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
+          WHERE p.org_id = ? AND p.pco_id IN (${ph(chunk)})`,
+      )
+      .all(orgId, ...chunk) as Array<{
+      id: string;
+      f: string | null;
+      l: string | null;
+      cls: string;
+    }>) {
+      names.set(r.id, { name: nameOf(r.f, r.l, r.id), cls: r.cls });
+    }
   }
 
   return {
@@ -334,6 +431,14 @@ export function getEventSource(orgId: number): EventSource {
     events: [...byEvent.entries()]
       .map(([name, people]) => ({ kind: "", id: name, name, people }))
       .sort((a, b) => b.people - a.people),
+    rows: ids
+      .map((id) => ({
+        personId: id,
+        name: names.get(id)?.name ?? `(unknown #${id})`,
+        classification: names.get(id)?.cls ?? "unknown",
+        events: attendance.get(id) ?? [],
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
 
@@ -361,6 +466,10 @@ export function getWorkingList(orgId: number): WorkingList {
       personId: r.personId,
       name: r.name,
       sources: ["A"],
+      lanes: { ...NO_LANES },
+      laneCount: 0,
+      lastActivityAt: null,
+      daysSince: null,
       sent: 0,
       opened: 0,
       events: [],
@@ -379,6 +488,10 @@ export function getWorkingList(orgId: number): WorkingList {
       personId: r.personId,
       name: r.name ?? "(no PCO match)",
       sources: [],
+      lanes: { ...NO_LANES },
+      laneCount: 0,
+      lastActivityAt: null,
+      daysSince: null,
       sent: 0,
       opened: 0,
       events: [],
@@ -419,12 +532,33 @@ export function getWorkingList(orgId: number): WorkingList {
       personId: pid,
       name: nameOf(p.f, p.l, pid),
       sources: ["R"],
+      lanes: { ...NO_LANES },
+      laneCount: 0,
+      lastActivityAt: null,
+      daysSince: null,
       sent: 0,
       opened: 0,
       events: labels,
       classification: p.cls,
       inactive: p.inactive === 1,
     });
+  }
+
+  // One query for everybody's lanes, rather than one per row. Email is
+  // set from what this page already knows: opening one of the ministry's
+  // emails is the signal, receiving one is not.
+  const withId = [...acc.values()].filter((r) => r.personId);
+  const lanes = laneRows(
+    orgId,
+    withId.map((r) => r.personId as string),
+  );
+  for (const r of acc.values()) {
+    const got = r.personId ? lanes.get(r.personId) : undefined;
+    r.lanes = got ? { ...got.lanes } : { ...NO_LANES };
+    r.lanes.e = r.opened > 0;
+    r.laneCount = Object.values(r.lanes).filter(Boolean).length;
+    r.lastActivityAt = got?.lastActivityAt ?? null;
+    r.daysSince = daysSince(r.lastActivityAt);
   }
 
   const standingOf = (r: Acc): Standing => {
