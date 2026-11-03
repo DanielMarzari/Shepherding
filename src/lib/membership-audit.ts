@@ -211,14 +211,38 @@ function getMembershipAuditImpl(
     l: string | null;
     lanes: number;
   }>;
-  const housemates = new Map<string, { pcoId: string; name: string; laneCount: number }[]>();
+  const housemates = new Map<string, string[]>();
   for (const h of housemateRows) {
     const list = housemates.get(h.pid) ?? housemates.set(h.pid, []).get(h.pid)!;
     // Two shared households would list the same person twice.
-    if (list.some((x) => x.pcoId === h.oid)) continue;
-    list.push({ pcoId: h.oid, name: nameOf(h.f, h.l, h.oid), laneCount: h.lanes });
+    const name = nameOf(h.f, h.l, h.oid);
+    if (!list.includes(name)) list.push(name);
   }
-  for (const list of housemates.values()) list.sort((a, b) => b.laneCount - a.laneCount);
+
+  // Members who opened or clicked any of the church's emails within the
+  // activity window — the same window the lanes look back over, so the two
+  // columns mean the same "recently". Walks each member's contacts by the
+  // (contact, type) index rather than the org's whole activity table.
+  const activityMonths = getSyncSettings(orgId).activityMonths;
+  const emailActive = new Set(
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT c.person_id AS pid
+             FROM constant_contact_contacts c
+             JOIN pco_people p
+               ON p.org_id = c.org_id AND p.pco_id = c.person_id
+              AND p.membership_type = ?
+            WHERE c.org_id = ?
+              AND EXISTS (
+                SELECT 1 FROM constant_contact_activity a
+                 WHERE a.org_id = c.org_id AND a.contact_id = c.contact_id
+                   AND a.activity_type IN ('open','click')
+                   AND a.occurred_at >= date('now', ?))`,
+        )
+        .all(membershipType, orgId, `-${activityMonths} months`) as Array<{ pid: string }>
+    ).map((r) => r.pid),
+  );
 
   const refreshed = db
     .prepare(
@@ -293,10 +317,7 @@ function getMembershipAuditImpl(
     else if (isJunkName(first) || isJunkName(last)) flags.push("Name looks wrong");
     const duplicateOf = partners.get(r.pcoId) ?? [];
     if (duplicateOf.length > 0) flags.push("Possible duplicate");
-    // Only for somebody in no lane: beside an active spouse, silence may be
-    // the household's sign-ups all going under one name.
-    const householdActive = laneCount === 0 ? (housemates.get(r.pcoId) ?? []) : [];
-    if (householdActive.length > 0) flags.push("Active household");
+    const householdActive = housemates.get(r.pcoId) ?? [];
     if (flags.length) flaggedTotal++;
 
     const daysSince = r.lastActivityAt
@@ -317,6 +338,7 @@ function getMembershipAuditImpl(
       connection: cls,
       flags,
       duplicateOf,
+      other: { email: emailActive.has(r.pcoId), household: householdActive.length > 0 },
       householdActive,
     };
   });
@@ -336,6 +358,6 @@ function getMembershipAuditImpl(
     bandTotalsByName,
     flaggedTotal,
     refreshedAt: refreshed?.at ?? null,
-    activityMonths: getSyncSettings(orgId).activityMonths,
+    activityMonths,
   };
 }

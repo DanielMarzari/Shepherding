@@ -436,13 +436,21 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       {/* Roster */}
       <div className="rounded-lg border border-border-soft bg-bg-elev overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[880px] text-[13px]">
+          <table className="w-full min-w-[990px] text-[13px]">
             <thead>
               <tr className="bg-bg-elev-2">
                 <Th label="Person" k="name" sort={sort} dir={dir} onSort={toggleSort} />
                 <th className="text-left px-4 py-2.5 border-b border-border-soft w-[150px]">
                   <span className="text-[10px] uppercase tracking-wider text-subtle font-medium">
                     Lanes
+                  </span>
+                </th>
+                <th
+                  className="text-left px-4 py-2.5 border-b border-border-soft w-[110px]"
+                  title="Not lanes, but signs of life: E — opened one of the church's emails in the activity window; H — another adult in their household is in a lane"
+                >
+                  <span className="text-[10px] uppercase tracking-wider text-subtle font-medium">
+                    Other activity
                   </span>
                 </th>
                 <Th label="#" k="lanes" sort={sort} dir={dir} onSort={toggleSort} width="w-[60px]" />
@@ -454,7 +462,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-sm text-muted">
+                  <td colSpan={7} className="px-4 py-12 text-center text-sm text-muted">
                     Nothing matches — which is good news, not an empty page.
                   </td>
                 </tr>
@@ -566,6 +574,24 @@ function Row({ r }: { r: AuditPersonRow }) {
           <LaneTiles keys={LANE_KEYS.filter((k) => r.lanes[k]).join("")} size={20} />
         </div>
       </td>
+      <td className="px-4 py-2">
+        <div className="flex gap-1">
+          <OtherTile
+            letter="E"
+            on={r.other.email}
+            title={r.other.email ? "Opened one of the church's emails recently" : "No email opened recently"}
+          />
+          <OtherTile
+            letter="H"
+            on={r.other.household}
+            title={
+              r.other.household
+                ? `Active in the household: ${r.householdActive.join(", ")}`
+                : "Nobody else in the household is in a lane"
+            }
+          />
+        </div>
+      </td>
       <td
         className={`px-4 py-2 tnum ${
           r.laneCount === 0 ? "text-warn-soft-fg font-semibold" : "text-muted"
@@ -656,6 +682,24 @@ function LaneTiles({ keys, size }: { keys: string; size: number }) {
         );
       })}
     </>
+  );
+}
+
+/** Email and household, beside the lanes. Lit in the soft accent rather
+ *  than the solid one, so they never read as two more lanes. */
+function OtherTile({ letter, on, title }: { letter: string; on: boolean; title: string }) {
+  return (
+    <span
+      title={title}
+      style={{ width: 20, height: 20, fontSize: 9 }}
+      className={`rounded font-bold flex items-center justify-center shrink-0 border ${
+        on
+          ? "bg-accent-soft-bg text-accent border-accent/50"
+          : "border-dashed border-border-soft text-subtle"
+      }`}
+    >
+      {letter}
+    </span>
   );
 }
 
@@ -1113,13 +1157,13 @@ function printRoster(
       { label: "Person" },
       { label: "Last activity", width: "1.7in" },
       { label: "Remove", width: "0.65in", align: "center", kind: "box" },
-      // Blank for a pen, except where the household note is printed small.
+      // Blank for a pen, except for the other activity, printed small.
       { label: "Notes", width: "2.75in", aside: true },
     ],
     sections: [
       {
         rows: sorted.map((r) => ({
-          cells: [nameFor(r), when(r), "", householdNote(r)],
+          cells: [nameFor(r), when(r), "", otherNote(r)],
         })),
       },
     ],
@@ -1127,25 +1171,24 @@ function printRoster(
   });
 }
 
-/** A flag as the row shows it: the two that point at somebody else say who. */
+/** A flag as the row shows it: a duplicate says of whom. */
 function flagText(r: AuditPersonRow) {
   return (f: string) => {
     if (f === "Possible duplicate" && r.duplicateOf.length)
       return `Duplicate of ${r.duplicateOf.map((d) => d.name).join(", ")}`;
-    if (f === "Active household" && r.householdActive.length)
-      return `Household active: ${r.householdActive.map((h) => h.name).join(", ")}`;
     return f;
   };
 }
 
-/** What the printout's Notes column starts with. Phrased as a possibility,
- *  because that is all it is: the sheet is for deciding, not for telling. */
-function householdNote(r: AuditPersonRow): string {
-  if (r.householdActive.length === 0) return "";
-  const who = r.householdActive
-    .map((h) => `${h.name} (${h.laneCount} lane${h.laneCount === 1 ? "" : "s"})`)
-    .join(", ");
-  return `Activity in household — ${who}. May be signing up for both.`;
+/** What the printout's Notes column starts with: the other activity, in
+ *  a word each, so a quiet name is not crossed off without seeing it. */
+function otherNote(r: AuditPersonRow): string {
+  return [
+    r.other.email ? "Opens email" : "",
+    r.other.household ? "Household active" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** Which activity bucket a row falls in. One place, so the dropdown counts
@@ -1171,6 +1214,8 @@ function exportRows(rows: AuditPersonRow[], membershipType: string) {
     "Name",
     ...LANE_KEYS.map((k) => LANE_LABELS[k]),
     "Lanes active",
+    "Opens email",
+    "Household active",
     "Last activity",
     "Connection",
     "Worth a look",
@@ -1183,6 +1228,8 @@ function exportRows(rows: AuditPersonRow[], membershipType: string) {
         r.fullName,
         ...LANE_KEYS.map((k) => (r.lanes[k] ? "yes" : "")),
         String(r.laneCount),
+        r.other.email ? "yes" : "",
+        r.other.household ? "yes" : "",
         agoLabel(r.daysSince),
         CLASS_LABEL[classOf(r.connection)],
         r.flags.map(flagText(r)).join("; "),

@@ -34,7 +34,6 @@ export const FLAG_TYPES = [
   "Moved out of area",
   "Inactive in PCO",
   "Possible duplicate",
-  "Active household",
   "Name looks wrong",
   "No name on record",
 ] as const;
@@ -76,11 +75,16 @@ export interface AuditPersonRow {
    *  the pair can be judged without opening two tabs. High-confidence
    *  pairs only, and a person can be in more than one. */
   duplicateOf: { pcoId: string; name: string }[];
-  /** Other adults in their household who ARE in a lane, when this person is
-   *  in none. Households tend to have one person who signs up, registers
-   *  and gives for both — so a silent member beside an active spouse may be
-   *  just as involved, only invisible to PCO. A possibility, not a verdict. */
-  householdActive: { pcoId: string; name: string; laneCount: number }[];
+  /** Other activity: signs of life that are not a lane, shown beside them.
+   *  `email` — opened or clicked one of the church's emails within the
+   *  activity window. `household` — another adult in their household is in
+   *  a lane. Households tend to have one person who signs up, registers and
+   *  gives for both, so a quiet member beside an active spouse may be just
+   *  as involved, only invisible to PCO. Shown for everybody, active or not:
+   *  it is about the household, not a verdict on the person. */
+  other: { email: boolean; household: boolean };
+  /** Who lit the household marker, for its tooltip. */
+  householdActive: string[];
 }
 
 export interface MembershipAudit {
