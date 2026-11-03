@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { getSyncSettings } from "@/lib/pco";
 import { isSyncDue } from "@/lib/pco-schedule";
 import { cleanupStaleSyncRuns, healStaleSnapshots, runSync } from "@/lib/pco-sync";
+import { getRefreshRunStatus, launchRefresh } from "@/lib/dashboard-refresh";
 import { startGeocodeRun } from "@/lib/geocode-runner";
 import { startDriveRun } from "@/lib/drive-runner";
 import { startMeshRun } from "@/lib/mesh-runner";
@@ -53,6 +54,26 @@ export async function GET(req: Request) {
   // between Fridays was to run a 20-minute PCO sync that would skip them
   // anyway. &full=1 drops the cursors and re-reads everything.
   // Same auth as the rest of this endpoint.
+  // ?only=refresh rebuilds the snapshots now. healStaleSnapshots only acts
+  // when they are already stale, so a change to what counts as Known —
+  // which is computed during the refresh, not read at request time — would
+  // otherwise not show until the next nightly run.
+  if (url.searchParams.get("only") === "refresh") {
+    const out: unknown[] = [];
+    for (const { id } of getDb()
+      .prepare("SELECT DISTINCT org_id AS id FROM pco_sync_settings")
+      .all() as Array<{ id: number }>) {
+      try {
+        const { runId, joined, done } = launchRefresh(id, "manual");
+        await done;
+        out.push({ orgId: id, runId, joined, status: getRefreshRunStatus(runId)?.status });
+      } catch (e) {
+        out.push({ orgId: id, error: e instanceof Error ? e.message : "failed" });
+      }
+    }
+    return NextResponse.json({ only: "refresh", results: out });
+  }
+
   if (url.searchParams.get("only") === "cc") {
     const fullRefresh = url.searchParams.get("full") === "1";
     const out: unknown[] = [];
