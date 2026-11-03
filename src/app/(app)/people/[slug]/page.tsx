@@ -24,6 +24,7 @@ import { PersonTimeline, PersonTimelineSkeleton } from "./timeline";
 const TONE: Record<ActivityClassification, "good" | "accent" | "warn" | "muted"> = {
   shepherded: "accent",
   known: "good",
+  inactive: "muted",
   unknown: "warn",
 };
 

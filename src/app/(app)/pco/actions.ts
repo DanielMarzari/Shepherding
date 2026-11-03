@@ -130,6 +130,7 @@ export async function saveSyncSettingsAction(
     knownSignals: current.knownSignals,
     knownMinSignals: current.knownMinSignals,
     knownEmailMin: current.knownEmailMin,
+    knownSignalMins: current.knownSignalMins,
   };
   saveSyncSettings(s.orgId, settings);
   revalidatePath("/pco");

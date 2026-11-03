@@ -229,13 +229,20 @@ export async function saveKnownDefinitionAction(
   const signals = formData
     .getAll("signal")
     .filter((v) => typeof v === "string") as string[];
-  const min = Number(formData.get("minSignals") ?? 1);
-  const emailMin = Number(formData.get("emailMin") ?? 1);
+  const min = Number(formData.get("minSignals") ?? 2);
+  // One box per signal, named min_<signal>. Anything missing or junk is
+  // left out here and falls back to that signal's default on read.
+  const signalMins: Record<string, number> = {};
+  for (const [k, v] of formData.entries()) {
+    if (!k.startsWith("min_")) continue;
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 1) signalMins[k.slice(4)] = Math.round(n);
+  }
   saveKnownDefinition(
     s.orgId,
     signals,
-    Number.isFinite(min) ? min : 1,
-    Number.isFinite(emailMin) ? emailMin : 1,
+    Number.isFinite(min) ? min : 2,
+    signalMins,
   );
   revalidatePath("/pco/filters");
   revalidatePath("/membership-audit");

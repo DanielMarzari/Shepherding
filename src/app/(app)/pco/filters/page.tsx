@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
-import { parseKnownSignals } from "@/lib/classification";
+import { parseKnownSignals, parseSignalMins } from "@/lib/classification";
 import {
   getCheckinEventStats,
   getExcludedGroupTypes,
@@ -174,7 +174,7 @@ export default async function FiltersPage({
             <KnownDefinitionForm
               initialSignals={parseKnownSignals(syncSettings.knownSignals)}
               initialMin={syncSettings.knownMinSignals}
-              initialEmailMin={syncSettings.knownEmailMin}
+              initialSignalMins={parseSignalMins(syncSettings.knownSignalMins)}
               activityMonths={syncSettings.activityMonths}
               isAdmin={session.role === "admin"}
             />

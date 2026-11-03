@@ -1,6 +1,11 @@
 import "server-only";
 import { getDb, prepareCached } from "./db";
-import { parseKnownSignals } from "./classification";
+import {
+  DEFAULT_MIN_SIGNALS,
+  parseKnownSignals,
+  parseSignalMins,
+  type KnownSignal,
+} from "./classification";
 import {
   getExcludedMembershipTypes,
   getOutreachGroupTypes,
@@ -1175,58 +1180,116 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
   // is activity ON a person by a staff member, not BY them — a data cleanup
   // would otherwise promote hundreds of people into Known overnight. It
   // leaves them Unknown, which is the honest answer.
-  const signals = parseKnownSignals(getSyncSettings(orgId).knownSignals);
-  const minSignals = Math.max(1, getSyncSettings(orgId).knownMinSignals ?? 1);
-  const emailMin = Math.max(1, getSyncSettings(orgId).knownEmailMin ?? 1);
+  const settings = getSyncSettings(orgId);
+  const signals = parseKnownSignals(settings.knownSignals);
+  const minSignals = Math.max(1, settings.knownMinSignals ?? DEFAULT_MIN_SIGNALS);
+  const mins = parseSignalMins(settings.knownSignalMins);
   const cut = cutoffActivity;
   const day = cut.slice(0, 10);
 
   db.exec(`DROP TABLE IF EXISTS act_set;`);
   db.exec(`CREATE TEMP TABLE act_set (person_id TEXT NOT NULL, kind TEXT NOT NULL);`);
-  const add = (kind: string, sql: string, params: unknown[]) => {
-    if (!signals.includes(kind as never)) return;
+
+  /** Every signal is COUNTED now, against its own minimum, rather than
+   *  being present once. That is the whole change: the old rule read the
+   *  last_*_at columns on person_activity, which can only say "at least
+   *  once", so a single gift or one email open made somebody Known. The
+   *  counts have to come from the source tables, which is why none of
+   *  these read person_activity any more. */
+  const add = (kind: KnownSignal, sql: string, params: unknown[]) => {
+    if (!signals.includes(kind)) return;
     db.prepare(
       `INSERT INTO act_set (person_id, kind) SELECT person_id, '${kind}' FROM (${sql})`,
     ).run(...(params as []));
   };
 
-  add("checkin", `SELECT person_id FROM person_activity
-                   WHERE org_id = ? AND last_check_in_at IS NOT NULL AND last_check_in_at >= ?`, [orgId, cut]);
-  add("form", `SELECT person_id FROM person_activity
-                WHERE org_id = ? AND last_form_submission_at IS NOT NULL AND last_form_submission_at >= ?`, [orgId, cut]);
-  add("attendance", `SELECT person_id FROM person_activity
-                      WHERE org_id = ? AND last_attended_at IS NOT NULL AND last_attended_at >= ?`, [orgId, cut]);
-  add("serving", `SELECT person_id FROM person_activity
-                   WHERE org_id = ? AND last_served_at IS NOT NULL AND last_served_at >= ?`, [orgId, cut]);
-  add("giving", `SELECT DISTINCT person_id FROM pushpay_payer_summary
-                  WHERE org_id = ? AND person_id IS NOT NULL
-                    AND last_gift_on IS NOT NULL AND last_gift_on >= ?`, [orgId, day]);
-  // Opens and clicks are separate signals and separately configurable: a
-  // click is strictly stronger evidence — on the member roster every
-  // person who clicked had also opened — while an open can be a preview
-  // pane rendering images.
-  //
-  // These two are COUNTED rather than merely present, against
-  // known_email_min. A person can hold several contact records, so the
-  // count sums across them and the grouping is by person.
-  const emailSignal = (kind: string, type: string) =>
-    add(kind, `SELECT c.person_id AS person_id
-                 FROM constant_contact_activity a
-                 JOIN constant_contact_contacts c
-                   ON c.org_id = a.org_id AND c.contact_id = a.contact_id
-                WHERE a.org_id = ? AND a.activity_type = ?
-                  AND a.occurred_at >= ?
-                  AND c.person_id IS NOT NULL AND c.person_id != ''
-                GROUP BY c.person_id
-               HAVING COUNT(*) >= ?`, [orgId, type, cut, emailMin]);
-  emailSignal("email_open", "open");
-  emailSignal("email_click", "click");
-  add("registration", `SELECT DISTINCT a.person_id AS person_id
-                         FROM pco_registration_attendees a
-                         JOIN pco_registration_signups s
-                           ON s.org_id = a.org_id AND s.pco_id = a.signup_id
-                        WHERE a.org_id = ? AND a.person_id IS NOT NULL
-                          AND COALESCE(s.pco_created_at,'') >= ?`, [orgId, cut]);
+  // Checking somebody else in — a parent with a child, nearly always. It
+  // lands on the adult who did it, not on the child, and it is the one
+  // signal that is about a person other than its subject, which is why it
+  // carries the highest bar of the two.
+  add(
+    "checkin_child",
+    `SELECT checked_in_by_id AS person_id FROM pco_check_ins
+      WHERE org_id = ? AND checked_in_by_id IS NOT NULL
+        AND checked_in_by_id <> COALESCE(person_id,'')
+        AND event_time_starts_at >= ?
+      GROUP BY checked_in_by_id HAVING COUNT(*) >= ?`,
+    [orgId, cut, mins.checkin_child],
+  );
+
+  // Turning up themselves: adult ministries, classes, volunteer check-in.
+  add(
+    "checkin_self",
+    `SELECT person_id FROM pco_check_ins
+      WHERE org_id = ? AND person_id IS NOT NULL AND person_id <> ''
+        AND event_time_starts_at >= ?
+      GROUP BY person_id HAVING COUNT(*) >= ?`,
+    [orgId, cut, mins.checkin_self],
+  );
+
+  add(
+    "form",
+    `SELECT person_id FROM pco_form_submissions
+      WHERE org_id = ? AND person_id IS NOT NULL AND person_id <> ''
+        AND pco_created_at >= ?
+      GROUP BY person_id HAVING COUNT(*) >= ?`,
+    [orgId, cut, mins.form],
+  );
+
+  add(
+    "attendance",
+    `SELECT person_id FROM pco_event_attendances
+      WHERE org_id = ? AND attended = 1 AND event_starts_at >= ?
+      GROUP BY person_id HAVING COUNT(*) >= ?`,
+    [orgId, cut, mins.attendance],
+  );
+
+  // Scheduled and did not decline. 'D' is declined; 'C' confirmed, 'U'
+  // unconfirmed — being asked and not saying no is still a rota slot.
+  add(
+    "serving",
+    `SELECT person_id FROM pco_plan_people
+      WHERE org_id = ? AND COALESCE(status,'') <> 'D' AND pco_created_at >= ?
+      GROUP BY person_id HAVING COUNT(*) >= ?`,
+    [orgId, cut, mins.serving],
+  );
+
+  // The import carries one row per payer with a last-gift date, not one
+  // per gift, so the count here is of payer records rather than of
+  // donations. At a minimum of 1 the two are the same thing.
+  add(
+    "giving",
+    `SELECT person_id FROM pushpay_payer_summary
+      WHERE org_id = ? AND person_id IS NOT NULL
+        AND last_gift_on IS NOT NULL AND last_gift_on >= ?
+      GROUP BY person_id HAVING COUNT(*) >= ?`,
+    [orgId, day, mins.giving],
+  );
+
+  // A person can hold several contact records, so this sums across them.
+  add(
+    "email_open",
+    `SELECT c.person_id AS person_id
+       FROM constant_contact_activity a
+       JOIN constant_contact_contacts c
+         ON c.org_id = a.org_id AND c.contact_id = a.contact_id
+      WHERE a.org_id = ? AND a.activity_type = 'open' AND a.occurred_at >= ?
+        AND c.person_id IS NOT NULL AND c.person_id != ''
+      GROUP BY c.person_id HAVING COUNT(*) >= ?`,
+    [orgId, cut, mins.email_open],
+  );
+
+  add(
+    "registration",
+    `SELECT a.person_id AS person_id
+       FROM pco_registration_attendees a
+       JOIN pco_registration_signups s
+         ON s.org_id = a.org_id AND s.pco_id = a.signup_id
+      WHERE a.org_id = ? AND a.person_id IS NOT NULL AND a.person_id <> ''
+        AND COALESCE(s.pco_created_at,'') >= ?
+      GROUP BY a.person_id HAVING COUNT(*) >= ?`,
+    [orgId, cut, mins.registration],
+  );
 
   db.exec(`CREATE INDEX act_set_pid ON act_set(person_id);`);
   db.exec(`DROP TABLE IF EXISTS known_set;`);
@@ -1251,6 +1314,17 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
                    THEN 'shepherded'
               WHEN person_id IN (SELECT person_id FROM temp.known_set)
                    THEN 'known'
+              -- Carved out of Unknown, and below the two bands above it on
+              -- purpose: an inactive record that is still on a roster or
+              -- still active is a contradiction worth seeing, not one to
+              -- bury. Everyone else the church has already written off
+              -- stops being counted as somebody we failed to notice.
+              WHEN person_id IN (
+                     SELECT pco_id FROM pco_people
+                      WHERE org_id = person_activity.org_id
+                        AND (inactivated_at IS NOT NULL
+                          OR LOWER(COALESCE(status,'')) = 'inactive'))
+                   THEN 'inactive'
               ELSE 'unknown'
             END,
             refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')

@@ -186,6 +186,8 @@ export interface SyncSettings {
   knownMinSignals: number;
   /** How many opens (or clicks) are needed before that signal counts. */
   knownEmailMin: number;
+  /** Per-signal minimums as stored JSON; parsed with parseSignalMins. */
+  knownSignalMins: string | null;
   /** Always look back this many months on each sync, even with a newer
    *  cursor — catches retroactive PCO edits (default 3). */
   syncThresholdMonths: number;
@@ -236,7 +238,8 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
               shepherded_checkin_min_events,
               shepherded_checkin_window_months,
               serving_interest_form_id,
-              known_signals, known_min_signals, known_email_min
+              known_signals, known_min_signals, known_email_min,
+              known_signal_mins
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -261,6 +264,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
         known_signals: string | null;
         known_min_signals: number | null;
         known_email_min: number | null;
+        known_signal_mins: string | null;
       }
     | undefined;
   if (!row) {
@@ -285,6 +289,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
       knownSignals: null,
       knownMinSignals: 1,
       knownEmailMin: 1,
+  knownSignalMins: null,
     };
   }
   const freq: SyncFrequency =
@@ -310,6 +315,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
     knownSignals: row.known_signals ?? null,
     knownMinSignals: row.known_min_signals ?? 1,
     knownEmailMin: row.known_email_min ?? 1,
+    knownSignalMins: row.known_signal_mins ?? null,
   };
 }
 
@@ -1035,7 +1041,7 @@ export function saveKnownDefinition(
   orgId: number,
   signals: string[],
   minSignals: number,
-  emailMin: number,
+  signalMins: Record<string, number>,
 ): void {
   const cleaned = Array.from(new Set(signals.filter(Boolean)));
   const exists = getDb()
@@ -1045,14 +1051,22 @@ export function saveKnownDefinition(
   getDb()
     .prepare(
       `UPDATE pco_sync_settings
-          SET known_signals = ?, known_min_signals = ?, known_email_min = ?,
+          SET known_signals = ?, known_min_signals = ?,
+              known_signal_mins = ?,
               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE org_id = ?`,
     )
     .run(
       cleaned.length ? JSON.stringify(cleaned) : null,
       Math.max(1, Math.round(minSignals)),
-      Math.max(1, Math.round(emailMin)),
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(signalMins).map(([k, v]) => [
+            k,
+            Math.max(1, Math.round(Number(v) || 1)),
+          ]),
+        ),
+      ),
       orgId,
     );
 }

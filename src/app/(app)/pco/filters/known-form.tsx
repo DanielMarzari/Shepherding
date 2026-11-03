@@ -2,10 +2,10 @@
 
 import { useActionState, useState } from "react";
 import {
-  COUNTED_SIGNALS,
   KNOWN_SIGNALS,
   SIGNAL_HELP,
   SIGNAL_LABEL,
+  SIGNAL_MIN_DEFAULT,
   type KnownSignal,
 } from "@/lib/classification";
 import { saveKnownDefinitionAction, type FilterSaveState } from "./actions";
@@ -26,19 +26,22 @@ import { saveKnownDefinitionAction, type FilterSaveState } from "./actions";
 export function KnownDefinitionForm({
   initialSignals,
   initialMin,
-  initialEmailMin,
+  initialSignalMins,
   activityMonths,
   isAdmin,
 }: {
   initialSignals: KnownSignal[];
   initialMin: number;
-  initialEmailMin: number;
+  initialSignalMins: Record<KnownSignal, number>;
   activityMonths: number;
   isAdmin: boolean;
 }) {
   const [signals, setSignals] = useState<Set<string>>(new Set(initialSignals));
   const [min, setMin] = useState(initialMin);
-  const [emailMin, setEmailMin] = useState(initialEmailMin);
+  const [mins, setMins] = useState<Record<string, number>>({
+    ...SIGNAL_MIN_DEFAULT,
+    ...initialSignalMins,
+  });
   const [state, action, pending] = useActionState<FilterSaveState | null, FormData>(
     saveKnownDefinitionAction,
     null,
@@ -99,43 +102,31 @@ export function KnownDefinitionForm({
                   </span>
                 </span>
               </label>
+              {/* The threshold sits on the signal it belongs to rather
+                  than in a panel of its own: every signal has one now, and
+                  a single shared box could only ever describe one. */}
+              <span className="flex items-center gap-2 shrink-0 pl-7 sm:pl-0">
+                <span className="text-xs text-muted">counts after</span>
+                <input
+                  type="number"
+                  min={1}
+                  name={`min_${sig}`}
+                  value={mins[sig] ?? SIGNAL_MIN_DEFAULT[sig as KnownSignal]}
+                  onChange={(e) =>
+                    setMins((prev) => ({
+                      ...prev,
+                      [sig]: Math.max(1, Number(e.target.value) || 1),
+                    }))
+                  }
+                  disabled={!isAdmin || !signals.has(sig)}
+                  aria-label={`How many before ${SIGNAL_LABEL[sig as KnownSignal]} counts`}
+                  className="w-[64px] bg-bg border border-border-soft rounded px-2 py-1 text-[13px] text-right tnum disabled:opacity-50"
+                />
+              </span>
             </li>
           );
         })}
       </ul>
-
-      <div className="px-5 py-4 border-t border-border-soft">
-        <div className="flex flex-wrap items-center gap-3">
-          <label htmlFor="emailMin" className="text-sm">
-            An email signal counts after
-          </label>
-          <select
-            id="emailMin"
-            name="emailMin"
-            value={emailMin}
-            onChange={(e) => setEmailMin(Number(e.target.value))}
-            disabled={!isAdmin || !COUNTED_SIGNALS.some((c) => signals.has(c))}
-            className="bg-bg border border-border-soft rounded-md px-2.5 py-1.5 text-[13px] text-fg disabled:opacity-50"
-          >
-            {[1, 2, 3, 5, 10].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-          <span className="text-sm">
-            open{emailMin === 1 ? "" : "s"} — or {emailMin} click
-            {emailMin === 1 ? "" : "s"} — inside the window.
-          </span>
-        </div>
-        <p className="text-xs text-muted mt-2 leading-relaxed max-w-3xl">
-          Applies to each of the two separately, and only to those two —
-          everything else above counts the first time it happens. Measured on
-          the member roster: raising the open threshold barely filters
-          (598 people at one open, still 507 at ten — people who open, open
-          often). Requiring a <em>click</em> is the stronger move: 437.
-        </p>
-      </div>
 
       <div className="px-5 py-4 border-t border-border-soft bg-bg-elev">
         <div className="flex flex-wrap items-center gap-3">
@@ -157,8 +148,8 @@ export function KnownDefinitionForm({
             ))}
           </select>
           <span className="text-sm">
-            different kind{min === 1 ? "" : "s"} of activity, within{" "}
-            <strong>{activityMonths} months</strong>.
+            different kind{min === 1 ? "" : "s"} of activity, each over its
+            own bar above, within <strong>{activityMonths} months</strong>.
           </span>
         </div>
         <p className="text-xs text-muted mt-2 leading-relaxed max-w-3xl">
