@@ -47,6 +47,19 @@ export default async function InactiveAuditPage() {
               label="already inactive — left alone"
             />
           </div>
+          <div className="mt-3 text-[11px] text-subtle leading-relaxed">
+            {audit.excludedByType > 0 && (
+              <>
+                <strong className="text-fg tnum">
+                  {audit.excludedByType.toLocaleString()}
+                </strong>{" "}
+                more are never suggested because of their membership type
+                &mdash; {audit.excludedTypes.join(", ")}. A partner with no
+                check-ins is a partner, not a lapsed attender, and a SYSTEM
+                USE record is not a person.
+              </>
+            )}
+          </div>
           <p className="text-xs text-subtle mt-3.5 leading-relaxed max-w-3xl">
             This is a list to work through, not a verdict. Somebody can be
             in the building every Sunday and leave no record of it, so the
@@ -57,7 +70,11 @@ export default async function InactiveAuditPage() {
           </p>
         </div>
 
-        <InactiveTable rows={audit.candidates} months={audit.months} />
+        <InactiveTable
+          rows={audit.candidates}
+          months={audit.months}
+          types={audit.typesPresent}
+        />
       </div>
     </AppShell>
   );

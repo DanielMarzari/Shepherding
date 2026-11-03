@@ -29,6 +29,7 @@ import { CheckinEventsForm } from "./checkin-events-form";
 import { FiltersForm } from "./form";
 import { GroupTypeFiltersForm } from "./group-types-form";
 import { KnownDefinitionForm } from "./known-form";
+import { ShepherdedDefinitionForm } from "./shepherded-form";
 import { OutreachLaneForm } from "./outreach-form";
 import { TeamTypeFiltersForm } from "./team-types-form";
 
@@ -39,6 +40,9 @@ const TABS = [
   { key: "checkins", label: "Check-in events" },
   { key: "outreach", label: "Outreach lane" },
   { key: "known", label: "What makes someone Known" },
+  // Shepherded is the larger band and had no page at all, which made the
+  // one nobody could inspect the one that mattered most.
+  { key: "shepherded", label: "What makes someone Shepherded" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -150,6 +154,10 @@ export default async function FiltersPage({
           <nav className="flex gap-1 -mb-px overflow-x-auto">
             {TABS.map((t) => {
               const isActive = t.key === tab;
+              // The exclusion tabs count rows you can tick. The three
+              // definition tabs have nothing to count, and inheriting the
+              // check-in count put a number beside them that meant
+              // nothing.
               const count =
                 t.key === "people"
                   ? memStats.length
@@ -157,7 +165,9 @@ export default async function FiltersPage({
                     ? groupStats.length
                     : t.key === "teams"
                       ? teamStats.length
-                      : checkinStats.length;
+                      : t.key === "checkins"
+                        ? checkinStats.length
+                        : null;
               return (
                 <Link
                   key={t.key}
@@ -169,11 +179,13 @@ export default async function FiltersPage({
                   }`}
                 >
                   <span>{t.label}</span>
-                  <span
-                    className={`tnum text-xs ${isActive ? "text-accent" : "text-subtle"}`}
-                  >
-                    {count.toLocaleString()}
-                  </span>
+                  {count !== null && (
+                    <span
+                      className={`tnum text-xs ${isActive ? "text-accent" : "text-subtle"}`}
+                    >
+                      {count.toLocaleString()}
+                    </span>
+                  )}
                 </Link>
               );
             })}
@@ -199,6 +211,25 @@ export default async function FiltersPage({
               initialSignalMins={parseSignalMins(syncSettings.knownSignalMins)}
               forms={formOptions}
               activityMonths={syncSettings.activityMonths}
+              isAdmin={session.role === "admin"}
+            />
+          </Card>
+        ) : tab === "shepherded" ? (
+          <Card>
+            <CardHeader
+              title="What makes someone Shepherded"
+              badge={
+                session.role === "admin" ? null : <Pill tone="muted">read-only</Pill>
+              }
+              right={
+                <span className="text-xs text-muted">
+                  three ways in — two are rosters
+                </span>
+              }
+            />
+            <ShepherdedDefinitionForm
+              initialMinEvents={syncSettings.shepherdedCheckinMinEvents}
+              windowMonths={syncSettings.shepherdedCheckinWindowMonths}
               isAdmin={session.role === "admin"}
             />
           </Card>

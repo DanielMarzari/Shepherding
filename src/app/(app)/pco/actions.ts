@@ -132,6 +132,7 @@ export async function saveSyncSettingsAction(
     knownEmailMin: current.knownEmailMin,
     knownSignalMins: current.knownSignalMins,
     trackedFormIds: current.trackedFormIds,
+    inactiveAuditExcludedTypes: current.inactiveAuditExcludedTypes,
   };
   saveSyncSettings(s.orgId, settings);
   revalidatePath("/pco");

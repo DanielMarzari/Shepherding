@@ -1,5 +1,9 @@
 import "server-only";
 import { getDb } from "./db";
+import {
+  getExcludedMembershipTypes,
+  getInactiveAuditExcludedTypes,
+} from "./pco";
 
 /** The pulse check: who shows no sign of life at all.
  *
@@ -21,6 +25,14 @@ export interface InactiveCandidate {
   personId: string;
   name: string;
   membershipType: string | null;
+  /** The five next-steps lanes. A candidate with one is a contradiction
+   *  worth seeing: the lane comes from a roster, which needs no
+   *  attendance, so they are connected on paper and absent in fact. */
+  lanes: Record<"w" | "s" | "c" | "g" | "o", boolean>;
+  laneCount: number;
+  /** Their band. 'shepherded' here means somebody is formally responsible
+   *  for them and has still not seen them in a year. */
+  classification: string;
   /** The most recent trace of them anywhere, or null if there is none. */
   lastSeenAt: string | null;
   /** Which source that date came from. */
@@ -36,6 +48,11 @@ export interface InactiveAudit {
   candidates: InactiveCandidate[];
   /** Of the candidates, how many have no trace at all, ever. */
   neverSeen: number;
+  /** Left out because of their membership type, and which types those are. */
+  excludedByType: number;
+  excludedTypes: string[];
+  /** Membership types present on the list, for the filter chips. */
+  typesPresent: { type: string; n: number }[];
   months: number;
 }
 
@@ -103,23 +120,52 @@ export function getInactiveAudit(
 
   const cut = new Date(Date.now() - months * 30.44 * 86_400_000).toISOString();
 
+  // Both lists: the org-wide one (SYSTEM USE, Non-Attendee Staff — people
+  // the whole app already does not count) and the audit's own, which
+  // holds the Outreach Partner types. A partner with no check-ins is a
+  // partner, not a lapsed attender.
+  const excludedTypes = Array.from(
+    new Set([
+      ...getExcludedMembershipTypes(orgId),
+      ...getInactiveAuditExcludedTypes(orgId),
+    ]),
+  );
+  const typePh = excludedTypes.length
+    ? `AND COALESCE(p.membership_type,'') NOT IN (${excludedTypes.map(() => "?").join(",")})`
+    : "";
+
   const rows = db
     .prepare(
       `SELECT p.pco_id AS id, p.first_name AS f, p.last_name AS l,
               p.membership_type AS mt,
+              COALESCE(pa.classification,'unknown') AS cls,
+              COALESCE(pa.in_worship_lane,0) AS lw,
+              COALESCE(pa.in_serving_lane,0) AS ls,
+              COALESCE(pa.in_community_lane,0) AS lc,
+              COALESCE(pa.in_giving_lane,0) AS lg,
+              COALESCE(pa.in_outreach_lane,0) AS lo,
               (SELECT MAX(at) FROM pulse WHERE person_id = p.pco_id) AS lastAt,
               (SELECT src FROM pulse WHERE person_id = p.pco_id
                 ORDER BY at DESC LIMIT 1) AS lastSrc
          FROM pco_people p
+         LEFT JOIN person_activity pa
+           ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
         WHERE p.org_id = ? AND ${aliveSql}
+          ${typePh}
           AND COALESCE((SELECT MAX(at) FROM pulse WHERE person_id = p.pco_id), '') < ?
         ORDER BY p.last_name COLLATE NOCASE, p.first_name COLLATE NOCASE`,
     )
-    .all(orgId, cut) as Array<{
+    .all(orgId, ...excludedTypes, cut) as Array<{
     id: string;
     f: string | null;
     l: string | null;
     mt: string | null;
+    cls: string;
+    lw: number;
+    ls: number;
+    lc: number;
+    lg: number;
+    lo: number;
     lastAt: string | null;
     lastSrc: string | null;
   }>;
@@ -130,12 +176,22 @@ export function getInactiveAudit(
   const now = Date.now();
   const candidates = rows.map((r) => {
     const t = r.lastAt ? Date.parse(r.lastAt) : NaN;
+    const lanes = {
+      w: r.lw === 1,
+      s: r.ls === 1,
+      c: r.lc === 1,
+      g: r.lg === 1,
+      o: r.lo === 1,
+    };
     return {
       personId: r.id,
       name:
         [r.f?.trim(), r.l?.trim()].filter(Boolean).join(" ") ||
         `(unknown #${r.id})`,
       membershipType: r.mt,
+      lanes,
+      laneCount: Object.values(lanes).filter(Boolean).length,
+      classification: r.cls,
       lastSeenAt: r.lastAt,
       lastSeenVia: r.lastSrc ? (SOURCE_LABEL[r.lastSrc] ?? r.lastSrc) : null,
       daysSince: Number.isNaN(t)
@@ -158,6 +214,26 @@ export function getInactiveAudit(
     ),
     candidates,
     neverSeen: candidates.filter((c) => c.lastSeenAt === null).length,
+    excludedByType: excludedTypes.length
+      ? one(
+          `SELECT COUNT(*) AS n FROM pco_people p
+            WHERE p.org_id = ? AND ${aliveSql}
+              AND COALESCE(p.membership_type,'') IN (${excludedTypes
+                .map((t) => `'${t.replace(/'/g, "''")}'`)
+                .join(",")})`,
+        )
+      : 0,
+    excludedTypes,
+    typesPresent: [
+      ...candidates
+        .reduce((m, c) => {
+          const k = c.membershipType ?? "(unset)";
+          return m.set(k, (m.get(k) ?? 0) + 1);
+        }, new Map<string, number>())
+        .entries(),
+    ]
+      .map(([type, n]) => ({ type, n }))
+      .sort((a, b) => b.n - a.n),
     months,
   };
 }

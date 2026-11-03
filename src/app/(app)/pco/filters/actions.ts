@@ -16,6 +16,7 @@ import {
   saveKidCheckinEvents,
   saveOutreachGroupTypes,
   saveKnownDefinition,
+  saveShepherdedCheckinMin,
   saveTrackedFormIds,
   saveOutreachServiceTypes,
   saveOutreachTags,
@@ -266,5 +267,30 @@ export async function saveKnownDefinitionAction(
   return {
     status: "saved",
     message: `Saved. ${signals.length || "All"} signal${signals.length === 1 ? "" : "s"} count toward Known — rebuilding the snapshot now (refresh ${runId}); the bands will move as it finishes.`,
+  };
+}
+
+/** The one number behind Shepherded: how many check-ins make a dependent
+ *  somebody's responsibility. Rebuilds the snapshot like the Known form,
+ *  for the same reason — the band is computed there, not at read time. */
+export async function saveShepherdedDefinitionAction(
+  _prev: FilterSaveState | null,
+  formData: FormData,
+): Promise<FilterSaveState> {
+  const s = await requireOrg();
+  if (s.role !== "admin") {
+    return { status: "error", message: "Only admins can change filters." };
+  }
+  const n = Number(formData.get("checkinMin") ?? 3);
+  if (!Number.isFinite(n) || n < 1 || n > 52) {
+    return { status: "error", message: "That is not a number of check-ins." };
+  }
+  saveShepherdedCheckinMin(s.orgId, Math.round(n));
+  const runId = startRefreshInBackground(s.orgId, "manual");
+  revalidatePath("/pco/filters");
+  revalidatePath("/people");
+  return {
+    status: "saved",
+    message: `Saved — rebuilding the snapshot now (refresh ${runId}).`,
   };
 }

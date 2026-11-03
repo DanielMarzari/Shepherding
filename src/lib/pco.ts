@@ -190,6 +190,7 @@ export interface SyncSettings {
   knownSignalMins: string | null;
   /** Form ids whose submissions are synced; JSON. */
   trackedFormIds: string | null;
+  inactiveAuditExcludedTypes: string | null;
   /** Always look back this many months on each sync, even with a newer
    *  cursor — catches retroactive PCO edits (default 3). */
   syncThresholdMonths: number;
@@ -241,7 +242,8 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
               shepherded_checkin_window_months,
               serving_interest_form_id,
               known_signals, known_min_signals, known_email_min,
-              known_signal_mins, tracked_form_ids
+              known_signal_mins, tracked_form_ids,
+              inactive_audit_excluded_types
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -268,6 +270,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
         known_email_min: number | null;
         known_signal_mins: string | null;
         tracked_form_ids: string | null;
+        inactive_audit_excluded_types: string | null;
       }
     | undefined;
   if (!row) {
@@ -294,6 +297,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
       knownEmailMin: 1,
   knownSignalMins: null,
   trackedFormIds: null,
+  inactiveAuditExcludedTypes: null,
     };
   }
   const freq: SyncFrequency =
@@ -321,6 +325,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
     knownEmailMin: row.known_email_min ?? 1,
     knownSignalMins: row.known_signal_mins ?? null,
     trackedFormIds: row.tracked_form_ids ?? null,
+    inactiveAuditExcludedTypes: row.inactive_audit_excluded_types ?? null,
   };
 }
 
@@ -1043,6 +1048,28 @@ export function saveSeniorsAgeMin(orgId: number, age: number): void {
  *
  *  Defaults to the three that used to be a constant in pco-sync, so an
  *  org that never opens the page behaves as it always did. */
+/** Membership types the inactive audit never suggests. See 0120. */
+export const getInactiveAuditExcludedTypes = cache((orgId: number): string[] =>
+  readIdList(orgId, "inactive_audit_excluded_types"),
+);
+
+export function saveInactiveAuditExcludedTypes(orgId: number, types: string[]) {
+  writeIdList(orgId, "inactive_audit_excluded_types", types);
+}
+
+/** How many check-ins make a dependent shepherded. */
+export function saveShepherdedCheckinMin(orgId: number, n: number): void {
+  const db = getDb();
+  if (!db.prepare("SELECT 1 FROM pco_sync_settings WHERE org_id = ?").get(orgId)) {
+    saveSyncSettings(orgId, getSyncSettings(orgId));
+  }
+  db.prepare(
+    `UPDATE pco_sync_settings SET shepherded_checkin_min_events = ?,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE org_id = ?`,
+  ).run(Math.max(1, Math.round(n)), orgId);
+}
+
 export const DEFAULT_TRACKED_FORM_IDS = ["308672", "144568", "70538"];
 
 export const getTrackedFormIds = cache((orgId: number): string[] => {
