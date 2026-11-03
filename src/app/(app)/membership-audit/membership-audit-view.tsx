@@ -32,7 +32,7 @@ const BAND_STYLE = [
   { bg: "var(--accent)", fg: "var(--accent-fg)" },
 ];
 
-type SortKey = "name" | "lanes" | "days" | "email" | "flags";
+type SortKey = "name" | "days" | "email" | "flags";
 
 export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   const [lanes, setLanes] = useState<Set<LaneKey>>(new Set());
@@ -40,6 +40,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   const [connections, setConnections] = useState<Set<string>>(new Set());
   const [warnings, setWarnings] = useState<Set<string>>(new Set());
   const [activity, setActivity] = useState<Set<string>>(new Set());
+  const [hhActivity, setHhActivity] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string | null>(null);
   // Exactly one of the two reference panels can be open. They sit between
   // the filter card and the table rather than floating over it: both are
@@ -59,7 +60,8 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
     bands.size > 0 ||
     connections.size > 0 ||
     warnings.size > 0 ||
-    activity.size > 0;
+    activity.size > 0 ||
+    hhActivity.size > 0;
 
   /** How many rows carry each warning, and how many fall in each activity
    *  bucket. Computed off the unfiltered roster so the dropdown counts stay
@@ -79,6 +81,15 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
     return out;
   }, [audit.rows]);
 
+  const hhActivityTotals = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const r of audit.rows) {
+      const id = householdBucket(r);
+      out[id] = (out[id] ?? 0) + 1;
+    }
+    return out;
+  }, [audit.rows]);
+
   const visible = useMemo(() => {
     const out = audit.rows.filter((r) => {
       for (const k of lanes) if (!r.lanes[k]) return false;
@@ -86,6 +97,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       if (connections.size && !connections.has(classOf(r.connection))) return false;
       if (warnings.size && !r.flags.some((f) => warnings.has(f))) return false;
       if (activity.size && !activity.has(bucketOf(r.daysSince))) return false;
+      if (hhActivity.size && !hhActivity.has(householdBucket(r))) return false;
       return true;
     });
     const sign = dir === "asc" ? 1 : -1;
@@ -93,8 +105,6 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       switch (sort) {
         case "name":
           return a.fullName.localeCompare(b.fullName) * sign;
-        case "lanes":
-          return (a.laneCount - b.laneCount) * sign;
         case "flags":
           return (a.flags.length - b.flags.length) * sign;
         case "email": {
@@ -110,7 +120,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
         }
       }
     });
-  }, [audit.rows, lanes, bands, connections, warnings, activity, sort, dir]);
+  }, [audit.rows, lanes, bands, connections, warnings, activity, hhActivity, sort, dir]);
 
   function toggleSort(k: SortKey) {
     if (sort === k) setDir(dir === "asc" ? "desc" : "asc");
@@ -126,6 +136,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
     setConnections(new Set());
     setWarnings(new Set());
     setActivity(new Set());
+    setHhActivity(new Set());
   }
 
   function applyCombo(key: string) {
@@ -165,6 +176,12 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
         [...activity]
           .map((id) => labelForBucket(id).toLowerCase())
           .join(" or "),
+      );
+    if (hhActivity.size)
+      bits.push(
+        `household: ${[...hhActivity]
+          .map((id) => labelForHouseholdBucket(id).toLowerCase())
+          .join(" or ")}`,
       );
     return bits.length ? bits.join(" · ") : "everything";
   })();
@@ -322,6 +339,26 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
             onToggle={(id) => setActivity(toggled(activity, id))}
           />
           <Dropdown
+            id="hhActivity"
+            label="Household activity"
+            value={
+              hhActivity.size
+                ? [...hhActivity].map(labelForHouseholdBucket).join(" or ")
+                : "any"
+            }
+            open={open === "hhActivity"}
+            setOpen={setOpen}
+            items={[...ACTIVITY_BUCKETS.map((b) => b.id), NEVER_BUCKET, NO_HOUSEHOLD]
+              .map((id) => ({
+                id,
+                label: labelForHouseholdBucket(id),
+                count: hhActivityTotals[id] ?? 0,
+                checked: hhActivity.has(id),
+              }))
+              .filter((i) => i.count > 0)}
+            onToggle={(id) => setHhActivity(toggled(hhActivity, id))}
+          />
+          <Dropdown
             id="connection"
             label="Connection"
             value={
@@ -445,7 +482,6 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
                     Lanes
                   </span>
                 </th>
-                <Th label="#" k="lanes" sort={sort} dir={dir} onSort={toggleSort} width="w-[60px]" />
                 <Th label="Email opened" k="email" sort={sort} dir={dir} onSort={toggleSort} width="w-[130px]" />
                 <th
                   className="text-left px-4 py-2.5 border-b border-border-soft w-[260px]"
@@ -462,7 +498,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-sm text-muted">
+                  <td colSpan={6} className="px-4 py-12 text-center text-sm text-muted">
                     Nothing matches — which is good news, not an empty page.
                   </td>
                 </tr>
@@ -573,13 +609,6 @@ function Row({ r }: { r: AuditPersonRow }) {
         <div className="flex gap-1" role="img" aria-label={laneSummary(r)}>
           <LaneTiles keys={LANE_KEYS.filter((k) => r.lanes[k]).join("")} size={20} />
         </div>
-      </td>
-      <td
-        className={`px-4 py-2 tnum ${
-          r.laneCount === 0 ? "text-warn-soft-fg font-semibold" : "text-muted"
-        }`}
-      >
-        {r.laneCount}
       </td>
       <td
         className="px-4 py-2 whitespace-nowrap tnum text-muted"
@@ -1169,6 +1198,24 @@ function bucketOf(days: number | null): string {
     if (days >= b.minDays && (b.maxDays === null || days < b.maxDays)) return b.id;
   }
   return ACTIVITY_BUCKETS[ACTIVITY_BUCKETS.length - 1].id;
+}
+
+/** Households: the most recent activity of anyone else in it. Somebody
+ *  seen last week makes the household recent, however quiet the rest. */
+const NO_HOUSEHOLD = "none";
+
+function householdBucket(r: AuditPersonRow): string {
+  if (r.household.length === 0) return NO_HOUSEHOLD;
+  const seen = r.household
+    .map((h) => h.daysSince)
+    .filter((d): d is number => d !== null);
+  return bucketOf(seen.length ? Math.min(...seen) : null);
+}
+
+function labelForHouseholdBucket(id: string): string {
+  if (id === NO_HOUSEHOLD) return "No other adults";
+  if (id === NEVER_BUCKET) return "Nothing in PCO";
+  return labelForBucket(id);
 }
 
 function labelForBucket(id: string): string {
