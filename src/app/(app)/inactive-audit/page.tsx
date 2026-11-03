@@ -24,7 +24,7 @@ export default async function InactiveAuditPage() {
           </h1>
           <p className="text-muted text-sm mt-1.5 max-w-3xl leading-relaxed">
             Active PCO records with no trace of the person anywhere in{" "}
-            {audit.months} months &mdash; no check-in, no form, no group
+            {`${audit.months} months`}{" "}&mdash; no check-in, no form, no group
             meeting, no serving, no gift, no email opened, no registration.
             One of any of them would have been enough.
           </p>

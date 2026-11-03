@@ -18,6 +18,7 @@ import {
 } from "@/lib/membership-audit-shared";
 import { printDocument } from "@/lib/print-document";
 import { ActivityTimeline, TenureBox } from "./charts";
+import { FilterDropdown } from "@/components/FilterDropdown";
 
 const PCO_PERSON = "https://people.planningcenteronline.com/people/";
 
@@ -310,7 +311,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
               })}
             </div>
           </div>
-          <Dropdown
+          <FilterDropdown
             id="bands"
             label="Lanes active"
             value={bands.size ? phraseBands(bands) : "any"}
@@ -328,7 +329,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
               }))}
             onToggle={(id) => setBands(toggled(bands, Number(id)))}
           />
-          <Dropdown
+          <FilterDropdown
             id="activity"
             label="Last activity"
             value={
@@ -354,7 +355,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
             ].filter((i) => i.count > 0)}
             onToggle={(id) => setActivity(toggled(activity, id))}
           />
-          <Dropdown
+          <FilterDropdown
             id="hhActivity"
             label="Household activity"
             value={
@@ -374,7 +375,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
               .filter((i) => i.count > 0)}
             onToggle={(id) => setHhActivity(toggled(hhActivity, id))}
           />
-          <Dropdown
+          <FilterDropdown
             id="connection"
             label="Connection"
             value={
@@ -751,63 +752,6 @@ function Th({
         </span>
       </button>
     </th>
-  );
-}
-
-function Dropdown({
-  id,
-  label,
-  value,
-  open,
-  setOpen,
-  items,
-  onToggle,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  open: boolean;
-  setOpen: (v: string | null) => void;
-  items: { id: string; label: string; count: number; checked: boolean }[];
-  onToggle: (id: string) => void;
-}) {
-  const isSet = items.some((i) => i.checked);
-  return (
-    <div className="relative" onClick={(e) => e.stopPropagation()}>
-      <button
-        type="button"
-        onClick={() => setOpen(open ? null : id)}
-        aria-expanded={open}
-        className={`flex items-center gap-2 rounded-md border bg-bg px-3 py-1.5 text-[13px] ${
-          isSet ? "border-accent ring-1 ring-accent" : "border-border-soft hover:bg-bg-elev-2"
-        }`}
-      >
-        <span className={isSet ? "text-accent" : "text-subtle"}>{label}</span>
-        <span className="font-semibold">{value}</span>
-        <span className="text-subtle text-xs">▾</span>
-      </button>
-      {open && (
-        <div className="absolute left-0 top-[calc(100%+6px)] z-30 min-w-[230px] rounded-lg border border-border-soft bg-bg-elev p-1.5 shadow-xl">
-          {items.map((i) => (
-            <label
-              key={i.id}
-              className="flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer hover:bg-bg-elev-2"
-            >
-              <input
-                type="checkbox"
-                checked={i.checked}
-                onChange={() => onToggle(i.id)}
-                className="accent-[var(--accent)] w-3.5 h-3.5"
-              />
-              <span className="text-[13px] flex-1">{i.label}</span>
-              <span className="text-[11px] text-subtle tnum">
-                {i.count.toLocaleString()}
-              </span>
-            </label>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 

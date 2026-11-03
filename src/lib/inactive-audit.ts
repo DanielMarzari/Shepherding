@@ -38,6 +38,21 @@ export interface InactiveCandidate {
   /** Which source that date came from. */
   lastSeenVia: string | null;
   daysSince: number | null;
+  /** The last of the church's emails they opened or clicked, ever. Past the
+   *  pulse window by definition — an open inside it would have kept them off
+   *  this list — but how long past is worth knowing. */
+  lastEmailAt: string | null;
+  emailDaysSince: number | null;
+  /** The other adults in their household, and when each was last seen by
+   *  the same measure as this page: any trace, from any source. A quiet
+   *  record beside a spouse seen last month is likely a household where one
+   *  person does the signing up, not somebody who has gone. */
+  household: Array<{
+    personId: string;
+    name: string;
+    lastSeenAt: string | null;
+    daysSince: number | null;
+  }>;
 }
 
 export interface InactiveAudit {
@@ -51,7 +66,7 @@ export interface InactiveAudit {
   /** Left out because of their membership type, and which types those are. */
   excludedByType: number;
   excludedTypes: string[];
-  /** Membership types present on the list, for the filter chips. */
+  /** Membership types present on the list, for the Membership filter. */
   typesPresent: { type: string; n: number }[];
   months: number;
 }
@@ -146,7 +161,9 @@ export function getInactiveAudit(
               COALESCE(pa.in_outreach_lane,0) AS lo,
               (SELECT MAX(at) FROM pulse WHERE person_id = p.pco_id) AS lastAt,
               (SELECT src FROM pulse WHERE person_id = p.pco_id
-                ORDER BY at DESC LIMIT 1) AS lastSrc
+                ORDER BY at DESC LIMIT 1) AS lastSrc,
+              (SELECT at FROM pulse WHERE person_id = p.pco_id
+                AND src = 'email') AS emailAt
          FROM pco_people p
          LEFT JOIN person_activity pa
            ON pa.org_id = p.org_id AND pa.person_id = p.pco_id
@@ -168,12 +185,58 @@ export function getInactiveAudit(
     lo: number;
     lastAt: string | null;
     lastSrc: string | null;
+    emailAt: string | null;
   }>;
 
   const one = (sql: string) =>
     (db.prepare(sql).get(orgId) as { n: number }).n;
 
   const now = Date.now();
+  const ago = (iso: string | null) => {
+    const t = iso ? Date.parse(iso) : NaN;
+    return Number.isNaN(t) ? null : Math.max(0, Math.floor((now - t) / 86_400_000));
+  };
+
+  // The other adults in each candidate's household, with their last trace
+  // from the same pulse table. Adults only — a child's check-in says little
+  // about whether the parent beside them is around — and nobody PCO already
+  // has inactive. Read before the pulse table goes.
+  const ids = new Set(rows.map((r) => r.id));
+  const household = new Map<string, InactiveCandidate["household"]>();
+  for (const h of db
+    .prepare(
+      `SELECT me.person_id AS pid, o.pco_id AS oid,
+              o.first_name AS f, o.last_name AS l,
+              (SELECT MAX(at) FROM pulse WHERE person_id = o.pco_id) AS lastAt
+         FROM pco_household_memberships me
+         JOIN pco_household_memberships them
+           ON them.org_id = me.org_id AND them.household_id = me.household_id
+          AND them.person_id <> me.person_id AND them.pending = 0
+         JOIN pco_people o
+           ON o.org_id = them.org_id AND o.pco_id = them.person_id
+          AND o.is_minor = 0 AND o.inactivated_at IS NULL
+          AND LOWER(COALESCE(o.status,'')) <> 'inactive'
+        WHERE me.org_id = ? AND me.pending = 0`,
+    )
+    .all(orgId) as Array<{
+    pid: string;
+    oid: string;
+    f: string | null;
+    l: string | null;
+    lastAt: string | null;
+  }>) {
+    if (!ids.has(h.pid)) continue;
+    const list = household.get(h.pid) ?? household.set(h.pid, []).get(h.pid)!;
+    // Two shared households would list the same person twice.
+    if (list.some((x) => x.personId === h.oid)) continue;
+    list.push({
+      personId: h.oid,
+      name: [h.f?.trim(), h.l?.trim()].filter(Boolean).join(" ") || `(unknown #${h.oid})`,
+      lastSeenAt: h.lastAt,
+      daysSince: ago(h.lastAt),
+    });
+  }
+
   const candidates = rows.map((r) => {
     const t = r.lastAt ? Date.parse(r.lastAt) : NaN;
     const lanes = {
@@ -197,6 +260,9 @@ export function getInactiveAudit(
       daysSince: Number.isNaN(t)
         ? null
         : Math.max(0, Math.floor((now - t) / 86_400_000)),
+      lastEmailAt: r.emailAt,
+      emailDaysSince: ago(r.emailAt),
+      household: household.get(r.id) ?? [],
     };
   });
 
