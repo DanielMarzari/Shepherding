@@ -210,12 +210,18 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
           </div>
           <div className="relative h-10">
             {(() => {
-              let acc = 0;
+              const pct = (n: number) => (n / Math.max(1, audit.total)) * 100;
               return audit.bandTotals.map((n, i) => {
                 if (n === 0) return null;
-                const w = (n / Math.max(1, audit.total)) * 100;
-                const mid = acc + w / 2;
-                acc += w;
+                const w = pct(n);
+                // Where this band starts: the widths of every band before
+                // it. Summed afresh rather than carried in a running total,
+                // which the compiler rejects — a callback reassigning an
+                // outer variable reads to it as a side effect of render.
+                const start = audit.bandTotals
+                  .slice(0, i)
+                  .reduce((sum, m) => sum + pct(m), 0);
+                const mid = start + w / 2;
                 const tight = w < 9;
                 return (
                   <span
