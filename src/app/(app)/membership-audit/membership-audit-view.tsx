@@ -447,7 +447,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
                 </th>
                 <th
                   className="text-left px-4 py-2.5 border-b border-border-soft w-[110px]"
-                  title="Not lanes, but signs of life: E — opened one of the church's emails in the activity window; H — another adult in their household is in a lane"
+                  title="Not lanes, but signs of life: E — opened one of the church's emails in the activity window; H — somebody in their household, them included, is in a lane"
                 >
                   <span className="text-[10px] uppercase tracking-wider text-subtle font-medium">
                     Other activity
@@ -586,8 +586,8 @@ function Row({ r }: { r: AuditPersonRow }) {
             on={r.other.household}
             title={
               r.other.household
-                ? `Active in the household: ${r.householdActive.join(", ")}`
-                : "Nobody else in the household is in a lane"
+                ? `Active household: ${r.householdActive.join(", ")}`
+                : "Nobody in the household is in a lane"
             }
           />
         </div>

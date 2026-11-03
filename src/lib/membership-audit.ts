@@ -176,11 +176,11 @@ function getMembershipAuditImpl(
     partners.get(pr.b)!.push({ pcoId: pr.a, name: aName });
   }
 
-  // Adults sharing a household with a member, who are in at least one lane
-  // themselves. Any membership type: a spouse who never became a member
-  // can still be the one doing the signing up. Minors are left out — a
-  // child checked into kids' church says little about the other parent —
-  // and so are housemates PCO has inactive.
+  // Everybody in a member's household who is in at least one lane — the
+  // member included. The marker is about the household: if anyone in it is
+  // active, the whole household is, and every member of it lights up. Any
+  // membership type and any age (a child checked in on Sunday was brought
+  // by somebody); only people PCO has inactive are left out.
   const housemateRows = db
     .prepare(
       `SELECT me.person_id AS pid, o.pco_id AS oid,
@@ -193,10 +193,10 @@ function getMembershipAuditImpl(
           AND p.membership_type = ?
          JOIN pco_household_memberships them
            ON them.org_id = me.org_id AND them.household_id = me.household_id
-          AND them.person_id <> me.person_id AND them.pending = 0
+          AND them.pending = 0
          JOIN pco_people o
            ON o.org_id = them.org_id AND o.pco_id = them.person_id
-          AND o.is_minor = 0 AND o.inactivated_at IS NULL
+          AND o.inactivated_at IS NULL
           AND LOWER(COALESCE(o.status,'')) <> 'inactive'
          JOIN person_activity pa
            ON pa.org_id = o.org_id AND pa.person_id = o.pco_id

@@ -77,13 +77,14 @@ export interface AuditPersonRow {
   duplicateOf: { pcoId: string; name: string }[];
   /** Other activity: signs of life that are not a lane, shown beside them.
    *  `email` — opened or clicked one of the church's emails within the
-   *  activity window. `household` — another adult in their household is in
-   *  a lane. Households tend to have one person who signs up, registers and
-   *  gives for both, so a quiet member beside an active spouse may be just
-   *  as involved, only invisible to PCO. Shown for everybody, active or not:
-   *  it is about the household, not a verdict on the person. */
+   *  activity window. `household` — somebody in their household, themselves
+   *  included, is in a lane. Households tend to have one person who signs
+   *  up, registers and gives for all of them, so a quiet member of an active
+   *  household may be just as involved, only invisible to PCO. It is about
+   *  the household, not a verdict on the person: Joe and Karine both light
+   *  up when either of them is active. */
   other: { email: boolean; household: boolean };
-  /** Who lit the household marker, for its tooltip. */
+  /** Who in the household is active, for the marker's tooltip. */
   householdActive: string[];
 }
 
