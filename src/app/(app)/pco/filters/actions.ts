@@ -2,7 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { requireOrg } from "@/lib/auth";
-import { recomputeOutreachLane } from "@/lib/dashboard-refresh";
+import {
+  recomputeOutreachLane,
+  startRefreshInBackground,
+} from "@/lib/dashboard-refresh";
 import {
   saveAdultCheckinEvents,
   saveExcludedCheckinEvents,
@@ -13,6 +16,7 @@ import {
   saveKidCheckinEvents,
   saveOutreachGroupTypes,
   saveKnownDefinition,
+  saveTrackedFormIds,
   saveOutreachServiceTypes,
   saveOutreachTags,
   saveSundayCheckinEvents,
@@ -244,11 +248,23 @@ export async function saveKnownDefinitionAction(
     Number.isFinite(min) ? min : 2,
     signalMins,
   );
+  saveTrackedFormIds(
+    s.orgId,
+    formData.getAll("form").map((v) => String(v)).filter(Boolean),
+  );
+
+  // The bands are computed during the snapshot refresh, not read at
+  // request time, so saving a new definition changed nothing anybody
+  // could see until the next nightly run — which made the page feel
+  // broken and invited a second save. Kick the rebuild off here instead.
+  // In the background: a full refresh is minutes, and this action has a
+  // form waiting on it.
+  const runId = startRefreshInBackground(s.orgId, "manual");
   revalidatePath("/pco/filters");
   revalidatePath("/membership-audit");
   revalidatePath("/people");
   return {
     status: "saved",
-    message: `Saved. ${signals.length || "All"} signal${signals.length === 1 ? "" : "s"} count toward Known — applied on the next snapshot refresh.`,
+    message: `Saved. ${signals.length || "All"} signal${signals.length === 1 ? "" : "s"} count toward Known — rebuilding the snapshot now (refresh ${runId}); the bands will move as it finishes.`,
   };
 }

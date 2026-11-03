@@ -188,6 +188,8 @@ export interface SyncSettings {
   knownEmailMin: number;
   /** Per-signal minimums as stored JSON; parsed with parseSignalMins. */
   knownSignalMins: string | null;
+  /** Form ids whose submissions are synced; JSON. */
+  trackedFormIds: string | null;
   /** Always look back this many months on each sync, even with a newer
    *  cursor — catches retroactive PCO edits (default 3). */
   syncThresholdMonths: number;
@@ -239,7 +241,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
               shepherded_checkin_window_months,
               serving_interest_form_id,
               known_signals, known_min_signals, known_email_min,
-              known_signal_mins
+              known_signal_mins, tracked_form_ids
        FROM pco_sync_settings WHERE org_id = ?`,
     )
     .get(orgId) as
@@ -265,6 +267,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
         known_min_signals: number | null;
         known_email_min: number | null;
         known_signal_mins: string | null;
+        tracked_form_ids: string | null;
       }
     | undefined;
   if (!row) {
@@ -290,6 +293,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
       knownMinSignals: 1,
       knownEmailMin: 1,
   knownSignalMins: null,
+  trackedFormIds: null,
     };
   }
   const freq: SyncFrequency =
@@ -316,6 +320,7 @@ function getSyncSettingsImpl(orgId: number): SyncSettings {
     knownMinSignals: row.known_min_signals ?? 1,
     knownEmailMin: row.known_email_min ?? 1,
     knownSignalMins: row.known_signal_mins ?? null,
+    trackedFormIds: row.tracked_form_ids ?? null,
   };
 }
 
@@ -1032,6 +1037,21 @@ export function saveSeniorsAgeMin(orgId: number, age: number): void {
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE org_id = ?`,
   ).run(n, orgId);
+}
+
+/** Forms whose submissions are synced and therefore count as a signal.
+ *
+ *  Defaults to the three that used to be a constant in pco-sync, so an
+ *  org that never opens the page behaves as it always did. */
+export const DEFAULT_TRACKED_FORM_IDS = ["308672", "144568", "70538"];
+
+export const getTrackedFormIds = cache((orgId: number): string[] => {
+  const ids = readIdList(orgId, "tracked_form_ids");
+  return ids.length ? ids : DEFAULT_TRACKED_FORM_IDS;
+});
+
+export function saveTrackedFormIds(orgId: number, ids: string[]): void {
+  writeIdList(orgId, "tracked_form_ids", ids);
 }
 
 /** The Known definition: which signals count, and how many kinds are

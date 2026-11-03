@@ -3,6 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { Card, CardHeader, Pill } from "@/components/ui";
 import { requireOrg } from "@/lib/auth";
 import { parseKnownSignals, parseSignalMins } from "@/lib/classification";
+import { getDb } from "@/lib/db";
 import {
   getCheckinEventStats,
   getExcludedGroupTypes,
@@ -14,6 +15,7 @@ import {
   getOutreachGroupTypes,
   getOutreachServiceTypes,
   getSyncSettings,
+  getTrackedFormIds,
   getOutreachTags,
   getPersonTagStats,
   getServiceTypeStats,
@@ -72,6 +74,26 @@ export default async function FiltersPage({
   const outreachGroupTypes = getOutreachGroupTypes(session.orgId);
   const outreachTags = getOutreachTags(session.orgId);
   const syncSettings = getSyncSettings(session.orgId);
+  // The catalogue the sync builds, with what is ticked today. Closed forms
+  // stay listed: one may have been the only thing a visitor ever filled in.
+  const tracked = new Set(getTrackedFormIds(session.orgId));
+  const formOptions = (
+    getDb()
+      .prepare(
+        `SELECT pco_id AS id, name, active FROM pco_forms
+          WHERE org_id = ? ORDER BY active DESC, name COLLATE NOCASE`,
+      )
+      .all(session.orgId) as Array<{
+      id: string;
+      name: string | null;
+      active: number;
+    }>
+  ).map((f) => ({
+    id: f.id,
+    name: f.name ?? `(unnamed form ${f.id})`,
+    active: f.active === 1,
+    tracked: tracked.has(f.id),
+  }));
   const tagStats = getPersonTagStats(session.orgId);
 
   const checkinStats = getCheckinEventStats(session.orgId);
@@ -175,6 +197,7 @@ export default async function FiltersPage({
               initialSignals={parseKnownSignals(syncSettings.knownSignals)}
               initialMin={syncSettings.knownMinSignals}
               initialSignalMins={parseSignalMins(syncSettings.knownSignalMins)}
+              forms={formOptions}
               activityMonths={syncSettings.activityMonths}
               isAdmin={session.role === "admin"}
             />

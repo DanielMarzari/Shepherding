@@ -16,6 +16,7 @@ import {
   getKidCheckinEvents,
   getSyncEntities,
   getSyncSettings,
+  getTrackedFormIds,
 } from "./pco";
 import { PCOClient, PCOError, type PCOResource } from "./pco-client";
 import { refreshLastCheckIn, syncCheckinsAll } from "./pco-sync-checkins";
@@ -30,7 +31,8 @@ import { refreshLastServed, syncServicesAll } from "./pco-sync-services";
 
 // Forms the user explicitly asked to track (from the prompt).
 // Becomes user-configurable later; for now this is the canonical list.
-const TRACKED_FORM_IDS = ["308672", "144568", "70538"];
+// Which forms count now lives in pco_sync_settings.tracked_form_ids
+// (0119) so a connection card can be added without a deploy.
 
 export interface SyncResult {
   ok: boolean;
@@ -394,7 +396,18 @@ export async function runSync(
 
     // ── Forms (only if "forms" entity is enabled) ────────────────────────
     if (enabled.forms) {
-      for (const formId of TRACKED_FORM_IDS) {
+      // The catalogue first: without it the settings page can only offer
+      // the forms already being tracked, which makes adding a new one
+      // impossible from the UI.
+      try {
+        details.forms.fetched += await syncFormCatalogue(client, orgId);
+      } catch (e) {
+        warning = appendWarning(
+          warning,
+          `Form catalogue: ${e instanceof Error ? e.message : "failed"}`,
+        );
+      }
+      for (const formId of getTrackedFormIds(orgId)) {
         try {
           const formResult = await syncOneForm(
             client,
@@ -969,6 +982,33 @@ function backfillPersonNames(orgId: number): void {
 }
 
 // ─── Forms ──────────────────────────────────────────────────────────────
+
+/** Every form PCO has, metadata only.
+ *
+ *  Separate from syncOneForm, which also pulls fields and submissions:
+ *  this is the catalogue the settings page lists so somebody can tick
+ *  which ones count. Listing them is cheap; their submissions are not,
+ *  which is why only the ticked ones get walked.
+ */
+async function syncFormCatalogue(
+  client: PCOClient,
+  orgId: number,
+): Promise<number> {
+  let seen = 0;
+  for await (const { page } of client.paginate<PCOResource>("/people/v2/forms")) {
+    for (const f of (Array.isArray(page.data) ? page.data : [page.data])) {
+      const a = (f.attributes ?? {}) as Record<string, unknown>;
+      upsertForm(orgId, {
+        pcoId: f.id,
+        name: (a.name as string | undefined) ?? null,
+        description: (a.description as string | undefined) ?? null,
+        active: a.active === true ? 1 : 0,
+      });
+      seen++;
+    }
+  }
+  return seen;
+}
 
 async function syncOneForm(
   client: PCOClient,

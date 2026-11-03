@@ -27,12 +27,15 @@ export function KnownDefinitionForm({
   initialSignals,
   initialMin,
   initialSignalMins,
+  forms,
   activityMonths,
   isAdmin,
 }: {
   initialSignals: KnownSignal[];
   initialMin: number;
   initialSignalMins: Record<KnownSignal, number>;
+  /** Every form PCO knows about, with whether its submissions are synced. */
+  forms: { id: string; name: string; active: boolean; tracked: boolean }[];
   activityMonths: number;
   isAdmin: boolean;
 }) {
@@ -127,6 +130,50 @@ export function KnownDefinitionForm({
           );
         })}
       </ul>
+
+      {/* Which forms produce a signal at all. A form that is not ticked is
+          not synced, so submitting it leaves no trace anywhere — not in
+          Known, and not in the inactive audit, where it showed up as
+          people with a record and nothing against it. */}
+      <div className="px-5 py-4 border-t border-border-soft">
+        <h3 className="text-sm font-semibold">Forms that count</h3>
+        <p className="text-xs text-muted mt-0.5 mb-3 leading-relaxed max-w-3xl">
+          Only ticked forms have their submissions pulled from Planning
+          Center. Anything unticked is invisible everywhere, however many
+          people fill it in &mdash; so a connection card nobody ticked
+          looks exactly like a person who has done nothing.
+          {forms.length === 0 && (
+            <>
+              {" "}
+              <strong className="text-fg">
+                No forms have been catalogued yet
+              </strong>{" "}
+              &mdash; they are listed on the next PCO sync.
+            </>
+          )}
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-[280px] overflow-y-auto">
+          {forms.map((f) => (
+            <label
+              key={f.id}
+              className="flex items-center gap-2 text-[13px] rounded px-2 py-1 hover:bg-bg-elev-2 cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                name="form"
+                value={f.id}
+                defaultChecked={f.tracked}
+                disabled={!isAdmin}
+                className="accent-[var(--accent)]"
+              />
+              <span className="min-w-0 flex-1 truncate">{f.name}</span>
+              {!f.active && (
+                <span className="text-[10px] text-subtle shrink-0">closed</span>
+              )}
+            </label>
+          ))}
+        </div>
+      </div>
 
       <div className="px-5 py-4 border-t border-border-soft bg-bg-elev">
         <div className="flex flex-wrap items-center gap-3">
