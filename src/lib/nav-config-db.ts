@@ -58,6 +58,8 @@ const MANAGED_PAGES: Record<string, { id: string; label: string }> = {
   // Who is actually in the seniors ministry. It sits with the audits: like
   // them it is a list of things to go and fix, not a dashboard to read.
   "seniors-audit": { id: "audit", label: "Audits" },
+  // Same folder as the rest of the audits, by the label an admin gave it.
+  "inactive-audit": { id: "audit", label: "Audits" },
   // Giving impact joins the two pages it shares a method with. Faith Church's
   // saved nav keeps Sermon impact and Announcement impact together in
   // "Next steps", so that is where this belongs for them too — without it the
