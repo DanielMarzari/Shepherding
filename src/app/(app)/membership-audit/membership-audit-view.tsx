@@ -32,7 +32,7 @@ const BAND_STYLE = [
   { bg: "var(--accent)", fg: "var(--accent-fg)" },
 ];
 
-type SortKey = "name" | "lanes" | "days" | "email" | "connection" | "flags";
+type SortKey = "name" | "lanes" | "days" | "email" | "flags";
 
 export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   const [lanes, setLanes] = useState<Set<LaneKey>>(new Set());
@@ -95,11 +95,6 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
           return a.fullName.localeCompare(b.fullName) * sign;
         case "lanes":
           return (a.laneCount - b.laneCount) * sign;
-        case "connection":
-          return (
-            (CLASSIFICATIONS.indexOf(classOf(a.connection)) -
-              CLASSIFICATIONS.indexOf(classOf(b.connection))) * sign
-          );
         case "flags":
           return (a.flags.length - b.flags.length) * sign;
         case "email": {
@@ -121,7 +116,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
     if (sort === k) setDir(dir === "asc" ? "desc" : "asc");
     else {
       setSort(k);
-      setDir(k === "name" || k === "connection" ? "asc" : "desc");
+      setDir(k === "name" ? "asc" : "desc");
     }
   }
 
@@ -441,7 +436,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       {/* Roster */}
       <div className="rounded-lg border border-border-soft bg-bg-elev overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1340px] text-[13px]">
+          <table className="w-full min-w-[1100px] text-[13px]">
             <thead>
               <tr className="bg-bg-elev-2">
                 <Th label="Person" k="name" sort={sort} dir={dir} onSort={toggleSort} />
@@ -450,33 +445,24 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
                     Lanes
                   </span>
                 </th>
-                <th
-                  className="text-left px-4 py-2.5 border-b border-border-soft w-[110px]"
-                  title="Not lanes, but signs of life: E — opened one of the church's emails in the activity window; H — somebody in their household, them included, is in a lane"
-                >
-                  <span className="text-[10px] uppercase tracking-wider text-subtle font-medium">
-                    Other activity
-                  </span>
-                </th>
                 <Th label="#" k="lanes" sort={sort} dir={dir} onSort={toggleSort} width="w-[60px]" />
-                <Th label="Last activity" k="days" sort={sort} dir={dir} onSort={toggleSort} width="w-[140px]" />
-                <Th label="Last email" k="email" sort={sort} dir={dir} onSort={toggleSort} width="w-[120px]" />
-                <Th label="Connection" k="connection" sort={sort} dir={dir} onSort={toggleSort} width="w-[120px]" />
-                <Th label="Worth a look" k="flags" sort={sort} dir={dir} onSort={toggleSort} width="w-[210px]" />
+                <Th label="Email opened" k="email" sort={sort} dir={dir} onSort={toggleSort} width="w-[130px]" />
                 <th
-                  className="text-left px-4 py-2.5 border-b border-border-soft w-[250px]"
-                  title="The other adults in their household: when PCO last saw each, and when each last opened an email"
+                  className="text-left px-4 py-2.5 border-b border-border-soft w-[260px]"
+                  title="The other adults in their household, and when PCO last saw each"
                 >
                   <span className="text-[10px] uppercase tracking-wider text-subtle font-medium">
                     Household
                   </span>
                 </th>
+                <Th label="Last activity" k="days" sort={sort} dir={dir} onSort={toggleSort} width="w-[140px]" />
+                <Th label="Worth a look" k="flags" sort={sort} dir={dir} onSort={toggleSort} width="w-[210px]" />
               </tr>
             </thead>
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-12 text-center text-sm text-muted">
+                  <td colSpan={7} className="px-4 py-12 text-center text-sm text-muted">
                     Nothing matches — which is good news, not an empty page.
                   </td>
                 </tr>
@@ -588,24 +574,6 @@ function Row({ r }: { r: AuditPersonRow }) {
           <LaneTiles keys={LANE_KEYS.filter((k) => r.lanes[k]).join("")} size={20} />
         </div>
       </td>
-      <td className="px-4 py-2">
-        <div className="flex gap-1">
-          <OtherTile
-            letter="E"
-            on={r.other.email}
-            title={r.other.email ? "Opened one of the church's emails recently" : "No email opened recently"}
-          />
-          <OtherTile
-            letter="H"
-            on={r.other.household}
-            title={
-              r.other.household
-                ? `Active household: ${r.householdActive.join(", ")}`
-                : "Nobody in the household is in a lane"
-            }
-          />
-        </div>
-      </td>
       <td
         className={`px-4 py-2 tnum ${
           r.laneCount === 0 ? "text-warn-soft-fg font-semibold" : "text-muted"
@@ -614,34 +582,33 @@ function Row({ r }: { r: AuditPersonRow }) {
         {r.laneCount}
       </td>
       <td
+        className="px-4 py-2 whitespace-nowrap tnum text-muted"
+        title={r.lastEmailAt ? `Last opened ${r.lastEmailAt.slice(0, 10)}` : "Never opened one"}
+      >
+        {r.emailDaysSince === null ? "never" : `${agoLabel(r.emailDaysSince)}${r.emailDaysSince === 0 ? "" : " ago"}`}
+      </td>
+      <td className="px-4 py-2 text-xs">
+        {r.household.length ? (
+          <div className="space-y-0.5">
+            {r.household.map((h) => (
+              <div key={h.pcoId} className="leading-snug">
+                <a href={`/people/${h.pcoId}`} className="text-fg hover:text-accent">
+                  {h.name}
+                </a>
+                <span className="text-subtle"> · {seen(h.daysSince)}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <span className="text-subtle">—</span>
+        )}
+      </td>
+      <td
         className={`px-4 py-2 whitespace-nowrap tnum ${
           lapsed ? "text-warn-soft-fg font-medium" : "text-muted"
         }`}
       >
         {agoLabel(r.daysSince)}
-      </td>
-      <td
-        className="px-4 py-2 whitespace-nowrap tnum text-muted"
-        title={r.lastEmailAt ? `Last opened ${r.lastEmailAt.slice(0, 10)}` : "Never opened one"}
-      >
-        {agoLabel(r.emailDaysSince)}
-      </td>
-      <td className="px-4 py-2">
-        {r.connection ? (
-          <span
-            className={`inline-block text-[11px] font-semibold px-2 py-0.5 rounded border ${
-              classOf(r.connection) === "unknown"
-                ? "bg-warn-soft-bg text-warn-soft-fg border-warn-soft-fg/30"
-                : classOf(r.connection) === "shepherded"
-                  ? "bg-accent-soft-bg text-accent border-accent/30"
-                  : "bg-bg-elev-2 text-muted border-border-soft"
-            }`}
-          >
-            {CLASS_LABEL[classOf(r.connection)]}
-          </span>
-        ) : (
-          <span className="text-subtle">—</span>
-        )}
       </td>
       <td className="px-4 py-2 text-xs">
         {r.flags.length ? (
@@ -674,22 +641,6 @@ function Row({ r }: { r: AuditPersonRow }) {
           <span className="text-subtle">—</span>
         )}
       </td>
-      <td className="px-4 py-2 text-xs">
-        {r.household.length ? (
-          <div className="space-y-0.5">
-            {r.household.map((h) => (
-              <div key={h.pcoId} className="leading-snug">
-                <a href={`/people/${h.pcoId}`} className="text-fg hover:text-accent">
-                  {h.name}
-                </a>
-                <span className="text-subtle"> · {seenAndEmail(h)}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <span className="text-subtle">—</span>
-        )}
-      </td>
     </tr>
   );
 }
@@ -718,24 +669,6 @@ function LaneTiles({ keys, size }: { keys: string; size: number }) {
         );
       })}
     </>
-  );
-}
-
-/** Email and household, beside the lanes. Lit in the soft accent rather
- *  than the solid one, so they never read as two more lanes. */
-function OtherTile({ letter, on, title }: { letter: string; on: boolean; title: string }) {
-  return (
-    <span
-      title={title}
-      style={{ width: 20, height: 20, fontSize: 9 }}
-      className={`rounded font-bold flex items-center justify-center shrink-0 border ${
-        on
-          ? "bg-accent-soft-bg text-accent border-accent/50"
-          : "border-dashed border-border-soft text-subtle"
-      }`}
-    >
-      {letter}
-    </span>
   );
 }
 
@@ -1184,7 +1117,7 @@ function printRoster(
     columns: [
       { label: "Person" },
       { label: "Last activity", width: "1.05in" },
-      { label: "Last email", width: "0.9in" },
+      { label: "Email opened", width: "0.9in" },
       { label: "Remove", width: "0.6in", align: "center", kind: "box" },
       // Blank for a pen, except for the household, printed small.
       { label: "Notes", width: "2.95in", aside: true },
@@ -1215,29 +1148,17 @@ function flagText(r: AuditPersonRow) {
   };
 }
 
-/** "3 months ago · email 12 days ago" — one housemate, both signals.
- *  PCO's last activity never counts email, so the two are said apart. */
-function seenAndEmail(h: AuditPersonRow["household"][number]): string {
-  const seen =
-    h.daysSince === null
-      ? "nothing in PCO"
-      : h.daysSince === 0
-        ? "seen today"
-        : `seen ${agoLabel(h.daysSince)} ago`;
-  const email =
-    h.emailDaysSince === null
-      ? "no email opened"
-      : h.emailDaysSince === 0
-        ? "email today"
-        : `email ${agoLabel(h.emailDaysSince)} ago`;
-  return `${seen} · ${email}`;
+/** "seen 3 months ago" — when PCO last saw a housemate. */
+function seen(days: number | null): string {
+  if (days === null) return "nothing in PCO";
+  return days === 0 ? "seen today" : `seen ${agoLabel(days)} ago`;
 }
 
 /** What the printout's Notes column starts with: the other adults in the
  *  household and when each was last seen, so a quiet name is not crossed
  *  off without seeing that the household is here. */
 function householdNote(r: AuditPersonRow): string {
-  return r.household.map((h) => `${h.name}: ${seenAndEmail(h)}`).join("; ");
+  return r.household.map((h) => `${h.name}: ${seen(h.daysSince)}`).join("; ");
 }
 
 /** Which activity bucket a row falls in. One place, so the dropdown counts
@@ -1263,10 +1184,8 @@ function exportRows(rows: AuditPersonRow[], membershipType: string) {
     "Name",
     ...LANE_KEYS.map((k) => LANE_LABELS[k]),
     "Lanes active",
-    "Opens email",
-    "Household active",
     "Last activity",
-    "Last email",
+    "Email opened",
     "Connection",
     "Worth a look",
     "Household",
@@ -1279,8 +1198,6 @@ function exportRows(rows: AuditPersonRow[], membershipType: string) {
         r.fullName,
         ...LANE_KEYS.map((k) => (r.lanes[k] ? "yes" : "")),
         String(r.laneCount),
-        r.other.email ? "yes" : "",
-        r.other.household ? "yes" : "",
         agoLabel(r.daysSince),
         agoLabel(r.emailDaysSince),
         CLASS_LABEL[classOf(r.connection)],

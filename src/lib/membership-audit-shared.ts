@@ -75,30 +75,19 @@ export interface AuditPersonRow {
    *  the pair can be judged without opening two tabs. High-confidence
    *  pairs only, and a person can be in more than one. */
   duplicateOf: { pcoId: string; name: string }[];
-  /** Other activity: signs of life that are not a lane, shown beside them.
-   *  `email` — opened or clicked one of the church's emails within the
-   *  activity window. `household` — somebody in their household, themselves
-   *  included, is in a lane. Households tend to have one person who signs
-   *  up, registers and gives for all of them, so a quiet member of an active
-   *  household may be just as involved, only invisible to PCO. It is about
-   *  the household, not a verdict on the person: Joe and Karine both light
-   *  up when either of them is active. */
-  other: { email: boolean; household: boolean };
-  /** Who in the household is active, for the marker's tooltip. */
-  householdActive: string[];
   /** The last email of the church's they opened or clicked, ever. Kept
    *  apart from lastActivityAt, which is PCO only and never counts email. */
   lastEmailAt: string | null;
   emailDaysSince: number | null;
-  /** The other adults in their household, and when each was last seen —
-   *  enough to judge whether the household is here, not just this record. */
+  /** The other adults in their household, and when PCO last saw each.
+   *  Households tend to have one person who signs up, registers and gives
+   *  for everyone, so a quiet member beside a spouse seen last week may be
+   *  just as involved, only invisible to PCO. */
   household: Array<{
     pcoId: string;
     name: string;
     lastActivityAt: string | null;
     daysSince: number | null;
-    lastEmailAt: string | null;
-    emailDaysSince: number | null;
   }>;
 }
 
