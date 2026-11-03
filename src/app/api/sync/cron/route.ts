@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { getSyncSettings } from "@/lib/pco";
 import { isSyncDue } from "@/lib/pco-schedule";
-import { cleanupStaleSyncRuns, healStaleSnapshots, runSync } from "@/lib/pco-sync";
+import {
+  cleanupStaleSyncRuns,
+  healStaleSnapshots,
+  refreshFormCatalogue,
+  runSync,
+} from "@/lib/pco-sync";
 import { getRefreshRunStatus, launchRefresh } from "@/lib/dashboard-refresh";
 import { startGeocodeRun } from "@/lib/geocode-runner";
 import { startDriveRun } from "@/lib/drive-runner";
@@ -72,6 +77,22 @@ export async function GET(req: Request) {
       }
     }
     return NextResponse.json({ only: "refresh", results: out });
+  }
+
+  // ?only=forms lists PCO's forms so the settings page has something to
+  // offer. Cheap next to a full sync, which is what used to be required.
+  if (url.searchParams.get("only") === "forms") {
+    const out: unknown[] = [];
+    for (const { id } of getDb()
+      .prepare("SELECT DISTINCT org_id AS id FROM pco_sync_settings")
+      .all() as Array<{ id: number }>) {
+      try {
+        out.push({ orgId: id, forms: await refreshFormCatalogue(id) });
+      } catch (e) {
+        out.push({ orgId: id, error: e instanceof Error ? e.message : "failed" });
+      }
+    }
+    return NextResponse.json({ only: "forms", results: out });
   }
 
   if (url.searchParams.get("only") === "cc") {

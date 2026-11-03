@@ -990,6 +990,20 @@ function backfillPersonNames(orgId: number): void {
  *  which ones count. Listing them is cheap; their submissions are not,
  *  which is why only the ticked ones get walked.
  */
+/** List every PCO form without syncing anything else.
+ *
+ *  The catalogue is what the settings page offers to tick, and it is only
+ *  built during a full sync — so adding a connection card meant waiting
+ *  for one, or running twenty minutes of people and check-ins to fetch a
+ *  list of names. One endpoint, a few pages.
+ */
+export async function refreshFormCatalogue(orgId: number): Promise<number> {
+  const creds = getDecryptedCreds(orgId);
+  if (!creds) throw new Error("No PCO credentials saved.");
+  const client = new PCOClient({ appId: creds.appId, secret: creds.secret });
+  return syncFormCatalogue(client, orgId);
+}
+
 async function syncFormCatalogue(
   client: PCOClient,
   orgId: number,
