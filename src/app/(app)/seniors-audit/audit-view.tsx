@@ -26,7 +26,7 @@ import {
   type WorkingList,
 } from "@/lib/seniors-audit-shared";
 import { downloadCsv } from "./csv";
-import { printDocument, type PrintColumn, type PrintRow } from "./print";
+import { printDocument, type PrintColumn, type PrintRow } from "@/lib/print-document";
 
 type Tab = "list" | "email" | "age" | "events";
 

@@ -16,6 +16,7 @@ import {
   type MembershipAudit,
   agoLabel,
 } from "@/lib/membership-audit-shared";
+import { printDocument } from "@/lib/print-document";
 
 const PCO_PERSON = "https://people.planningcenteronline.com/people/";
 
@@ -399,6 +400,13 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
               Export
               <span className="tnum text-subtle">{visible.length.toLocaleString()}</span>
             </button>
+            <PrintMenu
+              open={open === "print"}
+              setOpen={setOpen}
+              disabled={visible.length === 0}
+              count={visible.length}
+              onPrint={(by) => printRoster(visible, by, audit.membershipType, readout)}
+            />
           </div>
         </div>
       </div>
@@ -593,13 +601,7 @@ function Row({ r }: { r: AuditPersonRow }) {
         {r.flags.length ? (
           <span className="inline-flex items-center gap-1.5 text-subtle">
             <span className="truncate">
-              {r.flags
-                .map((f) =>
-                  f === "Possible duplicate" && r.duplicateOf.length
-                    ? `Duplicate of ${r.duplicateOf.map((d) => d.name).join(", ")}`
-                    : f,
-                )
-                .join(" · ")}
+              {r.flags.map(flagText(r)).join(" · ")}
             </span>
             <a
               href={`${PCO_PERSON}${r.pcoId}`}
@@ -987,6 +989,165 @@ function WarningsDropdown({
   );
 }
 
+type PrintSort = "last" | "first" | "activity";
+
+const PRINT_SORTS: { id: PrintSort; label: string; hint: string }[] = [
+  { id: "last", label: "Last name", hint: "Smith, Mary — A to Z by surname" },
+  { id: "first", label: "First name", hint: "Mary Smith — A to Z by first name" },
+  { id: "activity", label: "Last activity", hint: "Longest silence first, never-active at the top" },
+];
+
+/** Print the roster as a worksheet. One button, three orders: the order is
+ *  the only thing that changes how the sheet is worked — by surname to
+ *  match a directory, by first name to match how people are known, by
+ *  silence to start with whoever is most likely to come off. */
+function PrintMenu({
+  open,
+  setOpen,
+  disabled,
+  count,
+  onPrint,
+}: {
+  open: boolean;
+  setOpen: (v: string | null) => void;
+  disabled: boolean;
+  count: number;
+  onPrint: (by: PrintSort) => void;
+}) {
+  return (
+    <div className="relative" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => setOpen(open ? null : "print")}
+        disabled={disabled}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="flex items-center gap-2 rounded-md border border-border-soft bg-bg px-3 py-1.5 text-[13px] hover:bg-bg-elev-2 disabled:opacity-50"
+        title="A printable worksheet of the rows showing now: name, last activity, a box to tick for removal, room for notes"
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden="true"
+        >
+          <path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6a1 1 0 0 1-1 1h-2" />
+          <path d="M6 14h12v7H6z" />
+        </svg>
+        Print
+        <span className="text-xs opacity-70">▾</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-[calc(100%+6px)] z-30 w-[270px] rounded-lg border border-border-soft bg-bg-elev p-1.5 shadow-xl"
+        >
+          <div className="px-2 pt-1 pb-1.5 text-[10px] uppercase tracking-wider text-subtle">
+            {count.toLocaleString()} {count === 1 ? "member" : "members"}, sorted by
+          </div>
+          {PRINT_SORTS.map((o) => (
+            <button
+              key={o.id}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(null);
+                onPrint(o.id);
+              }}
+              className="w-full text-left rounded px-2 py-1.5 hover:bg-bg-elev-2"
+            >
+              <div className="text-[13px] font-medium">{o.label}</div>
+              <div className="text-[11px] text-subtle leading-snug">{o.hint}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The worksheet itself. The rows showing now — filters apply, the
+ *  screen's sort does not, since the sheet asks for its own. */
+function printRoster(
+  rows: AuditPersonRow[],
+  by: PrintSort,
+  membershipType: string,
+  readout: string,
+) {
+  const key = (s: string | null) => (s ?? "").toLocaleLowerCase();
+  const byName = (a: AuditPersonRow, b: AuditPersonRow, firstFirst: boolean) => {
+    const [a1, a2] = firstFirst ? [a.firstName, a.lastName] : [a.lastName, a.firstName];
+    const [b1, b2] = firstFirst ? [b.firstName, b.lastName] : [b.lastName, b.firstName];
+    // Nameless records sink to the bottom rather than leading the sheet.
+    if (!a1 !== !b1) return a1 ? -1 : 1;
+    return key(a1).localeCompare(key(b1)) || key(a2).localeCompare(key(b2));
+  };
+  const sorted = rows.slice().sort((a, b) => {
+    if (by === "activity") {
+      const ad = a.daysSince ?? Number.MAX_SAFE_INTEGER;
+      const bd = b.daysSince ?? Number.MAX_SAFE_INTEGER;
+      return bd - ad || byName(a, b, false);
+    }
+    return byName(a, b, by === "first");
+  });
+
+  const nameFor = (r: AuditPersonRow) =>
+    by === "last" && r.lastName && r.firstName ? `${r.lastName}, ${r.firstName}` : r.fullName;
+  const when = (r: AuditPersonRow) => {
+    if (!r.lastActivityAt) return "Never";
+    const d = new Date(r.lastActivityAt);
+    if (Number.isNaN(d.getTime())) return agoLabel(r.daysSince);
+    const date = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    return `${date} · ${agoLabel(r.daysSince)}`;
+  };
+
+  const label = PRINT_SORTS.find((s) => s.id === by)?.label.toLowerCase() ?? by;
+  printDocument({
+    title: `Membership audit — ${membershipType}s`,
+    subtitle: `Tick anyone who should come off the roster, and note why`,
+    meta: [...(readout !== "everything" ? [readout] : []), `Sorted by ${label}`],
+    columns: [
+      { label: "Person" },
+      { label: "Last activity", width: "1.7in" },
+      { label: "Remove", width: "0.65in", align: "center", kind: "box" },
+      // Blank for a pen, except where the household note is printed small.
+      { label: "Notes", width: "2.75in", aside: true },
+    ],
+    sections: [
+      {
+        rows: sorted.map((r) => ({
+          cells: [nameFor(r), when(r), "", householdNote(r)],
+        })),
+      },
+    ],
+    roomy: true,
+  });
+}
+
+/** A flag as the row shows it: the two that point at somebody else say who. */
+function flagText(r: AuditPersonRow) {
+  return (f: string) => {
+    if (f === "Possible duplicate" && r.duplicateOf.length)
+      return `Duplicate of ${r.duplicateOf.map((d) => d.name).join(", ")}`;
+    if (f === "Active household" && r.householdActive.length)
+      return `Household active: ${r.householdActive.map((h) => h.name).join(", ")}`;
+    return f;
+  };
+}
+
+/** What the printout's Notes column starts with. Phrased as a possibility,
+ *  because that is all it is: the sheet is for deciding, not for telling. */
+function householdNote(r: AuditPersonRow): string {
+  if (r.householdActive.length === 0) return "";
+  const who = r.householdActive
+    .map((h) => `${h.name} (${h.laneCount} lane${h.laneCount === 1 ? "" : "s"})`)
+    .join(", ");
+  return `Activity in household — ${who}. May be signing up for both.`;
+}
+
 /** Which activity bucket a row falls in. One place, so the dropdown counts
  *  and the filter can never disagree. */
 function bucketOf(days: number | null): string {
@@ -1024,7 +1185,7 @@ function exportRows(rows: AuditPersonRow[], membershipType: string) {
         String(r.laneCount),
         agoLabel(r.daysSince),
         CLASS_LABEL[classOf(r.connection)],
-        r.flags.join("; "),
+        r.flags.map(flagText(r)).join("; "),
         `${PCO_PERSON}${r.pcoId}`,
       ]
         .map(csvCell)

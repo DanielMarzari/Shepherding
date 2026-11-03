@@ -16,6 +16,10 @@ export interface PrintColumn {
   /** A CSS width. Leave one column without, to take what is left. */
   width?: string;
   align?: "left" | "right" | "center";
+  /** An empty box to tick by hand. The row's cell for it is ignored. */
+  kind?: "box";
+  /** Small, grey text: a printed aside that leaves the cell for a pen. */
+  aside?: boolean;
 }
 
 export interface PrintRow {
@@ -46,6 +50,9 @@ export interface PrintDoc {
   pagePerSection?: boolean;
   /** What the warning sign means. Printed only when a row carries one. */
   flagLegend?: string;
+  /** Taller, unstriped rows: room to write by hand on a list that will be
+   *  marked up with a pen. */
+  roomy?: boolean;
 }
 
 const esc = (s: string) =>
@@ -74,6 +81,7 @@ function renderTable(cols: PrintColumn[], rows: PrintRow[], caption = ""): strin
   const body = rows
     .map((r) => {
       const tds = cols.map((c, i) => {
+        if (c.kind === "box") return `<td class="c"><span class="box"></span></td>`;
         if (r.ticks && i in r.ticks) {
           return `<td${align(c)}>${
             r.ticks[i] ? '<span class="yes">✓</span>' : '<span class="no">–</span>'
@@ -81,7 +89,10 @@ function renderTable(cols: PrintColumn[], rows: PrintRow[], caption = ""): strin
         }
         const text = esc(r.cells[i] ?? "");
         const flag = i === 0 && r.flag ? ` <span class="flag">${WARN_SVG}</span>` : "";
-        return `<td${align(c)}>${text}${flag}</td>`;
+        const cls = [c.align === "right" ? "r" : c.align === "center" ? "c" : "", c.aside ? "aside" : ""]
+          .filter(Boolean)
+          .join(" ");
+        return `<td${cls ? ` class="${cls}"` : ""}>${text}${flag}</td>`;
       });
       return `<tr>${tds.join("")}</tr>`;
     })
@@ -171,6 +182,10 @@ td:first-child { font-weight: 500; }
 .warn { width: 8.5pt; height: 8.5pt; vertical-align: -0.5pt; }
 .legend { font-size: 8pt; color: #555; margin: 4pt 0 0; }
 .empty { color: #888; font-style: italic; }
+.aside { font-size: 7.5pt; color: #666; line-height: 1.3; vertical-align: top !important; }
+.box { display: inline-block; width: 10pt; height: 10pt; border: 0.9pt solid #555; border-radius: 1.5pt; vertical-align: middle; }
+${d.roomy ? `td { padding: 8pt 6pt; vertical-align: middle; border-bottom-color: #c9c9c2; }
+tbody tr:nth-child(even) td { background: none; }` : ""}
 </style></head>
 <body>
 <header class="doc">

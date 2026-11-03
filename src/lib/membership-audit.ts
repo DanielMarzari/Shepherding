@@ -176,6 +176,50 @@ function getMembershipAuditImpl(
     partners.get(pr.b)!.push({ pcoId: pr.a, name: aName });
   }
 
+  // Adults sharing a household with a member, who are in at least one lane
+  // themselves. Any membership type: a spouse who never became a member
+  // can still be the one doing the signing up. Minors are left out — a
+  // child checked into kids' church says little about the other parent —
+  // and so are housemates PCO has inactive.
+  const housemateRows = db
+    .prepare(
+      `SELECT me.person_id AS pid, o.pco_id AS oid,
+              o.first_name AS f, o.last_name AS l,
+              (pa.in_worship_lane + pa.in_serving_lane + pa.in_community_lane
+               + pa.in_giving_lane + pa.in_outreach_lane) AS lanes
+         FROM pco_household_memberships me
+         JOIN pco_people p
+           ON p.org_id = me.org_id AND p.pco_id = me.person_id
+          AND p.membership_type = ?
+         JOIN pco_household_memberships them
+           ON them.org_id = me.org_id AND them.household_id = me.household_id
+          AND them.person_id <> me.person_id AND them.pending = 0
+         JOIN pco_people o
+           ON o.org_id = them.org_id AND o.pco_id = them.person_id
+          AND o.is_minor = 0 AND o.inactivated_at IS NULL
+          AND LOWER(COALESCE(o.status,'')) <> 'inactive'
+         JOIN person_activity pa
+           ON pa.org_id = o.org_id AND pa.person_id = o.pco_id
+        WHERE me.org_id = ? AND me.pending = 0
+          AND (pa.in_worship_lane + pa.in_serving_lane + pa.in_community_lane
+               + pa.in_giving_lane + pa.in_outreach_lane) > 0`,
+    )
+    .all(membershipType, orgId) as Array<{
+    pid: string;
+    oid: string;
+    f: string | null;
+    l: string | null;
+    lanes: number;
+  }>;
+  const housemates = new Map<string, { pcoId: string; name: string; laneCount: number }[]>();
+  for (const h of housemateRows) {
+    const list = housemates.get(h.pid) ?? housemates.set(h.pid, []).get(h.pid)!;
+    // Two shared households would list the same person twice.
+    if (list.some((x) => x.pcoId === h.oid)) continue;
+    list.push({ pcoId: h.oid, name: nameOf(h.f, h.l, h.oid), laneCount: h.lanes });
+  }
+  for (const list of housemates.values()) list.sort((a, b) => b.laneCount - a.laneCount);
+
   const refreshed = db
     .prepare(
       `SELECT MAX(refreshed_at) AS at FROM person_activity WHERE org_id = ?`,
@@ -249,6 +293,10 @@ function getMembershipAuditImpl(
     else if (isJunkName(first) || isJunkName(last)) flags.push("Name looks wrong");
     const duplicateOf = partners.get(r.pcoId) ?? [];
     if (duplicateOf.length > 0) flags.push("Possible duplicate");
+    // Only for somebody in no lane: beside an active spouse, silence may be
+    // the household's sign-ups all going under one name.
+    const householdActive = laneCount === 0 ? (housemates.get(r.pcoId) ?? []) : [];
+    if (householdActive.length > 0) flags.push("Active household");
     if (flags.length) flaggedTotal++;
 
     const daysSince = r.lastActivityAt
@@ -258,6 +306,8 @@ function getMembershipAuditImpl(
     return {
       pcoId: r.pcoId,
       fullName,
+      firstName: first,
+      lastName: last,
       initials:
         ((first?.[0] ?? "") + (last?.[0] ?? "")).toUpperCase() || "??",
       lanes,
@@ -267,6 +317,7 @@ function getMembershipAuditImpl(
       connection: cls,
       flags,
       duplicateOf,
+      householdActive,
     };
   });
 

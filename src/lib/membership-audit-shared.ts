@@ -34,6 +34,7 @@ export const FLAG_TYPES = [
   "Moved out of area",
   "Inactive in PCO",
   "Possible duplicate",
+  "Active household",
   "Name looks wrong",
   "No name on record",
 ] as const;
@@ -59,6 +60,9 @@ export const NEVER_BUCKET = "never";
 export interface AuditPersonRow {
   pcoId: string;
   fullName: string;
+  /** The two halves, for a list sorted by surname. Null when PCO has none. */
+  firstName: string | null;
+  lastName: string | null;
   initials: string;
   lanes: Record<LaneKey, boolean>;
   laneCount: number;
@@ -72,6 +76,11 @@ export interface AuditPersonRow {
    *  the pair can be judged without opening two tabs. High-confidence
    *  pairs only, and a person can be in more than one. */
   duplicateOf: { pcoId: string; name: string }[];
+  /** Other adults in their household who ARE in a lane, when this person is
+   *  in none. Households tend to have one person who signs up, registers
+   *  and gives for both — so a silent member beside an active spouse may be
+   *  just as involved, only invisible to PCO. A possibility, not a verdict. */
+  householdActive: { pcoId: string; name: string; laneCount: number }[];
 }
 
 export interface MembershipAudit {
