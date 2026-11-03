@@ -32,7 +32,7 @@ const BAND_STYLE = [
   { bg: "var(--accent)", fg: "var(--accent-fg)" },
 ];
 
-type SortKey = "name" | "lanes" | "days" | "connection" | "flags";
+type SortKey = "name" | "lanes" | "days" | "email" | "connection" | "flags";
 
 export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   const [lanes, setLanes] = useState<Set<LaneKey>>(new Set());
@@ -102,6 +102,11 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
           );
         case "flags":
           return (a.flags.length - b.flags.length) * sign;
+        case "email": {
+          const ad = a.emailDaysSince ?? Number.MAX_SAFE_INTEGER;
+          const bd = b.emailDaysSince ?? Number.MAX_SAFE_INTEGER;
+          return (ad - bd) * sign;
+        }
         default: {
           // Never-active sorts as the longest silence, not as zero.
           const ad = a.daysSince ?? Number.MAX_SAFE_INTEGER;
@@ -436,7 +441,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       {/* Roster */}
       <div className="rounded-lg border border-border-soft bg-bg-elev overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[990px] text-[13px]">
+          <table className="w-full min-w-[1340px] text-[13px]">
             <thead>
               <tr className="bg-bg-elev-2">
                 <Th label="Person" k="name" sort={sort} dir={dir} onSort={toggleSort} />
@@ -455,14 +460,23 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
                 </th>
                 <Th label="#" k="lanes" sort={sort} dir={dir} onSort={toggleSort} width="w-[60px]" />
                 <Th label="Last activity" k="days" sort={sort} dir={dir} onSort={toggleSort} width="w-[140px]" />
+                <Th label="Last email" k="email" sort={sort} dir={dir} onSort={toggleSort} width="w-[120px]" />
                 <Th label="Connection" k="connection" sort={sort} dir={dir} onSort={toggleSort} width="w-[120px]" />
                 <Th label="Worth a look" k="flags" sort={sort} dir={dir} onSort={toggleSort} width="w-[210px]" />
+                <th
+                  className="text-left px-4 py-2.5 border-b border-border-soft w-[250px]"
+                  title="The other adults in their household: when PCO last saw each, and when each last opened an email"
+                >
+                  <span className="text-[10px] uppercase tracking-wider text-subtle font-medium">
+                    Household
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-sm text-muted">
+                  <td colSpan={9} className="px-4 py-12 text-center text-sm text-muted">
                     Nothing matches — which is good news, not an empty page.
                   </td>
                 </tr>
@@ -606,6 +620,12 @@ function Row({ r }: { r: AuditPersonRow }) {
       >
         {agoLabel(r.daysSince)}
       </td>
+      <td
+        className="px-4 py-2 whitespace-nowrap tnum text-muted"
+        title={r.lastEmailAt ? `Last opened ${r.lastEmailAt.slice(0, 10)}` : "Never opened one"}
+      >
+        {agoLabel(r.emailDaysSince)}
+      </td>
       <td className="px-4 py-2">
         {r.connection ? (
           <span
@@ -650,6 +670,22 @@ function Row({ r }: { r: AuditPersonRow }) {
               </svg>
             </a>
           </span>
+        ) : (
+          <span className="text-subtle">—</span>
+        )}
+      </td>
+      <td className="px-4 py-2 text-xs">
+        {r.household.length ? (
+          <div className="space-y-0.5">
+            {r.household.map((h) => (
+              <div key={h.pcoId} className="leading-snug">
+                <a href={`/people/${h.pcoId}`} className="text-fg hover:text-accent">
+                  {h.name}
+                </a>
+                <span className="text-subtle"> · {seenAndEmail(h)}</span>
+              </div>
+            ))}
+          </div>
         ) : (
           <span className="text-subtle">—</span>
         )}
@@ -1140,14 +1176,6 @@ function printRoster(
 
   const nameFor = (r: AuditPersonRow) =>
     by === "last" && r.lastName && r.firstName ? `${r.lastName}, ${r.firstName}` : r.fullName;
-  const when = (r: AuditPersonRow) => {
-    if (!r.lastActivityAt) return "Never";
-    const d = new Date(r.lastActivityAt);
-    if (Number.isNaN(d.getTime())) return agoLabel(r.daysSince);
-    const date = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-    return `${date} · ${agoLabel(r.daysSince)}`;
-  };
-
   const label = PRINT_SORTS.find((s) => s.id === by)?.label.toLowerCase() ?? by;
   printDocument({
     title: `Membership audit — ${membershipType}s`,
@@ -1155,15 +1183,22 @@ function printRoster(
     meta: [...(readout !== "everything" ? [readout] : []), `Sorted by ${label}`],
     columns: [
       { label: "Person" },
-      { label: "Last activity", width: "1.7in" },
-      { label: "Remove", width: "0.65in", align: "center", kind: "box" },
-      // Blank for a pen, except for the other activity, printed small.
-      { label: "Notes", width: "2.75in", aside: true },
+      { label: "Last activity", width: "1.05in" },
+      { label: "Last email", width: "0.9in" },
+      { label: "Remove", width: "0.6in", align: "center", kind: "box" },
+      // Blank for a pen, except for the household, printed small.
+      { label: "Notes", width: "2.95in", aside: true },
     ],
     sections: [
       {
         rows: sorted.map((r) => ({
-          cells: [nameFor(r), when(r), "", otherNote(r)],
+          cells: [
+            nameFor(r),
+            agoLabel(r.daysSince),
+            agoLabel(r.emailDaysSince),
+            "",
+            householdNote(r),
+          ],
         })),
       },
     ],
@@ -1180,15 +1215,29 @@ function flagText(r: AuditPersonRow) {
   };
 }
 
-/** What the printout's Notes column starts with: the other activity, in
- *  a word each, so a quiet name is not crossed off without seeing it. */
-function otherNote(r: AuditPersonRow): string {
-  return [
-    r.other.email ? "Opens email" : "",
-    r.other.household ? "Household active" : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+/** "3 months ago · email 12 days ago" — one housemate, both signals.
+ *  PCO's last activity never counts email, so the two are said apart. */
+function seenAndEmail(h: AuditPersonRow["household"][number]): string {
+  const seen =
+    h.daysSince === null
+      ? "nothing in PCO"
+      : h.daysSince === 0
+        ? "seen today"
+        : `seen ${agoLabel(h.daysSince)} ago`;
+  const email =
+    h.emailDaysSince === null
+      ? "no email opened"
+      : h.emailDaysSince === 0
+        ? "email today"
+        : `email ${agoLabel(h.emailDaysSince)} ago`;
+  return `${seen} · ${email}`;
+}
+
+/** What the printout's Notes column starts with: the other adults in the
+ *  household and when each was last seen, so a quiet name is not crossed
+ *  off without seeing that the household is here. */
+function householdNote(r: AuditPersonRow): string {
+  return r.household.map((h) => `${h.name}: ${seenAndEmail(h)}`).join("; ");
 }
 
 /** Which activity bucket a row falls in. One place, so the dropdown counts
@@ -1217,8 +1266,10 @@ function exportRows(rows: AuditPersonRow[], membershipType: string) {
     "Opens email",
     "Household active",
     "Last activity",
+    "Last email",
     "Connection",
     "Worth a look",
+    "Household",
     "PCO link",
   ];
   const lines = [header.map(csvCell).join(",")];
@@ -1231,8 +1282,10 @@ function exportRows(rows: AuditPersonRow[], membershipType: string) {
         r.other.email ? "yes" : "",
         r.other.household ? "yes" : "",
         agoLabel(r.daysSince),
+        agoLabel(r.emailDaysSince),
         CLASS_LABEL[classOf(r.connection)],
         r.flags.map(flagText(r)).join("; "),
+        householdNote(r),
         `${PCO_PERSON}${r.pcoId}`,
       ]
         .map(csvCell)

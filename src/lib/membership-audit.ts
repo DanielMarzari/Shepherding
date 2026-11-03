@@ -176,17 +176,24 @@ function getMembershipAuditImpl(
     partners.get(pr.b)!.push({ pcoId: pr.a, name: aName });
   }
 
-  // Everybody in a member's household who is in at least one lane — the
-  // member included. The marker is about the household: if anyone in it is
-  // active, the whole household is, and every member of it lights up. Any
-  // membership type and any age (a child checked in on Sunday was brought
-  // by somebody); only people PCO has inactive are left out.
-  const housemateRows = db
+  const now = Date.now();
+  const ago = (iso: string | null) =>
+    iso ? Math.max(0, Math.floor((now - Date.parse(iso)) / MS_PER_DAY)) : null;
+
+  // Everybody in a member's household, the member included, with what the
+  // snapshot knows of them. Two uses: the H marker — if anyone in it is in a
+  // lane, the whole household is active, and every member of it lights up
+  // (any membership type, any age: a child checked in on Sunday was brought
+  // by somebody) — and the Household column, which names the other adults
+  // and when each was last seen. People PCO has inactive are left out of
+  // both.
+  const householdRows = db
     .prepare(
       `SELECT me.person_id AS pid, o.pco_id AS oid,
-              o.first_name AS f, o.last_name AS l,
-              (pa.in_worship_lane + pa.in_serving_lane + pa.in_community_lane
-               + pa.in_giving_lane + pa.in_outreach_lane) AS lanes
+              o.first_name AS f, o.last_name AS l, o.is_minor AS minor,
+              COALESCE(pa.in_worship_lane + pa.in_serving_lane + pa.in_community_lane
+                       + pa.in_giving_lane + pa.in_outreach_lane, 0) AS lanes,
+              pa.last_activity_at AS lastAt
          FROM pco_household_memberships me
          JOIN pco_people p
            ON p.org_id = me.org_id AND p.pco_id = me.person_id
@@ -198,51 +205,85 @@ function getMembershipAuditImpl(
            ON o.org_id = them.org_id AND o.pco_id = them.person_id
           AND o.inactivated_at IS NULL
           AND LOWER(COALESCE(o.status,'')) <> 'inactive'
-         JOIN person_activity pa
+         LEFT JOIN person_activity pa
            ON pa.org_id = o.org_id AND pa.person_id = o.pco_id
-        WHERE me.org_id = ? AND me.pending = 0
-          AND (pa.in_worship_lane + pa.in_serving_lane + pa.in_community_lane
-               + pa.in_giving_lane + pa.in_outreach_lane) > 0`,
+        WHERE me.org_id = ? AND me.pending = 0`,
     )
     .all(membershipType, orgId) as Array<{
     pid: string;
     oid: string;
     f: string | null;
     l: string | null;
+    minor: number;
     lanes: number;
+    lastAt: string | null;
   }>;
-  const housemates = new Map<string, string[]>();
-  for (const h of housemateRows) {
-    const list = housemates.get(h.pid) ?? housemates.set(h.pid, []).get(h.pid)!;
-    // Two shared households would list the same person twice.
-    const name = nameOf(h.f, h.l, h.oid);
-    if (!list.includes(name)) list.push(name);
+
+  // When each member, and each of their housemates, last opened or clicked
+  // one of the church's emails — ever, not just in the window, so the
+  // column can say when. Only those people's contacts are walked, by the
+  // (contact, type) index, rather than the org's whole activity table.
+  const lastEmail = new Map<string, string>();
+  for (const r of db
+    .prepare(
+      `WITH folk AS (
+         SELECT pco_id AS pid FROM pco_people
+          WHERE org_id = ? AND membership_type = ?
+         UNION
+         SELECT them.person_id
+           FROM pco_household_memberships me
+           JOIN pco_people p
+             ON p.org_id = me.org_id AND p.pco_id = me.person_id
+            AND p.membership_type = ?
+           JOIN pco_household_memberships them
+             ON them.org_id = me.org_id AND them.household_id = me.household_id
+          WHERE me.org_id = ?
+       )
+       SELECT c.person_id AS pid, MAX(a.occurred_at) AS last
+         FROM constant_contact_contacts c
+         JOIN constant_contact_activity a
+           ON a.org_id = c.org_id AND a.contact_id = c.contact_id
+          AND a.activity_type IN ('open','click')
+        WHERE c.org_id = ? AND c.person_id IN (SELECT pid FROM folk)
+        GROUP BY c.person_id`,
+    )
+    .all(orgId, membershipType, membershipType, orgId, orgId) as Array<{
+    pid: string;
+    last: string | null;
+  }>) {
+    if (r.last) lastEmail.set(r.pid, r.last);
   }
 
-  // Members who opened or clicked any of the church's emails within the
-  // activity window — the same window the lanes look back over, so the two
-  // columns mean the same "recently". Walks each member's contacts by the
-  // (contact, type) index rather than the org's whole activity table.
+  const householdActive = new Map<string, string[]>();
+  const household = new Map<string, AuditPersonRow["household"]>();
+  for (const h of householdRows) {
+    const name = nameOf(h.f, h.l, h.oid);
+    if (h.lanes > 0) {
+      const list = householdActive.get(h.pid) ?? householdActive.set(h.pid, []).get(h.pid)!;
+      // Two shared households would list the same person twice.
+      if (!list.includes(name)) list.push(name);
+    }
+    // The column is for the other adults — a spouse, a grown child at home.
+    // Children would crowd it and tell you nothing about whether the
+    // parents are here; they still count towards H.
+    if (h.oid === h.pid || h.minor === 1) continue;
+    const list = household.get(h.pid) ?? household.set(h.pid, []).get(h.pid)!;
+    if (list.some((x) => x.pcoId === h.oid)) continue;
+    const email = lastEmail.get(h.oid) ?? null;
+    list.push({
+      pcoId: h.oid,
+      name,
+      lastActivityAt: h.lastAt,
+      daysSince: ago(h.lastAt),
+      lastEmailAt: email,
+      emailDaysSince: ago(email),
+    });
+  }
+
+  // E: an email opened within the activity window, the window the lanes
+  // look back over, so the two mean the same "recently".
   const activityMonths = getSyncSettings(orgId).activityMonths;
-  const emailActive = new Set(
-    (
-      db
-        .prepare(
-          `SELECT DISTINCT c.person_id AS pid
-             FROM constant_contact_contacts c
-             JOIN pco_people p
-               ON p.org_id = c.org_id AND p.pco_id = c.person_id
-              AND p.membership_type = ?
-            WHERE c.org_id = ?
-              AND EXISTS (
-                SELECT 1 FROM constant_contact_activity a
-                 WHERE a.org_id = c.org_id AND a.contact_id = c.contact_id
-                   AND a.activity_type IN ('open','click')
-                   AND a.occurred_at >= date('now', ?))`,
-        )
-        .all(membershipType, orgId, `-${activityMonths} months`) as Array<{ pid: string }>
-    ).map((r) => r.pid),
-  );
+  const emailWindowDays = activityMonths * 30.44;
 
   const refreshed = db
     .prepare(
@@ -250,7 +291,6 @@ function getMembershipAuditImpl(
     )
     .get(orgId) as { at: string | null } | undefined;
 
-  const now = Date.now();
   const laneTotals: Record<LaneKey, number> = { w: 0, s: 0, c: 0, g: 0, o: 0 };
   const bandTotals = [0, 0, 0, 0, 0, 0];
   const comboCounts = new Map<string, number>();
@@ -317,7 +357,9 @@ function getMembershipAuditImpl(
     else if (isJunkName(first) || isJunkName(last)) flags.push("Name looks wrong");
     const duplicateOf = partners.get(r.pcoId) ?? [];
     if (duplicateOf.length > 0) flags.push("Possible duplicate");
-    const householdActive = housemates.get(r.pcoId) ?? [];
+    const active = householdActive.get(r.pcoId) ?? [];
+    const emailAt = lastEmail.get(r.pcoId) ?? null;
+    const emailDays = ago(emailAt);
     if (flags.length) flaggedTotal++;
 
     const daysSince = r.lastActivityAt
@@ -338,8 +380,14 @@ function getMembershipAuditImpl(
       connection: cls,
       flags,
       duplicateOf,
-      other: { email: emailActive.has(r.pcoId), household: householdActive.length > 0 },
-      householdActive,
+      lastEmailAt: emailAt,
+      emailDaysSince: emailDays,
+      other: {
+        email: emailDays !== null && emailDays <= emailWindowDays,
+        household: active.length > 0,
+      },
+      householdActive: active,
+      household: household.get(r.pcoId) ?? [],
     };
   });
 

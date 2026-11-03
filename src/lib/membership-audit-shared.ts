@@ -86,6 +86,20 @@ export interface AuditPersonRow {
   other: { email: boolean; household: boolean };
   /** Who in the household is active, for the marker's tooltip. */
   householdActive: string[];
+  /** The last email of the church's they opened or clicked, ever. Kept
+   *  apart from lastActivityAt, which is PCO only and never counts email. */
+  lastEmailAt: string | null;
+  emailDaysSince: number | null;
+  /** The other adults in their household, and when each was last seen —
+   *  enough to judge whether the household is here, not just this record. */
+  household: Array<{
+    pcoId: string;
+    name: string;
+    lastActivityAt: string | null;
+    daysSince: number | null;
+    lastEmailAt: string | null;
+    emailDaysSince: number | null;
+  }>;
 }
 
 export interface MembershipAudit {
