@@ -17,6 +17,7 @@ import {
   agoLabel,
 } from "@/lib/membership-audit-shared";
 import { printDocument } from "@/lib/print-document";
+import { ActivityTimeline, TenureBox } from "./charts";
 
 const PCO_PERSON = "https://people.planningcenteronline.com/people/";
 
@@ -195,6 +196,15 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       }}
     >
       <div className="rounded-lg border border-border-soft bg-bg-elev px-5 py-4 space-y-3">
+        <div className="grid gap-x-8 gap-y-5 lg:grid-cols-[3fr_2fr] pt-3 pb-2">
+          <ActivityTimeline timeline={audit.timeline} />
+          <TenureBox
+            tenure={audit.tenure}
+            missingDate={audit.tenureMissingDate}
+            neverActive={audit.tenureNeverActive}
+          />
+        </div>
+
         {/* Coverage strip. Read-only on purpose: it is a picture of the
             shape, and the "Lanes active" dropdown is the filter. Making it
             both meant a click could silently narrow the table while you

@@ -34,6 +34,7 @@ export const FLAG_TYPES = [
   "Moved out of area",
   "Inactive in PCO",
   "Possible duplicate",
+  "No membership date",
   "Name looks wrong",
   "No name on record",
 ] as const;
@@ -75,6 +76,9 @@ export interface AuditPersonRow {
    *  the pair can be judged without opening two tabs. High-confidence
    *  pairs only, and a person can be in more than one. */
   duplicateOf: { pcoId: string; name: string }[];
+  /** PCO's "Original Membership Date", as YYYY-MM-DD. Null for anyone it
+   *  was never filled in for — which the "No membership date" flag lists. */
+  memberSince: string | null;
   /** The last email of the church's they opened or clicked, ever. Kept
    *  apart from lastActivityAt, which is PCO only and never counts email. */
   lastEmailAt: string | null;
@@ -107,6 +111,37 @@ export interface MembershipAudit {
   refreshedAt: string | null;
   /** The org's activity window, in months — what every lane looks back over. */
   activityMonths: number;
+  /** Members by the quarter of their last activity, oldest first. Ten years
+   *  at most; anything older is counted in `earlier`, and nobody with no
+   *  activity at all is in a bar — they are `never`. Built on the server so
+   *  the bins agree with the page around them about what "now" is. */
+  timeline: {
+    bins: Array<{ label: string; year: number; quarter: number; count: number }>;
+    earlier: number;
+    never: number;
+  };
+  /** Years from Original Membership Date to last activity, over everybody
+   *  who has both. Null until the field has synced for anyone. */
+  tenure: TenureStats | null;
+  /** Members with no Original Membership Date, and members with one who
+   *  have never been active — the two left out of `tenure`. */
+  tenureMissingDate: number;
+  tenureNeverActive: number;
+}
+
+/** A five-number summary, Tukey whiskers: each reaches the furthest point
+ *  within 1.5 × the middle half of the box; anything beyond is an outlier
+ *  and drawn as its own dot. */
+export interface TenureStats {
+  n: number;
+  q1: number;
+  median: number;
+  q3: number;
+  lo: number;
+  hi: number;
+  min: number;
+  max: number;
+  outliers: number[];
 }
 
 /** "3 days", "14 months", "2 yr 1 mo" — the column is scanned, not read,

@@ -8,6 +8,7 @@ import {
   type AuditPersonRow,
   type LaneKey,
   type MembershipAudit,
+  type TenureStats,
 } from "./membership-audit-shared";
 
 export * from "./membership-audit-shared";
@@ -40,6 +41,7 @@ interface RawRow {
   lastActivityAt: string | null;
   classification: string | null;
   diedOn: string | null;
+  memberSince: string | null;
   inactiveReason: string | null;
   dupPairs: number;
 }
@@ -128,6 +130,7 @@ function getMembershipAuditImpl(
          pa.last_activity_at   AS lastActivityAt,
          pa.classification     AS classification,
          dod.value_on          AS diedOn,
+         omd.value_on          AS memberSince,
          (d.pid IS NOT NULL) AS dupPairs
        FROM pco_people p
        LEFT JOIN person_activity pa
@@ -136,6 +139,9 @@ function getMembershipAuditImpl(
        LEFT JOIN pco_person_fields dod
          ON dod.org_id = p.org_id AND dod.person_id = p.pco_id
         AND dod.field_name = 'Date of Death'
+       LEFT JOIN pco_person_fields omd
+         ON omd.org_id = p.org_id AND omd.person_id = p.pco_id
+        AND omd.field_name = 'Original Membership Date'
       WHERE p.org_id = ? AND p.membership_type = ?`,
     )
     .all(membershipType, membershipType, orgId, orgId, membershipType) as RawRow[];
@@ -264,6 +270,11 @@ function getMembershipAuditImpl(
   const bandTotalsByName: Record<string, number> = {};
   let flaggedTotal = 0;
 
+  // Only flag a missing membership date once the field has synced for
+  // somebody. Before that, every member lacks one and the warning would
+  // say nothing but "the sync has not run".
+  const membershipDateSynced = raw.some((r) => r.memberSince);
+
   const rows: AuditPersonRow[] = raw.map((r) => {
     const lanes: Record<LaneKey, boolean> = {
       w: r.w === 1,
@@ -323,6 +334,7 @@ function getMembershipAuditImpl(
     else if (isJunkName(first) || isJunkName(last)) flags.push("Name looks wrong");
     const duplicateOf = partners.get(r.pcoId) ?? [];
     if (duplicateOf.length > 0) flags.push("Possible duplicate");
+    if (membershipDateSynced && !r.memberSince) flags.push("No membership date");
     const emailAt = lastEmail.get(r.pcoId) ?? null;
     const emailDays = ago(emailAt);
     if (flags.length) flaggedTotal++;
@@ -345,6 +357,7 @@ function getMembershipAuditImpl(
       connection: cls,
       flags,
       duplicateOf,
+      memberSince: r.memberSince,
       lastEmailAt: emailAt,
       emailDaysSince: emailDays,
       household: household.get(r.pcoId) ?? [],
@@ -367,5 +380,87 @@ function getMembershipAuditImpl(
     flaggedTotal,
     refreshedAt: refreshed?.at ?? null,
     activityMonths: getSyncSettings(orgId).activityMonths,
+    timeline: activityTimeline(rows, now),
+    tenure: membershipDateSynced ? tenureStats(rows) : null,
+    tenureMissingDate: rows.filter((r) => !r.memberSince).length,
+    tenureNeverActive: rows.filter((r) => r.memberSince && !r.lastActivityAt).length,
+  };
+}
+
+const TIMELINE_YEARS = 10;
+const QUARTER_NAMES = ["Jan–Mar", "Apr–Jun", "Jul–Sep", "Oct–Dec"];
+
+/** Members per quarter of last activity, from ten years back to now. Every
+ *  quarter gets a bar, empty or not, so the axis is time and a gap reads as
+ *  a gap. */
+function activityTimeline(rows: AuditPersonRow[], now: number): MembershipAudit["timeline"] {
+  const today = new Date(now);
+  const endIdx = today.getUTCFullYear() * 4 + Math.floor(today.getUTCMonth() / 3);
+  const startIdx = endIdx - TIMELINE_YEARS * 4 + 1;
+  const counts = new Array(endIdx - startIdx + 1).fill(0) as number[];
+  let earlier = 0;
+  let never = 0;
+  for (const r of rows) {
+    if (!r.lastActivityAt) {
+      never++;
+      continue;
+    }
+    const d = new Date(r.lastActivityAt);
+    if (Number.isNaN(d.getTime())) {
+      never++;
+      continue;
+    }
+    const idx = d.getUTCFullYear() * 4 + Math.floor(d.getUTCMonth() / 3);
+    if (idx < startIdx) earlier++;
+    else counts[Math.min(idx, endIdx) - startIdx]++;
+  }
+  return {
+    bins: counts.map((count, i) => {
+      const idx = startIdx + i;
+      const year = Math.floor(idx / 4);
+      const quarter = idx % 4;
+      return { label: `${QUARTER_NAMES[quarter]} ${year}`, year, quarter, count };
+    }),
+    earlier,
+    never,
+  };
+}
+
+/** Years from Original Membership Date to last activity, summarized. A
+ *  negative span — last seen before the date they joined — is kept: it is a
+ *  record that needs looking at, and dropping it would hide that. */
+function tenureStats(rows: AuditPersonRow[]): TenureStats | null {
+  const years = rows
+    .filter((r) => r.memberSince && r.lastActivityAt)
+    .map(
+      (r) =>
+        (Date.parse(r.lastActivityAt as string) - Date.parse(r.memberSince as string)) /
+        (MS_PER_DAY * 365.25),
+    )
+    .filter((y) => Number.isFinite(y))
+    .sort((a, b) => a - b);
+  if (years.length === 0) return null;
+  // Linear interpolation between closest ranks — what most tools mean by
+  // a quartile, so the numbers match a spreadsheet's.
+  const q = (p: number) => {
+    const pos = (years.length - 1) * p;
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    return years[lo] + (years[hi] - years[lo]) * (pos - lo);
+  };
+  const q1 = q(0.25);
+  const q3 = q(0.75);
+  const fence = 1.5 * (q3 - q1);
+  const inside = years.filter((y) => y >= q1 - fence && y <= q3 + fence);
+  return {
+    n: years.length,
+    q1,
+    median: q(0.5),
+    q3,
+    lo: inside[0] ?? q1,
+    hi: inside[inside.length - 1] ?? q3,
+    min: years[0],
+    max: years[years.length - 1],
+    outliers: years.filter((y) => y < q1 - fence || y > q3 + fence),
   };
 }

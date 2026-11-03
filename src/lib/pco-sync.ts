@@ -1615,7 +1615,13 @@ export function getSyncedCounts(orgId: number): SyncedDataCounts {
  *  person on the member roster has passed away, which is the one row on that
  *  page nobody should have to discover by accident. Four people have it; one
  *  is still typed Member. */
-const PERSON_FIELD_ALLOWLIST = new Set(["Baptism", "Date of Death"]);
+const PERSON_FIELD_ALLOWLIST = new Set([
+  "Baptism",
+  "Date of Death",
+  // When somebody joined, for the membership audit's tenure chart. Same
+  // "Membership & Assimilation" tab; not everyone has one yet.
+  "Original Membership Date",
+]);
 
 /** PCO returns a date field as the admin typed it — "06/29/2003" — which sorts
  *  and groups as nonsense. Normalize once, here, so every query downstream can
