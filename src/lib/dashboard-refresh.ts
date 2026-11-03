@@ -1314,17 +1314,9 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
                    THEN 'shepherded'
               WHEN person_id IN (SELECT person_id FROM temp.known_set)
                    THEN 'known'
-              -- Carved out of Unknown, and below the two bands above it on
-              -- purpose: an inactive record that is still on a roster or
-              -- still active is a contradiction worth seeing, not one to
-              -- bury. Everyone else the church has already written off
-              -- stops being counted as somebody we failed to notice.
-              WHEN person_id IN (
-                     SELECT pco_id FROM pco_people
-                      WHERE org_id = person_activity.org_id
-                        AND (inactivated_at IS NOT NULL
-                          OR LOWER(COALESCE(status,'')) = 'inactive'))
-                   THEN 'inactive'
+              -- Inactive is NOT decided here. The override below owns it
+              -- and runs after this, so a branch in this CASE would be
+              -- dead code that looks authoritative.
               ELSE 'unknown'
             END,
             refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
@@ -1332,14 +1324,20 @@ function classifyPersonActivity(orgId: number, cutoffActivity: string): void {
   ).run({ cut: cutoffActivity, orgId });
 
   // Hard override: anyone PCO marks inactive is ALWAYS inactive in our
-  // system, no matter what other signals say (groups, check-ins,
-  // forms). PCO is the source of truth for membership status, so this
-  // wins even over 'shepherded'. Run as a second pass so it can't be
-  // undone by the CASE above. Mirrors the live classification in
-  // people-read.getClassificationCountsImpl.
+  // system, no matter what other signals say (groups, check-ins, forms).
+  // PCO is the source of truth for membership status, so this wins even
+  // over 'shepherded'. Run as a second pass so it cannot be undone by the
+  // CASE above.
+  //
+  // It used to write 'unknown', which put 17,205 people the church had
+  // already written off into the same band as everyone it had simply
+  // never seen — and made Unknown a number nobody could act on, since
+  // more than half of it was already dealt with. They get their own word
+  // now. The band is new (classification.ts); the rule it enforces is
+  // not.
   db.prepare(
     `UPDATE person_activity
-        SET classification = 'unknown',
+        SET classification = 'inactive',
             refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE org_id = ?
         AND person_id IN (
