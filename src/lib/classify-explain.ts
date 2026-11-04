@@ -15,8 +15,11 @@ export interface ClassificationRationale {
   isShepherded: boolean;
   /** Things that ARE pushing the person toward Shepherded. */
   shepherdedReasons: string[];
-  /** Things that could have shepherded them but were filtered out
-   *  (excluded group type, excluded service type, archived team, etc.). */
+  /** Rosters that did not count toward Shepherded — an excluded group
+   *  type, an excluded service type, an archived team. These are facts
+   *  about the ROSTER, not about the person: one roster being set not to
+   *  count never takes somebody out of Shepherded, it just is not the
+   *  thing that puts them in. Any one roster that does count is enough. */
   blockers: string[];
   /** What's pushing them to Active (forms / check-ins). */
   activitySignals: string[];
@@ -84,10 +87,10 @@ export function explainClassification(
     const gName = g.groupName ?? `Group #${g.groupId}`;
     const tName = g.typeName ?? "(no type)";
     if (g.groupArchivedAt) {
-      blockers.push(`In group "${gName}" but the group is archived.`);
+      blockers.push(`Group "${gName}" — archived, so it does not count.`);
     } else if (g.groupTypeId && excludedGroups.has(g.groupTypeId)) {
       blockers.push(
-        `In group "${gName}" but its type "${tName}" is excluded on /pco/filters.`,
+        `Group "${gName}" — its type "${tName}" is set not to count, on /pco/filters.`,
       );
     } else {
       shepherdedReasons.push(`Active member of group "${gName}" (${tName}).`);
@@ -140,12 +143,12 @@ export function explainClassification(
     const tName = r0.teamName ?? `Team #${teamId}`;
     const stName = r0.serviceTypeName ?? "(no service type)";
     if (r0.teamArchivedAt || r0.teamDeletedAt) {
-      blockers.push(`On team "${tName}" but the team is archived.`);
+      blockers.push(`Team "${tName}" — archived, so it does not count.`);
       continue;
     }
     if (r0.serviceTypeId && excludedTeams.has(r0.serviceTypeId)) {
       blockers.push(
-        `On team "${tName}" but its service type "${stName}" is excluded.`,
+        `Team "${tName}" — its service type "${stName}" is set not to count.`,
       );
       continue;
     }
@@ -158,7 +161,7 @@ export function explainClassification(
         .map((r) => r.positionName ?? "(unnamed position)")
         .join(", ");
       blockers.push(
-        `On team "${tName}" but every position they hold (${posNames}) is excluded.`,
+        `Team "${tName}" — every position they hold (${posNames}) is set not to count.`,
       );
       continue;
     }

@@ -319,9 +319,18 @@ export async function ClassificationSection({
           )}
           {rationale.blockers.length > 0 && (
             <div>
+              {/* "Filtered out of Shepherded" read as though the PERSON had
+                  been removed from the band. It never means that: an
+                  excluded type takes that roster out of the reckoning, and
+                  any other roster that counts still puts them in. */}
               <div className="text-xs font-medium text-warn-soft-fg mb-1">
-                Filtered out of Shepherded
+                Rosters that don&rsquo;t count toward Shepherded
               </div>
+              <p className="text-[11px] text-subtle mb-1 leading-relaxed">
+                {rationale.isShepherded
+                  ? "They are Shepherded regardless — these simply are not what puts them there."
+                  : "These are facts about the rosters, not about the person. Any one roster that counts would be enough."}
+              </p>
               <ul className="list-disc list-inside space-y-0.5 text-muted">
                 {rationale.blockers.map((r, i) => (
                   <li key={i}>{r}</li>
