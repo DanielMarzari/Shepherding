@@ -41,6 +41,11 @@ jobs:
         # and the app renders "(unknown #id)" for every person, so write the
         # file on every deploy and run this step first — if it fails, nothing
         # has been shipped and the running app is untouched.
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM: ${{ secrets.RESEND_FROM }}
+          LEADERSHIP_PASSWORD: ${{ secrets.LEADERSHIP_PASSWORD }}
+          APP_URL: ${{ secrets.APP_URL }}
         run: |
           if [ -z "${{ secrets.ENCRYPTION_KEY }}" ]; then
             echo "::error::ENCRYPTION_KEY secret is empty — refusing to deploy an app that cannot read its own data."
@@ -48,6 +53,22 @@ jobs:
           fi
           umask 077
           printf 'ENCRYPTION_KEY=%s\nOSRM_URL=http://localhost:5000\n' '${{ secrets.ENCRYPTION_KEY }}' > env.production.staged
+          # Sign-in settings. Each is optional: one left unset switches its
+          # feature off (no confirmation emails, so no sign-ups; no shared
+          # leadership login) rather than failing the deploy. Read from env
+          # rather than pasted into the command, so a password with a quote
+          # in it cannot break — or inject into — the shell line.
+          for k in RESEND_API_KEY RESEND_FROM LEADERSHIP_PASSWORD APP_URL; do
+            v="${!k}"
+            # Next reads this file with dotenv, which expands $NAME and cuts
+            # at #: such a value would arrive changed. Refuse it instead.
+            case "$v" in
+              *$'\n'*|*'$'*|*'#'*|*'"'*|*"'"*|*'\'*|*'`'*)
+                echo "::error::The $k secret contains a character the env file can't carry (\$ # quotes backslash backtick newline). Use letters, digits and - _ . @ < > space."
+                exit 1;;
+            esac
+            if [ -n "$v" ]; then printf '%s=%s\n' "$k" "$v" >> env.production.staged; fi
+          done
           # F660, not F600. /var/www/apps/shepherdly carries a default ACL
           # granting user:ubuntu (which pm2 runs the app as) while the files
           # are owned by the deploy user. On a file with an extended ACL the

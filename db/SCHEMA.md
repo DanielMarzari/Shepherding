@@ -286,13 +286,13 @@ so back that table up as if it were owned.
 | `spotify_credentials` | 1 | Spotify client id, secret and artist. |
 | `integration_credentials` | 0 | One row per secret field for a provider that has no sync yet (§3). |
 | `organizations` | 1 | The tenant. Deleting a row cascades to 87 tables. |
-| `users` | 4 | A login: `email`, `password_hash`, `name`. |
+| `users` | 4 | A login: `email`, `password_hash`, `name`, and `email_verified_at` — when the address was proven by a sign-up link ([0121]; accounts that had a membership then were stamped with their `created_at`). The shared leadership login is the row with `email = 'leadership'`: not an address, and its `password_hash` is `env:` plus a keyed digest of `LEADERSHIP_PASSWORD`, so changing that secret ends its sessions (`church-auth.ts`). |
 | `memberships` | 4 | A user's `role` (admin / member) in an org. |
 
 In every credential table, `*_enc` values are encrypted and `*_last4` is kept in
 plaintext only so the page can show which key is stored.
 
-### App bookkeeping (10): mostly safe to lose, but never `_migrations`, `pushpay_uploads` or `pushpay_transaction_uploads`
+### App bookkeeping (11): mostly safe to lose, but never `_migrations`, `pushpay_uploads` or `pushpay_transaction_uploads`
 
 | Table | Rows | A row is |
 |---|--:|---|
@@ -306,6 +306,7 @@ plaintext only so the page can show which key is stored.
 | `pushpay_uploads` | 1 | **Not safe to lose.** One PushPay upload of either kind ([0098]): `kind`, `file_name`, `imported_at`, `total` rows in the file, how many were new (`inserted`), the match breakdown (`matched` / `ambiguous` / `unmatched`, and for transactions `by_your_id` / `by_payer_manual` ([0100]) / `by_donor_manual` / `by_donor_match`), and for transactions the file's `first_gift_on` and `last_gift_on`. Ids are AUTOINCREMENT and never reused, so an id always means the upload that had it. Losing this table strands every gift: nothing could ever be removed again. `is_backfilled = 1` marks the one synthetic row 0098 wrote for the 16,574 gifts that predate the table. The /pushpay Datasets card lists these newest first, with a Remove control per row. |
 | `pushpay_transaction_uploads` | 16,574 | **Not safe to lose.** One `(gift, upload that carried it)` pair ([0098]) — the whole answer to which files a gift is in, and so to what a removal may delete. PushPay export windows overlap, so a gift has one row here per file that listed it; the importer writes a row for every row of the file, re-supplies included. This is a many-to-many fact and cannot live in columns on the gift: with three overlapping files all holding one gift, two columns can only remember two of them (§4). Losing this table makes every gift unremovable. |
 | `sessions` | 1 | A login session. Deleting rows signs people out. |
+| `pending_signups` | 0 | One sign-up link sent and not yet used ([0121]): the address, the name and password hash chosen, and a SHA-256 of the token — never the token. The account is made from this row when the link is used, and every row for the address goes then; expired rows are cleared on the next sign-up. Losing the table only means those links stop working. |
 
 ### Backups
 
@@ -748,6 +749,7 @@ These rules were learned the hard way.
 [0098]: migrations/0098_pushpay_uploads.sql
 [0099]: migrations/0099_giving_on_transactions.sql
 [0100]: migrations/0100_pushpay_payers.sql
+[0121]: migrations/0121_email_verification.sql
 [db.ts]: ../src/lib/db.ts
 [builder.ts]: ../src/lib/builder.ts
 [builder-seeds.ts]: ../src/lib/builder-seeds.ts

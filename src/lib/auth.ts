@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getDb } from "./db";
+import { isStaleLeadershipSession } from "./church-auth";
 
 const SESSION_COOKIE = "shepherding_session";
 const SESSION_DAYS = 30;
@@ -71,7 +72,7 @@ export async function getSession(): Promise<SessionContext | null> {
   const row = db
     .prepare(
       `SELECT s.id as session_id, s.current_org_id,
-              u.id as user_id, u.email, u.name,
+              u.id as user_id, u.email, u.name, u.password_hash,
               o.name as org_name, m.role as role
        FROM sessions s
        JOIN users u ON u.id = s.user_id
@@ -86,12 +87,20 @@ export async function getSession(): Promise<SessionContext | null> {
         user_id: number;
         email: string;
         name: string;
+        password_hash: string;
         org_name: string | null;
         role: "admin" | "member" | null;
       }
     | undefined;
   if (!row) {
     cookieStore.delete(SESSION_COOKIE);
+    return null;
+  }
+  // The shared leadership login, on a password that has since changed or
+  // been switched off: that session is over. The row goes too, so it
+  // cannot come back if the old password is ever restored.
+  if (isStaleLeadershipSession(row.email, row.password_hash)) {
+    db.prepare("DELETE FROM sessions WHERE id = ?").run(row.session_id);
     return null;
   }
   return {
@@ -128,26 +137,3 @@ export async function setCurrentOrg(orgId: number) {
   db.prepare("UPDATE sessions SET current_org_id = ? WHERE id = ?").run(orgId, s.sessionId);
 }
 
-export interface OrgListing {
-  id: number;
-  name: string;
-  role: "admin" | "member";
-}
-
-export function listOrgs(userId: number): OrgListing[] {
-  return getDb()
-    .prepare(
-      `SELECT o.id, o.name, m.role
-       FROM organizations o
-       JOIN memberships m ON m.org_id = o.id
-       WHERE m.user_id = ?
-       ORDER BY o.name`,
-    )
-    .all(userId) as OrgListing[];
-}
-
-export function listAllOrgs(): { id: number; name: string }[] {
-  return getDb()
-    .prepare("SELECT id, name FROM organizations ORDER BY name")
-    .all() as { id: number; name: string }[];
-}

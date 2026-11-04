@@ -1,41 +1,48 @@
-import Image from "next/image";
-import { listAllOrgs, listOrgs, requireSession } from "@/lib/auth";
-import { OrgPicker } from "./form";
+import { redirect } from "next/navigation";
+import { AuthLayout } from "@/components/AuthLayout";
+import { requireSession, setCurrentOrg } from "@/lib/auth";
+import { churchOrgId } from "@/lib/church-auth";
+import { getDb } from "@/lib/db";
+import { logoutAction } from "./actions";
 
+/** Where a signed-in account with no access lands.
+ *
+ *  There used to be an organization picker here, with Join and Create —
+ *  which let anybody who made an account walk into the church's data. One
+ *  church, so there is nothing to pick: an account with a membership goes
+ *  straight in, and one without is told so. Access is only ever granted by
+ *  confirming a church email (or by the leadership team), never here. */
 export default async function OrgsPage() {
   const s = await requireSession();
-  const myOrgs = listOrgs(s.user.id);
-  const allOrgs = listAllOrgs();
-  const myIds = new Set(myOrgs.map((o) => o.id));
-  const otherOrgs = allOrgs.filter((o) => !myIds.has(o.id));
+  if (s.orgId !== null && s.role !== null) redirect("/");
+
+  const orgId = churchOrgId();
+  const member =
+    orgId !== null &&
+    getDb()
+      .prepare("SELECT 1 FROM memberships WHERE user_id = ? AND org_id = ?")
+      .get(s.user.id, orgId);
+  if (member && orgId !== null) {
+    await setCurrentOrg(orgId);
+    redirect("/");
+  }
 
   return (
-    <div className="min-h-screen flex flex-col px-6 py-12">
-      <div className="max-w-2xl mx-auto w-full flex-1">
-        <div className="flex items-center gap-2 mb-8">
-          <Image src="/icon.svg" alt="Shepherding" width={36} height={36} unoptimized />
-          <span className="font-semibold tracking-tight text-lg">Shepherding</span>
-        </div>
-        <h1 className="text-2xl font-semibold tracking-tight mb-1">
-          Welcome, {s.user.name.split(" ")[0]}.
-        </h1>
-        <p className="text-sm text-muted mb-8">
-          Pick an organization to enter — or create a new one and you&apos;ll be its admin.
-        </p>
-        <OrgPicker myOrgs={myOrgs} otherOrgs={otherOrgs} />
-      </div>
-      <p className="text-center text-[10px] text-subtle mt-8">
-        Sheep icon by{" "}
-        <a
-          href="https://www.flaticon.com/free-icons/sheep"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-muted hover:text-fg underline"
-          title="sheep icons"
-        >
-          Freepik · Flaticon
-        </a>
+    <AuthLayout>
+      <h1 className="text-2xl font-semibold tracking-tight mb-1">No access yet</h1>
+      <p className="text-sm text-muted mb-6 leading-relaxed">
+        You&rsquo;re signed in as <strong className="text-fg">{s.user.email}</strong>, but
+        this account can&rsquo;t see the church&rsquo;s information. Ask the leadership
+        team to give you access.
       </p>
-    </div>
+      <form action={logoutAction}>
+        <button
+          type="submit"
+          className="w-full px-3 py-2 rounded border border-border-soft text-sm hover:bg-bg-elev-2"
+        >
+          Sign out
+        </button>
+      </form>
+    </AuthLayout>
   );
 }
