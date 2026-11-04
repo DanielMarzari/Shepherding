@@ -611,11 +611,14 @@ export function getPersonByPcoId(
     .prepare(
       `SELECT CASE WHEN active_group_count > 0
                     OR active_team_count > 0
-                   THEN 1 ELSE 0 END AS isShepherded
+                   THEN 1 ELSE 0 END AS isShepherded,
+              classification
          FROM person_activity
         WHERE org_id = ? AND person_id = ?`,
     )
-    .get(orgId, pcoId) as { isShepherded: number } | undefined;
+    .get(orgId, pcoId) as
+    | { isShepherded: number; classification: string | null }
+    | undefined;
 
   if (fast) {
     const row = db
@@ -623,11 +626,21 @@ export function getPersonByPcoId(
         `SELECT pco_id, enc_pii, gender, membership_type, marital_status,
                 pco_created_at, pco_updated_at, last_form_submission_at,
                 last_check_in_at, is_minor, birth_year,
-                ? AS is_shepherded
+                ? AS is_shepherded,
+                -- The band itself, which toRow reads. Without it the
+                -- profile page called classOf(undefined) on every person
+                -- and rendered "unknown" — the list beside it, which does
+                -- select this, said shepherded for the same person.
+                ? AS snapshot_classification
            FROM pco_people
           WHERE org_id = ? AND pco_id = ?`,
       )
-      .get(fast.isShepherded, orgId, pcoId) as RawRow | undefined;
+      .get(
+        fast.isShepherded,
+        fast.classification,
+        orgId,
+        pcoId,
+      ) as RawRow | undefined;
     if (!row) return null;
     return toRow(row);
   }
@@ -641,9 +654,13 @@ export function getPersonByPcoId(
       `SELECT pco_people.pco_id, enc_pii, gender, membership_type, marital_status,
               pco_created_at, pco_updated_at, last_form_submission_at, last_check_in_at,
               is_minor, birth_year,
-              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded
+              CASE WHEN s.person_id IS NOT NULL THEN 1 ELSE 0 END AS is_shepherded,
+              pa.classification AS snapshot_classification
          FROM pco_people
          LEFT JOIN temp.shep_set s ON s.person_id = pco_people.pco_id
+         LEFT JOIN person_activity pa
+           ON pa.org_id = pco_people.org_id
+          AND pa.person_id = pco_people.pco_id
          WHERE pco_people.org_id = ? AND pco_people.pco_id = ?`,
     )
     .get(orgId, pcoId) as RawRow | undefined;
