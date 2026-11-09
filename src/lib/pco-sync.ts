@@ -1739,10 +1739,11 @@ async function syncPersonFields(
   const db = getDb();
   const ins = db.prepare(
     `INSERT INTO pco_person_fields
-      (org_id, person_id, field_id, field_name, value, value_on, synced_at)
-     VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      (org_id, person_id, field_id, field_name, tab, value, value_on, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
      ON CONFLICT(org_id, person_id, field_id) DO UPDATE SET
        field_name = excluded.field_name,
+       tab = excluded.tab,
        value = excluded.value,
        value_on = excluded.value_on,
        synced_at = excluded.synced_at`,
@@ -1750,7 +1751,14 @@ async function syncPersonFields(
 
   for (const def of wanted) {
     const name = ((def.attributes ?? {}) as Record<string, unknown>).name as string;
-    const rows: Array<[string, string, string, string | null, string | null]> = [];
+    const defTabRel = def.relationships?.tab?.data;
+    const defTab =
+      !Array.isArray(defTabRel) && defTabRel
+        ? (tabName.get(defTabRel.id) ?? null)
+        : null;
+    const rows: Array<
+      [string, string, string, string | null, string | null, string | null]
+    > = [];
     for await (const { page } of client.paginate<PCOResource>(
       `/people/v2/field_data?where[field_definition_id]=${def.id}&per_page=100`,
     )) {
@@ -1763,14 +1771,14 @@ async function syncPersonFields(
         const personId = !Array.isArray(rel) && rel ? rel.id : null;
         if (!personId) continue;
         const value = typeof a.value === "string" ? a.value : a.value == null ? null : String(a.value);
-        rows.push([personId, def.id, name, value, toIsoDate(value)]);
+        rows.push([personId, def.id, name, defTab, value, toIsoDate(value)]);
       }
     }
     // A field cleared in PCO leaves no field_data row, so replace the whole
     // set for this definition rather than upserting over a stale value.
     const tx = db.transaction(() => {
       db.prepare(`DELETE FROM pco_person_fields WHERE org_id = ? AND field_id = ?`).run(orgId, def.id);
-      for (const r of rows) ins.run(orgId, r[0], r[1], r[2], r[3], r[4]);
+      for (const r of rows) ins.run(orgId, r[0], r[1], r[2], r[3], r[4], r[5]);
     });
     tx();
     out.upserted += rows.length;

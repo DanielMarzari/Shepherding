@@ -93,7 +93,17 @@ export interface AuditPersonRow {
     lastActivityAt: string | null;
     daysSince: number | null;
   }>;
+  /** The most recent congregational meeting they voted in, as a year, and
+   *  how many they have voted in altogether. Null means no record of them
+   *  ever voting: PCO stores nothing for somebody who did not, so absence
+   *  IS the "did not vote" — there is no blank-value row to find. */
+  lastVotedYear: number | null;
+  votesCast: number;
 }
+
+/** The meeting fields live on their own PCO tab. Named here so the query
+ *  and the page agree on what counts as a vote. */
+export const VOTE_TAB = "Congregational Meetings";
 
 export interface MembershipAudit {
   membershipType: string;
@@ -108,6 +118,17 @@ export interface MembershipAudit {
   /** Totals rolled up into the three shown bands. */
   bandTotalsByName: Record<string, number>;
   flaggedTotal: number;
+  /** Turnout across this membership type. */
+  votes: {
+    /** The most recent meeting anybody has a record for, as a year. */
+    latestYear: number | null;
+    /** Of this type, how many voted in that meeting. */
+    votedLatest: number;
+    /** How many have never voted in any meeting on record. */
+    neverVoted: number;
+    /** Voted in at least one of the last three meetings on record. */
+    votedRecently: number;
+  };
   refreshedAt: string | null;
   /** The org's activity window, in months — what every lane looks back over. */
   activityMonths: number;

@@ -34,7 +34,7 @@ const BAND_STYLE = [
   { bg: "var(--accent)", fg: "var(--accent-fg)" },
 ];
 
-type SortKey = "name" | "days" | "email" | "flags";
+type SortKey = "name" | "days" | "email" | "voted" | "flags";
 
 export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   const [lanes, setLanes] = useState<Set<LaneKey>>(new Set());
@@ -43,6 +43,9 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
   const [warnings, setWarnings] = useState<Set<string>>(new Set());
   const [activity, setActivity] = useState<Set<string>>(new Set());
   const [hhActivity, setHhActivity] = useState<Set<string>>(new Set());
+  /** "", "latest", "recent", "lapsed", "never" — turnout, not a date. */
+  const [voted, setVoted] = useState<Set<string>>(new Set());
+  const latestVoteYear = audit.votes.latestYear;
   const [open, setOpen] = useState<string | null>(null);
   // Exactly one of the two reference panels can be open. They sit between
   // the filter card and the table rather than floating over it: both are
@@ -100,6 +103,12 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
       if (warnings.size && !r.flags.some((f) => warnings.has(f))) return false;
       if (activity.size && !activity.has(bucketOf(r.daysSince))) return false;
       if (hhActivity.size && !hhActivity.has(householdBucket(r))) return false;
+      if (
+        voted.size &&
+        ![...voted].some((v) => matchesVoted(r, v, latestVoteYear))
+      ) {
+        return false;
+      }
       return true;
     });
     const sign = dir === "asc" ? 1 : -1;
@@ -114,6 +123,12 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
           const bd = b.emailDaysSince ?? Number.MAX_SAFE_INTEGER;
           return (ad - bd) * sign;
         }
+        case "voted": {
+          // Never voted sorts as the longest gap, not as year zero.
+          const ay = a.lastVotedYear ?? -1;
+          const by = b.lastVotedYear ?? -1;
+          return (by - ay) * sign;
+        }
         default: {
           // Never-active sorts as the longest silence, not as zero.
           const ad = a.daysSince ?? Number.MAX_SAFE_INTEGER;
@@ -122,7 +137,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
         }
       }
     });
-  }, [audit.rows, lanes, bands, connections, warnings, activity, hhActivity, sort, dir]);
+  }, [audit.rows, lanes, bands, connections, warnings, activity, hhActivity, voted, latestVoteYear, sort, dir]);
 
   function toggleSort(k: SortKey) {
     if (sort === k) setDir(dir === "asc" ? "desc" : "asc");
@@ -376,6 +391,23 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
             onToggle={(id) => setHhActivity(toggled(hhActivity, id))}
           />
           <FilterDropdown
+            id="voted"
+            label="Voted"
+            value={
+              voted.size ? [...voted].map(labelForVoted).join(" or ") : "any"
+            }
+            open={open === "voted"}
+            setOpen={setOpen}
+            items={VOTE_BUCKETS.map((id) => ({
+              id,
+              label: labelForVoted(id),
+              count: audit.rows.filter((r) => matchesVoted(r, id, latestVoteYear))
+                .length,
+              checked: voted.has(id),
+            })).filter((i) => i.count > 0)}
+            onToggle={(id) => setVoted(toggled(voted, id))}
+          />
+          <FilterDropdown
             id="connection"
             label="Connection"
             value={
@@ -465,6 +497,41 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
         </div>
       </div>
 
+      {/* Turnout. A congregational vote is the one act of membership that
+          is recorded for everybody and asked of everybody, so a member who
+          has never cast one is a different kind of quiet from one who is
+          simply not in a group. */}
+      {audit.votes.latestYear !== null && (
+        <p className="text-xs text-muted leading-relaxed px-1">
+          Of {audit.total.toLocaleString()} {audit.membershipType.toLowerCase()}
+          {audit.total === 1 ? "" : "s"},{" "}
+          <button
+            type="button"
+            onClick={() => setVoted(toggled(voted, "latest"))}
+            className="text-fg font-medium tnum hover:text-accent underline decoration-dotted"
+          >
+            {audit.votes.votedLatest.toLocaleString()}
+          </button>{" "}
+          voted at the {audit.votes.latestYear} meeting and{" "}
+          <button
+            type="button"
+            onClick={() => setVoted(toggled(voted, "recent"))}
+            className="text-fg font-medium tnum hover:text-accent underline decoration-dotted"
+          >
+            {audit.votes.votedRecently.toLocaleString()}
+          </button>{" "}
+          in the last three.{" "}
+          <button
+            type="button"
+            onClick={() => setVoted(toggled(voted, "never"))}
+            className="text-warn-soft-fg font-medium tnum hover:underline decoration-dotted"
+          >
+            {audit.votes.neverVoted.toLocaleString()}
+          </button>{" "}
+          have never voted in any meeting on record.
+        </p>
+      )}
+
       {/* One expanding reference block, between the filters and the table */}
       {panel !== null && (
         <div
@@ -508,6 +575,15 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
                     Household
                   </span>
                 </th>
+                <Th
+                  label="Last voted"
+                  k="voted"
+                  sort={sort}
+                  dir={dir}
+                  onSort={toggleSort}
+                  width="w-[110px]"
+                  title="The most recent congregational meeting they voted in. PCO records nothing for somebody who did not vote, so a blank means no record of them ever voting."
+                />
                 <Th label="Last activity" k="days" sort={sort} dir={dir} onSort={toggleSort} width="w-[140px]" />
                 <Th label="Worth a look" k="flags" sort={sort} dir={dir} onSort={toggleSort} width="w-[210px]" />
               </tr>
@@ -515,7 +591,7 @@ export function MembershipAuditView({ audit }: { audit: MembershipAudit }) {
             <tbody>
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-sm text-muted">
+                  <td colSpan={7} className="px-4 py-12 text-center text-sm text-muted">
                     Nothing matches — which is good news, not an empty page.
                   </td>
                 </tr>
@@ -650,6 +726,25 @@ function Row({ r }: { r: AuditPersonRow }) {
         )}
       </td>
       <td
+        className="px-4 py-2 whitespace-nowrap tnum text-muted"
+        title={
+          r.lastVotedYear === null
+            ? "No record of them voting in any congregational meeting"
+            : `Voted in ${r.votesCast} meeting${r.votesCast === 1 ? "" : "s"}; most recently ${r.lastVotedYear}`
+        }
+      >
+        {r.lastVotedYear === null ? (
+          <span className="text-subtle">never</span>
+        ) : (
+          <>
+            {r.lastVotedYear}
+            {r.votesCast > 1 && (
+              <span className="text-subtle text-xs"> ×{r.votesCast}</span>
+            )}
+          </>
+        )}
+      </td>
+      <td
         className={`px-4 py-2 whitespace-nowrap tnum ${
           lapsed ? "text-warn-soft-fg font-medium" : "text-muted"
         }`}
@@ -725,6 +820,7 @@ function Th({
   dir,
   onSort,
   width = "",
+  title,
 }: {
   label: string;
   k: SortKey;
@@ -732,12 +828,14 @@ function Th({
   dir: "asc" | "desc";
   onSort: (k: SortKey) => void;
   width?: string;
+  title?: string;
 }) {
   const on = sort === k;
   return (
     <th
       className={`text-left px-4 py-2.5 border-b border-border-soft ${width}`}
       aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : "none"}
+      title={title}
     >
       <button
         type="button"
@@ -1259,4 +1357,37 @@ function phraseBands(bands: Set<number>): string {
   const named = vs.map((v) => (v === 0 ? "no lane" : String(v)));
   const last = named.pop();
   return `${named.join(", ")} or ${last} lanes`;
+}
+
+/** Turnout buckets. Counted in MEETINGS back from the most recent one
+ *  anybody voted in, not in calendar years: the meetings are roughly
+ *  annual but the one-off votes are not, and counting by year would skip
+ *  them. "Never" is the whole point of the column — PCO stores nothing
+ *  for somebody who did not vote, so there is no row to find and absence
+ *  is the answer. */
+const VOTE_BUCKETS = ["latest", "recent", "lapsed", "never"] as const;
+
+function labelForVoted(id: string): string {
+  switch (id) {
+    case "latest":
+      return "Voted at the last meeting";
+    case "recent":
+      return "Voted in the last 3 meetings";
+    case "lapsed":
+      return "Voted, but not lately";
+    default:
+      return "Never voted";
+  }
+}
+
+function matchesVoted(
+  r: AuditPersonRow,
+  id: string,
+  latest: number | null,
+): boolean {
+  if (id === "never") return r.lastVotedYear === null;
+  if (r.lastVotedYear === null || latest === null) return false;
+  if (id === "latest") return r.lastVotedYear === latest;
+  if (id === "recent") return r.lastVotedYear >= latest - 2;
+  return r.lastVotedYear < latest - 2;
 }

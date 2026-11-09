@@ -5,6 +5,7 @@ import { getSyncSettings } from "./pco";
 import { classOf } from "./classification";
 import {
   LANE_KEYS,
+  VOTE_TAB,
   type AuditPersonRow,
   type LaneKey,
   type MembershipAudit,
@@ -42,6 +43,8 @@ interface RawRow {
   classification: string | null;
   diedOn: string | null;
   memberSince: string | null;
+  lastVotedYear: number | null;
+  votesCast: number;
   inactiveReason: string | null;
   dupPairs: number;
 }
@@ -131,6 +134,19 @@ function getMembershipAuditImpl(
          pa.classification     AS classification,
          dod.value_on          AS diedOn,
          omd.value_on          AS memberSince,
+         -- Every meeting field's name ends in its year, whatever shape the
+         -- rest of it takes ("June 2024", "9/18/2016", "September 2022").
+         -- The tab is what identifies them; the year is read off the end.
+         (SELECT MAX(CAST(substr(v.field_name, -4) AS INTEGER))
+            FROM pco_person_fields v
+           WHERE v.org_id = p.org_id AND v.person_id = p.pco_id
+             AND v.tab = ?
+             AND COALESCE(v.value,'') <> '')          AS lastVotedYear,
+         (SELECT COUNT(*)
+            FROM pco_person_fields v2
+           WHERE v2.org_id = p.org_id AND v2.person_id = p.pco_id
+             AND v2.tab = ?
+             AND COALESCE(v2.value,'') <> '')         AS votesCast,
          (d.pid IS NOT NULL) AS dupPairs
        FROM pco_people p
        LEFT JOIN person_activity pa
@@ -144,7 +160,15 @@ function getMembershipAuditImpl(
         AND omd.field_name = 'Original Membership Date'
       WHERE p.org_id = ? AND p.membership_type = ?`,
     )
-    .all(membershipType, membershipType, orgId, orgId, membershipType) as RawRow[];
+    .all(
+      membershipType,
+      membershipType,
+      orgId,
+      VOTE_TAB,
+      VOTE_TAB,
+      orgId,
+      membershipType,
+    ) as RawRow[];
 
   // Who each person pairs with, resolved to names in one pass. The column
   // showing "Possible duplicate" without saying duplicate of WHOM made the
@@ -361,8 +385,36 @@ function getMembershipAuditImpl(
       lastEmailAt: emailAt,
       emailDaysSince: emailDays,
       household: household.get(r.pcoId) ?? [],
+      lastVotedYear: r.lastVotedYear ?? null,
+      votesCast: r.votesCast ?? 0,
     };
   });
+
+  // Turnout. The latest meeting is read from the data rather than from
+  // the calendar: the 2026 field exists in PCO with nobody in it, and a
+  // meeting nobody has voted in yet is not one anybody has missed.
+  const latestYear = getDb()
+    .prepare(
+      `SELECT MAX(CAST(substr(field_name, -4) AS INTEGER)) AS y
+         FROM pco_person_fields
+        WHERE org_id = ? AND tab = ? AND COALESCE(value,'') <> ''`,
+    )
+    .get(orgId, VOTE_TAB) as { y: number | null } | undefined;
+  const latest = latestYear?.y ?? null;
+  const votes = {
+    latestYear: latest,
+    votedLatest:
+      latest === null ? 0 : rows.filter((r) => r.lastVotedYear === latest).length,
+    neverVoted: rows.filter((r) => r.lastVotedYear === null).length,
+    // Three meetings, not three years: they are roughly annual but the
+    // one-off votes are not, and counting back by year would skip them.
+    votedRecently:
+      latest === null
+        ? 0
+        : rows.filter(
+            (r) => r.lastVotedYear !== null && r.lastVotedYear >= latest - 2,
+          ).length,
+  };
 
   const combos = [...comboCounts.entries()]
     .map(([key, count]) => ({ key, count }))
@@ -372,6 +424,7 @@ function getMembershipAuditImpl(
     membershipType,
     total: rows.length,
     rows,
+    votes,
     laneTotals,
     bandTotals,
     combos,
