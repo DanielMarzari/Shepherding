@@ -1642,6 +1642,47 @@ function toIsoDate(raw: string | null): string | null {
   return null;
 }
 
+/** Every custom field PCO has, with the tab it sits on.
+ *
+ *  Names only — no values, so nothing about any person leaves PCO here.
+ *  The allowlist is by name, and a tab like "Congregational Meetings"
+ *  grows a new field every year, so the first thing anybody needs is to
+ *  see what is actually there.
+ */
+export async function listPersonFieldDefinitions(orgId: number): Promise<
+  Array<{ id: string; name: string; tab: string | null; type: string | null }>
+> {
+  const creds = getDecryptedCreds(orgId);
+  if (!creds) throw new Error("No PCO credentials saved.");
+  const client = new PCOClient({ appId: creds.appId, secret: creds.secret });
+
+  const tabs = await client.getAll<PCOResource>("/people/v2/tabs?per_page=100");
+  const tabName = new Map(
+    (tabs.data ?? []).map((t) => [
+      t.id,
+      ((t.attributes ?? {}) as Record<string, unknown>).name as string | null,
+    ]),
+  );
+
+  const defs = await client.getAll<PCOResource>(
+    "/people/v2/field_definitions?per_page=100",
+  );
+  return (defs.data ?? [])
+    .filter((d) => !((d.attributes ?? {}) as Record<string, unknown>).deleted_at)
+    .map((d) => {
+      const a = (d.attributes ?? {}) as Record<string, unknown>;
+      const rel = d.relationships?.tab?.data;
+      const tabId = !Array.isArray(rel) && rel ? rel.id : null;
+      return {
+        id: d.id,
+        name: (a.name as string | undefined) ?? "(unnamed)",
+        tab: tabId ? (tabName.get(tabId) ?? null) : null,
+        type: (a.data_type as string | undefined) ?? null,
+      };
+    })
+    .sort((x, y) => (x.tab ?? "~").localeCompare(y.tab ?? "~") || x.name.localeCompare(y.name));
+}
+
 /** Sync the allowlisted person custom fields. One request per field definition
  *  page — Baptism alone is ~1,000 rows, ten pages. */
 async function syncPersonFields(

@@ -5,6 +5,7 @@ import { isSyncDue } from "@/lib/pco-schedule";
 import {
   cleanupStaleSyncRuns,
   healStaleSnapshots,
+  listPersonFieldDefinitions,
   refreshFormCatalogue,
   runSync,
 } from "@/lib/pco-sync";
@@ -81,6 +82,22 @@ export async function GET(req: Request) {
 
   // ?only=forms lists PCO's forms so the settings page has something to
   // offer. Cheap next to a full sync, which is what used to be required.
+  // ?only=fielddefs lists PCO's custom fields and the tab each sits on.
+  // Names only, no values.
+  if (url.searchParams.get("only") === "fielddefs") {
+    const out: unknown[] = [];
+    for (const { id } of getDb()
+      .prepare("SELECT DISTINCT org_id AS id FROM pco_sync_settings")
+      .all() as Array<{ id: number }>) {
+      try {
+        out.push({ orgId: id, fields: await listPersonFieldDefinitions(id) });
+      } catch (e) {
+        out.push({ orgId: id, error: e instanceof Error ? e.message : "failed" });
+      }
+    }
+    return NextResponse.json({ only: "fielddefs", results: out });
+  }
+
   if (url.searchParams.get("only") === "forms") {
     const out: unknown[] = [];
     for (const { id } of getDb()
