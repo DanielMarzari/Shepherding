@@ -1623,6 +1623,16 @@ const PERSON_FIELD_ALLOWLIST = new Set([
   "Original Membership Date",
 ]);
 
+/** Whole tabs whose every field is synced, named rather than listed.
+ *
+ *  Congregational Meetings holds one select per meeting — twenty of them,
+ *  Annual Meeting June 2013 through June 2026, plus the one-off votes. A
+ *  new one appears every year, and a by-name allowlist would mean editing
+ *  this file each June and nobody remembering to. By tab, next year's
+ *  meeting syncs itself.
+ */
+const PERSON_FIELD_TAB_ALLOWLIST = new Set(["Congregational Meetings"]);
+
 /** PCO returns a date field as the admin typed it — "06/29/2003" — which sorts
  *  and groups as nonsense. Normalize once, here, so every query downstream can
  *  just use substr(value_on,1,4). Returns null for anything unparseable
@@ -1683,6 +1693,16 @@ export async function listPersonFieldDefinitions(orgId: number): Promise<
     .sort((x, y) => (x.tab ?? "~").localeCompare(y.tab ?? "~") || x.name.localeCompare(y.name));
 }
 
+/** Run the custom-field sync on its own, without the rest of a sync. */
+export async function refreshPersonFields(
+  orgId: number,
+): Promise<{ fetched: number; upserted: number }> {
+  const creds = getDecryptedCreds(orgId);
+  if (!creds) throw new Error("No PCO credentials saved.");
+  const client = new PCOClient({ appId: creds.appId, secret: creds.secret });
+  return syncPersonFields(client, orgId);
+}
+
 /** Sync the allowlisted person custom fields. One request per field definition
  *  page — Baptism alone is ~1,000 rows, ten pages. */
 async function syncPersonFields(
@@ -1690,16 +1710,29 @@ async function syncPersonFields(
   orgId: number,
 ): Promise<{ fetched: number; upserted: number }> {
   const out = { fetched: 0, upserted: 0 };
+  // Tab names, so a field can be wanted for the tab it sits on rather than
+  // for its own name.
+  const tabs = await client.getAll<PCOResource>("/people/v2/tabs?per_page=100");
+  const tabName = new Map(
+    (tabs.data ?? []).map((t) => [
+      t.id,
+      ((t.attributes ?? {}) as Record<string, unknown>).name as string | null,
+    ]),
+  );
+
   const defs = await client.getAll<PCOResource>(
     "/people/v2/field_definitions?per_page=100",
   );
   const wanted = (defs.data ?? []).filter((d) => {
     const a = (d.attributes ?? {}) as Record<string, unknown>;
-    return (
-      !a.deleted_at &&
-      typeof a.name === "string" &&
-      PERSON_FIELD_ALLOWLIST.has(a.name as string)
-    );
+    if (a.deleted_at || typeof a.name !== "string") return false;
+    // A header is a layout element on the tab, not a value anybody holds.
+    if (a.data_type === "header") return false;
+    if (PERSON_FIELD_ALLOWLIST.has(a.name as string)) return true;
+    const rel = d.relationships?.tab?.data;
+    const tabId = !Array.isArray(rel) && rel ? rel.id : null;
+    const tab = tabId ? tabName.get(tabId) : null;
+    return !!tab && PERSON_FIELD_TAB_ALLOWLIST.has(tab);
   });
   if (!wanted.length) return out;
 
